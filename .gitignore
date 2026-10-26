@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+
+# 由 .hyper 轉出的 DuckDB 檔可隨時重建，不進版控
+*.duckdb
+*.duckdb.wal
+
+# 編輯器與系統
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

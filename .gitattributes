@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+# Tableau 與測試資料保持原始位元組
+*.twb -text
+*.twbx binary
+*.hyper binary
+*.png binary
+
+# 單一 .hyper 超過 100 MB 時（GitHub 的單檔上限），改用 Git LFS：
+#   git lfs install
+#   取消下一行的註解後再加入檔案
+# *.hyper filter=lfs diff=lfs merge=lfs -text

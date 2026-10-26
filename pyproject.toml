@@ -1,0 +1,44 @@
+[project]
+name = "tableau-migration"
+version = "0.1.0"
+description = "Tableau 移轉平台：起步階段的 monorepo 根目錄"
+requires-python = ">=3.12,<3.14"
+dependencies = ["tmig"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pyright[nodejs]>=1.1.380",
+    "pytest>=8",
+    "lxml-stubs>=0.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["kernel"]
+
+[tool.uv.sources]
+tmig = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["kernel/schema"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# 中文全形標點會被誤判為易混淆字元；行長交給 formatter。
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.pyright]
+include = ["kernel/src", "kernel/tests", "scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["kernel/tests"]
+addopts = "-ra"

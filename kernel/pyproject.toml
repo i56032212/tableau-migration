@@ -1,0 +1,19 @@
+[project]
+name = "tmig"
+version = "0.1.0"
+description = "Tableau 移轉核心函式庫：解析、IR、公式、查詢規劃、驗證"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "pydantic>=2.7,<3",
+    "lxml>=5.2",
+]
+
+[project.scripts]
+tmig = "tmig.cli:entry"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tmig"]
