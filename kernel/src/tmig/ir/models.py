@@ -1,4 +1,4 @@
-"""IR v0 的資料模型。
+"""IR 的資料模型（v0.2）。
 
 IR 是唯一的報表定義：解析器寫入，其他模組只讀，任何模組都不回頭讀 .twb。
 規則見 Spec「IR v0 資料合約」：
@@ -6,7 +6,7 @@ IR 是唯一的報表定義：解析器寫入，其他模組只讀，任何模�
 - 每個實體帶穩定的 ``id`` 與 ``source_ref``（在 .twb 中的 XPath）
 - 欄位一律以 ``id`` 參照；計算欄位同時保存原文 ``formula`` 與語法樹 ``ast``
 - dashboard 座標存換算後的像素值
-- 無法辨識的元素放進 ``unsupported``，不得默默丟棄
+- 無法辨識的元素放進 ``unsupported``，不得默默丟棄；不影響數字、刻意略過的元素放進 ``ignored``
 - 欄位異動必須升 ``ir_version``，並重新產生 ``kernel/schema/``
 
 跨實體的參照（欄位、參數、工作表、Table Calculation）由 ``integrity`` 檢查。
@@ -27,7 +27,7 @@ from pydantic import (
     model_validator,
 )
 
-IR_VERSION = "0.1"
+IR_VERSION = "0.2"
 
 Id = Annotated[
     str,
@@ -42,8 +42,21 @@ Scalar = StrictBool | StrictInt | StrictFloat | StrictStr | None
 
 DataType = Literal["string", "integer", "real", "boolean", "date", "datetime"]
 Role = Literal["dimension", "measure"]
-Aggregation = Literal["sum", "avg", "min", "max", "count", "countd"]
-DatePart = Literal["year", "quarter", "month", "week", "day", "hour", "minute", "second"]
+Aggregation = Literal[
+    "sum",
+    "avg",
+    "min",
+    "max",
+    "count",
+    "countd",
+    "median",
+    "attr",
+    "stdev",
+    "stdevp",
+    "var",
+    "varp",
+]
+DatePart = Literal["year", "quarter", "month", "week", "weekday", "day", "hour", "minute", "second"]
 WeekDay = Literal["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 CalcLevel = Literal["row", "aggregate", "lod", "table_calc"]
 FilterStage = Literal[
@@ -115,8 +128,16 @@ class DataField(IRModel):
     datatype: DataType
     default_agg: Aggregation | None = None
     format: str | None = Field(default=None, description="Tableau 數字或日期格式字串原文")
+    hidden: bool = False
+    column: str | None = Field(default=None, description="萃取資料表中的實體欄位；計算欄位為 None")
     calc: Calc | None = None
     source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _column_or_calc(self) -> Self:
+        if (self.column is None) == (self.calc is None):
+            raise ValueError("欄位必須剛好有 column（一般欄位）或 calc（計算欄位）其中之一")
+        return self
 
 
 class ExtractConnection(IRModel):
@@ -174,7 +195,7 @@ class RangeFilter(IRModel):
 
 
 class TopNFilter(IRModel):
-    """依某個彙總值取前 N 或後 N。"""
+    """依某個彙總運算式取前 N 或後 N。"""
 
     kind: Literal["top_n"]
     id: Id
@@ -182,7 +203,7 @@ class TopNFilter(IRModel):
     stage: FilterStage
     direction: Literal["top", "bottom"]
     count: Annotated[StrictInt, Field(gt=0)] | ParamRef
-    by: FieldUse = Field(description="排名依據的彙總值")
+    by: str = Field(min_length=1, description="排名依據的 Tableau 彙總公式，例如 SUM([Sales])")
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -452,13 +473,16 @@ class Unsupported(IRModel):
 class IR(IRModel):
     """一份 workbook 的完整 IR。"""
 
-    ir_version: Literal["0.1"]
+    ir_version: Literal["0.2"]
     workbook: Workbook
     datasources: list[Datasource] = Field(min_length=1)
     parameters: list[Parameter] = Field(default_factory=list)
     worksheets: list[Worksheet] = Field(default_factory=list)
     dashboards: list[Dashboard] = Field(default_factory=list)
     unsupported: list[Unsupported] = Field(default_factory=list)
+    ignored: list[Unsupported] = Field(
+        default_factory=list, description="刻意略過、不影響數字的元素，例如格式、註解、醒目提示動作"
+    )
 
     @model_validator(mode="after")
     def _check_references(self) -> Self:

@@ -56,7 +56,7 @@ uv run tmig census fixtures/sales_overview/sales_overview.twbx --out-dir fixture
 
 ```bash
 uv run tmig ir validate <IR 檔>                               # 驗證 IR
-uv run tmig ir schema --out kernel/schema/ir-0.1.schema.json   # 更新 JSON Schema
+uv run tmig ir schema --out kernel/schema/ir-0.2.schema.json   # 更新 JSON Schema
 ```
 
 ## 開發規則

@@ -71,10 +71,12 @@ def check_references(ir: IR) -> list[str]:
 
     def check_filter(flt: Filter, ds_id: str, where: str, table_calcs: set[str] | None) -> None:
         check_use(flt.field, ds_id, f"{where}.field", table_calcs)
-        if isinstance(flt, TopNFilter):
-            check_use(flt.by, ds_id, f"{where}.by", table_calcs)
-            if isinstance(flt.count, ParamRef) and flt.count.parameter not in params:
-                errors.append(f"{where}.count：參數「{flt.count.parameter}」不存在")
+        if (
+            isinstance(flt, TopNFilter)
+            and isinstance(flt.count, ParamRef)
+            and flt.count.parameter not in params
+        ):
+            errors.append(f"{where}.count：參數「{flt.count.parameter}」不存在")
 
     for ds in ir.datasources:
         for flt in ds.filters:

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Tableau 移轉 IR v0.1",
+  "title": "Tableau 移轉 IR v0.2",
   "$defs": {
     "AllowedAll": {
       "additionalProperties": false,
@@ -352,7 +352,13 @@
                 "min",
                 "max",
                 "count",
-                "countd"
+                "countd",
+                "median",
+                "attr",
+                "stdev",
+                "stdevp",
+                "var",
+                "varp"
               ],
               "type": "string"
             },
@@ -375,6 +381,24 @@
           "default": null,
           "description": "Tableau 數字或日期格式字串原文",
           "title": "Format"
+        },
+        "hidden": {
+          "default": false,
+          "title": "Hidden",
+          "type": "boolean"
+        },
+        "column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "萃取資料表中的實體欄位；計算欄位為 None",
+          "title": "Column"
         },
         "calc": {
           "anyOf": [
@@ -527,6 +551,7 @@
             "quarter",
             "month",
             "week",
+            "weekday",
             "day",
             "hour",
             "minute",
@@ -592,7 +617,13 @@
                 "min",
                 "max",
                 "count",
-                "countd"
+                "countd",
+                "median",
+                "attr",
+                "stdev",
+                "stdevp",
+                "var",
+                "varp"
               ],
               "type": "string"
             },
@@ -1112,7 +1143,7 @@
     },
     "TopNFilter": {
       "additionalProperties": false,
-      "description": "依某個彙總值取前 N 或後 N。",
+      "description": "依某個彙總運算式取前 N 或後 N。",
       "properties": {
         "kind": {
           "const": "top_n",
@@ -1163,8 +1194,10 @@
           "title": "Count"
         },
         "by": {
-          "$ref": "#/$defs/FieldUse",
-          "description": "排名依據的彙總值"
+          "description": "排名依據的 Tableau 彙總公式，例如 SUM([Sales])",
+          "minLength": 1,
+          "title": "By",
+          "type": "string"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
@@ -1552,7 +1585,7 @@
   "description": "一份 workbook 的完整 IR。",
   "properties": {
     "ir_version": {
-      "const": "0.1",
+      "const": "0.2",
       "title": "Ir Version",
       "type": "string"
     },
@@ -1593,6 +1626,14 @@
         "$ref": "#/$defs/Unsupported"
       },
       "title": "Unsupported",
+      "type": "array"
+    },
+    "ignored": {
+      "description": "刻意略過、不影響數字的元素，例如格式、註解、醒目提示動作",
+      "items": {
+        "$ref": "#/$defs/Unsupported"
+      },
+      "title": "Ignored",
       "type": "array"
     }
   },
