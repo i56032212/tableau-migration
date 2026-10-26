@@ -11,6 +11,7 @@ dev = [
     "pyright[nodejs]>=1.1.380",
     "pytest>=8",
     "lxml-stubs>=0.5",
+    "jsonschema>=4.26.0",
 ]
 
 [tool.uv]
@@ -31,6 +32,9 @@ extend-exclude = ["kernel/schema"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # 中文全形標點會被誤判為易混淆字元；行長交給 formatter。
 ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tmig"]
 
 [tool.pyright]
 include = ["kernel/src", "kernel/tests", "scripts"]

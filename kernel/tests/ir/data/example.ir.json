@@ -1,0 +1,476 @@
+{
+  "ir_version": "0.1",
+  "workbook": {
+    "id": "wb_sales",
+    "name": "Sales",
+    "tableau_version": "18.1",
+    "source_ref": "/workbook"
+  },
+  "datasources": [
+    {
+      "id": "ds_orders",
+      "name": "federated.0abc123",
+      "caption": "Orders",
+      "connection": {
+        "kind": "extract",
+        "hyper_file": "Data/Extracts/orders.hyper",
+        "table": "Extract.Extract"
+      },
+      "settings": {
+        "week_start": "sunday"
+      },
+      "fields": [
+        {
+          "id": "f_region",
+          "name": "[Region]",
+          "caption": "Region",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource[2]/column[1]"
+        },
+        {
+          "id": "f_category",
+          "name": "[Category]",
+          "caption": "Category",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource[2]/column[2]"
+        },
+        {
+          "id": "f_order_date",
+          "name": "[Order Date]",
+          "caption": "Order Date",
+          "role": "dimension",
+          "datatype": "date",
+          "default_agg": null,
+          "format": null,
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource[2]/column[3]"
+        },
+        {
+          "id": "f_sales",
+          "name": "[Sales]",
+          "caption": "Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": "sum",
+          "format": "n#,##0",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource[2]/column[4]"
+        },
+        {
+          "id": "f_profit",
+          "name": "[Profit]",
+          "caption": "Profit",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": "sum",
+          "format": null,
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource[2]/column[5]"
+        },
+        {
+          "id": "f_profit_ratio",
+          "name": "[Calculation_1368249927221915648]",
+          "caption": "Profit Ratio",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": "p0.0%",
+          "calc": {
+            "formula": "SUM([Profit]) / SUM([Sales])",
+            "ast": null,
+            "level": null
+          },
+          "source_ref": "/workbook/datasources/datasource[2]/column[6]"
+        },
+        {
+          "id": "f_region_sales",
+          "name": "[Calculation_2911430225018785792]",
+          "caption": "Region Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": "sum",
+          "format": null,
+          "calc": {
+            "formula": "{FIXED [Region] : SUM([Sales])}",
+            "ast": null,
+            "level": null
+          },
+          "source_ref": "/workbook/datasources/datasource[2]/column[7]"
+        }
+      ],
+      "filters": [],
+      "source_ref": "/workbook/datasources/datasource[2]"
+    }
+  ],
+  "parameters": [
+    {
+      "id": "p_top_n",
+      "name": "[Parameter 1]",
+      "caption": "Top N",
+      "datatype": "integer",
+      "allowed": {
+        "kind": "range",
+        "min": 1,
+        "max": 20,
+        "step": 1
+      },
+      "value": 10,
+      "source_ref": "/workbook/datasources/datasource[1]/column[1]"
+    }
+  ],
+  "worksheets": [
+    {
+      "id": "ws_sales_by_region",
+      "name": "Sales by Region",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        },
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": "tc_running_sales"
+          }
+        ]
+      },
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_category",
+          "field": {
+            "field": "f_category",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "include",
+          "values": [
+            "Furniture",
+            "Technology"
+          ],
+          "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[1]"
+        },
+        {
+          "kind": "top_n",
+          "id": "flt_top_regions",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "top_n",
+          "direction": "top",
+          "count": {
+            "parameter": "p_top_n"
+          },
+          "by": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[2]"
+        }
+      ],
+      "sorts": [
+        {
+          "field": "f_region",
+          "kind": "by_field",
+          "order": "desc",
+          "by": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "manual_values": []
+        }
+      ],
+      "table_calcs": [
+        {
+          "id": "tc_running_sales",
+          "type": "running_total",
+          "preset": "table_down",
+          "addressing": [
+            "f_region"
+          ],
+          "inferred": false,
+          "options": {},
+          "source_ref": "/workbook/worksheets/worksheet[1]/table/view/datasource-dependencies/column-instance[3]/table-calc"
+        }
+      ],
+      "source_ref": "/workbook/worksheets/worksheet[1]"
+    },
+    {
+      "id": "ws_monthly_profit",
+      "name": "Monthly Profit",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_profit",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_order_date",
+          "agg": null,
+          "date": {
+            "kind": "trunc",
+            "unit": "month"
+          },
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "line",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [
+          {
+            "field": "f_profit_ratio",
+            "agg": null,
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ]
+      },
+      "filters": [
+        {
+          "kind": "range",
+          "id": "flt_order_date",
+          "field": {
+            "field": "f_order_date",
+            "agg": null,
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "min": "2024-01-01",
+          "max": "2025-12-31",
+          "include_null": false,
+          "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter[1]"
+        },
+        {
+          "kind": "range",
+          "id": "flt_min_sales",
+          "field": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "stage": "measure",
+          "min": 1000,
+          "max": null,
+          "include_null": false,
+          "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[2]"
+    }
+  ],
+  "dashboards": [
+    {
+      "id": "db_overview",
+      "name": "Overview",
+      "size": {
+        "width": 1200,
+        "height": 800
+      },
+      "zones": [
+        {
+          "id": "z4",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1200,
+          "h": 800,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z10",
+              "kind": "title",
+              "x": 0,
+              "y": 0,
+              "w": 1200,
+              "h": 56,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": "Overview",
+              "image": null,
+              "children": [],
+              "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[1]"
+            },
+            {
+              "id": "z1",
+              "kind": "worksheet",
+              "x": 0,
+              "y": 56,
+              "w": 960,
+              "h": 372,
+              "worksheet": "ws_sales_by_region",
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [],
+              "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[2]"
+            },
+            {
+              "id": "z2",
+              "kind": "worksheet",
+              "x": 0,
+              "y": 428,
+              "w": 960,
+              "h": 372,
+              "worksheet": "ws_monthly_profit",
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [],
+              "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[3]"
+            },
+            {
+              "id": "z5",
+              "kind": "filter",
+              "x": 960,
+              "y": 56,
+              "w": 240,
+              "h": 120,
+              "worksheet": "ws_sales_by_region",
+              "field": {
+                "field": "f_category",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              },
+              "parameter": null,
+              "control": "multi_dropdown",
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [],
+              "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[4]"
+            },
+            {
+              "id": "z6",
+              "kind": "parameter",
+              "x": 960,
+              "y": 176,
+              "w": 240,
+              "h": 80,
+              "worksheet": null,
+              "field": null,
+              "parameter": "p_top_n",
+              "control": "single_slider",
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [],
+              "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[5]"
+            },
+            {
+              "id": "z7",
+              "kind": "legend",
+              "x": 960,
+              "y": 256,
+              "w": 240,
+              "h": 172,
+              "worksheet": "ws_sales_by_region",
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": "color",
+              "text": null,
+              "image": null,
+              "children": [],
+              "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[6]"
+            }
+          ],
+          "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[1]"
+    }
+  ],
+  "unsupported": []
+}

@@ -1,0 +1,1605 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tableau 移轉 IR v0.1",
+  "$defs": {
+    "AllowedAll": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "all",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "AllowedAll",
+      "type": "object"
+    },
+    "AllowedList": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "list",
+          "title": "Kind",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "values"
+      ],
+      "title": "AllowedList",
+      "type": "object"
+    },
+    "AllowedRange": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "range",
+          "title": "Kind",
+          "type": "string"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "AllowedRange",
+      "type": "object"
+    },
+    "Calc": {
+      "additionalProperties": false,
+      "description": "計算欄位。解析器只填 formula；ast 與 level 由公式引擎（B2）補上。",
+      "properties": {
+        "formula": {
+          "description": "公式原文",
+          "minLength": 1,
+          "title": "Formula",
+          "type": "string"
+        },
+        "ast": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "語法樹，格式由公式引擎定義",
+          "title": "Ast"
+        },
+        "level": {
+          "anyOf": [
+            {
+              "enum": [
+                "row",
+                "aggregate",
+                "lod",
+                "table_calc"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "計算層級，決定在運算順序的哪一步執行",
+          "title": "Level"
+        }
+      },
+      "required": [
+        "formula"
+      ],
+      "title": "Calc",
+      "type": "object"
+    },
+    "CategoricalFilter": {
+      "additionalProperties": false,
+      "description": "以值清單篩選。mode 為 all 時不過濾。",
+      "properties": {
+        "kind": {
+          "const": "categorical",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "stage": {
+          "enum": [
+            "extract",
+            "datasource",
+            "context",
+            "top_n",
+            "dimension",
+            "measure",
+            "table_calc"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "include",
+            "exclude",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "field",
+        "stage",
+        "mode",
+        "source_ref"
+      ],
+      "title": "CategoricalFilter",
+      "type": "object"
+    },
+    "Dashboard": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/$defs/Size",
+          "description": "固定尺寸，單位為像素"
+        },
+        "zones": {
+          "items": {
+            "$ref": "#/$defs/Zone"
+          },
+          "title": "Zones",
+          "type": "array"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "size",
+        "source_ref"
+      ],
+      "title": "Dashboard",
+      "type": "object"
+    },
+    "DataField": {
+      "additionalProperties": false,
+      "description": "資料源中的一個欄位，可以是原始欄位或計算欄位。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Tableau 內部名稱，例如 [Calculation_123]",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "caption": {
+          "description": "顯示名稱",
+          "minLength": 1,
+          "title": "Caption",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "dimension",
+            "measure"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "datatype": {
+          "enum": [
+            "string",
+            "integer",
+            "real",
+            "boolean",
+            "date",
+            "datetime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "default_agg": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "avg",
+                "min",
+                "max",
+                "count",
+                "countd"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Agg"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tableau 數字或日期格式字串原文",
+          "title": "Format"
+        },
+        "calc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Calc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "caption",
+        "role",
+        "datatype",
+        "source_ref"
+      ],
+      "title": "DataField",
+      "type": "object"
+    },
+    "Datasource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Tableau 內部名稱",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "caption": {
+          "minLength": 1,
+          "title": "Caption",
+          "type": "string"
+        },
+        "connection": {
+          "$ref": "#/$defs/ExtractConnection"
+        },
+        "settings": {
+          "$ref": "#/$defs/DatasourceSettings"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/DataField"
+          },
+          "minItems": 1,
+          "title": "Fields",
+          "type": "array"
+        },
+        "filters": {
+          "description": "萃取篩選與資料源篩選",
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "categorical": "#/$defs/CategoricalFilter",
+                "range": "#/$defs/RangeFilter",
+                "top_n": "#/$defs/TopNFilter"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CategoricalFilter"
+              },
+              {
+                "$ref": "#/$defs/RangeFilter"
+              },
+              {
+                "$ref": "#/$defs/TopNFilter"
+              }
+            ]
+          },
+          "title": "Filters",
+          "type": "array"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "caption",
+        "connection",
+        "settings",
+        "fields",
+        "source_ref"
+      ],
+      "title": "Datasource",
+      "type": "object"
+    },
+    "DatasourceSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "week_start": {
+          "description": "週起始日，影響週數與 DATETRUNC('week')",
+          "enum": [
+            "sunday",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday"
+          ],
+          "title": "Week Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "week_start"
+      ],
+      "title": "DatasourceSettings",
+      "type": "object"
+    },
+    "DateDerivation": {
+      "additionalProperties": false,
+      "description": "日期欄位作為維度時的衍生方式。",
+      "properties": {
+        "kind": {
+          "description": "part＝日期部分（如 YEAR 得到 2025），trunc＝截斷到單位（如年-月）",
+          "enum": [
+            "part",
+            "trunc"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "unit": {
+          "enum": [
+            "year",
+            "quarter",
+            "month",
+            "week",
+            "day",
+            "hour",
+            "minute",
+            "second"
+          ],
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "unit"
+      ],
+      "title": "DateDerivation",
+      "type": "object"
+    },
+    "ExtractConnection": {
+      "additionalProperties": false,
+      "description": "資料位於 .twbx 內的 .hyper 檔（嵌入式 Extract）。",
+      "properties": {
+        "kind": {
+          "const": "extract",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hyper_file": {
+          "description": ".twbx 內的路徑，一律用 /",
+          "minLength": 1,
+          "title": "Hyper File",
+          "type": "string"
+        },
+        "table": {
+          "description": "資料表，例如 Extract.Extract",
+          "minLength": 1,
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "hyper_file",
+        "table"
+      ],
+      "title": "ExtractConnection",
+      "type": "object"
+    },
+    "FieldUse": {
+      "additionalProperties": false,
+      "description": "欄列架、標記編碼、篩選、排序與控制項中的一次欄位使用。",
+      "properties": {
+        "field": {
+          "description": "欄位 id",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Field",
+          "type": "string"
+        },
+        "agg": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "avg",
+                "min",
+                "max",
+                "count",
+                "countd"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "彙總方式；None 表示不彙總",
+          "title": "Agg"
+        },
+        "date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DateDerivation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "日期衍生；只用於日期維度"
+        },
+        "continuous": {
+          "default": false,
+          "description": "True＝連續（綠色），False＝離散（藍色）",
+          "title": "Continuous",
+          "type": "boolean"
+        },
+        "table_calc": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "套用的 Table Calculation id",
+          "title": "Table Calc"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "title": "FieldUse",
+      "type": "object"
+    },
+    "Marks": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "automatic",
+            "bar",
+            "line",
+            "area",
+            "circle",
+            "square",
+            "shape",
+            "text",
+            "pie",
+            "gantt",
+            "map",
+            "polygon"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "label": {
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Label",
+          "type": "array"
+        },
+        "detail": {
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Detail",
+          "type": "array"
+        },
+        "tooltip": {
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Tooltip",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Marks",
+      "type": "object"
+    },
+    "ParamRef": {
+      "additionalProperties": false,
+      "description": "以參數取代常值，例如 Top N 的 N。",
+      "properties": {
+        "parameter": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Parameter",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parameter"
+      ],
+      "title": "ParamRef",
+      "type": "object"
+    },
+    "Parameter": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Tableau 內部名稱，例如 [Parameter 1]",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "caption": {
+          "minLength": 1,
+          "title": "Caption",
+          "type": "string"
+        },
+        "datatype": {
+          "enum": [
+            "string",
+            "integer",
+            "real",
+            "boolean",
+            "date",
+            "datetime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "allowed": {
+          "discriminator": {
+            "mapping": {
+              "all": "#/$defs/AllowedAll",
+              "list": "#/$defs/AllowedList",
+              "range": "#/$defs/AllowedRange"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AllowedAll"
+            },
+            {
+              "$ref": "#/$defs/AllowedList"
+            },
+            {
+              "$ref": "#/$defs/AllowedRange"
+            }
+          ],
+          "title": "Allowed"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "目前值",
+          "title": "Value"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "caption",
+        "datatype",
+        "allowed",
+        "value",
+        "source_ref"
+      ],
+      "title": "Parameter",
+      "type": "object"
+    },
+    "RangeFilter": {
+      "additionalProperties": false,
+      "description": "以範圍篩選；min、max 為 None 表示該側不設限。",
+      "properties": {
+        "kind": {
+          "const": "range",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "stage": {
+          "enum": [
+            "extract",
+            "datasource",
+            "context",
+            "top_n",
+            "dimension",
+            "measure",
+            "table_calc"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
+        },
+        "include_null": {
+          "default": false,
+          "title": "Include Null",
+          "type": "boolean"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "field",
+        "stage",
+        "source_ref"
+      ],
+      "title": "RangeFilter",
+      "type": "object"
+    },
+    "Size": {
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "title": "Size",
+      "type": "object"
+    },
+    "Sort": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "description": "被排序的維度欄位",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Field",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "by_field",
+            "alphabetic",
+            "manual",
+            "data_source"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "default": "asc",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "title": "Order",
+          "type": "string"
+        },
+        "by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "kind 為 by_field 時的排序依據"
+        },
+        "manual_values": {
+          "description": "kind 為 manual 時的順序",
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Manual Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "field",
+        "kind"
+      ],
+      "title": "Sort",
+      "type": "object"
+    },
+    "TableCalc": {
+      "additionalProperties": false,
+      "description": "Table Calculation。type 為 formula 表示計算欄位內含 Table Calculation 函式。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "running_total",
+            "percent_of_total",
+            "rank",
+            "difference",
+            "percent_difference",
+            "moving",
+            "formula"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "preset": {
+          "description": "Tableau 的計算方向設定",
+          "enum": [
+            "table_across",
+            "table_down",
+            "table_across_then_down",
+            "table_down_then_across",
+            "pane_across",
+            "pane_down",
+            "pane_across_then_down",
+            "pane_down_then_across",
+            "cell",
+            "specific"
+          ],
+          "title": "Preset",
+          "type": "string"
+        },
+        "addressing": {
+          "description": "解析後的計算方向欄位，依序",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Addressing",
+          "type": "array"
+        },
+        "inferred": {
+          "default": false,
+          "description": "計算方向是否依 Tableau 預設規則推定",
+          "title": "Inferred",
+          "type": "boolean"
+        },
+        "options": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "例如 rank 的方式與方向",
+          "title": "Options",
+          "type": "object"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "preset",
+        "source_ref"
+      ],
+      "title": "TableCalc",
+      "type": "object"
+    },
+    "TopNFilter": {
+      "additionalProperties": false,
+      "description": "依某個彙總值取前 N 或後 N。",
+      "properties": {
+        "kind": {
+          "const": "top_n",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "被篩選的維度"
+        },
+        "stage": {
+          "enum": [
+            "extract",
+            "datasource",
+            "context",
+            "top_n",
+            "dimension",
+            "measure",
+            "table_calc"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "top",
+            "bottom"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ParamRef"
+            }
+          ],
+          "title": "Count"
+        },
+        "by": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "排名依據的彙總值"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "field",
+        "stage",
+        "direction",
+        "count",
+        "by",
+        "source_ref"
+      ],
+      "title": "TopNFilter",
+      "type": "object"
+    },
+    "Unsupported": {
+      "additionalProperties": false,
+      "description": "解析器不認得或 v0 不支援的元素。有任何一筆，報表就進人工佇列。",
+      "properties": {
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "element": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "XML 標籤名稱",
+          "title": "Element"
+        },
+        "xml": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "原始 XML 片段，可截斷",
+          "title": "Xml"
+        }
+      },
+      "required": [
+        "source_ref",
+        "reason"
+      ],
+      "title": "Unsupported",
+      "type": "object"
+    },
+    "Workbook": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "tableau_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tableau Version"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source_ref"
+      ],
+      "title": "Workbook",
+      "type": "object"
+    },
+    "Worksheet": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "datasource": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Datasource",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Columns",
+          "type": "array"
+        },
+        "marks": {
+          "$ref": "#/$defs/Marks"
+        },
+        "filters": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "categorical": "#/$defs/CategoricalFilter",
+                "range": "#/$defs/RangeFilter",
+                "top_n": "#/$defs/TopNFilter"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CategoricalFilter"
+              },
+              {
+                "$ref": "#/$defs/RangeFilter"
+              },
+              {
+                "$ref": "#/$defs/TopNFilter"
+              }
+            ]
+          },
+          "title": "Filters",
+          "type": "array"
+        },
+        "sorts": {
+          "items": {
+            "$ref": "#/$defs/Sort"
+          },
+          "title": "Sorts",
+          "type": "array"
+        },
+        "table_calcs": {
+          "items": {
+            "$ref": "#/$defs/TableCalc"
+          },
+          "title": "Table Calcs",
+          "type": "array"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "datasource",
+        "marks",
+        "source_ref"
+      ],
+      "title": "Worksheet",
+      "type": "object"
+    },
+    "Zone": {
+      "additionalProperties": false,
+      "description": "dashboard 上的一個區塊；座標為換算後的像素值。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "container",
+            "worksheet",
+            "filter",
+            "parameter",
+            "legend",
+            "text",
+            "image",
+            "title",
+            "blank"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        },
+        "w": {
+          "minimum": 0,
+          "title": "W",
+          "type": "integer"
+        },
+        "h": {
+          "minimum": 0,
+          "title": "H",
+          "type": "integer"
+        },
+        "worksheet": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工作表、篩選、圖例區塊所屬的工作表",
+          "title": "Worksheet"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選控制項的欄位"
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "參數控制項的參數",
+          "title": "Parameter"
+        },
+        "control": {
+          "anyOf": [
+            {
+              "enum": [
+                "single_dropdown",
+                "multi_dropdown",
+                "single_list",
+                "multi_list",
+                "range_slider",
+                "single_slider",
+                "date_range",
+                "type_in"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Control"
+        },
+        "legend": {
+          "anyOf": [
+            {
+              "enum": [
+                "color",
+                "size",
+                "shape"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Legend"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": ".twbx 內的圖片路徑",
+          "title": "Image"
+        },
+        "children": {
+          "description": "只有 container 可以有子區塊",
+          "items": {
+            "$ref": "#/$defs/Zone"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "x",
+        "y",
+        "w",
+        "h",
+        "source_ref"
+      ],
+      "title": "Zone",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "一份 workbook 的完整 IR。",
+  "properties": {
+    "ir_version": {
+      "const": "0.1",
+      "title": "Ir Version",
+      "type": "string"
+    },
+    "workbook": {
+      "$ref": "#/$defs/Workbook"
+    },
+    "datasources": {
+      "items": {
+        "$ref": "#/$defs/Datasource"
+      },
+      "minItems": 1,
+      "title": "Datasources",
+      "type": "array"
+    },
+    "parameters": {
+      "items": {
+        "$ref": "#/$defs/Parameter"
+      },
+      "title": "Parameters",
+      "type": "array"
+    },
+    "worksheets": {
+      "items": {
+        "$ref": "#/$defs/Worksheet"
+      },
+      "title": "Worksheets",
+      "type": "array"
+    },
+    "dashboards": {
+      "items": {
+        "$ref": "#/$defs/Dashboard"
+      },
+      "title": "Dashboards",
+      "type": "array"
+    },
+    "unsupported": {
+      "items": {
+        "$ref": "#/$defs/Unsupported"
+      },
+      "title": "Unsupported",
+      "type": "array"
+    }
+  },
+  "required": [
+    "ir_version",
+    "workbook",
+    "datasources"
+  ],
+  "type": "object"
+}
