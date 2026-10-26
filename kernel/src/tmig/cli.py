@@ -1,7 +1,8 @@
 """tmig 命令列。
 
-tmig ir schema [--out 檔案]       輸出 IR 的 JSON Schema
-tmig ir validate <IR 檔>...       驗證 IR JSON 檔
+tmig census <.twb／.twbx>... [--out-dir 目錄]   功能盤點與起步條件檢查
+tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
+tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
 
 from __future__ import annotations
@@ -14,7 +15,36 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from tmig import __version__
+from tmig.census import render_markdown, run_census
 from tmig.ir import ir_json_schema_text, load_ir
+from tmig.parser.twbx import WorkbookFormatError
+
+
+def _cmd_census(args: argparse.Namespace) -> int:
+    failed = 0
+    for path in args.paths:
+        try:
+            report = run_census(path)
+        except WorkbookFormatError as exc:
+            print(f"失敗  {path}：{exc}", file=sys.stderr)
+            failed += 1
+            continue
+        markdown = render_markdown(report)
+        if args.out_dir is None:
+            sys.stdout.write(markdown)
+            continue
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(path).stem
+        md_path = args.out_dir / f"{stem}.census.md"
+        json_path = args.out_dir / f"{stem}.census.json"
+        md_path.write_text(markdown, encoding="utf-8", newline="\n")
+        json_path.write_text(
+            report.model_dump_json(indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
+        failed_checks = [c.title for c in report.checks if c.status == "fail"]
+        summary = f"不符合：{'、'.join(failed_checks)}" if failed_checks else "起步條件符合"
+        print(f"{path}：{report.grade} 級，{summary} → {md_path}")
+    return 1 if failed else 0
 
 
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
@@ -54,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tmig", description="Tableau 移轉工具")
     parser.add_argument("--version", action="version", version=f"tmig {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="指令")
+
+    census = commands.add_parser("census", help="功能盤點：列出報表用到的功能與起步條件")
+    census.add_argument("paths", nargs="+", type=Path, metavar=".twb／.twbx")
+    census.add_argument(
+        "--out-dir",
+        type=Path,
+        help="寫入 <檔名>.census.md 與 .census.json；省略時把 Markdown 印到標準輸出",
+    )
+    census.set_defaults(handler=_cmd_census)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")

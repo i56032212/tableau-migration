@@ -1,0 +1,178 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<!-- 測試用的合成 workbook：刻意包含各種不符合起步條件或 IR v0 未涵蓋的功能。 -->
+<workbook source-build='2021.4.0 (20214.21.1109.1240)' source-platform='mac' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <datasources>
+    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>
+      <column caption='區域' datatype='string' name='[Parameter 2]' param-domain-type='list' role='measure' type='nominal' value='&quot;North&quot;'>
+        <calculation class='tableau' formula='&quot;North&quot;' />
+        <members>
+          <member value='&quot;North&quot;' />
+          <member value='&quot;South&quot;' />
+        </members>
+      </column>
+    </datasource>
+    <datasource caption='Sales (Oracle)' inline='true' name='federated.oracle1' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='prod-db' name='oracle.0aaa'>
+            <connection authentication='username-password' class='oracle' dbname='' one-time-sql='' port='1521' schema='SALES' server='prod-db' service='ORCL' username='report' />
+          </named-connection>
+        </named-connections>
+        <relation connection='oracle.0aaa' name='Custom SQL Query' type='text'>SELECT * FROM SALES WHERE REGION IN (&apos;North&apos;, &apos;South&apos;)</relation>
+      </connection>
+      <column datatype='string' name='[REGION]' role='dimension' type='nominal' />
+      <column datatype='real' name='[AMOUNT]' role='measure' type='quantitative' />
+      <column datatype='date' name='[ORDER_DATE]' role='dimension' type='ordinal' />
+      <column caption='Mine' datatype='boolean' name='[Calculation_10]' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='[OWNER] = USERNAME()' />
+      </column>
+      <column caption='Region Label' datatype='string' name='[Calculation_11]' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='IF [REGION] IN (&quot;North&quot;, &quot;South&quot;) THEN ATTR([REGION]) ELSE &quot;[Other]&quot; END' />
+      </column>
+      <column caption='Order Day' datatype='integer' name='[Calculation_12]' role='dimension' type='ordinal'>
+        <calculation class='tableau' formula='DAY([ORDER_DATE]) + {INCLUDE [REGION] : MAX(DAY([ORDER_DATE]))} + {SUM([AMOUNT])}' />
+      </column>
+      <column caption='Region Group' datatype='string' name='[REGION (group)]' role='dimension' type='nominal'>
+        <calculation class='categorical-bin' column='[REGION]' new-bin='true'>
+          <bin default-name='false' value='&quot;Main&quot;'>
+            <value>&quot;North&quot;</value>
+          </bin>
+        </calculation>
+      </column>
+      <group caption='Top Customers' name='[Set 1]' name-style='unqualified' user:ui-builder='filter-group'>
+        <groupfilter function='member' level='[REGION]' member='&quot;North&quot;' />
+      </group>
+      <filter class='categorical' column='[REGION]'>
+        <groupfilter expression='ISMEMBEROF(&quot;sales&quot;)' function='filter' user:ui-domain='database' user:ui-enumeration='all' user:ui-marker='filter-by' />
+      </filter>
+      <_.fcp.ObjectModelEncapsulateLegacy.true...object-graph>
+        <objects>
+          <object caption='Orders' id='Orders_1'>
+            <properties context=''>
+              <relation connection='oracle.0aaa' name='Orders' table='[SALES].[ORDERS]' type='table' />
+            </properties>
+          </object>
+          <object caption='Owners' id='Owners_2'>
+            <properties context=''>
+              <relation connection='oracle.0aaa' name='Owners' table='[SALES].[OWNERS]' type='table' />
+            </properties>
+          </object>
+        </objects>
+      </_.fcp.ObjectModelEncapsulateLegacy.true...object-graph>
+    </datasource>
+    <datasource caption='Targets' inline='true' name='sqlproxy.42' version='18.1'>
+      <repository-location derived-from='https://tableau.example.com/datasources/Targets' id='Targets' path='/datasources' revision='1.0' />
+      <connection channel='https' class='sqlproxy' dbname='Targets' port='443' server='tableau.example.com' username=''>
+        <relation name='sqlproxy' table='[sqlproxy]' type='table' />
+      </connection>
+      <column datatype='real' name='[Target]' role='measure' type='quantitative' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Blended'>
+      <table>
+        <view>
+          <datasources>
+            <datasource caption='Sales (Oracle)' name='federated.oracle1' />
+            <datasource caption='Targets' name='sqlproxy.42' />
+          </datasources>
+          <datasource-dependencies datasource='federated.oracle1'>
+            <column-instance column='[ORDER_DATE]' derivation='None' name='[none:ORDER_DATE:qk]' pivot='key' type='quantitative' />
+            <column-instance column='[AMOUNT]' derivation='Sum' name='[sum:AMOUNT:qk]' pivot='key' type='quantitative' />
+          </datasource-dependencies>
+          <filter class='relative-date' column='[federated.oracle1].[none:ORDER_DATE:qk]' first-period='-3' include-future='true' include-null='false' last-period='0' period-type-v2='month' />
+          <filter class='categorical' column='[federated.oracle1].[none:REGION:nk]'>
+            <groupfilter expression='SUM([AMOUNT]) &gt; 100' function='filter' user:ui-domain='database' user:ui-enumeration='all' user:ui-marker='filter-by' />
+          </filter>
+          <filter class='categorical' column='[federated.oracle1].[:Measure Names]'>
+            <groupfilter function='union' user:ui-enumeration='inclusive'>
+              <groupfilter function='member' level='[:Measure Names]' member='&quot;[federated.oracle1].[sum:AMOUNT:qk]&quot;' />
+            </groupfilter>
+          </filter>
+        </view>
+        <panes>
+          <pane id='1' y-axis-name='[federated.oracle1].[sum:AMOUNT:qk]'>
+            <mark class='Line' />
+            <reference-line axis-column='[federated.oracle1].[sum:AMOUNT:qk]' formula='average' id='refline0' scope='per-pane' value-column='[federated.oracle1].[sum:AMOUNT:qk]' />
+            <trend-line enable-confidence-bands='false' type='linear' />
+          </pane>
+          <pane id='2' y-axis-name='[sqlproxy.42].[sum:Target:qk]'>
+            <mark class='Bar' />
+          </pane>
+        </panes>
+        <rows>([federated.oracle1].[sum:AMOUNT:qk] + [sqlproxy.42].[sum:Target:qk])</rows>
+        <cols>[federated.oracle1].[none:ORDER_DATE:qk]</cols>
+      </table>
+    </worksheet>
+    <worksheet name='Map'>
+      <table>
+        <view>
+          <datasources>
+            <datasource caption='Sales (Oracle)' name='federated.oracle1' />
+          </datasources>
+        </view>
+        <panes>
+          <pane>
+            <mark class='Automatic' />
+          </pane>
+        </panes>
+        <rows>[federated.oracle1].[Latitude (generated)]</rows>
+        <cols>[federated.oracle1].[Longitude (generated)]</cols>
+      </table>
+    </worksheet>
+  </worksheets>
+  <dashboards>
+    <dashboard name='Auto'>
+      <zones>
+        <zone h='100000' id='3' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='100000' id='1' name='Blended' w='100000' x='0' y='0' />
+        </zone>
+      </zones>
+      <devicelayouts>
+        <devicelayout auto-generated='true' name='Phone'>
+          <zones>
+            <zone h='100000' id='9' name='Blended' w='100000' x='0' y='0' />
+          </zones>
+        </devicelayout>
+      </devicelayouts>
+    </dashboard>
+    <dashboard name='Story 1' type='storyboard'>
+      <size maxheight='964' maxwidth='1016' minheight='964' minwidth='1016' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='2' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='10000' id='1' type-v2='flipboard-nav' w='100000' x='0' y='0' />
+          <zone h='90000' id='5' type-v2='flipboard' w='100000' x='0' y='10000' />
+        </zone>
+      </zones>
+    </dashboard>
+  </dashboards>
+  <actions>
+    <action caption='Filter 1' name='[Action1]'>
+      <activation auto-clear='true' type='on-select' />
+      <source dashboard='Auto' type='sheet' worksheet='Blended' />
+      <command command='tsc:tsl-filter'>
+        <param name='target' value='Auto' />
+      </command>
+    </action>
+    <action caption='Highlight 1' name='[Action2]'>
+      <activation type='on-hover' />
+      <source dashboard='Auto' type='sheet' />
+      <command command='tsc:brush'>
+        <param name='target' value='Auto' />
+      </command>
+    </action>
+    <action caption='Open link' name='[Action3]'>
+      <activation type='on-menu' />
+      <source dashboard='Auto' type='sheet' />
+      <command command='tsc:url-action' />
+    </action>
+    <action caption='Go to View' name='[Action4]'>
+      <source datasource='federated.oracle1' type='datasource' />
+      <link caption='Go to View' expression='&lt;[REGION]&gt;' />
+    </action>
+    <datasources>
+      <datasource caption='Sales (Oracle)' name='federated.oracle1' />
+    </datasources>
+  </actions>
+</workbook>

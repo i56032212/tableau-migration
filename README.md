@@ -36,6 +36,29 @@ uv run python scripts/check.py --fix # 先自動修正 lint 與格式
 
 第一次執行 pyright 會從 npm registry 下載 pyright 本體；公司網路若擋 npm，需要設定代理。
 
+## 盤點試點報表（S3）
+
+把兩份候選報表的 .twbx 放進 `fixtures/<報表>/`，再執行：
+
+```bash
+uv run tmig census fixtures/sales_overview/sales_overview.twbx --out-dir fixtures/sales_overview
+```
+
+產出 `<報表>.census.md`（給人看）與 `<報表>.census.json`（完整資料）。報告內容：
+
+- 起步條件：單一資料源、資料在 .twbx 的萃取檔內、單表萃取、無 RLS、無 Blending、固定尺寸 dashboard 等八項，逐項標示通過、注意或不符合
+- 分級：A（只有一般計算）、B（含 LOD 或 Table Calculation）、C（Blending、自訂 SQL、Story、地圖）
+- 用到的函式與是否在 v0 函式集、每個計算欄位的公式、工作表的標記與篩選、dashboard 區塊、參數與動作
+
+盤點只讀 .twb 的 XML，不讀萃取資料。報表選定後，把 census 列出、v0 尚未涵蓋的函式與功能補登為任務。
+
+## 其他指令
+
+```bash
+uv run tmig ir validate <IR 檔>                               # 驗證 IR
+uv run tmig ir schema --out kernel/schema/ir-0.1.schema.json   # 更新 JSON Schema
+```
+
 ## 開發規則
 
 - IR 是唯一的報表定義：解析器寫入，其他模組只讀，不回頭讀 .twb
