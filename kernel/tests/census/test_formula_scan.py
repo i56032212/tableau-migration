@@ -1,6 +1,7 @@
 import pytest
 
-from tmig.census.formula_scan import scan_formula, tokenize
+from tmig.census.formula_scan import scan_formula
+from tmig.formula.lexer import tokenize
 
 
 def test_counts_function_calls() -> None:
@@ -60,17 +61,17 @@ def test_table_calc_and_user_functions() -> None:
     assert scan.table_calc_functions == ["LOOKUP", "RUNNING_SUM", "WINDOW_AVG"]
 
 
-def test_outside_v0_includes_in_operator() -> None:
+def test_outside_v0() -> None:
     scan = scan_formula(
-        "IF [Region] IN ('North', 'South') THEN ATTR([Region]) END + DAY(#2025-01-31#)"
+        "IF REGEXP_MATCH([Region], 'a') THEN DATENAME('month', [d]) END + ATTR([x]) IN (1)"
     )
-    assert scan.outside_v0 == ["ATTR", "DAY", "IN（運算子）"]
+    assert scan.outside_v0 == ["DATENAME", "REGEXP_MATCH"]
 
 
 def test_numbers_and_date_literals() -> None:
-    tokens, errors = tokenize("1.5e3 + .25 - #2025-01-01 08:00:00#")
-    assert errors == []
-    assert [t.kind for t in tokens] == ["number", "op", "number", "op", "date"]
+    tokens = tokenize("1.5e3 + .25 - #2025-01-01 08:00:00#")
+    assert [t.kind for t in tokens] == ["number", "op", "number", "op", "date", "eof"]
+    assert tokens[-2].value == "2025-01-01 08:00:00"
 
 
 @pytest.mark.parametrize(

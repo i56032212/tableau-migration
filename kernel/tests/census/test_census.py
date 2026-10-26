@@ -155,7 +155,7 @@ def test_problems_details(problems: CensusReport) -> None:
         detail(problems, "no_rls") == "ISMEMBEROF（Sales (Oracle) 的資料源篩選）；USERNAME（Mine）"
     )
     assert "「Auto」為 automatic" in detail(problems, "fixed_dashboards")
-    assert problems.functions_outside_v0 == ["ATTR", "DAY", "IN（運算子）", "USERNAME"]
+    assert problems.functions_outside_v0 == ["USERNAME"]
     assert problems.lod == {"INCLUDE": 1, "TABLE": 1}
 
 
