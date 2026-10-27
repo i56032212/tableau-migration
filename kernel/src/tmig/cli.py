@@ -3,6 +3,8 @@
 tmig census <.twb／.twbx>... [--out-dir 目錄]   功能盤點與起步條件檢查
 tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援的元素
 tmig import-hyper <.twbx> [--out-dir 目錄]      萃取匯入 DuckDB 並自檢
+tmig sql <IR 檔> <工作表> [--case 名稱]          產生的 SQL（除錯用）
+tmig query <IR 檔> <工作表> [--case 名稱]        執行查詢，輸出 CSV
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -116,6 +118,59 @@ def _cmd_import_hyper(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _query_inputs(args: argparse.Namespace):
+    """讀 IR，並把 --case 轉成篩選狀態。"""
+    from tmig.planner.state import QueryState
+    from tmig.verify.cases import case_state, load_cases
+
+    ir = load_ir(args.ir)
+    state = QueryState()
+    if args.case:
+        cases_path = args.cases or args.ir.parent / "cases.yaml"
+        state = case_state(ir, load_cases(cases_path).case(args.case))
+    return ir, state
+
+
+def _cmd_sql(args: argparse.Namespace) -> int:
+    from tmig.sqlgen.query import QueryError, worksheet_sql
+    from tmig.verify.cases import CasesError
+
+    try:
+        ir, state = _query_inputs(args)
+        query = worksheet_sql(ir, args.worksheet, state)
+    except (FileNotFoundError, ValidationError, CasesError, QueryError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    sys.stdout.write(query.sql)
+    if query.state.skipped:
+        print(f"-- 不適用這張工作表的篩選：{'、'.join(query.state.skipped)}", file=sys.stderr)
+    return 0
+
+
+def _cmd_query(args: argparse.Namespace) -> int:
+    from tmig.data.executor import ExecutionError, execute
+    from tmig.sqlgen.query import QueryError, worksheet_sql
+    from tmig.verify.cases import CasesError
+
+    try:
+        ir, state = _query_inputs(args)
+        query = worksheet_sql(ir, args.worksheet, state)
+        ws = next(w for w in ir.worksheets if w.id == query.worksheet)
+        db = args.db or args.ir.parent / "data" / f"{ws.datasource}.duckdb"
+        result = execute(db, query.sql)
+    except (FileNotFoundError, ValidationError, CasesError, QueryError, ExecutionError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    text = result.to_csv()
+    if args.out is None:
+        sys.stdout.write(text)
+    else:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"{len(result.rows)} 列 → {args.out}", file=sys.stderr)
+    return 0
+
+
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
     text = ir_json_schema_text()
     if args.out is None:
@@ -179,6 +234,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--out-dir", type=Path, help="DuckDB 檔的目錄；預設為 .twbx 所在目錄下的 data/"
     )
     imp.set_defaults(handler=_cmd_import_hyper)
+
+    for name, handler, help_text in (
+        ("sql", _cmd_sql, "產生工作表的 SQL（除錯用）"),
+        ("query", _cmd_query, "執行工作表查詢，輸出 CSV"),
+    ):
+        sub = commands.add_parser(name, help=help_text)
+        sub.add_argument("ir", type=Path, metavar="IR 檔")
+        sub.add_argument("worksheet", metavar="工作表", help="工作表 id 或名稱")
+        sub.add_argument("--case", help="cases.yaml 中的篩選組合名稱；省略時用工作表的預設篩選")
+        sub.add_argument("--cases", type=Path, help="cases.yaml 路徑；預設為 IR 檔所在目錄")
+        if name == "query":
+            sub.add_argument(
+                "--db",
+                type=Path,
+                help="DuckDB 檔；預設為 IR 檔所在目錄下的 data/<資料源 id>.duckdb",
+            )
+            sub.add_argument("--out", type=Path, help="寫入 CSV 檔；省略時印到標準輸出")
+        sub.set_defaults(handler=handler)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")

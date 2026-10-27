@@ -1,0 +1,33 @@
+# 示範報表的篩選組合：每張工作表比對預設值加 3 組
+# 網址參數的寫法與 Tableau 相同：欄位顯示名稱（大小寫須相符）、日期部分寫成 year(欄位)、多值以逗號分隔
+workbook: wb_superstore_demo
+# 示範報表沒有 Tableau Server；正式報表填入 https://<server>/#/site/<site>/views/<workbook>
+tableau_views_url: null
+# 由 fetch-expected 填入；示範報表的預期結果由 scripts/demo_oracle.py 獨立計算，不是 Tableau 產生
+fetched_at: null
+sheets:
+  - worksheet: ws_sales_by_region
+    view: SalesbyRegion
+  - worksheet: ws_monthly_profit
+    view: MonthlyProfit
+  - worksheet: ws_region_share_by_year
+    view: RegionSharebyYear
+  - worksheet: ws_sub_category_profit
+    view: Sub-CategoryProfit
+cases:
+  - name: default
+    url_params: {}
+    note: 工作表的預設篩選
+  - name: office_supplies
+    url_params:
+      Category: Office Supplies
+    note: 常用值；Sales by Region 原本的類別篩選被取代
+  - name: year_2024
+    url_params:
+      year(Order Date): "2024"
+    note: 日期邊界（資料的最後一年）；Top N 在維度篩選之前計算，不受年度影響
+  - name: consumer_top2
+    url_params:
+      Segment: Consumer
+      前 N 名: 2
+    note: 篩選加參數；Region Share by Year 原本的客群篩選被取代

@@ -1,0 +1,191 @@
+"""篩選與參數狀態：查詢服務的請求、cases.yaml 的網址參數，都先轉成這個格式。
+
+欄位鍵（field key）：
+
+- ``f_region``：欄位本身
+- ``year(f_order_date)``：日期部分（year、quarter、month、week、weekday、day、hour、minute、second）
+- ``trunc_month(f_order_date)``：日期截斷
+- ``sum(f_sales)``：彙總；Table Calculation 另加 ``#<tc id>``，例如 ``sum(f_sales)#tc_running``
+
+查詢結果的欄名也用同一套欄位鍵。
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from tmig.ir.models import (
+    IR,
+    CategoricalFilter,
+    DateDerivation,
+    FieldUse,
+    Filter,
+    RangeFilter,
+    Scalar,
+    TopNFilter,
+    Worksheet,
+)
+
+DATE_PARTS = ("year", "quarter", "month", "week", "weekday", "day", "hour", "minute", "second")
+TRUNC_UNITS = ("year", "quarter", "month", "week", "day", "hour", "minute", "second")
+_KEY = re.compile(r"^(?:(?P<fn>[a-z_]+)\()?(?P<field>[a-z][a-z0-9_]*)\)?$")
+
+
+class StateError(ValueError):
+    pass
+
+
+class FilterValue(BaseModel):
+    """一個欄位的篩選狀態：類別篩選給 mode 與 values，範圍篩選給 min、max。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["include", "exclude", "all"] | None = None
+    values: list[Scalar] = Field(default_factory=list)
+    min: Scalar = None
+    max: Scalar = None
+    include_null: bool | None = None
+
+    @property
+    def is_range(self) -> bool:
+        return self.mode is None and (self.min is not None or self.max is not None)
+
+
+class QueryState(BaseModel):
+    """篩選與參數的目前狀態。API 只接受這個格式，不接受 SQL。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filters: dict[str, FilterValue] = Field(default_factory=dict)
+    parameters: dict[str, Scalar] = Field(default_factory=dict)
+
+
+def use_key(use: FieldUse) -> str:
+    """FieldUse → 欄位鍵。"""
+    key = use.field
+    if use.date is not None:
+        name = use.date.unit if use.date.kind == "part" else f"trunc_{use.date.unit}"
+        key = f"{name}({key})"
+    if use.agg is not None:
+        key = f"{use.agg}({key})"
+    if use.table_calc is not None:
+        key = f"{key}#{use.table_calc}"
+    return key
+
+
+def parse_key(key: str) -> FieldUse:
+    """篩選狀態的欄位鍵 → FieldUse（只接受維度：欄位、日期部分、日期截斷）。"""
+    match = _KEY.match(key.strip())
+    if match is None:
+        raise StateError(f"無法辨識的欄位鍵「{key}」")
+    fn, field = match.group("fn"), match.group("field")
+    if fn is None:
+        return FieldUse(field=field)
+    if fn in DATE_PARTS:
+        return FieldUse(field=field, date=DateDerivation(kind="part", unit=fn))  # type: ignore[arg-type]
+    if fn.startswith("trunc_") and fn.removeprefix("trunc_") in TRUNC_UNITS:
+        unit = fn.removeprefix("trunc_")
+        return FieldUse(field=field, date=DateDerivation(kind="trunc", unit=unit), continuous=True)  # type: ignore[arg-type]
+    raise StateError(f"欄位鍵「{key}」的函式 {fn} 不支援")
+
+
+def _same_dimension(a: FieldUse, b: FieldUse) -> bool:
+    return a.field == b.field and a.date == b.date and a.agg is None and b.agg is None
+
+
+@dataclass
+class EffectiveState:
+    """套用到某張工作表後的結果。"""
+
+    filters: list[Filter]
+    parameters: dict[str, Scalar]
+    applied: list[str]
+    """實際套用的篩選欄位鍵。"""
+    skipped: list[str]
+    """不適用這張工作表的篩選欄位鍵（欄位不在工作表的資料源中）。"""
+
+
+def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveState:
+    """把狀態套到工作表：同一欄位的既有篩選改值，沒有的就新增維度篩選（與 Tableau 網址參數相同）。"""
+    datasource = next(ds for ds in ir.datasources if ds.id == worksheet.datasource)
+    field_ids = {f.id for f in datasource.fields}
+    params = {p.id: p.value for p in ir.parameters}
+    for param_id, value in state.parameters.items():
+        if param_id not in params:
+            raise StateError(f"參數「{param_id}」不存在")
+        params[param_id] = value
+
+    filters: list[Filter] = list(worksheet.filters)
+    applied: list[str] = []
+    skipped: list[str] = []
+    for n, (key, value) in enumerate(state.filters.items(), start=1):
+        use = parse_key(key)
+        if use.field not in field_ids:
+            skipped.append(key)
+            continue
+        applied.append(key)
+        index = next(
+            (
+                i
+                for i, flt in enumerate(filters)
+                if not isinstance(flt, TopNFilter) and _same_dimension(flt.field, use)
+            ),
+            None,
+        )
+        if index is not None:
+            filters[index] = _replace(filters[index], value)
+            continue
+        filters.append(_new_filter(f"state_{n}", use, value))
+    return EffectiveState(filters=filters, parameters=params, applied=applied, skipped=skipped)
+
+
+def _replace(existing: Filter, value: FilterValue) -> Filter:
+    if value.is_range:
+        if isinstance(existing, RangeFilter):
+            return existing.model_copy(
+                update={
+                    "min": value.min,
+                    "max": value.max,
+                    "include_null": existing.include_null
+                    if value.include_null is None
+                    else value.include_null,
+                }
+            )
+        return _new_filter(existing.id, existing.field, value, existing.stage)
+    if isinstance(existing, CategoricalFilter):
+        mode = value.mode or "include"
+        return existing.model_copy(
+            update={"mode": mode, "values": [] if mode == "all" else list(value.values)}
+        )
+    return _new_filter(existing.id, existing.field, value, existing.stage)
+
+
+def _new_filter(
+    filter_id: str, use: FieldUse, value: FilterValue, stage: str = "dimension"
+) -> Filter:
+    source = f"state:{use_key(use)}"
+    if value.is_range:
+        return RangeFilter(
+            kind="range",
+            id=filter_id,
+            field=use,
+            stage=stage,  # type: ignore[arg-type]
+            min=value.min,
+            max=value.max,
+            include_null=bool(value.include_null),
+            source_ref=source,
+        )
+    mode = value.mode or "include"
+    return CategoricalFilter(
+        kind="categorical",
+        id=filter_id,
+        field=use,
+        stage=stage,  # type: ignore[arg-type]
+        mode=mode,
+        values=[] if mode == "all" else list(value.values),
+        source_ref=source,
+    )
