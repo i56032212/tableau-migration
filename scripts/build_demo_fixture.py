@@ -105,8 +105,9 @@ DASHBOARD_W, DASHBOARD_H = 1200, 800
 
 
 def attr(value: str) -> str:
-    """以單引號包住的 XML 屬性值。"""
-    return "'" + escape(value, {"'": "&apos;", '"': "&quot;"}) + "'"
+    """以單引號包住的 XML 屬性值；換行寫成字元參照（與 Tableau 相同），否則 XML 會正規化成空白。"""
+    entities = {"'": "&apos;", '"': "&quot;", "\r": "&#13;", "\n": "&#10;"}
+    return "'" + escape(value, entities) + "'"
 
 
 def ref(instance: str) -> str:
@@ -381,7 +382,7 @@ def worksheets() -> str:
                     "Sum",
                     "[cum:sum:Sales:qk]",
                     "quantitative",
-                    "<table-calc aggregation='Sum' ordering-type='Rows' type='CumTotal' />",
+                    f"<table-calc aggregation='Sum' ordering-field={attr(f'[{DS}].[Region]')} ordering-type='Field' type='CumTotal' />",
                 ),
             ],
             [],
@@ -511,7 +512,7 @@ def worksheets() -> str:
                     "User",
                     "[usr:Calculation_5418932014720188416:qk]",
                     "quantitative",
-                    "<table-calc ordering-type='Rows' />",
+                    "<table-calc ordering-type='Columns' />",
                 ),
                 instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
                 instance("[Sub-Category]", "None", "[none:Sub-Category:nk]", "nominal"),

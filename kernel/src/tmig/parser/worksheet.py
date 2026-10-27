@@ -1,0 +1,658 @@
+"""工作表：欄列架、標記、篩選、排序與 Table Calculation（A4）。
+
+Table Calculation 的計算方向（Tableau 的 Compute Using）依真實 .twb 歸納：
+
+- ``ordering-type='Columns'`` 為 Table (down)：沿著欄往下算，定址為列架上的維度與標記卡上的維度
+- ``ordering-type='Rows'`` 為 Table (across)：沿著列往右算，定址為欄架上的維度與標記卡上的維度
+- ``ordering-type='Field'`` 為指定維度：``ordering-field`` 或 ``<order field>`` 列出定址欄位
+- 未寫 ``ordering-type`` 時依 Tableau 預設 Table (across)，並標記為推定（``inferred``）
+
+其餘未納入的分割方式一律列為不支援，等真實報表出現再補。
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from lxml import etree
+
+from tmig.ir.models import (
+    FieldUse,
+    Filter,
+    Marks,
+    MarkType,
+    Scalar,
+    Sort,
+    TableCalc,
+    TableCalcPreset,
+    Worksheet,
+)
+from tmig.parser.context import DsState, ParseContext, SheetState
+from tmig.parser.datasource import add_calc_field, analyze_calcs
+from tmig.parser.fields import (
+    FilterParser,
+    bucket_values,
+    instance_key,
+    is_aggregate,
+    use_from_instance,
+    value_type,
+)
+from tmig.parser.twbx import child, children, local_name, text_of, xpath
+from tmig.parser.values import LiteralError
+
+MARKS: dict[str, MarkType] = {
+    "Automatic": "automatic",
+    "Bar": "bar",
+    "Line": "line",
+    "Area": "area",
+    "Circle": "circle",
+    "Square": "square",
+    "Shape": "shape",
+    "Text": "text",
+    "Pie": "pie",
+    "GanttBar": "gantt",
+}
+ORDERING: dict[str, TableCalcPreset] = {
+    "Columns": "table_down",
+    "Rows": "table_across",
+    "Field": "specific",
+}
+QUICK_TYPES = {"CumTotal": "running_total", "PctTotal": "percent_of_total", "Rank": "rank"}
+RANK_TYPES = {
+    "Competition": "competition",
+    "Dense": "dense",
+    "Modified": "modified",
+    "Unique": "unique",
+}
+
+# 工作表內可以出現的元素；OPAQUE 只影響格式，不往下檢查
+KNOWN = frozenset(
+    {
+        "worksheet",
+        "table",
+        "view",
+        "datasources",
+        "datasource",
+        "datasource-dependencies",
+        "column",
+        "column-instance",
+        "table-calc",
+        "order",
+        "calculation",
+        "range",
+        "members",
+        "member",
+        "filter",
+        "groupfilter",
+        "min",
+        "max",
+        "sort",
+        "computed-sort",
+        "manual-sort",
+        "natural-sort",
+        "dictionary",
+        "bucket",
+        "shelf-sorts",
+        "shelf-sort-v2",
+        "slices",
+        "aggregation",
+        "panes",
+        "pane",
+        "mark",
+        "encodings",
+        "color",
+        "size",
+        "text",
+        "lod",
+        "tooltip",
+        "rows",
+        "cols",
+        "pages",
+        "simple-id",
+        "repository-location",
+        "breakdown",
+    }
+)
+OPAQUE = frozenset(
+    {
+        "style",
+        "layout-options",
+        "customized-tooltip",
+        "customized-label",
+        "mark-sizing",
+        "desc",
+        "aliases",
+        "formatted-text",
+        "tooltip-style",
+        "title",
+        "caption",
+        "layout-cache",
+        "page-trail-options",
+    }
+)
+KNOWN_UNSUPPORTED = {
+    "reference-line": "參考線、參考區間或分布",
+    "trend-line": "趨勢線",
+    "forecast-specification": "預測",
+    "subtotals": "小計與總計",
+    "mapsources": "地圖",
+    "mapsource": "地圖",
+    "add-in": "工作表擴充功能",
+}
+
+
+def shelf_refs(text: str) -> tuple[list[str], set[str]]:
+    """拆解欄列架文字：回傳完整參照（例如 [ds].[none:Region:nk]）與出現的運算子。"""
+    refs: list[str] = []
+    operators: set[str] = set()
+    current: list[str] = []
+
+    def flush() -> None:
+        if current:
+            refs.append(".".join("[" + part.replace("]", "]]") + "]" for part in current))
+            current.clear()
+
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "[":
+            j = i + 1
+            name: list[str] = []
+            while j < len(text):
+                if text[j] == "]":
+                    if j + 1 < len(text) and text[j + 1] == "]":
+                        name.append("]")
+                        j += 2
+                        continue
+                    break
+                name.append(text[j])
+                j += 1
+            current.append("".join(name))
+            i = j + 1
+            continue
+        if ch == ".":
+            i += 1
+            continue
+        if ch in "/*+()":
+            flush()
+            operators.add(ch)
+        elif ch.isspace():
+            flush()
+        i += 1
+    flush()
+    return refs, operators
+
+
+class SheetParser:
+    def __init__(self, ctx: ParseContext, element: etree._Element) -> None:
+        self.ctx = ctx
+        self.el = element
+        self.name = element.get("name", "")
+        self.instances: dict[str, etree._Element] = {}
+        self.uses: dict[str, FieldUse] = {}
+        self.ds: DsState | None = None
+
+    # ------------------------------------------------------------ 入口
+
+    def parse(self) -> Worksheet | None:
+        ctx, el = self.ctx, self.el
+        table = child(el, "table")
+        view = child(table, "view")
+        if table is None or view is None:
+            ctx.flag(el, f"工作表「{self.name}」沒有 <table>／<view>")
+            return None
+        sources = [d.get("name", "") for d in children(child(view, "datasources"), "datasource")]
+        main = [s for s in sources if s != "Parameters"]
+        if not main:
+            ctx.flag(el, f"工作表「{self.name}」沒有資料源")
+            return None
+        if len(main) > 1:
+            ctx.flag(
+                view, f"工作表「{self.name}」使用 Data Blending（{'、'.join(main)}），v0 不支援"
+            )
+            return None
+        ds = ctx.datasources.get(main[0])
+        if ds is None:
+            ctx.flag(el, f"工作表「{self.name}」的資料源 {main[0]} 無法移轉")
+            return None
+        self.ds = ds
+        self._dependencies(view, main[0])
+        self._check_elements(el)
+
+        rows = self._shelf(child(table, "rows"))
+        cols = self._shelf(child(table, "cols"))
+        pages = child(table, "pages")
+        if pages is not None and (text_of(pages) or len(children(pages))):
+            ctx.flag(pages, "頁面架（Pages）v0 不支援")
+        if view is not None:
+            aggregation = child(view, "aggregation")
+            if aggregation is not None and aggregation.get("value") == "false":
+                ctx.flag(aggregation, "取消彙總量值（Aggregate Measures 關閉）v0 不支援")
+        marks, mark_dims = self._marks(child(table, "panes"))
+        sheet_id = ctx.ids.make("ws", self.name)
+        table_calcs = self._table_calcs(rows, cols, mark_dims)
+        filters, kinds = self._filters(view)
+        sorts = self._sorts(view)
+        worksheet = Worksheet(
+            id=sheet_id,
+            name=self.name,
+            datasource=ds.id,
+            rows=rows,
+            columns=cols,
+            marks=marks,
+            filters=filters,
+            sorts=sorts,
+            table_calcs=table_calcs,
+            source_ref=xpath(el),
+        )
+        ctx.sheets[self.name] = SheetState(
+            id=sheet_id,
+            name=self.name,
+            ds=ds,
+            instances=self.instances,
+            uses=self.uses,
+            filter_kinds=kinds,
+        )
+        return worksheet
+
+    # ------------------------------------------------------------ 欄位實例
+
+    def _dependencies(self, view: etree._Element, ds_name: str) -> None:
+        assert self.ds is not None
+        added = False
+        for dep in children(view, "datasource-dependencies"):
+            if dep.get("datasource") != ds_name:
+                continue
+            for column in children(dep, "column"):
+                name = column.get("name", "")
+                if name in self.ds.by_name or child(column, "calculation") is None:
+                    continue
+                # 直接在欄列架上輸入的臨時計算，只存在工作表裡
+                if add_calc_field(self.ctx, self.ds, column) is not None:
+                    added = True
+            for inst in children(dep, "column-instance"):
+                self.instances[inst.get("name", "")] = inst
+        if added:
+            analyze_calcs(self.ctx, self.ds)
+
+    def resolve(self, ref: str) -> FieldUse | str:
+        assert self.ds is not None
+        from tmig.parser.refs import qualified_parts
+
+        parts = qualified_parts(ref)
+        if len(parts) == 2 and parts[0] not in (self.ds.name, "Parameters"):
+            return f"參照了其他資料源 {parts[0]}"
+        if parts and parts[0] == "Parameters":
+            return f"欄列架上的參數 {ref} v0 不支援"
+        key = instance_key(ref)
+        if key in self.uses:
+            return self.uses[key]
+        inst = self.instances.get(key)
+        if inst is None:
+            data_field = self.ds.by_name.get(key)
+            if data_field is None:
+                if key in ("[:Measure Names]", "[Multiple Values]") or key.startswith("[:"):
+                    return f"Measure Names／Values {key} v0 不支援"
+                return f"找不到欄位實例 {ref}"
+            use = FieldUse(field=data_field.id)
+        else:
+            resolved = use_from_instance(self.ds, inst)
+            if isinstance(resolved, str):
+                return resolved
+            use = resolved
+        self.uses[key] = use
+        return use
+
+    def _use(self, ref: str | None, anchor: etree._Element, what: str) -> FieldUse | None:
+        if not ref:
+            self.ctx.flag(anchor, f"{what}缺少欄位")
+            return None
+        resolved = self.resolve(ref)
+        if isinstance(resolved, str):
+            self.ctx.flag(anchor, f"{what}：{resolved}")
+            return None
+        return resolved
+
+    # ------------------------------------------------------------ 欄列架與標記
+
+    def _shelf(self, element: etree._Element | None) -> list[FieldUse]:
+        if element is None:
+            return []
+        text = text_of(element)
+        if not text:
+            return []
+        refs, operators = shelf_refs(text)
+        if "+" in operators:
+            self.ctx.flag(element, "合併軸或雙軸 v0 不支援")
+        uses: list[FieldUse] = []
+        for ref in refs:
+            use = self._use(ref, element, f"{local_name(element)} 架")
+            if use is not None:
+                uses.append(use)
+        return uses
+
+    def _marks(self, panes_el: etree._Element | None) -> tuple[Marks, list[FieldUse]]:
+        panes = children(panes_el, "pane")
+        if not panes:
+            return Marks(type="automatic"), []
+        main = panes[0]
+        signature = _pane_signature(main)
+        for extra in panes[1:]:
+            if _pane_signature(extra) != signature:
+                self.ctx.flag(extra, "多個標記卡（雙軸或個別量值的標記設定）v0 不支援")
+        mark_el = child(main, "mark")
+        mark_class = mark_el.get("class", "Automatic") if mark_el is not None else "Automatic"
+        mark_type = MARKS.get(mark_class)
+        if mark_type is None:
+            self.ctx.flag(
+                mark_el if mark_el is not None else main, f"標記類型 {mark_class} v0 不支援"
+            )
+            mark_type = "automatic"
+        marks = Marks(type=mark_type)
+        dims: list[FieldUse] = []
+        for enc in children(child(main, "encodings")):
+            tag = local_name(enc)
+            if tag not in ("color", "size", "text", "lod", "tooltip"):
+                self.ctx.flag(enc, f"標記編碼 <{tag}> v0 不支援")
+                continue
+            use = self._use(enc.get("column"), enc, f"標記編碼 {tag}")
+            if use is None:
+                continue
+            if tag == "color":
+                if marks.color is not None:
+                    self.ctx.flag(enc, "顏色重複設定")
+                    continue
+                marks.color = use
+            elif tag == "size":
+                if marks.size is not None:
+                    self.ctx.flag(enc, "大小重複設定")
+                    continue
+                marks.size = use
+            elif tag == "text":
+                marks.label.append(use)
+            elif tag == "lod":
+                marks.detail.append(use)
+            else:
+                marks.tooltip.append(use)
+            assert self.ds is not None
+            if not is_aggregate(self.ds, use):
+                dims.append(use)
+        return marks, dims
+
+    # ------------------------------------------------------------ Table Calculation
+
+    def _table_calcs(
+        self, rows: list[FieldUse], cols: list[FieldUse], mark_dims: list[FieldUse]
+    ) -> list[TableCalc]:
+        assert self.ds is not None
+        ds = self.ds
+        row_dims = [u for u in rows if not is_aggregate(ds, u)]
+        col_dims = [u for u in cols if not is_aggregate(ds, u)]
+        result: list[TableCalc] = []
+        # 依工作表相依清單的順序處理；只出現在篩選上的 Table Calculation 也要先建立
+        for key, inst in self.instances.items():
+            calc_el = child(inst, "table-calc")
+            data_field = ds.by_name.get(inst.get("column", ""))
+            is_formula = data_field is not None and ds.levels.get(data_field.id) == "table_calc"
+            if calc_el is None and not is_formula:
+                continue
+            use = self.resolve(key)
+            if isinstance(use, str):
+                self.ctx.flag(inst, f"Table Calculation 的欄位無法解析：{use}")
+                continue
+            if calc_el is None:
+                result.append(self._default_formula_calc(use, row_dims, col_dims, mark_dims, inst))
+                continue
+            created = self._table_calc(calc_el, use, row_dims, col_dims, mark_dims)
+            if created is not None:
+                result.append(created)
+        return result
+
+    def _default_formula_calc(
+        self,
+        use: FieldUse,
+        row_dims: list[FieldUse],
+        col_dims: list[FieldUse],
+        mark_dims: list[FieldUse],
+        inst: etree._Element | None,
+    ) -> TableCalc:
+        assert self.ds is not None
+        caption = self.ds.field_by_id(use.field).caption
+        tc_id = self.ctx.ids.make("tc", f"formula {caption}", f"formula {use.field}")
+        use.table_calc = tc_id
+        return TableCalc(
+            id=tc_id,
+            type="formula",
+            preset="table_across",
+            addressing=_field_ids(col_dims + mark_dims),
+            inferred=True,
+            source_ref=xpath(inst) if inst is not None else xpath(self.el),
+        )
+
+    def _table_calc(
+        self,
+        calc_el: etree._Element,
+        use: FieldUse,
+        row_dims: list[FieldUse],
+        col_dims: list[FieldUse],
+        mark_dims: list[FieldUse],
+    ) -> TableCalc | None:
+        assert self.ds is not None
+        ds = self.ds
+        type_attr = calc_el.get("type")
+        if type_attr is None:
+            if ds.levels.get(use.field) != "table_calc":
+                self.ctx.ignore(calc_el, "非 Table Calculation 欄位上的計算方向設定，不影響數字")
+                return None
+            calc_type = "formula"
+        elif type_attr in QUICK_TYPES:
+            calc_type = QUICK_TYPES[type_attr]
+        else:
+            self.ctx.flag(calc_el, f"快速 Table Calculation 類型 {type_attr} v0 不支援")
+            return None
+        options: dict[str, Scalar] = {}
+        if calc_type == "running_total":
+            options["aggregation"] = calc_el.get("aggregation", "Sum").lower()
+            if options["aggregation"] not in ("sum", "avg", "min", "max"):
+                self.ctx.flag(calc_el, f"累計的彙總方式 {options['aggregation']} v0 不支援")
+                return None
+        if calc_type == "rank":
+            parts = [
+                p.strip() for p in calc_el.get("rank-options", "Competition,Descending").split(",")
+            ]
+            rank_type = RANK_TYPES.get(parts[0]) if parts else None
+            if rank_type is None:
+                self.ctx.flag(calc_el, f"排名方式 {calc_el.get('rank-options')} v0 不支援")
+                return None
+            options["rank_type"] = rank_type
+            options["direction"] = "asc" if len(parts) > 1 and parts[1] == "Ascending" else "desc"
+        ordering = calc_el.get("ordering-type")
+        inferred = ordering is None
+        preset: TableCalcPreset
+        if ordering is None:
+            preset = "table_across"
+        elif ordering in ORDERING:
+            preset = ORDERING[ordering]
+        else:
+            self.ctx.flag(
+                calc_el, f"Table Calculation 的計算方向 ordering-type={ordering} v0 不支援"
+            )
+            return None
+        if preset == "table_down":
+            addressing = _field_ids(row_dims + mark_dims)
+        elif preset == "table_across":
+            addressing = _field_ids(col_dims + mark_dims)
+        else:
+            refs = [r for r in [calc_el.get("ordering-field")] if r]
+            refs += [o.get("field", "") for o in children(calc_el, "order")]
+            addressing = []
+            for ref in refs:
+                found = self._field_ref(ref)
+                if found is None:
+                    self.ctx.flag(calc_el, f"Table Calculation 的定址欄位 {ref} 找不到")
+                    return None
+                if found not in addressing:
+                    addressing.append(found)
+            if not addressing:
+                self.ctx.flag(calc_el, "指定維度的 Table Calculation 沒有列出定址欄位")
+                return None
+        caption = ds.field_by_id(use.field).caption
+        tc_id = self.ctx.ids.make("tc", f"{calc_type} {caption}", f"{calc_type} {use.field}")
+        use.table_calc = tc_id
+        return TableCalc(
+            id=tc_id,
+            type=calc_type,  # type: ignore[arg-type]
+            preset=preset,
+            addressing=addressing,
+            inferred=inferred,
+            options=options,
+            source_ref=xpath(calc_el),
+        )
+
+    def _field_ref(self, ref: str) -> str | None:
+        """[ds].[Region]（欄位名稱）或 [ds].[none:Region:nk]（欄位實例）→ 欄位 id。"""
+        assert self.ds is not None
+        key = instance_key(ref)
+        data_field = self.ds.by_name.get(key)
+        if data_field is not None:
+            return data_field.id
+        resolved = self.resolve(ref)
+        return None if isinstance(resolved, str) else resolved.field
+
+    # ------------------------------------------------------------ 篩選與排序
+
+    def _filters(
+        self, view: etree._Element
+    ) -> tuple[list[Filter], dict[str, Literal["categorical", "range", "top_n"]]]:
+        assert self.ds is not None
+        parser = FilterParser(self.ctx, self.ds, self.resolve, "worksheet")
+        filters: list[Filter] = []
+        kinds: dict[str, Literal["categorical", "range", "top_n"]] = {}
+        for element in children(view, "filter"):
+            parsed = parser.parse(element)
+            if parsed is None:
+                continue
+            filters.append(parsed)
+            kinds[instance_key(element.get("column", ""))] = parsed.kind
+        return filters, kinds
+
+    def _sorts(self, view: etree._Element) -> list[Sort]:
+        sorts: list[Sort] = []
+        for element in children(view):
+            tag = local_name(element)
+            try:
+                if tag in ("sort", "computed-sort"):
+                    parsed = self._sort(element, tag)
+                elif tag == "manual-sort":
+                    parsed = self._manual(element)
+                elif tag == "natural-sort":
+                    parsed = self._simple(element, element.get("column"), "alphabetic")
+                elif tag == "shelf-sorts":
+                    for item in children(element, "shelf-sort-v2"):
+                        found = self._by_field(
+                            item,
+                            item.get("dimension-to-sort"),
+                            item.get("measure-to-sort-by"),
+                            item.get("direction"),
+                        )
+                        if found is not None:
+                            sorts.append(found)
+                    continue
+                else:
+                    continue
+            except LiteralError as exc:
+                self.ctx.flag(element, f"排序值無法解析：{exc}")
+                continue
+            if parsed is not None:
+                sorts.append(parsed)
+        return sorts
+
+    def _sort(self, element: etree._Element, tag: str) -> Sort | None:
+        sort_class = "computed" if tag == "computed-sort" else element.get("class", "")
+        column = element.get("column")
+        if sort_class == "computed":
+            return self._by_field(element, column, element.get("using"), element.get("direction"))
+        if sort_class == "alphabetic":
+            return self._simple(element, column, "alphabetic")
+        if sort_class == "datasource":
+            return self._simple(element, column, "data_source")
+        if sort_class == "manual":
+            return self._manual(element)
+        self.ctx.flag(element, f"排序方式 {sort_class} v0 不支援")
+        return None
+
+    def _by_field(
+        self,
+        element: etree._Element,
+        column: str | None,
+        using: str | None,
+        direction: str | None,
+    ) -> Sort | None:
+        dim = self._use(column, element, "排序的維度")
+        by = self._use(using, element, "排序依據")
+        if dim is None or by is None:
+            return None
+        return Sort(field=dim.field, kind="by_field", order=_order(direction), by=by)
+
+    def _simple(
+        self,
+        element: etree._Element,
+        column: str | None,
+        kind: Literal["alphabetic", "data_source"],
+    ) -> Sort | None:
+        dim = self._use(column, element, "排序的維度")
+        if dim is None:
+            return None
+        return Sort(field=dim.field, kind=kind, order=_order(element.get("direction")))
+
+    def _manual(self, element: etree._Element) -> Sort | None:
+        dim = self._use(element.get("column"), element, "手動排序的維度")
+        if dim is None:
+            return None
+        assert self.ds is not None
+        datatype = value_type(self.ds.field_by_id(dim.field), dim)
+        values = bucket_values(child(element, "dictionary"), datatype)
+        if not values:
+            return None
+        return Sort(
+            field=dim.field,
+            kind="manual",
+            order=_order(element.get("direction")),
+            manual_values=values,
+        )
+
+    # ------------------------------------------------------------ 未知元素
+
+    def _check_elements(self, element: etree._Element) -> None:
+        for item in children(element):
+            tag = local_name(item)
+            if tag in OPAQUE:
+                continue
+            if tag in KNOWN_UNSUPPORTED:
+                self.ctx.flag(item, f"{KNOWN_UNSUPPORTED[tag]} v0 不支援")
+                continue
+            if tag not in KNOWN:
+                self.ctx.flag(item, f"工作表中的未知元素 <{tag}>")
+                continue
+            self._check_elements(item)
+
+
+def _pane_signature(pane: etree._Element) -> tuple[str, tuple[tuple[str, str], ...]]:
+    mark_el = child(pane, "mark")
+    mark = mark_el.get("class", "") if mark_el is not None else ""
+    encodings = tuple(
+        (local_name(e), e.get("column", "")) for e in children(child(pane, "encodings"))
+    )
+    return mark, encodings
+
+
+def _field_ids(uses: list[FieldUse]) -> list[str]:
+    result: list[str] = []
+    for use in uses:
+        if use.field not in result:
+            result.append(use.field)
+    return result
+
+
+def _order(direction: str | None) -> Literal["asc", "desc"]:
+    return "desc" if (direction or "").upper() == "DESC" else "asc"

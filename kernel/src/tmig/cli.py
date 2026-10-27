@@ -1,6 +1,7 @@
 """tmig 命令列。
 
 tmig census <.twb／.twbx>... [--out-dir 目錄]   功能盤點與起步條件檢查
+tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援的元素
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -16,8 +17,12 @@ from pydantic import ValidationError
 
 from tmig import __version__
 from tmig.census import render_markdown, run_census
-from tmig.ir import ir_json_schema_text, load_ir
+from tmig.ir import dumps_ir, ir_json_schema_text, load_ir
 from tmig.parser.twbx import WorkbookFormatError
+from tmig.parser.workbook import WorkbookParseError, parse_workbook
+
+EXIT_UNSUPPORTED = 3
+"""tmig parse 成功產生 IR，但有不支援的元素。"""
 
 
 def _cmd_census(args: argparse.Namespace) -> int:
@@ -45,6 +50,35 @@ def _cmd_census(args: argparse.Namespace) -> int:
         summary = f"不符合：{'、'.join(failed_checks)}" if failed_checks else "起步條件符合"
         print(f"{path}：{report.grade} 級，{summary} → {md_path}")
     return 1 if failed else 0
+
+
+def _cmd_parse(args: argparse.Namespace) -> int:
+    try:
+        ir = parse_workbook(args.path, lenient=args.lenient)
+    except (WorkbookFormatError, WorkbookParseError) as exc:
+        print(f"失敗  {args.path}：{exc}", file=sys.stderr)
+        return 1
+    text = dumps_ir(ir)
+    if args.out is None:
+        sys.stdout.write(text)
+    else:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8", newline="\n")
+    print(
+        f"解析完成：{len(ir.datasources)} 個資料源、{len(ir.worksheets)} 張工作表、"
+        f"{len(ir.dashboards)} 個 dashboard、{len(ir.parameters)} 個參數"
+        + (f" → {args.out}" if args.out is not None else ""),
+        file=sys.stderr,
+    )
+    if ir.ignored:
+        print(f"略過 {len(ir.ignored)} 筆不影響數字的元素（見 IR 的 ignored）", file=sys.stderr)
+    if not ir.unsupported:
+        print("unsupported 為空，可以往下移轉", file=sys.stderr)
+        return 0
+    print(f"不支援 {len(ir.unsupported)} 筆，報表需人工處理：", file=sys.stderr)
+    for item in ir.unsupported:
+        print(f"  - {item.reason}（{item.source_ref}）", file=sys.stderr)
+    return EXIT_UNSUPPORTED
 
 
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
@@ -93,6 +127,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="寫入 <檔名>.census.md 與 .census.json；省略時把 Markdown 印到標準輸出",
     )
     census.set_defaults(handler=_cmd_census)
+
+    parse = commands.add_parser("parse", help="解析 .twbx 成 IR，列出不支援的元素")
+    parse.add_argument("path", type=Path, metavar=".twbx")
+    parse.add_argument("--out", type=Path, help="寫入 IR 檔；省略時印到標準輸出")
+    parse.add_argument(
+        "--lenient",
+        action="store_true",
+        help="資料源不是嵌入式萃取時仍解析欄位與工作表（盤點用，產生的 IR 不能查詢）",
+    )
+    parse.set_defaults(handler=_cmd_parse)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")

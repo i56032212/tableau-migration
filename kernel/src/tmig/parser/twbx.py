@@ -133,12 +133,18 @@ def descendants(
 
 
 def attr(element: etree._Element, name: str) -> str | None:
-    """讀取屬性，忽略命名空間與功能旗標前綴。"""
+    """讀取屬性，忽略命名空間與功能旗標前綴；功能旗標為 false 的替代屬性不算。"""
     value = element.get(name)
     if value is not None:
         return value
     for key, val in element.attrib.items():
-        if _strip(str(key)) == name:
+        bare = str(key).rsplit("}", 1)[-1]
+        match = _FCP.match(bare)
+        if match:
+            if match.group("state") == "false":
+                continue
+            bare = match.group("name")
+        if bare == name:
             return str(val)
     return None
 
