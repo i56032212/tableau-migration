@@ -6,6 +6,7 @@ tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援�
 tmig import-hyper <.twbx> [--out-dir 目錄]      萃取匯入 DuckDB 並自檢
 tmig sql <IR 檔> <工作表> [--case 名稱]          產生的 SQL（除錯用）
 tmig query <IR 檔> <工作表> [--case 名稱]        執行查詢，輸出 CSV
+tmig cases suggest <fixture 目錄> [--write]      依資料建議 3 組篩選組合
 tmig mapping suggest <fixture 目錄>              產生 CSV 欄名對照建議
 tmig verify <fixture 目錄> [--out 報告]          計算比對，寫出差異報告
 tmig serve [--fixtures 目錄] [--port 8000]       啟動查詢服務與檢視器
@@ -268,6 +269,33 @@ def _cmd_mapping_suggest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_cases_suggest(args: argparse.Namespace) -> int:
+    from tmig.data.executor import ExecutionError
+    from tmig.verify.cases import CasesError
+    from tmig.verify.suggest import append_cases, render_cases, suggest_cases
+
+    try:
+        cases, notes = suggest_cases(args.fixture)
+        for note in notes:
+            print(note, file=sys.stderr)
+        if not cases:
+            print("沒有可建議的篩選組合", file=sys.stderr)
+            return 1
+        if not args.write:
+            sys.stdout.write(render_cases(cases))
+            print("確認後加 --write 寫入 cases.yaml", file=sys.stderr)
+            return 0
+        written = append_cases(args.fixture / "cases.yaml", cases)
+    except (FileNotFoundError, CasesError, ExecutionError, ValidationError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    if written:
+        print(f"已加入 {'、'.join(written)} → {args.fixture / 'cases.yaml'}")
+    else:
+        print("cases.yaml 已有同名的篩選組合，沒有變更")
+    return 0
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     from tmig.data.executor import ExecutionError
     from tmig.data.hyper_import import HyperImportError
@@ -426,6 +454,17 @@ def build_parser() -> argparse.ArgumentParser:
     suggest.add_argument("fixture", type=Path, metavar="fixture 目錄")
     suggest.add_argument("--force", action="store_true", help="覆蓋既有的 mapping.yaml")
     suggest.set_defaults(handler=_cmd_mapping_suggest)
+
+    cases_parser = commands.add_parser("cases", help="cases.yaml 篩選組合")
+    cases_commands = cases_parser.add_subparsers(
+        dest="cases_command", required=True, metavar="子指令"
+    )
+    cases_suggest = cases_commands.add_parser(
+        "suggest", help="依 dashboard 的篩選與參數，用資料建議 3 組篩選組合"
+    )
+    cases_suggest.add_argument("fixture", type=Path, metavar="fixture 目錄")
+    cases_suggest.add_argument("--write", action="store_true", help="接在 cases.yaml 的 cases 後面")
+    cases_suggest.set_defaults(handler=_cmd_cases_suggest)
 
     verify = commands.add_parser("verify", help="計算比對：每張工作表 × 每組篩選，寫出差異報告")
     verify.add_argument("fixture", type=Path, metavar="fixture 目錄")

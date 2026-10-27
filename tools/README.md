@@ -1,9 +1,10 @@
 # tools
 
-需要瀏覽器自動化（Playwright）的工具放這裡，核心函式庫不依賴它們。
+需要連 Tableau Server 或瀏覽器自動化（Playwright）的工具放這裡，核心函式庫不依賴它們。
 
 | 目錄 | 任務 | 用途 |
 | --- | --- | --- |
+| `tableau_server/` | S2 | 從 Tableau Server 盤點報表、排出起步候選、下載選定的報表 |
 | `fetch_expected/` | E1 | 依 `cases.yaml` 從 Tableau 抓工作表的 CSV 與 PNG |
 | `compare_screens/` | F5 | 產生 Tableau PNG 與新平台截圖的並列頁 |
 
@@ -13,9 +14,31 @@
 uv run playwright install chromium
 ```
 
+## tableau_server（在能連到 Tableau Server 的電腦上執行）
+
+只用 REST API、不需要管理員權限：看得到哪些報表就盤點哪些；下載需要報表的「下載／另存新檔」權限。
+
+```bash
+# 盤點：列出報表與檢視次數，下載結構（不含萃取）並逐份盤點 → inventory/inventory.md
+uv run python tools/tableau_server/tableau_server.py inventory --server https://tableau.example.com --site sales --pat-name tmig
+
+# 下載選定的報表（含萃取）到 fixtures/<報表>/，並產生起始的 cases.yaml
+uv run python tools/tableau_server/tableau_server.py fetch --server https://tableau.example.com --site sales --pat-name tmig --workbook "銷售總覽"
+```
+
+- `--site`：瀏覽器網址 `#/site/<site>/...` 中的那一段；預設 site 不用給
+- 登入（擇一）：`--pat-name` 個人存取權杖（在 Tableau Server 的「我的帳戶設定」建立；密鑰讀環境變數
+  `TABLEAU_PAT_SECRET`，沒有就提示輸入）、`--user` 帳號密碼（`TABLEAU_PASSWORD` 或提示輸入）、
+  `--browser-session` 沿用 fetch_expected `--login` 的瀏覽器登入（只能 SSO 登入時使用；實驗性）
+- 工具不會把密鑰、密碼或登入權杖寫進任何檔案；憑證以作業系統的信任清單驗證，公司內部 CA 也適用（必要時 `--ca-bundle`）
+- `inventory` 的其他選項：`--project`（可重複）、`--limit N` 試跑、`--no-download` 只列清單、`--refresh` 全部重新下載
+  （預設只重新下載有更新的報表）
+- 輸出在 `inventory/`（不進版控）：`inventory.md`、`inventory.csv`（Excel 可直接開）、`features.csv`
+  （各功能用到的報表數，決定之後先支援哪些功能）、`census/`（單份報表的細節）、`server.json`
+
 ## fetch_expected（在能連到 Tableau Server 的電腦上執行）
 
-1. 在 `fixtures/<報表>/cases.yaml` 填 `tableau_views_url`（從瀏覽器網址列複製 workbook 的網址即可，`#/site/...` 會自動轉換）與 `sheets` 的 `view`（工作表網址中的名稱）
+1. 確認 `fixtures/<報表>/cases.yaml` 的 `tableau_views_url` 與 `sheets` 的 `view`（工作表網址中的名稱）；用 `tableau_server.py fetch` 下載的報表已自動填好，手動填時從瀏覽器網址列複製 workbook 的網址即可（`#/site/...` 會自動轉換）
 2. 第一次加 `--login`，在開啟的瀏覽器手動登入後回終端機按 Enter：
 
 ```bash

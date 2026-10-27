@@ -41,25 +41,34 @@ uv run python scripts/check.py --fix # 先自動修正 lint 與格式
 
 ## 移轉一份真實報表
 
-以 `fixtures/sales_overview/` 為例：
+第 1、2、6 步要在能連到 Tableau Server 的電腦上執行（不需要管理員權限，登入方式見 [tools/README.md](tools/README.md)）。
 
-1. **下載** .twbx 放進 `fixtures/sales_overview/`
-2. **盤點**：`uv run tmig census fixtures/sales_overview/sales_overview.twbx --out-dir fixtures/sales_overview`，確認起步條件都符合
-3. **解析**：`uv run tmig parse fixtures/sales_overview/sales_overview.twbx --out fixtures/sales_overview/golden.ir.json`
+1. **盤點並挑報表**：列出看得到的報表、下載結構（不含萃取）並逐份盤點，排出起步候選
+
+   ```bash
+   uv run python tools/tableau_server/tableau_server.py inventory --server https://<server> --site <site> --pat-name <權杖名稱>
+   ```
+
+   看 `inventory/inventory.md` 的 A 級、B 級候選，各挑一份有擁有者願意簽核的。手上已經有 .twbx 的話，
+   也可以直接 `uv run tmig inventory <資料夾>`
+2. **下載**：`tableau_server.py fetch`（同上的登入參數）`--workbook "<報表名稱>"`，下載含萃取的 .twbx 到
+   `fixtures/<報表>/`，並產生起始的 `cases.yaml`
+3. **解析**：`uv run tmig parse fixtures/<報表>/<報表>.twbx --out fixtures/<報表>/golden.ir.json`
    - 結束碼 3 表示有不支援的元素，清單會印出來；unsupported 必須是空的才往下
    - 人工對照 Tableau Desktop 核對 IR（欄位、篩選、計算方向、區塊位置）後提交，之後測試會要求解析結果與它逐字相同
-4. **匯入萃取**：`uv run tmig import-hyper fixtures/sales_overview/sales_overview.twbx`（自檢不一致會失敗）
-5. **篩選組合**：參考 `fixtures/superstore_demo/cases.yaml` 寫 `cases.yaml`（預設值加 3 組，涵蓋常用值與日期邊界）
-6. **抓預期結果**（在能連到 Tableau Server 的電腦）：見 [tools/README.md](tools/README.md)，抓完提交
-7. **欄位對照**：`uv run tmig mapping suggest fixtures/sales_overview`，人工確認後把 `confirmed` 改成 `true`
-8. **計算比對**：`uv run tmig verify fixtures/sales_overview`，差異報告在 `report/calc.json`；修到 fail 為 0
-9. **目視與簽核**：`uv run tmig serve` 開 dashboard；`uv run python tools/compare_screens/compare_screens.py fixtures/sales_overview` 產生並列頁給擁有者簽核
+4. **匯入萃取**：`uv run tmig import-hyper fixtures/<報表>/<報表>.twbx`（自檢不一致會失敗）
+5. **篩選組合**：`uv run tmig cases suggest fixtures/<報表> --write` 依 dashboard 的篩選與資料加入 3 組
+   （常用值、日期邊界、參數或組合），再請擁有者確認是常用的組合
+6. **抓預期結果**：見 [tools/README.md](tools/README.md)，抓完提交
+7. **欄位對照**：`uv run tmig mapping suggest fixtures/<報表>`，人工確認後把 `confirmed` 改成 `true`
+8. **計算比對**：`uv run tmig verify fixtures/<報表>`，差異報告在 `report/calc.json`；修到 fail 為 0
+9. **目視與簽核**：`uv run tmig serve` 開 dashboard；`uv run python tools/compare_screens/compare_screens.py fixtures/<報表>` 產生並列頁給擁有者簽核
 
 除錯時可以單獨看某張工作表的 SQL 與結果：
 
 ```bash
-uv run tmig sql fixtures/sales_overview/golden.ir.json "工作表名稱" --case <篩選組合>
-uv run tmig query fixtures/sales_overview/golden.ir.json "工作表名稱" --case <篩選組合>
+uv run tmig sql fixtures/<報表>/golden.ir.json "工作表名稱" --case <篩選組合>
+uv run tmig query fixtures/<報表>/golden.ir.json "工作表名稱" --case <篩選組合>
 ```
 
 SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與下推界線。
@@ -69,10 +78,12 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 | 指令 | 用途 |
 | --- | --- |
 | `tmig census <twbx>... [--out-dir 目錄]` | 功能盤點與起步條件檢查（S3） |
+| `tmig inventory <資料夾>... [--out-dir 目錄]` | 批次盤點：總表、功能使用統計與起步候選（S2） |
 | `tmig parse <twbx> [--out IR 檔] [--lenient]` | 解析成 IR，列出不支援的元素（A2–A6） |
 | `tmig import-hyper <twbx> [--out-dir 目錄]` | 萃取匯入 DuckDB 並自檢（C1） |
 | `tmig sql <IR> <工作表> [--case 名稱]` | 產生的 SQL（D1–D4） |
 | `tmig query <IR> <工作表> [--case 名稱] [--out CSV]` | 執行查詢，欄名為欄位鍵；缺 DuckDB 檔時自動匯入（C2） |
+| `tmig cases suggest <fixture 目錄> [--write]` | 依資料建議 3 組篩選組合（E1） |
 | `tmig mapping suggest <fixture 目錄>` | 預期 CSV 欄名對照建議（E2） |
 | `tmig verify <fixture 目錄>` | 計算比對，寫出固定格式的差異報告（E3） |
 | `tmig serve [--fixtures 目錄] [--port 8000]` | 查詢服務與檢視器（F2–F4） |

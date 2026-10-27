@@ -26,3 +26,6 @@ Thumbs.db
 # tmig verify 的差異報告每次重跑都會更新
 fixtures/*/report/
 fixtures/*/compare/
+
+# tools/tableau_server 的盤點輸出（含從 Tableau Server 下載的報表結構）
+/inventory/

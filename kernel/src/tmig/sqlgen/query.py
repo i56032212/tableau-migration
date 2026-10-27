@@ -1182,8 +1182,10 @@ def _bound(node: Node, side: Literal["start", "end"]) -> str:
 DOMAIN_LIMIT = 2000
 
 
-def domain_sql(ir: IR, datasource_id: str, use: FieldUse, kind: Literal["values", "range"]) -> str:
-    """篩選控制項的可選值：資料源篩選後的不重複值，或最小值與最大值。"""
+def domain_sql(
+    ir: IR, datasource_id: str, use: FieldUse, kind: Literal["values", "range", "frequency"]
+) -> str:
+    """篩選控制項的可選值：資料源篩選後的不重複值、最小值與最大值，或各值的筆數（多到少）。"""
     datasource = next((ds for ds in ir.datasources if ds.id == datasource_id), None)
     if datasource is None:
         raise QueryError(f"找不到資料源「{datasource_id}」")
@@ -1207,6 +1209,11 @@ def domain_sql(ir: IR, datasource_id: str, use: FieldUse, kind: Literal["values"
     table = ".".join(ident(p) for p in datasource.connection.table.split("."))
     if kind == "range":
         return f"SELECT min({value}) AS {ident('min')}, max({value}) AS {ident('max')} FROM {table}{_where(conds)}"
+    if kind == "frequency":
+        return (
+            f"SELECT {value} AS {ident('value')}, count(*) AS {ident('rows')} FROM {table}{_where(conds)} "
+            f"GROUP BY 1 ORDER BY 2 DESC, 1 NULLS LAST LIMIT {DOMAIN_LIMIT}"
+        )
     return (
         f"SELECT DISTINCT {value} AS {ident('value')} FROM {table}{_where(conds)} "
         f"ORDER BY 1 NULLS LAST LIMIT {DOMAIN_LIMIT}"
