@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 jobs:
   check:
     strategy:
@@ -11,6 +15,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -35,4 +42,13 @@ jobs:
       - name: 安裝 Chromium（端到端測試）
         run: uv run playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - name: 一鍵檢查
-        run: uv run python scripts/check.py
+        run: |
+          set -o pipefail
+          uv run python scripts/check.py 2>&1 | tee check.log
+      - name: 失敗時把檢查紀錄的結尾寫成註記
+        if: failure()
+        run: |
+          if [ -f check.log ]; then
+            msg=$(tail -n 120 check.log | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=一鍵檢查紀錄（最後 120 行）::${msg}"
+          fi

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -31,17 +32,25 @@ CHECK_STEPS: list[tuple[str, list[str]]] = [
 ]
 
 
+# Windows 主控台或 CI 的輸出編碼可能不是 UTF-8；子行程一律以 UTF-8 模式執行
+ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+
 def run(steps: list[tuple[str, list[str]]]) -> list[tuple[str, bool, float]]:
     results: list[tuple[str, bool, float]] = []
     for name, cmd in steps:
         print(f"\n=== {name} ===", flush=True)
         start = time.perf_counter()
-        ok = subprocess.run(cmd, cwd=ROOT, check=False).returncode == 0
+        ok = subprocess.run(cmd, cwd=ROOT, env=ENV, check=False).returncode == 0
         results.append((name, ok, time.perf_counter() - start))
     return results
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="一鍵檢查")
     parser.add_argument("--fix", action="store_true", help="先自動修正 lint 與格式")
     args = parser.parse_args()
