@@ -1,0 +1,36 @@
+# CSV 欄名 → 查詢結果的欄位鍵（tmig mapping suggest 產生）
+# 人工確認每一列後，把 confirmed 改成 true 再提交；值為 null 的 CSV 欄位不比對
+# numeric：auto＝帶格式的值以顯示精度比對、其餘以相對誤差 1e-6；raw；display
+confirmed: true
+sheets:
+  ws_sales_by_region:
+    columns:
+      Region: f_region
+      Category: f_category
+      Sales: sum(f_sales)
+      Running Sum of Sales: sum(f_sales)#tc_running_total_sales
+    ignore: []
+    numeric: auto
+  ws_monthly_profit:
+    columns:
+      Month of Order Date: trunc_month(f_order_date)
+      Profit: sum(f_profit)
+      利潤率: f_calc_1368249927221915648
+    ignore: []
+    numeric: auto
+  ws_region_share_by_year:
+    columns:
+      Region: f_region
+      Year of Order Date: year(f_order_date)
+      區域占比: f_calc_2049003526124994561
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_sub_category_profit:
+    columns:
+      Sub-Category: f_sub_category
+      Profit: sum(f_profit)
+      利潤排名: f_calc_5418932014720188416#tc_formula_f_calc_5418932014720188416
+      平均訂單利潤: f_calc_5418932014720745473
+    ignore: []
+    numeric: auto

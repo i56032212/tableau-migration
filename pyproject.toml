@@ -12,6 +12,7 @@ dev = [
     "pytest>=8",
     "lxml-stubs>=0.5",
     "jsonschema>=4.26.0",
+    "playwright==1.63.0",
 ]
 
 [tool.uv]
@@ -37,7 +38,7 @@ ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 known-first-party = ["tmig"]
 
 [tool.pyright]
-include = ["kernel/src", "kernel/tests", "scripts"]
+include = ["kernel/src", "kernel/tests", "scripts", "tools"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."

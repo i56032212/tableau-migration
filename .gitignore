@@ -20,3 +20,6 @@ node_modules/
 .idea/
 .DS_Store
 Thumbs.db
+
+# tmig verify 的差異報告每次重跑都會更新
+fixtures/*/report/

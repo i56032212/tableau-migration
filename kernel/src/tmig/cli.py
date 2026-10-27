@@ -5,6 +5,8 @@ tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援�
 tmig import-hyper <.twbx> [--out-dir 目錄]      萃取匯入 DuckDB 並自檢
 tmig sql <IR 檔> <工作表> [--case 名稱]          產生的 SQL（除錯用）
 tmig query <IR 檔> <工作表> [--case 名稱]        執行查詢，輸出 CSV
+tmig mapping suggest <fixture 目錄>              產生 CSV 欄名對照建議
+tmig verify <fixture 目錄> [--out 報告]          計算比對，寫出差異報告
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -171,6 +173,85 @@ def _cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mapping_suggest(args: argparse.Namespace) -> int:
+    from tmig.sqlgen.query import QueryError, worksheet_sql
+    from tmig.verify.cases import CasesError, load_cases
+    from tmig.verify.mapping import MappingFile, csv_headers, dump_mapping, suggest_sheet
+    from tmig.verify.run import load_fixture_ir
+
+    root: Path = args.fixture
+    target = root / "mapping.yaml"
+    if target.exists() and not args.force:
+        print(f"失敗：{target} 已存在；確定要覆蓋請加 --force", file=sys.stderr)
+        return 1
+    try:
+        ir = load_fixture_ir(root)
+        cases = load_cases(root / "cases.yaml")
+        mapping = MappingFile()
+        notes: dict[str, list[str]] = {}
+        for sheet in cases.sheets:
+            query = worksheet_sql(ir, sheet.worksheet)
+            files = sorted((root / "expected" / sheet.worksheet).glob("*.csv"))
+            headers = csv_headers(files[0]) if files else None
+            sheet_mapping, unmatched = suggest_sheet(ir, sheet.worksheet, query.columns, headers)
+            mapping.sheets[sheet.worksheet] = sheet_mapping
+            sheet_notes = notes.setdefault(sheet.worksheet, [])
+            if headers is None:
+                sheet_notes.append("還沒有預期 CSV，左邊的欄名是推測值；抓取後重新產生")
+            if unmatched:
+                sheet_notes.append(f"無法自動對應：{'、'.join(unmatched)}；請填入欄位鍵或保留 null")
+            if sheet_mapping.ignore:
+                sheet_notes.append(
+                    f"查詢結果中找不到 CSV 欄位的：{'、'.join(sheet_mapping.ignore)}"
+                )
+            status = "需人工處理" if unmatched or sheet_mapping.ignore else "全部對應"
+            print(f"{sheet.worksheet}：{len(sheet_mapping.columns)} 欄，{status}")
+    except (FileNotFoundError, ValidationError, CasesError, QueryError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    target.write_text(dump_mapping(mapping, notes), encoding="utf-8", newline="\n")
+    print(f"已寫入 {target}；人工確認後把 confirmed 改成 true")
+    return 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    from tmig.data.executor import ExecutionError
+    from tmig.data.hyper_import import HyperImportError
+    from tmig.verify.cases import CasesError
+    from tmig.verify.mapping import MappingError
+    from tmig.verify.run import verify_fixture, write_report
+
+    root: Path = args.fixture
+    try:
+        ir, report = verify_fixture(root)
+    except (
+        FileNotFoundError,
+        ValidationError,
+        CasesError,
+        MappingError,
+        ExecutionError,
+        HyperImportError,
+    ) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    out = args.out or root / "report" / "calc.json"
+    write_report(ir, report, out)
+    names = {w.id: w.name for w in ir.worksheets}
+    width = max((len(c.worksheet) for c in report.checks), default=0)
+    for check in report.checks:
+        mark = {"pass": "通過", "fail": "失敗", "unsupported": "不支援"}[check.status]
+        print(f"{mark}  {check.worksheet:<{width}}  {check.case:<16} {check.diff}")
+    for note in report.notes:
+        print(f"注意：{note}")
+    summary = report.summary
+    print(
+        f"共 {len(report.checks)} 項：通過 {summary['pass']}、失敗 {summary['fail']}、"
+        f"不支援 {summary['unsupported']} → {out}"
+    )
+    print(report.owner_summary(names))
+    return 0 if report.ok else 1
+
+
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
     text = ir_json_schema_text()
     if args.out is None:
@@ -252,6 +333,20 @@ def build_parser() -> argparse.ArgumentParser:
             )
             sub.add_argument("--out", type=Path, help="寫入 CSV 檔；省略時印到標準輸出")
         sub.set_defaults(handler=handler)
+
+    mapping_parser = commands.add_parser("mapping", help="預期 CSV 欄名對照")
+    mapping_commands = mapping_parser.add_subparsers(
+        dest="mapping_command", required=True, metavar="子指令"
+    )
+    suggest = mapping_commands.add_parser("suggest", help="依 IR 與預期 CSV 產生 mapping.yaml 建議")
+    suggest.add_argument("fixture", type=Path, metavar="fixture 目錄")
+    suggest.add_argument("--force", action="store_true", help="覆蓋既有的 mapping.yaml")
+    suggest.set_defaults(handler=_cmd_mapping_suggest)
+
+    verify = commands.add_parser("verify", help="計算比對：每張工作表 × 每組篩選，寫出差異報告")
+    verify.add_argument("fixture", type=Path, metavar="fixture 目錄")
+    verify.add_argument("--out", type=Path, help="差異報告路徑；預設為 <fixture>/report/calc.json")
+    verify.set_defaults(handler=_cmd_verify)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")
