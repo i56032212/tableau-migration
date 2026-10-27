@@ -135,13 +135,14 @@ def _query_inputs(args: argparse.Namespace):
 
 
 def _cmd_sql(args: argparse.Namespace) -> int:
+    from tmig.planner.state import StateError
     from tmig.sqlgen.query import QueryError, worksheet_sql
     from tmig.verify.cases import CasesError
 
     try:
         ir, state = _query_inputs(args)
         query = worksheet_sql(ir, args.worksheet, state)
-    except (FileNotFoundError, ValidationError, CasesError, QueryError) as exc:
+    except (FileNotFoundError, ValidationError, CasesError, QueryError, StateError) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
     sys.stdout.write(query.sql)
@@ -152,6 +153,7 @@ def _cmd_sql(args: argparse.Namespace) -> int:
 
 def _cmd_query(args: argparse.Namespace) -> int:
     from tmig.data.executor import ExecutionError, execute
+    from tmig.planner.state import StateError
     from tmig.sqlgen.query import QueryError, worksheet_sql
     from tmig.verify.cases import CasesError
 
@@ -161,7 +163,14 @@ def _cmd_query(args: argparse.Namespace) -> int:
         ws = next(w for w in ir.worksheets if w.id == query.worksheet)
         db = args.db or args.ir.parent / "data" / f"{ws.datasource}.duckdb"
         result = execute(db, query.sql)
-    except (FileNotFoundError, ValidationError, CasesError, QueryError, ExecutionError) as exc:
+    except (
+        FileNotFoundError,
+        ValidationError,
+        CasesError,
+        QueryError,
+        StateError,
+        ExecutionError,
+    ) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
     text = result.to_csv()

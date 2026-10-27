@@ -18,8 +18,9 @@ from typing import Any, Literal
 from tmig.data.executor import ExecutionError, execute
 from tmig.ir import IR, load_ir
 from tmig.parser.workbook import parse_workbook
+from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, worksheet_sql
-from tmig.verify.cases import CasesFile, case_state, load_cases
+from tmig.verify.cases import CasesError, CasesFile, case_state, load_cases
 from tmig.verify.compare import MAX_DETAILS, Comparison, compare
 from tmig.verify.mapping import MappingFile, load_mapping
 
@@ -191,6 +192,9 @@ def _check(
         result = execute(root / "data" / f"{ws.datasource}.duckdb", query.sql)
     except QueryError as exc:
         base.status = "unsupported" if exc.unsupported else "fail"
+        base.diff = str(exc)
+        return base
+    except (StateError, CasesError) as exc:
         base.diff = str(exc)
         return base
     except ExecutionError as exc:

@@ -522,6 +522,86 @@ def test_measure_filter_runs_before_table_calc(run: Run) -> None:
     ]
 
 
+# ---------------------------------------------------------------- 邊界情況
+
+
+def test_dimension_from_fixed(run: Run) -> None:
+    calcs = calc(
+        "Calculation_40",
+        "Size",
+        'IF {FIXED [Region] : SUM([Sales])} > 300 THEN "Big" ELSE "Small" END',
+        "string",
+        "dimension",
+    )
+    sheet = region_sheet(
+        [instance("[Calculation_40]", "None", "[none:Calculation_40:nk]")],
+        rows=ref("none:Calculation_40:nk"),
+    )
+    rows = run(sheet, calcs)
+    assert {r["f_size"]: r["sum(f_sales)"] for r in rows} == {"Big": 1150, "Small": 160}
+    # FIXED 維度上的維度篩選
+    flt = categorical("none:Calculation_40:nk", ["Big"])
+    rows = run(
+        region_sheet(
+            [instance("[Calculation_40]", "None", "[none:Calculation_40:nk]")], view_extra=flt
+        ),
+        calcs,
+    )
+    assert {r["f_region"] for r in rows} == {"East", "West"}
+
+
+def test_measure_filter_on_hidden_aggregate_calc(run: Run) -> None:
+    calcs = calc("Calculation_41", "Ratio", "SUM([Profit]) / SUM([Sales])")
+    flt = (
+        f"<filter class='quantitative' column='{ref('usr:Calculation_41:qk')}' included-values='in-range'>"
+        "<min>0.1</min></filter>"
+    )
+    sheet = region_sheet(
+        [instance("[Calculation_41]", "User", "[usr:Calculation_41:qk]", "quantitative")],
+        view_extra=flt,
+    )
+    rows = run(sheet, calcs)
+    # 比率：East 0.1286、West 0.025、South 0.1、North 0.1
+    assert {r["f_region"] for r in rows} == {"East", "South", "North"}
+    assert "f_ratio" not in rows[0]
+
+
+def test_top_n_by_fixed_with_context(run: Run) -> None:
+    calcs = calc("Calculation_42", "RS", "{FIXED [Region] : SUM([Sales])}")
+    flt = top_n("none:Region:nk", "1", by="MAX([Calculation_42])") + categorical(
+        "none:Category:nk", ["Office"], context=True
+    )
+    rows = run(region_sheet(view_extra=flt), calcs)
+    # 內容篩選後 FIXED：North 60、South 20 → 第一名 North
+    assert {r["f_region"]: r["sum(f_sales)"] for r in rows} == {"North": 60}
+
+
+def test_percent_of_total_with_partition(run: Run) -> None:
+    inst = [quick("PctTotal", "pcto")]
+    sheet = region_sheet(
+        inst,
+        cols=ref("none:Category:nk"),
+        encodings=f"<text column='{ref('pcto:sum:Sales:qk')}' />",
+    )
+    rows = run(sheet)
+    got = {
+        (r["f_category"], r["f_region"]): round(r["sum(f_sales)#tc_percent_of_total_sales"], 6)
+        for r in rows
+    }
+    assert got[("Furniture", "East")] == round(150 / 530, 6)
+    assert got[("Office", "North")] == round(60 / 80, 6)
+
+
+def test_exclude_as_dimension_is_unsupported(run: Run) -> None:
+    calcs = calc("Calculation_43", "Ex", "{EXCLUDE [Category] : SUM([Sales])}", "real", "dimension")
+    sheet = region_sheet(
+        [instance("[Calculation_43]", "None", "[none:Calculation_43:qk]", "quantitative")],
+        rows=ref("none:Calculation_43:qk"),
+    )
+    with pytest.raises(QueryError):
+        run(sheet, calcs)
+
+
 # ---------------------------------------------------------------- 錯誤處理
 
 
