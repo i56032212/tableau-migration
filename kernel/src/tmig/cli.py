@@ -156,12 +156,18 @@ def _cmd_query(args: argparse.Namespace) -> int:
     from tmig.planner.state import StateError
     from tmig.sqlgen.query import QueryError, worksheet_sql
     from tmig.verify.cases import CasesError
+    from tmig.verify.run import ensure_data
 
     try:
         ir, state = _query_inputs(args)
         query = worksheet_sql(ir, args.worksheet, state)
         ws = next(w for w in ir.worksheets if w.id == query.worksheet)
-        db = args.db or args.ir.parent / "data" / f"{ws.datasource}.duckdb"
+        db = args.db
+        if db is None:
+            # 與 tmig verify 相同：缺 DuckDB 檔時由同目錄的 .twbx 匯入
+            for note in ensure_data(args.ir.parent, ir):
+                print(note, file=sys.stderr)
+            db = args.ir.parent / "data" / f"{ws.datasource}.duckdb"
         result = execute(db, query.sql)
     except (
         FileNotFoundError,

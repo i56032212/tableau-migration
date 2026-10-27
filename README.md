@@ -72,7 +72,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 | `tmig parse <twbx> [--out IR 檔] [--lenient]` | 解析成 IR，列出不支援的元素（A2–A6） |
 | `tmig import-hyper <twbx> [--out-dir 目錄]` | 萃取匯入 DuckDB 並自檢（C1） |
 | `tmig sql <IR> <工作表> [--case 名稱]` | 產生的 SQL（D1–D4） |
-| `tmig query <IR> <工作表> [--case 名稱] [--out CSV]` | 執行查詢，欄名為欄位鍵（C2） |
+| `tmig query <IR> <工作表> [--case 名稱] [--out CSV]` | 執行查詢，欄名為欄位鍵；缺 DuckDB 檔時自動匯入（C2） |
 | `tmig mapping suggest <fixture 目錄>` | 預期 CSV 欄名對照建議（E2） |
 | `tmig verify <fixture 目錄>` | 計算比對，寫出固定格式的差異報告（E3） |
 | `tmig serve [--fixtures 目錄] [--port 8000]` | 查詢服務與檢視器（F2–F4） |

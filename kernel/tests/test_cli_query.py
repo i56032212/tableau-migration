@@ -23,8 +23,8 @@ def test_sql_unknown_case(capsys: pytest.CaptureFixture[str]) -> None:
     assert "找不到篩選組合" in capsys.readouterr().err
 
 
-@pytest.mark.skipif(not DB.is_file(), reason="需要先執行 tmig import-hyper")
 def test_query_writes_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # 沒有 DuckDB 檔時會先由 .twbx 自動匯入
     out = tmp_path / "result.csv"
     assert (
         main(
@@ -43,6 +43,7 @@ def test_query_writes_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     lines = out.read_text(encoding="utf-8").splitlines()
     assert lines[0].startswith("f_region,f_category,sum(f_sales)")
     assert {line.split(",")[0] for line in lines[1:]} == {"West", "East"}
+    assert DB.is_file()
 
 
 def test_query_missing_database(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
