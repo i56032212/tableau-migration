@@ -2,6 +2,7 @@
 
 tmig census <.twb／.twbx>... [--out-dir 目錄]   功能盤點與起步條件檢查
 tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援的元素
+tmig import-hyper <.twbx> [--out-dir 目錄]      萃取匯入 DuckDB 並自檢
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -81,6 +82,40 @@ def _cmd_parse(args: argparse.Namespace) -> int:
     return EXIT_UNSUPPORTED
 
 
+def _cmd_import_hyper(args: argparse.Namespace) -> int:
+    from tmig.data.hyper_import import HyperImportError, import_workbook
+
+    out_dir = args.out_dir or args.path.parent / "data"
+    try:
+        results = import_workbook(args.path, out_dir)
+    except (WorkbookFormatError, WorkbookParseError, HyperImportError) as exc:
+        print(f"失敗  {args.path}：{exc}", file=sys.stderr)
+        return 1
+    failed = 0
+    for result in results:
+        table = result.table
+        checks = table.checks
+        bad = [c for c in checks if not c.ok]
+        status = "通過" if result.ok else "失敗"
+        print(
+            f"{status}  {result.datasource}：{table.schema}.{table.table} {table.rows} 列、"
+            f"{len(table.columns)} 欄，自檢 {len(checks)} 項"
+            + (f"有 {len(bad)} 項不一致" if bad else "全部一致")
+            + f" → {out_dir / result.duckdb}"
+        )
+        for check in bad:
+            print(
+                f"      {check.column or '(表)'} 的 {check.stat}：Hyper {check.hyper}，DuckDB {check.duckdb}",
+                file=sys.stderr,
+            )
+        for name in result.missing_columns:
+            print(f"      IR 欄位 {name} 不在萃取資料表中", file=sys.stderr)
+        for warning in table.warnings:
+            print(f"      注意：{warning}", file=sys.stderr)
+        failed += 0 if result.ok else 1
+    return 1 if failed else 0
+
+
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
     text = ir_json_schema_text()
     if args.out is None:
@@ -137,6 +172,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="資料源不是嵌入式萃取時仍解析欄位與工作表（盤點用，產生的 IR 不能查詢）",
     )
     parse.set_defaults(handler=_cmd_parse)
+
+    imp = commands.add_parser("import-hyper", help="把 .twbx 內的萃取匯入 DuckDB 並自檢")
+    imp.add_argument("path", type=Path, metavar=".twbx")
+    imp.add_argument(
+        "--out-dir", type=Path, help="DuckDB 檔的目錄；預設為 .twbx 所在目錄下的 data/"
+    )
+    imp.set_defaults(handler=_cmd_import_hyper)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")

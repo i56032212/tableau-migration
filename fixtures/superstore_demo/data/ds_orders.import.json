@@ -1,0 +1,629 @@
+{
+  "datasource": "ds_orders",
+  "hyper_file": "Data/Extracts/federated_0s2xs1a1g5wq1h17oo8mq0b6k5ry.hyper",
+  "hyper_sha256": "a017c09a9dc40972bf6098e48c17623df92bd2922a89cff51aa9ea48df918fab",
+  "duckdb": "ds_orders.duckdb",
+  "table": {
+    "schema": "Extract",
+    "table": "Extract",
+    "rows": 10194,
+    "columns": [
+      {
+        "name": "Row ID",
+        "hyper_type": "BIG_INT",
+        "duckdb_type": "BIGINT",
+        "collation": null
+      },
+      {
+        "name": "Order ID",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Order Date",
+        "hyper_type": "DATE",
+        "duckdb_type": "DATE",
+        "collation": null
+      },
+      {
+        "name": "Ship Date",
+        "hyper_type": "DATE",
+        "duckdb_type": "DATE",
+        "collation": null
+      },
+      {
+        "name": "Ship Mode",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Customer ID",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Customer Name",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Segment",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Country/Region",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "City",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "State/Province",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Postal Code",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Region",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Product ID",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Category",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Sub-Category",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Product Name",
+        "hyper_type": "TEXT",
+        "duckdb_type": "VARCHAR",
+        "collation": null
+      },
+      {
+        "name": "Sales",
+        "hyper_type": "DOUBLE",
+        "duckdb_type": "DOUBLE",
+        "collation": null
+      },
+      {
+        "name": "Quantity",
+        "hyper_type": "BIG_INT",
+        "duckdb_type": "BIGINT",
+        "collation": null
+      },
+      {
+        "name": "Discount",
+        "hyper_type": "DOUBLE",
+        "duckdb_type": "DOUBLE",
+        "collation": null
+      },
+      {
+        "name": "Profit",
+        "hyper_type": "DOUBLE",
+        "duckdb_type": "DOUBLE",
+        "collation": null
+      }
+    ],
+    "checks": [
+      {
+        "column": null,
+        "stat": "rows",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Row ID",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Row ID",
+        "stat": "sum",
+        "hyper": "51963915",
+        "duckdb": "51963915",
+        "ok": true
+      },
+      {
+        "column": "Row ID",
+        "stat": "min",
+        "hyper": "1",
+        "duckdb": "1",
+        "ok": true
+      },
+      {
+        "column": "Row ID",
+        "stat": "max",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Order ID",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Order ID",
+        "stat": "min",
+        "hyper": "CA-2021-100867",
+        "duckdb": "CA-2021-100867",
+        "ok": true
+      },
+      {
+        "column": "Order ID",
+        "stat": "max",
+        "hyper": "US-2024-169999",
+        "duckdb": "US-2024-169999",
+        "ok": true
+      },
+      {
+        "column": "Order Date",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Order Date",
+        "stat": "min",
+        "hyper": "2021-01-03",
+        "duckdb": "2021-01-03",
+        "ok": true
+      },
+      {
+        "column": "Order Date",
+        "stat": "max",
+        "hyper": "2024-12-30",
+        "duckdb": "2024-12-30",
+        "ok": true
+      },
+      {
+        "column": "Ship Date",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Ship Date",
+        "stat": "min",
+        "hyper": "2021-01-07",
+        "duckdb": "2021-01-07",
+        "ok": true
+      },
+      {
+        "column": "Ship Date",
+        "stat": "max",
+        "hyper": "2025-01-05",
+        "duckdb": "2025-01-05",
+        "ok": true
+      },
+      {
+        "column": "Ship Mode",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Ship Mode",
+        "stat": "min",
+        "hyper": "First Class",
+        "duckdb": "First Class",
+        "ok": true
+      },
+      {
+        "column": "Ship Mode",
+        "stat": "max",
+        "hyper": "Standard Class",
+        "duckdb": "Standard Class",
+        "ok": true
+      },
+      {
+        "column": "Customer ID",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Customer ID",
+        "stat": "min",
+        "hyper": "AA-10315",
+        "duckdb": "AA-10315",
+        "ok": true
+      },
+      {
+        "column": "Customer ID",
+        "stat": "max",
+        "hyper": "ZD-21925",
+        "duckdb": "ZD-21925",
+        "ok": true
+      },
+      {
+        "column": "Customer Name",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Customer Name",
+        "stat": "min",
+        "hyper": "Aaron Bergman",
+        "duckdb": "Aaron Bergman",
+        "ok": true
+      },
+      {
+        "column": "Customer Name",
+        "stat": "max",
+        "hyper": "Zuschuss Donatelli",
+        "duckdb": "Zuschuss Donatelli",
+        "ok": true
+      },
+      {
+        "column": "Segment",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Segment",
+        "stat": "min",
+        "hyper": "Consumer",
+        "duckdb": "Consumer",
+        "ok": true
+      },
+      {
+        "column": "Segment",
+        "stat": "max",
+        "hyper": "Home Office",
+        "duckdb": "Home Office",
+        "ok": true
+      },
+      {
+        "column": "Country/Region",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Country/Region",
+        "stat": "min",
+        "hyper": "Canada",
+        "duckdb": "Canada",
+        "ok": true
+      },
+      {
+        "column": "Country/Region",
+        "stat": "max",
+        "hyper": "United States",
+        "duckdb": "United States",
+        "ok": true
+      },
+      {
+        "column": "City",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "City",
+        "stat": "min",
+        "hyper": "Aberdeen",
+        "duckdb": "Aberdeen",
+        "ok": true
+      },
+      {
+        "column": "City",
+        "stat": "max",
+        "hyper": "Yuma",
+        "duckdb": "Yuma",
+        "ok": true
+      },
+      {
+        "column": "State/Province",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "State/Province",
+        "stat": "min",
+        "hyper": "Alabama",
+        "duckdb": "Alabama",
+        "ok": true
+      },
+      {
+        "column": "State/Province",
+        "stat": "max",
+        "hyper": "Wyoming",
+        "duckdb": "Wyoming",
+        "ok": true
+      },
+      {
+        "column": "Postal Code",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Postal Code",
+        "stat": "min",
+        "hyper": "01040",
+        "duckdb": "01040",
+        "ok": true
+      },
+      {
+        "column": "Postal Code",
+        "stat": "max",
+        "hyper": "V6Z",
+        "duckdb": "V6Z",
+        "ok": true
+      },
+      {
+        "column": "Region",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Region",
+        "stat": "min",
+        "hyper": "Central",
+        "duckdb": "Central",
+        "ok": true
+      },
+      {
+        "column": "Region",
+        "stat": "max",
+        "hyper": "West",
+        "duckdb": "West",
+        "ok": true
+      },
+      {
+        "column": "Product ID",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Product ID",
+        "stat": "min",
+        "hyper": "FUR-BO-10000112",
+        "duckdb": "FUR-BO-10000112",
+        "ok": true
+      },
+      {
+        "column": "Product ID",
+        "stat": "max",
+        "hyper": "TEC-PH-10004977",
+        "duckdb": "TEC-PH-10004977",
+        "ok": true
+      },
+      {
+        "column": "Category",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Category",
+        "stat": "min",
+        "hyper": "Furniture",
+        "duckdb": "Furniture",
+        "ok": true
+      },
+      {
+        "column": "Category",
+        "stat": "max",
+        "hyper": "Technology",
+        "duckdb": "Technology",
+        "ok": true
+      },
+      {
+        "column": "Sub-Category",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Sub-Category",
+        "stat": "min",
+        "hyper": "Accessories",
+        "duckdb": "Accessories",
+        "ok": true
+      },
+      {
+        "column": "Sub-Category",
+        "stat": "max",
+        "hyper": "Tables",
+        "duckdb": "Tables",
+        "ok": true
+      },
+      {
+        "column": "Product Name",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Product Name",
+        "stat": "min",
+        "hyper": "\"While you Were Out\" Message Book, One Form per Page",
+        "duckdb": "\"While you Were Out\" Message Book, One Form per Page",
+        "ok": true
+      },
+      {
+        "column": "Product Name",
+        "stat": "max",
+        "hyper": "netTALK DUO VoIP Telephone Service",
+        "duckdb": "netTALK DUO VoIP Telephone Service",
+        "ok": true
+      },
+      {
+        "column": "Sales",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Sales",
+        "stat": "sum",
+        "hyper": "2326534.354299952",
+        "duckdb": "2326534.354299952",
+        "ok": true
+      },
+      {
+        "column": "Sales",
+        "stat": "min",
+        "hyper": "0.44399999999999995",
+        "duckdb": "0.44399999999999995",
+        "ok": true
+      },
+      {
+        "column": "Sales",
+        "stat": "max",
+        "hyper": "22638.48",
+        "duckdb": "22638.48",
+        "ok": true
+      },
+      {
+        "column": "Quantity",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Quantity",
+        "stat": "sum",
+        "hyper": "38654",
+        "duckdb": "38654",
+        "ok": true
+      },
+      {
+        "column": "Quantity",
+        "stat": "min",
+        "hyper": "1",
+        "duckdb": "1",
+        "ok": true
+      },
+      {
+        "column": "Quantity",
+        "stat": "max",
+        "hyper": "14",
+        "duckdb": "14",
+        "ok": true
+      },
+      {
+        "column": "Discount",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Discount",
+        "stat": "sum",
+        "hyper": "1583.990000000114",
+        "duckdb": "1583.990000000114",
+        "ok": true
+      },
+      {
+        "column": "Discount",
+        "stat": "min",
+        "hyper": "0.0",
+        "duckdb": "0.0",
+        "ok": true
+      },
+      {
+        "column": "Discount",
+        "stat": "max",
+        "hyper": "0.8",
+        "duckdb": "0.8",
+        "ok": true
+      },
+      {
+        "column": "Profit",
+        "stat": "non_null",
+        "hyper": "10194",
+        "duckdb": "10194",
+        "ok": true
+      },
+      {
+        "column": "Profit",
+        "stat": "sum",
+        "hyper": "292296.81460000016",
+        "duckdb": "292296.81460000016",
+        "ok": true
+      },
+      {
+        "column": "Profit",
+        "stat": "min",
+        "hyper": "-6599.978000000001",
+        "duckdb": "-6599.978000000001",
+        "ok": true
+      },
+      {
+        "column": "Profit",
+        "stat": "max",
+        "hyper": "8399.975999999999",
+        "duckdb": "8399.975999999999",
+        "ok": true
+      }
+    ],
+    "warnings": [],
+    "ok": true
+  },
+  "other_tables": [],
+  "missing_columns": [],
+  "ok": true
+}
