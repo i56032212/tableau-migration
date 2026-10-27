@@ -7,6 +7,7 @@ tmig sql <IR 檔> <工作表> [--case 名稱]          產生的 SQL（除錯用
 tmig query <IR 檔> <工作表> [--case 名稱]        執行查詢，輸出 CSV
 tmig mapping suggest <fixture 目錄>              產生 CSV 欄名對照建議
 tmig verify <fixture 目錄> [--out 報告]          計算比對，寫出差異報告
+tmig serve [--fixtures 目錄] [--port 8000]       啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -252,6 +253,17 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        from tmig_service import serve
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    print(f"查詢服務：http://{args.host}:{args.port}（讀取 {args.fixtures}）")
+    serve(args.fixtures, args.host, args.port, args.web)
+    return 0
+
+
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
     text = ir_json_schema_text()
     if args.out is None:
@@ -347,6 +359,15 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("fixture", type=Path, metavar="fixture 目錄")
     verify.add_argument("--out", type=Path, help="差異報告路徑；預設為 <fixture>/report/calc.json")
     verify.set_defaults(handler=_cmd_verify)
+
+    serve = commands.add_parser("serve", help="啟動查詢服務與檢視器")
+    serve.add_argument(
+        "--fixtures", type=Path, default=Path("fixtures"), help="報表目錄（預設 fixtures）"
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--web", type=Path, help="檢視器的建置目錄；預設為 web/dist")
+    serve.set_defaults(handler=_cmd_serve)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")

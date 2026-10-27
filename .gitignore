@@ -5,6 +5,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+# 檢視器的建置結果要進版控，沒有 Node 的電腦也能直接 tmig serve
+!web/dist/
 .pytest_cache/
 .ruff_cache/
 
@@ -23,3 +25,4 @@ Thumbs.db
 
 # tmig verify 的差異報告每次重跑都會更新
 fixtures/*/report/
+fixtures/*/compare/

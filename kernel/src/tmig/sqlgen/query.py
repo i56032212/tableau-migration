@@ -45,6 +45,7 @@ from tmig.ir.models import (
     DataField,
     FieldUse,
     Filter,
+    Marks,
     ParamRef,
     RangeFilter,
     Scalar,
@@ -1178,6 +1179,40 @@ def _bound(node: Node, side: Literal["start", "end"]) -> str:
     )
 
 
+DOMAIN_LIMIT = 2000
+
+
+def domain_sql(ir: IR, datasource_id: str, use: FieldUse, kind: Literal["values", "range"]) -> str:
+    """篩選控制項的可選值：資料源篩選後的不重複值，或最小值與最大值。"""
+    datasource = next((ds for ds in ir.datasources if ds.id == datasource_id), None)
+    if datasource is None:
+        raise QueryError(f"找不到資料源「{datasource_id}」")
+    if not any(f.id == use.field for f in datasource.fields):
+        raise QueryError(f"資料源「{datasource_id}」沒有欄位「{use.field}」")
+    holder = Worksheet(
+        id="domain",
+        name="domain",
+        datasource=datasource_id,
+        marks=Marks(type="automatic"),
+        source_ref="domain",
+    )
+    query = WorksheetQuery(ir.model_copy(update={"worksheets": [holder]}), "domain")
+    if query.is_measure(use):
+        raise QueryError("量值沒有可選值")
+    query.register_lods(query.field_node(use.field))
+    if query.lods:
+        raise QueryError("含 LOD 的欄位尚不支援列出可選值", unsupported=True)
+    value = query.dim_sql(use)
+    conds = [query._row_condition(f) for f in datasource.filters if f.stage == "datasource"]
+    table = ".".join(ident(p) for p in datasource.connection.table.split("."))
+    if kind == "range":
+        return f"SELECT min({value}) AS {ident('min')}, max({value}) AS {ident('max')} FROM {table}{_where(conds)}"
+    return (
+        f"SELECT DISTINCT {value} AS {ident('value')} FROM {table}{_where(conds)} "
+        f"ORDER BY 1 NULLS LAST LIMIT {DOMAIN_LIMIT}"
+    )
+
+
 def _find_worksheet(ir: IR, key: str) -> Worksheet:
     for ws in ir.worksheets:
         if key in (ws.id, ws.name):
@@ -1198,5 +1233,6 @@ __all__ = [
     "StageNote",
     "WorksheetQuery",
     "WorksheetSql",
+    "domain_sql",
     "worksheet_sql",
 ]

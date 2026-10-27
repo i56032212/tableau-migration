@@ -14,7 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
       - name: 安裝相依套件
         run: uv sync --locked
+      - name: 建置檢視器
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: 檢查提交的 web/dist 與原始碼一致
+        if: runner.os == 'Linux'
+        run: git diff --exit-code -- web/dist || (echo "web/dist 過期：在 web/ 執行 pnpm build 後提交" && exit 1)
+      - name: 安裝 Chromium（端到端測試）
+        run: uv run playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - name: 一鍵檢查
         run: uv run python scripts/check.py

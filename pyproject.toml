@@ -3,7 +3,7 @@ name = "tableau-migration"
 version = "0.1.0"
 description = "Tableau 移轉平台：起步階段的 monorepo 根目錄"
 requires-python = ">=3.12,<3.14"
-dependencies = ["tmig"]
+dependencies = ["tmig", "tmig-service"]
 
 [dependency-groups]
 dev = [
@@ -13,16 +13,18 @@ dev = [
     "lxml-stubs>=0.5",
     "jsonschema>=4.26.0",
     "playwright==1.63.0",
+    "httpx>=0.28.1",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["kernel"]
+members = ["kernel", "service"]
 
 [tool.uv.sources]
 tmig = { workspace = true }
+tmig-service = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -35,15 +37,16 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["tmig"]
+known-first-party = ["tmig", "tmig_service"]
 
 [tool.pyright]
-include = ["kernel/src", "kernel/tests", "scripts", "tools"]
+include = ["kernel/src", "kernel/tests", "service/src", "service/tests", "scripts", "tools"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
-testpaths = ["kernel/tests"]
+testpaths = ["kernel/tests", "service/tests"]
 addopts = "-ra"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]

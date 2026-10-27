@@ -1,0 +1,33 @@
+{
+  "name": "tmig-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tableau 移轉檢視器：依 IR 排版 dashboard，向查詢服務取圖表規格",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vega": "6.2.0",
+    "vega-embed": "7.0.2",
+    "vega-lite": "6.4.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.1.0",
+    "typescript": "5.9.3",
+    "vite": "7.1.12"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "packageManager": "pnpm@10.28.0"
+}
