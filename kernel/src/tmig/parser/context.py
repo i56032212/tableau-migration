@@ -82,6 +82,8 @@ class ParseContext:
     package: WorkbookPackage
     lenient: bool = False
     """寬鬆模式：資料源不是嵌入式萃取時仍解析欄位與工作表（以佔位連線表示），供盤點與測試使用。"""
+    extracts_omitted: bool = False
+    """.twbx 下載時刻意不含萃取檔（只盤點結構）：萃取檔不在 .twbx 內時不列為不支援。"""
     ids: IdAllocator = field(default_factory=IdAllocator)
     unsupported: list[Unsupported] = field(default_factory=list)
     ignored: list[Unsupported] = field(default_factory=list)

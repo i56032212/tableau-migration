@@ -172,11 +172,13 @@ class DatasourceParser:
         if conn is None:
             ctx.flag(el, f"資料源「{self.caption}」沒有連線設定")
             return None
-        if conn.get("class") == "sqlproxy":
-            ctx.flag(el, f"資料源「{self.caption}」是 Published Data Source，v0 不支援")
-            return None
         placeholder = ExtractConnection(kind="extract", hyper_file="(無)", table="(無)")
-        located = self._data_connection(conn)
+        published = conn.get("class") == "sqlproxy"
+        if published:
+            ctx.flag(el, f"資料源「{self.caption}」是 Published Data Source，v0 不支援")
+            if not ctx.lenient:
+                return None
+        located = None if published else self._data_connection(conn)
         connection: ExtractConnection | None
         if located is None:
             if not ctx.lenient:
@@ -286,7 +288,12 @@ class DatasourceParser:
             return names[stripped].replace("\\", "/")
         base = PurePosixPath(stripped).name.lower()
         matches = [n for n in names if PurePosixPath(n).name.lower() == base]
-        return matches[0] if len(matches) == 1 else None
+        if len(matches) == 1:
+            return matches[0]
+        if self.ctx.extracts_omitted:
+            # 下載時刻意不含萃取檔：沿用原路徑，只盤點結構
+            return stripped or None
+        return None
 
     def _week_start(self) -> WeekDay:
         options = child(self.el, "date-options")

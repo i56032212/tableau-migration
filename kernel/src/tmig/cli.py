@@ -1,6 +1,7 @@
 """tmig 命令列。
 
 tmig census <.twb／.twbx>... [--out-dir 目錄]   功能盤點與起步條件檢查
+tmig inventory <資料夾>... [--out-dir 目錄]     批次盤點：總表、功能使用統計與起步候選
 tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援的元素
 tmig import-hyper <.twbx> [--out-dir 目錄]      萃取匯入 DuckDB 並自檢
 tmig sql <IR 檔> <工作表> [--case 名稱]          產生的 SQL（除錯用）
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -56,6 +58,42 @@ def _cmd_census(args: argparse.Namespace) -> int:
         summary = f"不符合：{'、'.join(failed_checks)}" if failed_checks else "起步條件符合"
         print(f"{path}：{report.grade} 級，{summary} → {md_path}")
     return 1 if failed else 0
+
+
+def _cmd_inventory(args: argparse.Namespace) -> int:
+    from tmig.census.inventory import READINESS_TEXT, run_inventory
+
+    paths: list[Path] = list(args.paths)
+    if not paths:
+        if args.server_meta is None:
+            print(
+                "失敗：請給 .twb／.twbx 或資料夾，或以 --server-meta 指定 server.json",
+                file=sys.stderr,
+            )
+            return 1
+        paths = [args.server_meta.parent]
+    try:
+        result = run_inventory(
+            paths,
+            args.out_dir,
+            server_meta=args.server_meta,
+            extracts_omitted=True if args.extracts_omitted else None,
+            progress=lambda message: print(message, file=sys.stderr),
+        )
+    except (FileNotFoundError, ValidationError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    if not result.rows:
+        print("失敗：沒有找到 .twb／.twbx", file=sys.stderr)
+        return 1
+    counts = Counter(row.readiness for row in result.rows)
+    summary = "、".join(
+        f"{text} {counts[key]}" for key, text in READINESS_TEXT.items() if counts[key]
+    )
+    a, b = len(result.candidates("A")), len(result.candidates("B"))
+    print(f"{len(result.rows)} 份報表：{summary}；起步候選 A 級 {a}、B 級 {b}")
+    print(f"→ {args.out_dir / 'inventory.md'}")
+    return 0
 
 
 def _cmd_parse(args: argparse.Namespace) -> int:
@@ -325,6 +363,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="寫入 <檔名>.census.md 與 .census.json；省略時把 Markdown 印到標準輸出",
     )
     census.set_defaults(handler=_cmd_census)
+
+    inventory = commands.add_parser("inventory", help="批次盤點：總表、功能使用統計與起步候選")
+    inventory.add_argument(
+        "paths", nargs="*", type=Path, metavar="資料夾或檔案", help="含 .twb／.twbx 的資料夾或檔案"
+    )
+    inventory.add_argument(
+        "--out-dir", type=Path, default=Path("inventory"), help="輸出目錄（預設 inventory）"
+    )
+    inventory.add_argument(
+        "--server-meta",
+        type=Path,
+        help="tools/tableau_server 產生的 server.json（Project、檢視次數）",
+    )
+    inventory.add_argument(
+        "--extracts-omitted",
+        action="store_true",
+        help=".twbx 下載時不含萃取檔（只盤點結構）；缺萃取檔不算不符合起步條件",
+    )
+    inventory.set_defaults(handler=_cmd_inventory)
 
     parse = commands.add_parser("parse", help="解析 .twbx 成 IR，列出不支援的元素")
     parse.add_argument("path", type=Path, metavar=".twbx")

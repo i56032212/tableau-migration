@@ -46,15 +46,24 @@ class WorkbookParseError(ValueError):
     """解析結果無法組成合法的 IR（通常是解析器本身的缺陷）。"""
 
 
-def parse_workbook(path: str | Path, *, lenient: bool = False) -> IR:
-    """解析 .twb／.twbx。lenient 為 True 時，非嵌入式萃取的資料源也照樣解析（連線以佔位值表示）。"""
-    return WorkbookParser(load_workbook_package(path), lenient=lenient).parse()
+def parse_workbook(
+    path: str | Path, *, lenient: bool = False, extracts_omitted: bool = False
+) -> IR:
+    """解析 .twb／.twbx。
+
+    - lenient：非嵌入式萃取的資料源也照樣解析（連線以佔位值表示）
+    - extracts_omitted：.twbx 下載時不含萃取檔（只盤點結構），缺萃取檔不列為不支援
+    """
+    package = load_workbook_package(path)
+    return WorkbookParser(package, lenient=lenient, extracts_omitted=extracts_omitted).parse()
 
 
 class WorkbookParser:
-    def __init__(self, package: WorkbookPackage, *, lenient: bool = False) -> None:
+    def __init__(
+        self, package: WorkbookPackage, *, lenient: bool = False, extracts_omitted: bool = False
+    ) -> None:
         self.package = package
-        self.ctx = ParseContext(package, lenient=lenient)
+        self.ctx = ParseContext(package, lenient=lenient, extracts_omitted=extracts_omitted)
 
     def parse(self) -> IR:
         ctx, root = self.ctx, self.package.root

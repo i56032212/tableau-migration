@@ -107,7 +107,11 @@ MAP_MARKS = frozenset({"Map", "Multipolygon"})
 DATA_FILE_CLASSES = frozenset({"hyper", "dataengine"})
 
 
-def run_census(path: str | Path) -> CensusReport:
+def run_census(path: str | Path, *, extracts_omitted: bool = False) -> CensusReport:
+    """盤點一份 .twb／.twbx。
+
+    extracts_omitted：.twbx 下載時刻意不含萃取檔（只盤點結構），缺萃取檔不算不符合起步條件。
+    """
     package = load_workbook_package(path)
     root = package.root
 
@@ -162,7 +166,7 @@ def run_census(path: str | Path) -> CensusReport:
         grade_reasons=[],
         element_inventory=dict(sorted(inventory.items(), key=lambda item: (-item[1], item[0]))),
     )
-    report.checks = _checks(report)
+    report.checks = _checks(report, extracts_omitted=extracts_omitted)
     report.grade, report.grade_reasons = _grade(report)
     return report
 
@@ -449,7 +453,7 @@ def _norm(path: str) -> str:
     return path.replace("\\", "/").lstrip("./").lower()
 
 
-def _checks(r: CensusReport) -> list[Check]:
+def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
     checks: list[Check] = []
     dss = r.datasources
 
@@ -486,9 +490,11 @@ def _checks(r: CensusReport) -> list[Check]:
             problems.append(f"「{ds.caption}」是 Live 連線，資料不在 .twbx 內")
         elif any(f.lower().endswith(".tde") for f in ds.extract_files):
             problems.append(f"「{ds.caption}」的萃取是舊版 .tde，需先在 Tableau 升級為 .hyper")
-        elif packaged and missing:
+        elif packaged and missing and not extracts_omitted:
             problems.append(f"「{ds.caption}」的萃取檔不在 .twbx 內：{'、'.join(missing)}")
     ok_detail = "；".join(f"「{d.caption}」：{'、'.join(d.extract_files) or '萃取'}" for d in dss)
+    if dss and packaged and extracts_omitted:
+        ok_detail += "（下載時未含萃取檔，萃取檔是否齊全待下載正式檔確認）"
     if dss and not packaged:
         ok_detail += "（.twb 不含資料，正式盤點請用 .twbx）"
     checks.append(
@@ -591,7 +597,7 @@ def _checks(r: CensusReport) -> list[Check]:
             )
         )
 
-    features = _features_outside_v0(r)
+    features = features_outside_v0(r)
     checks.append(
         Check(
             key="v0_features",
@@ -605,7 +611,8 @@ def _checks(r: CensusReport) -> list[Check]:
     return checks
 
 
-def _features_outside_v0(r: CensusReport) -> list[str]:
+def features_outside_v0(r: CensusReport) -> list[str]:
+    """IR v0 未涵蓋的功能，每項寫成「功能（用到的工作表或 dashboard）」。"""
     features: list[str] = []
 
     def add(label: str, sheets: list[str]) -> None:
