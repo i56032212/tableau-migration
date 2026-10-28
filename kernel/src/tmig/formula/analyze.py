@@ -199,10 +199,11 @@ class Analyzer:
                 datatype = unify([a, b], pos, "-")
             elif a in ("date", "datetime") and is_numeric(b):
                 datatype = a  # type: ignore[assignment]
+            elif a in ("date", "datetime") and b in ("date", "datetime"):
+                # 日期相減為相差的天數：兩邊都是日期時為整數，含時間時為小數
+                datatype = "integer" if a == b == "date" else "real"
             else:
-                raise FormulaSemanticError(
-                    f"無法相減 {a} 與 {b}", pos, unsupported=a in ("date", "datetime")
-                )
+                raise FormulaSemanticError(f"無法相減 {a} 與 {b}", pos)
         elif op in ("*", "%"):
             if not (is_numeric(a) and is_numeric(b)):
                 raise FormulaSemanticError(f"{op} 只能用在數字", pos)

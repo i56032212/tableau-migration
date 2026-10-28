@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
+import statistics
 from collections.abc import Iterator
 from typing import Any
 
@@ -11,6 +13,7 @@ import pytest
 
 from tmig.formula.analyze import Target
 from tmig.formula.ast import Call, Lod
+from tmig.formula.catalog import is_table_calc_function
 from tmig.formula.functions import implemented_names
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
@@ -76,6 +79,8 @@ COLUMNS = [
     "Returned",
 ]
 COLUMN_BY_ID = {slug(name): name for name in BASE}
+SALES = [row[1] for row in ROWS]
+QUANTITY = [float(row[4]) for row in ROWS]
 
 
 class Env:
@@ -239,6 +244,65 @@ ROW_CASES: list[tuple[str, str, Any]] = [
     ("DATE('2024-03-05')", "A1", dt.date(2024, 3, 5)),
     ("DATE([Ship Time])", "A1", dt.date(2024, 2, 17)),
     ("DATETIME('2024-03-05 10:00:00')", "A1", dt.datetime(2024, 3, 5, 10)),
+    # K2 字串
+    ("ASCII([Region])", "A1", 69),
+    ("ASCII('')", "A1", None),
+    ("CHAR(65)", "A1", "A"),
+    ("FINDNTH('a-b-c', '-', 2)", "A1", 4),
+    ("FINDNTH('a-b-c', '-', 3)", "A1", 0),
+    ("FINDNTH([Category], 'u', 2)", "A1", 7),
+    ("FINDNTH([Customer], 'n', 1)", "A4", None),
+    ("SPACE(2) + 'x'", "A1", "  x"),
+    ("SPACE(-1) + 'x'", "A1", "x"),
+    ("REGEXP_EXTRACT('abc 123', '[a-z]+\\s+(\\d+)')", "A1", "123"),
+    ("REGEXP_EXTRACT([Category], 'ni.')", "A1", "nit"),
+    ("REGEXP_EXTRACT([Category], 'z(\\d)')", "A1", None),
+    ("REGEXP_EXTRACT_NTH('abc 123', '([a-z]+)\\s+(\\d+)', 2)", "A1", "123"),
+    ("REGEXP_EXTRACT_NTH('abc 123', '([a-z]+)\\s+(\\d+)', 0)", "A1", "abc 123"),
+    ("REGEXP_MATCH([Category], '^Furn')", "A1", True),
+    ("REGEXP_MATCH([Category], '^furn')", "A1", False),
+    ("REGEXP_MATCH([Category], '(?i)^furn')", "A1", True),
+    ("REGEXP_REPLACE('abc 123', '\\s', '-')", "A1", "abc-123"),
+    ("REGEXP_REPLACE('a1b22', '(\\d)', '<$1>')", "A1", "a<1>b<2><2>"),
+    ("REGEXP_REPLACE('a1', '\\d', '\\$')", "A1", "a$"),
+    # K2 數學
+    ("PI()", "A1", math.pi),
+    ("DEGREES(PI())", "A1", 180.0),
+    ("RADIANS(180)", "A1", math.pi),
+    ("SIN(0)", "A1", 0.0),
+    ("COS(0)", "A1", 1.0),
+    ("TAN(0)", "A1", 0.0),
+    ("COT(PI() / 4)", "A1", 1.0),
+    ("COT(0)", "A1", None),
+    ("ASIN(1)", "A1", math.pi / 2),
+    ("ASIN(2)", "A1", None),
+    ("ACOS(1)", "A1", 0.0),
+    ("ATAN(1)", "A1", math.pi / 4),
+    ("ATAN2(1, 1)", "A1", math.pi / 4),
+    ("SQUARE([Quantity])", "A1", 9.0),
+    # K2 日期
+    ("[Ship Time] - [Order Date]", "A1", 2.4375),
+    ("[Order Date] - #2024-01-01#", "A1", 45),
+    ("[Order Date] - [Order Date]", "A3", 0),
+    ("MAKETIME(10, 30, 0)", "A1", dt.datetime(1899, 12, 30, 10, 30)),
+    ("MAKEDATETIME([Order Date], MAKETIME(10, 30, 0))", "A1", dt.datetime(2024, 2, 15, 10, 30)),
+    ("DATENAME('month', [Order Date])", "A1", "February"),
+    ("DATENAME('weekday', [Order Date])", "A1", "Thursday"),
+    ("DATENAME('year', [Order Date])", "A1", "2024"),
+    ("DATENAME('quarter', [Order Date])", "A1", "1"),
+    ("DATENAME('week', [Order Date], 'monday')", "A4", "1"),
+    ("DATEPARSE('dd.MM.yyyy HH:mm', '05.03.2024 14:07')", "A1", dt.datetime(2024, 3, 5, 14, 7)),
+    ("DATEPARSE('MMM d, yyyy', 'Mar 5, 2024')", "A1", dt.datetime(2024, 3, 5)),
+    ("DATEPARSE(\"yyyy'年'M'月'd'日'\", '2024年3月5日')", "A1", dt.datetime(2024, 3, 5)),
+    ("DATEPARSE('yyyy-MM-dd', 'x')", "A1", None),
+    ("ISDATE('2024-03-05')", "A1", True),
+    ("ISDATE('2024-13-05')", "A1", False),
+    ("ISDATE([Customer])", "A4", None),
+    ("ISOYEAR(#2021-01-01#)", "A1", 2020),
+    ("ISOWEEK(#2021-01-01#)", "A1", 53),
+    ("ISOWEEKDAY([Order Date])", "A1", 4),
+    ("ISOQUARTER(#2021-01-01#)", "A1", 4),
+    ("ISOQUARTER([Order Date])", "A1", 1),
 ]
 
 
@@ -285,6 +349,9 @@ AGG_CASES: list[tuple[str, Any]] = [
     ("SUM([Profit]) / SUM([Sales])", pytest.approx(15.0 / 350.5)),
     ("SUM(IIF([Region] = 'East', [Sales], 0))", 300.0),
     ("COUNTD(IF [Profit] > 0 THEN [Order ID] END)", 1),
+    ("CORR([Sales], [Quantity])", pytest.approx(statistics.correlation(SALES, QUANTITY))),
+    ("COVAR([Sales], [Quantity])", pytest.approx(statistics.covariance(SALES, QUANTITY))),
+    ("COVARP([Sales], [Quantity])", pytest.approx(statistics.covariance(SALES, QUANTITY) * 3 / 4)),
 ]
 
 
@@ -302,11 +369,8 @@ def test_every_row_and_aggregate_function_is_tested() -> None:
     tested = {n for f, _, _ in ROW_CASES for n in _calls(f)} | {
         n for f, _ in AGG_CASES for n in _calls(f)
     }
-    table_calcs = {
-        "RUNNING_SUM", "RUNNING_AVG", "RUNNING_MIN", "RUNNING_MAX", "RUNNING_COUNT",
-        "WINDOW_SUM", "WINDOW_AVG", "WINDOW_MIN", "WINDOW_MAX", "WINDOW_COUNT",
-        "TOTAL", "INDEX", "FIRST", "LAST", "SIZE", "RANK", "RANK_DENSE", "RANK_MODIFIED", "RANK_UNIQUE", "LOOKUP",
-    }  # fmt: skip
+    # Table Calculation 在 test_query 以整張工作表實跑
+    table_calcs = {name for name in implemented_names() if is_table_calc_function(name)}
     missing = implemented_names() - tested - table_calcs - {"TODAY", "NOW"}
     assert missing == set()
 

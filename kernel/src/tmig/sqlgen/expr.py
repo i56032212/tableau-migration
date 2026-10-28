@@ -10,12 +10,16 @@
 
 - 除以 0 得 NULL；整數相除得小數
 - 兩個參數的 MIN、MAX：任一為 NULL 即為 NULL
-- SQRT、LN、LOG 的參數不合法時得 NULL
+- SQRT、LN、LOG、ASIN、ACOS、COT 的參數不合法時得 NULL
 - 週的計算依資料源的週起始日
+- REGEXP_EXTRACT 沒有符合時得 NULL；取代字串的 $1 轉成 RE2 的 \\1
+- 日期相減得相差的天數（兩邊都是日期時為整數）
+- DATENAME 的月份與星期為英文名稱（Tableau 依工作簿的地區設定）
 """
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from tmig.formula.analyze import Analyzer, Target
@@ -31,7 +35,14 @@ from tmig.formula.ast import (
     Node,
     Unary,
 )
-from tmig.formula.functions import WEEK_STARTS, lookup, string_literal, window_offset
+from tmig.formula.functions import (
+    WEEK_STARTS,
+    int_literal,
+    lookup,
+    string_literal,
+    strptime_format,
+    window_offset,
+)
 from tmig.formula.types import FormulaSemanticError
 from tmig.sqlgen.sql import cast, literal
 
@@ -146,6 +157,12 @@ class ExprCompiler:
                 return self._add_days(left, right, lt)
             return f"({left} + {right})"
         if op == "-":
+            rt = self.datatype(node.right)
+            if lt in ("date", "datetime") and rt in ("date", "datetime"):
+                if lt == rt == "date":
+                    return f"CAST(date_diff('day', {right}, {left}) AS BIGINT)"
+                seconds = f"(epoch(CAST({left} AS TIMESTAMP)) - epoch(CAST({right} AS TIMESTAMP)))"
+                return f"({seconds} / 86400.0)"
             if lt in ("date", "datetime"):
                 return self._add_days(left, f"(- {right})", lt)
             return f"({left} - {right})"
@@ -216,6 +233,10 @@ class ExprCompiler:
             p = node.args[1]
             assert isinstance(p, LiteralNode)
             return f"quantile_cont({x}, {float(p.value)!r})"
+        if name in ("CORR", "COVAR", "COVARP"):
+            y = self.row(node.args[1])
+            fn = {"CORR": "corr", "COVAR": "covar_samp", "COVARP": "covar_pop"}[name]
+            return f"{fn}({x}, {y})"
         raise FormulaSemanticError(f"尚不支援彙總函式 {name}", node.pos, unsupported=True)
 
     def _week_start(self, node: Call, index: int) -> int:
@@ -296,6 +317,51 @@ class ExprCompiler:
             return f"replace({a[0]}, {a[1]}, {a[2]})"
         if name == "SPLIT":
             return f"split_part({a[0]}, {a[1]}, CAST({a[2]} AS BIGINT))"
+        if name == "ASCII":
+            return (
+                f"(CASE WHEN length({a[0]}) = 0 THEN NULL ELSE CAST(unicode({a[0]}) AS BIGINT) END)"
+            )
+        if name == "CHAR":
+            return f"chr(CAST({a[0]} AS INTEGER))"
+        if name == "FINDNTH":
+            parts = f"string_split({a[0]}, {a[1]})"
+            n = f"CAST({a[2]} AS BIGINT)"
+            position = f"length(array_to_string(list_slice({parts}, 1, {n}), {a[1]})) + 1"
+            return (
+                f"CAST((CASE WHEN length({a[1]}) = 0 OR {n} < 1 OR len({parts}) - 1 < {n} THEN 0 "
+                f"ELSE {position} END) AS BIGINT)"
+            )
+        if name == "SPACE":
+            return f"repeat(' ', CAST(greatest({a[0]}, 0) AS BIGINT))"
+        if name == "REGEXP_MATCH":
+            return f"regexp_matches({a[0]}, {a[1]})"
+        if name in ("REGEXP_EXTRACT", "REGEXP_EXTRACT_NTH"):
+            if name == "REGEXP_EXTRACT_NTH":
+                group = int_literal(node.args[2], name, node.pos)
+            else:
+                group = 1 if _capture_groups(node.args[1]) else 0
+            # 沒有符合時為 Null（DuckDB 回傳空字串）
+            extracted = f"regexp_extract({a[0]}, {a[1]}, {group})"
+            return f"(CASE WHEN regexp_matches({a[0]}, {a[1]}) THEN {extracted} END)"
+        if name == "REGEXP_REPLACE":
+            replacement = node.args[2]
+            if isinstance(replacement, LiteralNode) and replacement.kind == "string":
+                repl = literal(icu_replacement(str(replacement.value)), "string")
+            else:
+                repl = a[2]
+            return f"regexp_replace({a[0]}, {a[1]}, {repl}, 'g')"
+        if name == "PI":
+            return "pi()"
+        if name in ("DEGREES", "RADIANS", "SIN", "COS", "TAN", "ATAN"):
+            return f"{name.lower()}({a[0]})"
+        if name in ("ASIN", "ACOS"):
+            return f"(CASE WHEN {a[0]} BETWEEN -1 AND 1 THEN {name.lower()}({a[0]}) END)"
+        if name == "ATAN2":
+            return f"atan2({a[0]}, {a[1]})"
+        if name == "COT":
+            return f"(CASE WHEN tan({a[0]}) = 0 THEN NULL ELSE 1 / tan({a[0]}) END)"
+        if name == "SQUARE":
+            return f"(CAST({a[0]} AS DOUBLE) * CAST({a[0]} AS DOUBLE))"
         if name in ("YEAR", "QUARTER", "MONTH", "DAY"):
             return f"CAST({name.lower()}({a[0]}) AS BIGINT)"
         if name == "WEEK":
@@ -322,6 +388,40 @@ class ExprCompiler:
             return (
                 f"make_date(CAST({a[0]} AS BIGINT), CAST({a[1]} AS BIGINT), CAST({a[2]} AS BIGINT))"
             )
+        if name == "MAKEDATETIME":
+            time = f"CAST({a[1]} AS TIMESTAMP)"
+            return (
+                f"(CAST(CAST({a[0]} AS DATE) AS TIMESTAMP) + ({time} - date_trunc('day', {time})))"
+            )
+        if name == "MAKETIME":
+            # Tableau 的時間是 1899-12-30 當天的日期時間
+            return (
+                f"make_timestamp(1899, 12, 30, CAST({a[0]} AS BIGINT), CAST({a[1]} AS BIGINT), "
+                f"CAST({a[2]} AS DOUBLE))"
+            )
+        if name == "DATENAME":
+            part = self._part(node, 0, _DATEPART)
+            if part == "month":
+                return f"monthname({a[1]})"
+            if part == "weekday":
+                return f"dayname({a[1]})"
+            return f"CAST({self.date_part(part, a[1], self._week_start(node, 2))} AS VARCHAR)"
+        if name == "DATEPARSE":
+            fmt = node.args[0]
+            assert isinstance(fmt, LiteralNode)
+            pattern = strptime_format(str(fmt.value), node.pos)
+            return f"try_strptime({a[1]}, {literal(pattern, 'string')})"
+        if name == "ISDATE":
+            return f"(CASE WHEN {a[0]} IS NULL THEN NULL ELSE TRY_CAST({a[0]} AS TIMESTAMP) IS NOT NULL END)"
+        if name == "ISOYEAR":
+            return f"CAST(isoyear({a[0]}) AS BIGINT)"
+        if name == "ISOWEEK":
+            return f"CAST(week({a[0]}) AS BIGINT)"
+        if name == "ISOWEEKDAY":
+            return f"CAST(isodow({a[0]}) AS BIGINT)"
+        if name == "ISOQUARTER":
+            # ISO 週 1–13 為第 1 季、14–26 第 2 季、27–39 第 3 季、40 以後第 4 季
+            return f"CAST(least((week({a[0]}) - 1) // 13 + 1, 4) AS BIGINT)"
         if name == "TODAY":
             return "current_date"
         if name == "NOW":
@@ -387,6 +487,39 @@ _DATEPART = (
     "second",
 )
 _TRUNC = ("year", "quarter", "month", "week", "day", "hour", "minute", "second")
+
+
+def _capture_groups(node: Node) -> int:
+    """樣式常值中的擷取群組數；不是常值時當作有一個群組（Tableau 的範例都有）。"""
+    if not (isinstance(node, LiteralNode) and node.kind == "string"):
+        return 1
+    try:
+        return re.compile(str(node.value)).groups
+    except re.error:
+        return 1
+
+
+def icu_replacement(text: str) -> str:
+    """ICU 的取代字串（$1 參照群組、\\ 跳脫）→ RE2 的寫法（\\1 參照群組）。"""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            out.append("\\\\" if nxt == "\\" else nxt)
+            i += 2
+            continue
+        if char == "$" and i + 1 < len(text) and text[i + 1].isdigit():
+            j = i + 1
+            while j < len(text) and text[j].isdigit():
+                j += 1
+            out.append("\\" + text[i + 1 : j])
+            i = j
+            continue
+        out.append("\\\\" if char == "\\" else char)
+        i += 1
+    return "".join(out)
 
 
 def _interval(part: str, amount: str) -> str:

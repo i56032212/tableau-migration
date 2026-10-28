@@ -63,9 +63,9 @@ def test_table_calc_and_user_functions() -> None:
 
 def test_outside_v0() -> None:
     scan = scan_formula(
-        "IF REGEXP_MATCH([Region], 'a') THEN DATENAME('month', [d]) END + ATTR([x]) IN (1)"
+        "IF HEXBINX([a], [b]) > 0 THEN PROPER([d]) END + ATTR([x]) IN (1) + DATENAME('month', [d])"
     )
-    assert scan.outside_v0 == ["DATENAME", "REGEXP_MATCH"]
+    assert scan.outside_v0 == ["HEXBINX", "PROPER"]
 
 
 def test_numbers_and_date_literals() -> None:

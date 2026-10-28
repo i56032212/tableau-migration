@@ -110,6 +110,15 @@ def test_lod_is_row_level() -> None:
         ("WINDOW_SUM(SUM([Sales]), [Parameters].[Top N], 0)", "視窗位移只支援"),
         ("[Loop A]", "循環參照"),
         ("{FIXED [Region] : SUM({FIXED [Category] : SUM([Sales])})}", "尚不支援巢狀 LOD"),
+        ("[Region] - [Order Date]", "無法相減"),
+        ("[Order Date] - [Region]", "無法相減"),
+        ("REGEXP_MATCH([Region], '(?=a)')", "前向查看"),
+        ("REGEXP_MATCH([Region], '(a)\\1')", "反向參照"),
+        ("REGEXP_EXTRACT_NTH([Region], '(a)', [Quantity])", "整數常值"),
+        ("REGEXP_REPLACE([Region], 'a', 1)", "必須是字串"),
+        ("DATEPARSE('yyyy-ww', [Region])", "「ww」尚不支援"),
+        ("DATEPARSE([Region], [Region])", "格式必須是字串常值"),
+        ("DATENAME('fortnight', [Order Date])", "不支援「fortnight」"),
     ],
 )
 def test_errors(formula: str, message: str) -> None:
@@ -117,9 +126,9 @@ def test_errors(formula: str, message: str) -> None:
 
 
 def test_unsupported_function_is_flagged() -> None:
-    exc = error("REGEXP_MATCH([Region], 'a')")
+    exc = error("HEXBINX([Sales], [Profit])")
     assert exc.unsupported
-    assert "REGEXP_MATCH" in exc.message
+    assert "HEXBINX" in exc.message
 
 
 def test_expand_walks_into_calcs() -> None:

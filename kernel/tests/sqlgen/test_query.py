@@ -368,6 +368,22 @@ TC_CALCS = "".join(
         calc("Calculation_31", "Unique", "RANK_UNIQUE(COUNTD([Order ID]))", "integer"),
         calc("Calculation_32", "Competition", "RANK(COUNTD([Order ID]))", "integer"),
         calc("Calculation_33", "Window Avg", "WINDOW_AVG(SUM([Sales]))"),
+        calc("Calculation_34", "Window Median", "WINDOW_MEDIAN(SUM([Sales]))"),
+        calc("Calculation_35", "Window Stdev", "WINDOW_STDEV(SUM([Sales]), FIRST(), LAST())"),
+        calc("Calculation_36", "Window Varp", "WINDOW_VARP(SUM([Sales]))"),
+        calc("Calculation_37", "Window Pct", "WINDOW_PERCENTILE(SUM([Sales]), 0.25, -1, 1)"),
+        calc("Calculation_38", "Window Corr", "WINDOW_CORR(SUM([Sales]), SUM([Profit]))"),
+        calc("Calculation_39", "Window Stdevp", "WINDOW_STDEVP(SUM([Sales]))"),
+        calc("Calculation_40", "Window Var", "WINDOW_VAR(SUM([Sales]))"),
+        calc("Calculation_41", "Window Covar", "WINDOW_COVAR(SUM([Sales]), SUM([Profit]))"),
+        calc("Calculation_42", "Window Covarp", "WINDOW_COVARP(SUM([Sales]), SUM([Profit]))"),
+        calc("Calculation_43", "Run Sum", "RUNNING_SUM(SUM([Sales]))"),
+        calc("Calculation_44", "Run Count", "RUNNING_COUNT(SUM([Sales]))", "integer"),
+        calc("Calculation_45", "Run Min", "RUNNING_MIN(SUM([Sales]))"),
+        calc("Calculation_46", "Run Max", "RUNNING_MAX(SUM([Sales]))"),
+        calc("Calculation_47", "Window Count", "WINDOW_COUNT(SUM([Sales]))", "integer"),
+        calc("Calculation_48", "Window Min", "WINDOW_MIN(SUM([Sales]), -1, 0)"),
+        calc("Calculation_49", "Window Max", "WINDOW_MAX(SUM([Sales]), 0, 1)"),
     ]
 )
 
@@ -481,6 +497,67 @@ def test_window_functions(run: Run) -> None:
     assert col(27, "avg_total") == approx({r: 1310 / 9 for r in by})
     assert col(28, "run_avg") == approx({"East": 350, "North": 205, "South": 170, "West": 327.5})
     assert col(33, "window_avg") == approx({r: 327.5 for r in by})
+
+
+def test_window_statistics(run: Run) -> None:
+    import statistics
+
+    numbers = tuple(range(34, 43))
+    inst = [tc_instance(n) for n in numbers]
+    enc = "".join(f"<tooltip column='{ref(f'usr:Calculation_{n}:qk')}' />" for n in numbers)
+    rows = tc_rows(run, inst, enc)
+    by = {r["f_region"]: r for r in rows}
+
+    def col(caption: str) -> dict[str, Any]:
+        key = next(k for k in rows[0] if k.endswith(f"#tc_formula_{caption}"))
+        return {region: by[region][key] for region in by}
+
+    # 依 Region 排序：East 350、North 60、South 100、West 800；Profit：45、6、10、20
+    sales = [350.0, 60.0, 100.0, 800.0]
+    profit = [45.0, 6.0, 10.0, 20.0]
+    every = lambda value: approx(dict.fromkeys(by, value))  # noqa: E731
+    assert col("window_median") == every(225.0)
+    assert col("window_stdev") == every(statistics.stdev(sales))
+    assert col("window_stdevp") == every(statistics.pstdev(sales))
+    assert col("window_var") == every(statistics.variance(sales))
+    assert col("window_varp") == every(statistics.pvariance(sales))
+    assert col("window_corr") == every(statistics.correlation(sales, profit))
+    assert col("window_covar") == every(statistics.covariance(sales, profit))
+    assert col("window_covarp") == every(statistics.covariance(sales, profit) * 3 / 4)
+    # 前後各一列的 25 百分位數（線性內插）：East [350, 60] → 132.5；North [350, 60, 100] → 80
+    assert col("window_pct") == approx({"East": 132.5, "North": 80.0, "South": 80.0, "West": 275.0})
+
+
+def test_running_and_window_basics(run: Run) -> None:
+    numbers = tuple(range(43, 50))
+    inst = [tc_instance(n) for n in numbers]
+    enc = "".join(f"<tooltip column='{ref(f'usr:Calculation_{n}:qk')}' />" for n in numbers)
+    rows = tc_rows(run, inst, enc)
+    by = {r["f_region"]: r for r in rows}
+
+    def col(caption: str) -> dict[str, Any]:
+        key = next(k for k in rows[0] if k.endswith(f"#tc_formula_{caption}"))
+        return {region: by[region][key] for region in by}
+
+    assert col("run_sum") == {"East": 350, "North": 410, "South": 510, "West": 1310}
+    assert col("run_count") == {"East": 1, "North": 2, "South": 3, "West": 4}
+    assert col("run_min") == {"East": 350, "North": 60, "South": 60, "West": 60}
+    assert col("run_max") == {"East": 350, "North": 350, "South": 350, "West": 800}
+    assert col("window_count") == {"East": 4, "North": 4, "South": 4, "West": 4}
+    assert col("window_min") == {"East": 350, "North": 60, "South": 60, "West": 100}
+    assert col("window_max") == {"East": 350, "North": 100, "South": 800, "West": 800}
+
+
+def test_every_table_calc_function_is_tested() -> None:
+    import re
+    from pathlib import Path
+
+    from tmig.formula.catalog import is_table_calc_function
+    from tmig.formula.functions import implemented_names
+
+    text = Path(__file__).read_text(encoding="utf-8")
+    names = [n for n in implemented_names() if is_table_calc_function(n)]
+    assert [n for n in names if not re.search(rf"\b{n}\(", text)] == []
 
 
 def test_rank_ties(run: Run) -> None:

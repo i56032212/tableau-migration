@@ -81,7 +81,21 @@ RANK_FUNCTIONS = {
     "modified": "RANK_MODIFIED",
     "unique": "RANK_UNIQUE",
 }
-WINDOW_AGG = {"SUM": "sum", "AVG": "avg", "MIN": "min", "MAX": "max", "COUNT": "count"}
+WINDOW_AGG = {
+    "SUM": "sum",
+    "AVG": "avg",
+    "MIN": "min",
+    "MAX": "max",
+    "COUNT": "count",
+    "MEDIAN": "median",
+    "STDEV": "stddev_samp",
+    "STDEVP": "stddev_pop",
+    "VAR": "var_samp",
+    "VARP": "var_pop",
+    "CORR": "corr",
+    "COVAR": "covar_samp",
+    "COVARP": "covar_pop",
+}
 STAGES = {
     1: "萃取篩選與資料源篩選",
     2: "內容篩選",
@@ -831,7 +845,7 @@ class WorksheetQuery:
         groups: dict[tuple[str, ...], list[Call]] = {}
         for node in combo_nodes:
             extra: list[str] = []
-            for lod in self.lods_in(node.args[0]):
+            for lod in (lod for arg in node.args for lod in self.lods_in(arg)):
                 spec = self.lods[lod]
                 for sql in self._lod_dims(spec, view_dims, self.row):
                     if sql not in level and sql not in extra:
@@ -843,7 +857,12 @@ class WorksheetQuery:
             g_sql = [*level, *group_key]
             g_keys = [f"__g{i}" for i in range(len(g_sql))]
             lod_cols = _unique(
-                [self.lods[lod].col for n in group_nodes for lod in self.lods_in(n.args[0])]
+                [
+                    self.lods[lod].col
+                    for n in group_nodes
+                    for arg in n.args
+                    for lod in self.lods_in(arg)
+                ]
             )
             combo_cols = [f"{sql} AS {ident(k)}" for sql, k in zip(g_sql, g_keys, strict=True)]
             combo_cols += [ident(c) for c in lod_cols]
@@ -882,11 +901,12 @@ class WorksheetQuery:
         return joined, cols, keys
 
     def _lod_only(self, node: Call) -> bool:
-        """彙總的參數只含 LOD（與常值、參數），不含列層級欄位。"""
+        """彙總的參數只含 LOD（與常值、參數），不含列層級欄位（CORR 等有兩個參數）。"""
         if not node.args:
             return False
-        arg = node.args[0]
-        return bool(self.lods_in(arg)) and not self.has_row_fields(arg)
+        return any(self.lods_in(arg) for arg in node.args) and not any(
+            self.has_row_fields(arg) for arg in node.args
+        )
 
     # ------------------------------------------------------------ 排序與 Table Calculation
 
@@ -1074,15 +1094,27 @@ class WorksheetQuery:
             sql = f"{fn}({arg(0)}) {over('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW')}"
             return self._integer(sql, node) if fn in ("sum", "count") else sql
         if name.startswith("WINDOW_"):
-            fn = WINDOW_AGG[name.removeprefix("WINDOW_")]
-            if len(node.args) == 1:
-                sql = (
-                    f"{fn}({arg(0)}) OVER ({partition})" if partition else f"{fn}({arg(0)}) OVER ()"
+            base = name.removeprefix("WINDOW_")
+            if base == "PERCENTILE":
+                p = node.args[1]
+                assert isinstance(p, LiteralNode)
+                value, fn, bounds = (
+                    f"quantile_cont({arg(0)}, {float(p.value)!r})",
+                    "",
+                    node.args[2:],
                 )
+            elif base in ("CORR", "COVAR", "COVARP"):
+                fn = WINDOW_AGG[base]
+                value, bounds = f"{fn}({arg(0)}, {arg(1)})", node.args[2:]
             else:
-                start = _bound(node.args[1], "start")
-                end = _bound(node.args[2], "end")
-                sql = f"{fn}({arg(0)}) {over(f'ROWS BETWEEN {start} AND {end}')}"
+                fn = WINDOW_AGG[base]
+                value, bounds = f"{fn}({arg(0)})", node.args[1:]
+            if not bounds:
+                sql = f"{value} OVER ({partition})" if partition else f"{value} OVER ()"
+            else:
+                start = _bound(bounds[0], "start")
+                end = _bound(bounds[1], "end")
+                sql = f"{value} {over(f'ROWS BETWEEN {start} AND {end}')}"
             return self._integer(sql, node) if fn in ("sum", "count") else sql
         if name == "INDEX":
             return f"row_number() {over()}"

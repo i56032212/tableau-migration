@@ -219,6 +219,146 @@ def _datediff(name: str) -> Checker:
     return check
 
 
+# 正規表示式：Tableau 萃取用 ICU，DuckDB 用 RE2；RE2 不支援前後查看、反向參照與佔有量詞
+_RE2_UNSUPPORTED = (
+    ("(?=", "前向查看"),
+    ("(?!", "否定前向查看"),
+    ("(?<=", "後向查看"),
+    ("(?<!", "否定後向查看"),
+    ("(?>", "原子群組"),
+    ("*+", "佔有量詞"),
+    ("++", "佔有量詞"),
+    ("?+", "佔有量詞"),
+)
+
+
+def regex_pattern(node: Node, name: str, pos: int) -> str | None:
+    """正規表示式的樣式：常值時檢查 RE2 能否執行並回傳內容；不是常值時回傳 None。"""
+    if not (isinstance(node, LiteralNode) and node.kind == "string"):
+        return None
+    pattern = str(node.value)
+    for token, label in _RE2_UNSUPPORTED:
+        if token in pattern:
+            raise FormulaSemanticError(
+                f"{name} 的樣式用到{label}（{token}），尚不支援", pos, unsupported=True
+            )
+    for i in range(len(pattern) - 1):
+        escaped = i > 0 and pattern[i - 1] == "\\"
+        if pattern[i] == "\\" and pattern[i + 1] in "123456789" and not escaped:
+            raise FormulaSemanticError(
+                f"{name} 的樣式用到反向參照，尚不支援", pos, unsupported=True
+            )
+    return pattern
+
+
+def _regexp(result: DataType) -> Callable[[str], Checker]:
+    def build(name: str) -> Checker:
+        def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+            for i in (0, 1):
+                _need(
+                    args[i].datatype in ("string", "null"),
+                    f"{name} 的第 {i + 1} 個參數必須是字串",
+                    pos,
+                )
+            regex_pattern(nodes[1], name, pos)
+            if name == "REGEXP_EXTRACT_NTH":
+                index = int_literal(nodes[2], name, pos)
+                _need(index >= 0, f"{name} 的群組編號不能是負數", pos)
+            if name == "REGEXP_REPLACE":
+                _need(
+                    args[2].datatype in ("string", "null"), f"{name} 的第 3 個參數必須是字串", pos
+                )
+            return result
+
+        return check
+
+    return build
+
+
+def _datename(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        string_literal(nodes[0], name, DATE_PARTS, pos)
+        _need(is_temporal(args[1].datatype), f"{name} 的第 2 個參數必須是日期", pos)
+        if len(nodes) == 3:
+            string_literal(nodes[2], name, WEEK_STARTS, pos)
+        return "string"
+
+    return check
+
+
+def _dateparse(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        node = nodes[0]
+        if not (isinstance(node, LiteralNode) and node.kind == "string"):
+            raise FormulaSemanticError(f"{name} 的格式必須是字串常值", pos, unsupported=True)
+        strptime_format(str(node.value), pos)
+        _need(args[1].datatype in ("string", "null"), f"{name} 的第 2 個參數必須是字串", pos)
+        return "datetime"
+
+    return check
+
+
+# ICU 日期格式 → strptime：只轉換常見的欄位，其他（時區、週數、毫秒等）列為不支援
+_ICU_FIELDS = {
+    "yyyy": "%Y",
+    "yy": "%y",
+    "y": "%Y",
+    "MMMM": "%B",
+    "MMM": "%b",
+    "MM": "%m",
+    "M": "%m",
+    "dd": "%d",
+    "d": "%d",
+    "HH": "%H",
+    "H": "%H",
+    "hh": "%I",
+    "h": "%I",
+    "mm": "%M",
+    "m": "%M",
+    "ss": "%S",
+    "s": "%S",
+    "a": "%p",
+    "EEEE": "%A",
+    "EEE": "%a",
+    "E": "%a",
+}
+
+
+def strptime_format(icu: str, pos: int) -> str:
+    """DATEPARSE 的 ICU 格式 → DuckDB strptime 格式。"""
+    out: list[str] = []
+    i = 0
+    while i < len(icu):
+        char = icu[i]
+        if char == "'":
+            end = icu.find("'", i + 1)
+            if end == i + 1:
+                out.append("'")
+                i += 2
+                continue
+            if end == -1:
+                raise FormulaSemanticError("DATEPARSE 的格式引號沒有成對", pos)
+            out.append(icu[i + 1 : end].replace("%", "%%"))
+            i = end + 1
+            continue
+        if char.isalpha():
+            j = i
+            while j < len(icu) and icu[j] == char:
+                j += 1
+            run = icu[i:j]
+            mapped = _ICU_FIELDS.get(run)
+            if mapped is None:
+                raise FormulaSemanticError(
+                    f"DATEPARSE 的格式「{run}」尚不支援", pos, unsupported=True
+                )
+            out.append(mapped)
+            i = j
+            continue
+        out.append("%%" if char == "%" else char)
+        i += 1
+    return "".join(out)
+
+
 def _percentile(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
         _numeric(name, 0)(args, pos)
@@ -269,10 +409,35 @@ def _window_result(base: str, t: str, name: str, pos: int) -> DataType:
     if base in ("SUM",):
         _need(is_numeric(t), f"{name} 的參數必須是數字", pos)
         return "integer" if t == "integer" else "real"
-    if base in ("AVG", "MEDIAN"):
+    if base in ("AVG", "MEDIAN", "STDEV", "STDEVP", "VAR", "VARP"):
         _need(is_numeric(t), f"{name} 的參數必須是數字", pos)
         return "real"
     return t  # type: ignore[return-value]
+
+
+def _window_extra(name: str) -> Checker:
+    """WINDOW_PERCENTILE(expr, p, [start, end])、WINDOW_CORR／COVAR／COVARP(a, b, [start, end])。"""
+
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        if len(nodes) == 3:
+            raise FormulaSemanticError(f"{name} 必須同時指定起點與終點", pos)
+        for node in nodes[2:]:
+            window_offset(node, name, pos)
+        _numeric(name, 0)(args, pos)
+        if name == "WINDOW_PERCENTILE":
+            node = nodes[1]
+            _need(
+                isinstance(node, LiteralNode)
+                and node.kind in ("integer", "real")
+                and 0 <= node.value <= 1,
+                f"{name} 的第 2 個參數必須是 0 到 1 的數字常值",
+                pos,
+            )
+        else:
+            _numeric(name, 1)(args, pos)
+        return "real"
+
+    return check
 
 
 def _running(name: str) -> Checker:
@@ -345,6 +510,26 @@ _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("FIND", 2, 3, _fixed("integer", "str", "str", "num")),
     ("REPLACE", 3, 3, _fixed("string", "str", "str", "str")),
     ("SPLIT", 3, 3, _fixed("string", "str", "str", "num")),
+    ("ASCII", 1, 1, _fixed("integer", "str")),
+    ("CHAR", 1, 1, _fixed("string", "num")),
+    ("FINDNTH", 3, 3, _fixed("integer", "str", "str", "num")),
+    ("SPACE", 1, 1, _fixed("string", "num")),
+    ("REGEXP_EXTRACT", 2, 2, _regexp("string")),
+    ("REGEXP_EXTRACT_NTH", 3, 3, _regexp("string")),
+    ("REGEXP_MATCH", 2, 2, _regexp("boolean")),
+    ("REGEXP_REPLACE", 3, 3, _regexp("string")),
+    ("PI", 0, 0, _fixed("real")),
+    ("DEGREES", 1, 1, _real_numeric),
+    ("RADIANS", 1, 1, _real_numeric),
+    ("SIN", 1, 1, _real_numeric),
+    ("COS", 1, 1, _real_numeric),
+    ("TAN", 1, 1, _real_numeric),
+    ("COT", 1, 1, _real_numeric),
+    ("ASIN", 1, 1, _real_numeric),
+    ("ACOS", 1, 1, _real_numeric),
+    ("ATAN", 1, 1, _real_numeric),
+    ("ATAN2", 2, 2, _real_numeric),
+    ("SQUARE", 1, 1, _real_numeric),
     ("YEAR", 1, 1, _fixed("integer", "date")),
     ("QUARTER", 1, 1, _fixed("integer", "date")),
     ("MONTH", 1, 1, _fixed("integer", "date")),
@@ -355,6 +540,15 @@ _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("DATEADD", 3, 3, _dateadd),
     ("DATEDIFF", 3, 4, _datediff),
     ("MAKEDATE", 3, 3, _fixed("date", "num", "num", "num")),
+    ("MAKEDATETIME", 2, 2, _fixed("datetime", "date", "date")),
+    ("MAKETIME", 3, 3, _fixed("datetime", "num", "num", "num")),
+    ("DATENAME", 2, 3, _datename),
+    ("DATEPARSE", 2, 2, _dateparse),
+    ("ISDATE", 1, 1, _fixed("boolean", "str")),
+    ("ISOYEAR", 1, 1, _fixed("integer", "date")),
+    ("ISOQUARTER", 1, 1, _fixed("integer", "date")),
+    ("ISOWEEK", 1, 1, _fixed("integer", "date")),
+    ("ISOWEEKDAY", 1, 1, _fixed("integer", "date")),
     ("TODAY", 0, 0, _fixed("date")),
     ("NOW", 0, 0, _fixed("datetime")),
     ("INT", 1, 1, _fixed("integer", "any")),
@@ -378,11 +572,18 @@ _AGGREGATE: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("VAR", 1, 1, _real_numeric),
     ("VARP", 1, 1, _real_numeric),
     ("PERCENTILE", 2, 2, _percentile),
+    ("CORR", 2, 2, _real_numeric),
+    ("COVAR", 2, 2, _real_numeric),
+    ("COVARP", 2, 2, _real_numeric),
 ]
 
 _TABLE_CALC: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     *[(f"RUNNING_{b}", 1, 1, _running) for b in ("SUM", "AVG", "MIN", "MAX", "COUNT")],
-    *[(f"WINDOW_{b}", 1, 3, _window) for b in ("SUM", "AVG", "MIN", "MAX", "COUNT")],
+    *[
+        (f"WINDOW_{b}", 1, 3, _window)
+        for b in ("SUM", "AVG", "MIN", "MAX", "COUNT", "MEDIAN", "STDEV", "STDEVP", "VAR", "VARP")
+    ],
+    *[(f"WINDOW_{b}", 2, 4, _window_extra) for b in ("PERCENTILE", "CORR", "COVAR", "COVARP")],
     ("TOTAL", 1, 1, _total),
     ("INDEX", 0, 0, _fixed("integer")),
     ("FIRST", 0, 0, _fixed("integer")),
