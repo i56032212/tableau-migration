@@ -1,0 +1,1055 @@
+{
+  "ir_version": "0.3",
+  "workbook": {
+    "id": "wb_superstore_features",
+    "name": "superstore_features",
+    "tableau_version": "18.1",
+    "source_ref": "/workbook"
+  },
+  "datasources": [
+    {
+      "id": "ds_orders",
+      "name": "federated.0s2xs1a1g5wq1h17oo8mq0b6k5ry",
+      "caption": "Orders",
+      "connection": {
+        "kind": "extract",
+        "hyper_file": "Data/Extracts/federated_0s2xs1a1g5wq1h17oo8mq0b6k5ry.hyper",
+        "table": "Extract.Extract"
+      },
+      "settings": {
+        "week_start": "sunday"
+      },
+      "fields": [
+        {
+          "id": "f_row_id",
+          "name": "[Row ID]",
+          "caption": "Row ID",
+          "role": "dimension",
+          "datatype": "integer",
+          "default_agg": null,
+          "format": null,
+          "hidden": true,
+          "column": "Row ID",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/column[7]"
+        },
+        {
+          "id": "f_order_id",
+          "name": "[Order ID]",
+          "caption": "Order ID",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Order ID",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[2]"
+        },
+        {
+          "id": "f_order_date",
+          "name": "[Order Date]",
+          "caption": "Order Date",
+          "role": "dimension",
+          "datatype": "date",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Order Date",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[3]"
+        },
+        {
+          "id": "f_ship_date",
+          "name": "[Ship Date]",
+          "caption": "Ship Date",
+          "role": "dimension",
+          "datatype": "date",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Ship Date",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[4]"
+        },
+        {
+          "id": "f_ship_mode",
+          "name": "[Ship Mode]",
+          "caption": "Ship Mode",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Ship Mode",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[5]"
+        },
+        {
+          "id": "f_customer_id",
+          "name": "[Customer ID]",
+          "caption": "Customer ID",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Customer ID",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[6]"
+        },
+        {
+          "id": "f_customer_name",
+          "name": "[Customer Name]",
+          "caption": "Customer Name",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Customer Name",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[7]"
+        },
+        {
+          "id": "f_segment",
+          "name": "[Segment]",
+          "caption": "Segment",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Segment",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[8]"
+        },
+        {
+          "id": "f_country_region",
+          "name": "[Country/Region]",
+          "caption": "Country/Region",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Country/Region",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[9]"
+        },
+        {
+          "id": "f_city",
+          "name": "[City]",
+          "caption": "City",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "City",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[10]"
+        },
+        {
+          "id": "f_state_province",
+          "name": "[State/Province]",
+          "caption": "State/Province",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "State/Province",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/column[8]"
+        },
+        {
+          "id": "f_postal_code",
+          "name": "[Postal Code]",
+          "caption": "Postal Code",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Postal Code",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/column[6]"
+        },
+        {
+          "id": "f_region",
+          "name": "[Region]",
+          "caption": "Region",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Region",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[13]"
+        },
+        {
+          "id": "f_product_id",
+          "name": "[Product ID]",
+          "caption": "Product ID",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Product ID",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[14]"
+        },
+        {
+          "id": "f_category",
+          "name": "[Category]",
+          "caption": "Category",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Category",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[15]"
+        },
+        {
+          "id": "f_sub_category",
+          "name": "[Sub-Category]",
+          "caption": "Sub-Category",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Sub-Category",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[16]"
+        },
+        {
+          "id": "f_product_name",
+          "name": "[Product Name]",
+          "caption": "Product Name",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": "Product Name",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[17]"
+        },
+        {
+          "id": "f_sales",
+          "name": "[Sales]",
+          "caption": "Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": "sum",
+          "format": null,
+          "hidden": false,
+          "column": "Sales",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[18]"
+        },
+        {
+          "id": "f_quantity",
+          "name": "[Quantity]",
+          "caption": "Quantity",
+          "role": "measure",
+          "datatype": "integer",
+          "default_agg": "sum",
+          "format": null,
+          "hidden": false,
+          "column": "Quantity",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[19]"
+        },
+        {
+          "id": "f_discount",
+          "name": "[Discount]",
+          "caption": "Discount",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": "sum",
+          "format": null,
+          "hidden": false,
+          "column": "Discount",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[20]"
+        },
+        {
+          "id": "f_profit",
+          "name": "[Profit]",
+          "caption": "Profit",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": "sum",
+          "format": null,
+          "hidden": false,
+          "column": "Profit",
+          "calc": null,
+          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[21]"
+        },
+        {
+          "id": "f_calc_1368249927221915648",
+          "name": "[Calculation_1368249927221915648]",
+          "caption": "利潤率",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": "p0.0%",
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "SUM([Profit])/SUM([Sales])",
+            "ast": {
+              "node": "binary",
+              "op": "/",
+              "left": {
+                "node": "call",
+                "name": "SUM",
+                "args": [
+                  {
+                    "node": "field",
+                    "ref": "[Profit]",
+                    "parts": [
+                      "Profit"
+                    ],
+                    "target": "field",
+                    "id": "f_profit"
+                  }
+                ]
+              },
+              "right": {
+                "node": "call",
+                "name": "SUM",
+                "args": [
+                  {
+                    "node": "field",
+                    "ref": "[Sales]",
+                    "parts": [
+                      "Sales"
+                    ],
+                    "target": "field",
+                    "id": "f_sales"
+                  }
+                ]
+              }
+            },
+            "level": "aggregate"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[1]"
+        },
+        {
+          "id": "f_calc_2049003526124437504",
+          "name": "[Calculation_2049003526124437504]",
+          "caption": "區域總銷售",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": "c\"$\"#,##0",
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "{FIXED [Region] : SUM([Sales])}",
+            "ast": {
+              "node": "lod",
+              "kind": "fixed",
+              "dims": [
+                {
+                  "node": "field",
+                  "ref": "[Region]",
+                  "parts": [
+                    "Region"
+                  ],
+                  "target": "field",
+                  "id": "f_region"
+                }
+              ],
+              "expr": {
+                "node": "call",
+                "name": "SUM",
+                "args": [
+                  {
+                    "node": "field",
+                    "ref": "[Sales]",
+                    "parts": [
+                      "Sales"
+                    ],
+                    "target": "field",
+                    "id": "f_sales"
+                  }
+                ]
+              }
+            },
+            "level": "lod"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[2]"
+        },
+        {
+          "id": "f_calc_2049003526124994561",
+          "name": "[Calculation_2049003526124994561]",
+          "caption": "區域占比",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": "p0.0%",
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "// 該年度銷售占區域全部銷售的比例\r\nSUM([Sales]) / SUM([Calculation_2049003526124437504])",
+            "ast": {
+              "node": "binary",
+              "op": "/",
+              "left": {
+                "node": "call",
+                "name": "SUM",
+                "args": [
+                  {
+                    "node": "field",
+                    "ref": "[Sales]",
+                    "parts": [
+                      "Sales"
+                    ],
+                    "target": "field",
+                    "id": "f_sales"
+                  }
+                ]
+              },
+              "right": {
+                "node": "call",
+                "name": "SUM",
+                "args": [
+                  {
+                    "node": "field",
+                    "ref": "[Calculation_2049003526124437504]",
+                    "parts": [
+                      "Calculation_2049003526124437504"
+                    ],
+                    "target": "field",
+                    "id": "f_calc_2049003526124437504"
+                  }
+                ]
+              }
+            },
+            "level": "aggregate"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[3]"
+        },
+        {
+          "id": "f_calc_5418932014720188416",
+          "name": "[Calculation_5418932014720188416]",
+          "caption": "利潤排名",
+          "role": "measure",
+          "datatype": "integer",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "RANK(SUM([Profit]))",
+            "ast": {
+              "node": "call",
+              "name": "RANK",
+              "args": [
+                {
+                  "node": "call",
+                  "name": "SUM",
+                  "args": [
+                    {
+                      "node": "field",
+                      "ref": "[Profit]",
+                      "parts": [
+                        "Profit"
+                      ],
+                      "target": "field",
+                      "id": "f_profit"
+                    }
+                  ]
+                }
+              ]
+            },
+            "level": "table_calc"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[4]"
+        },
+        {
+          "id": "f_calc_5418932014720745473",
+          "name": "[Calculation_5418932014720745473]",
+          "caption": "平均訂單利潤",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": "c\"$\"#,##0.00",
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "AVG({INCLUDE [Order ID] : SUM([Profit])})",
+            "ast": {
+              "node": "call",
+              "name": "AVG",
+              "args": [
+                {
+                  "node": "lod",
+                  "kind": "include",
+                  "dims": [
+                    {
+                      "node": "field",
+                      "ref": "[Order ID]",
+                      "parts": [
+                        "Order ID"
+                      ],
+                      "target": "field",
+                      "id": "f_order_id"
+                    }
+                  ],
+                  "expr": {
+                    "node": "call",
+                    "name": "SUM",
+                    "args": [
+                      {
+                        "node": "field",
+                        "ref": "[Profit]",
+                        "parts": [
+                          "Profit"
+                        ],
+                        "target": "field",
+                        "id": "f_profit"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "level": "aggregate"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[5]"
+        }
+      ],
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_country_region",
+          "field": {
+            "field": "f_country_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "datasource",
+          "mode": "include",
+          "values": [
+            "United States"
+          ],
+          "group": null,
+          "source_ref": "/workbook/datasources/datasource/filter"
+        }
+      ],
+      "source_ref": "/workbook/datasources/datasource"
+    }
+  ],
+  "parameters": [],
+  "worksheets": [
+    {
+      "id": "ws_sales_by_segment",
+      "name": "Sales by Segment",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_segment",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": []
+      },
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_segment",
+          "field": {
+            "field": "f_segment",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "include",
+          "values": [
+            "Consumer",
+            "Corporate"
+          ],
+          "group": "group:5",
+          "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_region",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "exclude",
+          "values": [
+            "Central"
+          ],
+          "group": "shared:ds_orders:f_region",
+          "source_ref": "/workbook/shared-views/shared-view/filter[1]"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_ship_mode",
+          "field": {
+            "field": "f_ship_mode",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "all",
+          "values": [],
+          "group": "shared:ds_orders:f_ship_mode",
+          "source_ref": "/workbook/shared-views/shared-view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[1]"
+    },
+    {
+      "id": "ws_profit_by_ship_mode",
+      "name": "Profit by Ship Mode",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_ship_mode",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [],
+      "marks": {
+        "type": "text",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_profit",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": []
+      },
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_segment_2",
+          "field": {
+            "field": "f_segment",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "include",
+          "values": [
+            "Consumer",
+            "Corporate"
+          ],
+          "group": "group:5",
+          "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_region_2",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "exclude",
+          "values": [
+            "Central"
+          ],
+          "group": "shared:ds_orders:f_region",
+          "source_ref": "/workbook/shared-views/shared-view/filter[1]"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_ship_mode_2",
+          "field": {
+            "field": "f_ship_mode",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "all",
+          "values": [],
+          "group": "shared:ds_orders:f_ship_mode",
+          "source_ref": "/workbook/shared-views/shared-view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[2]"
+    },
+    {
+      "id": "ws_orders_by_region",
+      "name": "Orders by Region",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [],
+      "marks": {
+        "type": "text",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_order_id",
+            "agg": "countd",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": []
+      },
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_region_3",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "exclude",
+          "values": [
+            "Central"
+          ],
+          "group": "shared:ds_orders:f_region",
+          "source_ref": "/workbook/shared-views/shared-view/filter[1]"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_ship_mode_3",
+          "field": {
+            "field": "f_ship_mode",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "all",
+          "values": [],
+          "group": "shared:ds_orders:f_ship_mode",
+          "source_ref": "/workbook/shared-views/shared-view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[3]"
+    }
+  ],
+  "dashboards": [
+    {
+      "id": "db_60eea131",
+      "name": "功能總覽",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 8,
+                  "w": 764,
+                  "h": 684,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z6",
+                      "kind": "title",
+                      "x": 8,
+                      "y": 8,
+                      "w": 764,
+                      "h": 40,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": "功能總覽",
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[1]"
+                    },
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 376,
+                      "h": 316,
+                      "worksheet": "ws_sales_by_segment",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[2]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 392,
+                      "y": 56,
+                      "w": 380,
+                      "h": 316,
+                      "worksheet": "ws_profit_by_ship_mode",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[3]"
+                    },
+                    {
+                      "id": "z9",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 380,
+                      "w": 764,
+                      "h": 312,
+                      "worksheet": "ws_orders_by_region",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[4]"
+                    }
+                  ],
+                  "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z10",
+                  "kind": "container",
+                  "x": 780,
+                  "y": 56,
+                  "w": 212,
+                  "h": 636,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z11",
+                      "kind": "filter",
+                      "x": 780,
+                      "y": 56,
+                      "w": 212,
+                      "h": 96,
+                      "worksheet": "ws_sales_by_segment",
+                      "field": {
+                        "field": "f_segment",
+                        "agg": null,
+                        "date": null,
+                        "continuous": false,
+                        "table_calc": null
+                      },
+                      "parameter": null,
+                      "control": "multi_dropdown",
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z12",
+                      "kind": "filter",
+                      "x": 780,
+                      "y": 160,
+                      "w": 212,
+                      "h": 96,
+                      "worksheet": "ws_orders_by_region",
+                      "field": {
+                        "field": "f_region",
+                        "agg": null,
+                        "date": null,
+                        "continuous": false,
+                        "table_calc": null
+                      },
+                      "parameter": null,
+                      "control": "multi_dropdown",
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[2]"
+                    },
+                    {
+                      "id": "z13",
+                      "kind": "filter",
+                      "x": 780,
+                      "y": 264,
+                      "w": 212,
+                      "h": 96,
+                      "worksheet": "ws_profit_by_ship_mode",
+                      "field": {
+                        "field": "f_ship_mode",
+                        "agg": null,
+                        "date": null,
+                        "continuous": false,
+                        "table_calc": null
+                      },
+                      "parameter": null,
+                      "control": "multi_dropdown",
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[3]"
+                    },
+                    {
+                      "id": "z14",
+                      "kind": "blank",
+                      "x": 780,
+                      "y": 368,
+                      "w": 212,
+                      "h": 324,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[4]"
+                    }
+                  ],
+                  "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]"
+                }
+              ],
+              "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone"
+            }
+          ],
+          "source_ref": "/workbook/dashboards/dashboard/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard"
+    }
+  ],
+  "unsupported": [],
+  "ignored": []
+}

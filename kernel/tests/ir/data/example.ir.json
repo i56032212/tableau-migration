@@ -1,5 +1,5 @@
 {
-  "ir_version": "0.2",
+  "ir_version": "0.3",
   "workbook": {
     "id": "wb_sales",
     "name": "Sales",
@@ -210,6 +210,7 @@
             "Furniture",
             "Technology"
           ],
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[1]"
         },
         {
@@ -228,6 +229,7 @@
             "parameter": "p_top_n"
           },
           "by": "SUM([Sales])",
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[2]"
         }
       ],
@@ -317,6 +319,7 @@
           "min": "2024-01-01",
           "max": "2025-12-31",
           "include_null": false,
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter[1]"
         },
         {
@@ -333,6 +336,7 @@
           "min": 1000,
           "max": null,
           "include_null": false,
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter[2]"
         }
       ],

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Tableau 移轉 IR v0.2",
+  "title": "Tableau 移轉 IR v0.3",
   "$defs": {
     "AllowedAll": {
       "additionalProperties": false,
@@ -241,6 +241,19 @@
           },
           "title": "Values",
           "type": "array"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+          "title": "Group"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
@@ -935,6 +948,19 @@
           "title": "Include Null",
           "type": "boolean"
         },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+          "title": "Group"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -1198,6 +1224,19 @@
           "minLength": 1,
           "title": "By",
           "type": "string"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+          "title": "Group"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
@@ -1585,7 +1624,7 @@
   "description": "一份 workbook 的完整 IR。",
   "properties": {
     "ir_version": {
-      "const": "0.2",
+      "const": "0.3",
       "title": "Ir Version",
       "type": "string"
     },

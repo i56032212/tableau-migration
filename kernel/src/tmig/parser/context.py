@@ -78,6 +78,19 @@ class SheetState:
 
 
 @dataclass
+class SharedView:
+    """全域篩選（<shared-views>）：套用到所有使用該資料源、且篩選架上有該欄位的工作表。"""
+
+    element: etree._Element
+    instances: dict[str, etree._Element]
+    """欄位實例，以名稱（含方括號）為鍵。"""
+    filters: dict[str, etree._Element]
+    """以欄位實例名稱（例如 [none:Region:nk]）為鍵的 <filter>。"""
+    failed: set[str] = field(default_factory=set)
+    """解析失敗、已列為不支援的篩選，避免每張工作表重複列出。"""
+
+
+@dataclass
 class ParseContext:
     package: WorkbookPackage
     lenient: bool = False
@@ -94,6 +107,8 @@ class ParseContext:
     """以內部名稱（含方括號，例如 [Parameter 1]）為鍵。"""
     sheets: dict[str, SheetState] = field(default_factory=dict)
     """以工作表名稱為鍵。"""
+    shared_views: dict[str, SharedView] = field(default_factory=dict)
+    """全域篩選，以資料源的 Tableau 內部名稱為鍵。"""
 
     def flag(self, element: etree._Element, reason: str) -> None:
         """記錄 v0 不支援的元素：報表因此進人工佇列。"""

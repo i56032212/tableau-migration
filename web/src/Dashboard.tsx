@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FilterControl, ParameterControl } from "./Controls";
-import { stateFor } from "./state";
+import { fieldKey, stateFor } from "./state";
 import type { CaseInfo, Dashboard, FilterValue, IR, RenderResponse, Scalar, Zone } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
@@ -10,6 +10,32 @@ const TABLEAU10 = ["#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b", "#eeca
 export interface ViewState {
   sheetFilters: Record<string, Record<string, FilterValue>>;
   parameters: Record<string, Scalar>;
+}
+
+/** 篩選控制項的變更：同一篩選群組（套用到選取的工作表、全域篩選）的工作表一起更新。 */
+export function applyFilter(
+  ir: IR,
+  sheetFilters: Record<string, Record<string, FilterValue>>,
+  worksheet: string,
+  key: string,
+  value: FilterValue,
+): Record<string, Record<string, FilterValue>> {
+  const targets: [string, string][] = [[worksheet, key]];
+  const own = ir.worksheets
+    .find((w) => w.id === worksheet)
+    ?.filters.find((f) => f.kind !== "top_n" && fieldKey(f.field) === key);
+  if (own?.group) {
+    for (const sheet of ir.worksheets) {
+      for (const f of sheet.filters) {
+        if (f.group === own.group && !(sheet.id === worksheet && fieldKey(f.field) === key)) {
+          targets.push([sheet.id, fieldKey(f.field)]);
+        }
+      }
+    }
+  }
+  const next = { ...sheetFilters };
+  for (const [sheet, field] of targets) next[sheet] = { ...(next[sheet] ?? {}), [field]: value };
+  return next;
 }
 
 export function caseState(ir: IR, info: CaseInfo | undefined): ViewState {
@@ -50,10 +76,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView }: Props) 
   useEffect(() => setRenders({}), [workbook, dashboard.id]);
 
   const setFilter = (worksheet: string, key: string, value: FilterValue) =>
-    onView({
-      ...view,
-      sheetFilters: { ...view.sheetFilters, [worksheet]: { ...(view.sheetFilters[worksheet] ?? {}), [key]: value } },
-    });
+    onView({ ...view, sheetFilters: applyFilter(ir, view.sheetFilters, worksheet, key, value) });
   const setParameter = (id: string, value: Scalar) =>
     onView({ ...view, parameters: { ...view.parameters, [id]: value } });
 

@@ -1,4 +1,4 @@
-// IR v0.2 中檢視器會用到的部分（完整定義見 kernel/schema/ir-0.2.schema.json）
+// IR v0.3 中檢視器會用到的部分（完整定義見 kernel/schema/ir-0.3.schema.json）
 
 export type Scalar = string | number | boolean | null;
 
@@ -57,6 +57,8 @@ export interface Filter {
   min?: Scalar;
   max?: Scalar;
   include_null?: boolean;
+  /** 篩選群組：同一群組的篩選一起變更（套用到選取的工作表、全域篩選） */
+  group?: string | null;
 }
 
 export interface Worksheet {

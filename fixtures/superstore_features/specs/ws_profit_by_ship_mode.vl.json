@@ -1,0 +1,62 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_profit_by_ship_mode",
+    "name": "Profit by Ship Mode",
+    "rows": 4,
+    "mark": "text"
+  },
+  "data": {
+    "values": "4 列",
+    "fields": [
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "text",
+    "tooltip": true
+  },
+  "encoding": {
+    "y": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Ship Mode",
+      "axis": {
+        "orient": "left",
+        "title": "Ship Mode"
+      }
+    },
+    "text": {
+      "field": "c1_label",
+      "type": "nominal"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Ship Mode"
+      },
+      {
+        "field": "c1_label",
+        "title": "Profit"
+      }
+    ]
+  }
+}

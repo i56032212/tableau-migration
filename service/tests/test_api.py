@@ -23,7 +23,9 @@ def client() -> TestClient:
 
 
 def test_list_workbooks(client: TestClient) -> None:
-    (demo,) = client.get("/api/workbooks").json()
+    demo, features = client.get("/api/workbooks").json()
+    assert features["id"] == "superstore_features"
+    assert features["unsupported"] == 0
     assert demo["id"] == "superstore_demo"
     assert demo["dashboards"] == [{"id": "db_ee909b0c", "name": "銷售總覽"}]
     assert len(demo["worksheets"]) == 4
@@ -32,7 +34,7 @@ def test_list_workbooks(client: TestClient) -> None:
 
 def test_ir(client: TestClient) -> None:
     ir = client.get(f"{WB}/ir").json()
-    assert ir["ir_version"] == "0.2"
+    assert ir["ir_version"] == "0.3"
     assert client.get("/api/workbooks/nope/ir").status_code == 404
 
 

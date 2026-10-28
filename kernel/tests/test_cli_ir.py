@@ -31,7 +31,7 @@ def test_validate_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture[str
 
 def test_schema_to_stdout(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["ir", "schema"]) == 0
-    assert json.loads(capsys.readouterr().out)["title"] == "Tableau 移轉 IR v0.2"
+    assert json.loads(capsys.readouterr().out)["title"] == "Tableau 移轉 IR v0.3"
 
 
 def test_schema_to_file(tmp_path: Path) -> None:

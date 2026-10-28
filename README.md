@@ -94,7 +94,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 ```text
 tableau-migration/
 ├── kernel/src/tmig/        Python 核心函式庫
-│   ├── ir/                 IR v0.2 的 Pydantic 模型、參照檢查、JSON Schema
+│   ├── ir/                 IR v0.3 的 Pydantic 模型、參照檢查、JSON Schema
 │   ├── parser/             .twbx 解析器
 │   ├── census/             功能盤點與起步條件檢查
 │   ├── formula/            公式解析、語法樹、型別與層級判定

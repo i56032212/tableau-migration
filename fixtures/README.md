@@ -20,3 +20,6 @@ fixtures/<報表>/
 同一份報表的 .twbx 與預期檔，必須在同一次萃取更新之間取得。單一 .hyper 超過 100 MB 時改用 Git LFS（見根目錄 `.gitattributes`）。
 
 `superstore_demo/` 是示範報表：以 Tableau 範例資料 Superstore 手寫的仿真 workbook，預期結果由獨立的 Python 程式計算（不是 Tableau 產生，見 `superstore_demo/expected/README.md`）。
+
+`superstore_features/` 是擴充階段的功能報表：同一份資料，逐項加入擴充功能（全域篩選、篩選群組等），
+由 `scripts/build_features_fixture.py` 產生，預期結果由 `scripts/features_oracle.py` 獨立計算（同樣不是 Tableau 產生）。

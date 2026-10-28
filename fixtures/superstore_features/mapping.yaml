@@ -1,0 +1,23 @@
+# CSV 欄名 → 查詢結果的欄位鍵（tmig mapping suggest 產生）
+# 人工確認每一列後，把 confirmed 改成 true 再提交；值為 null 的 CSV 欄位不比對
+# numeric：auto＝帶格式的值以顯示精度比對、其餘以相對誤差 1e-6；raw；display
+confirmed: true
+sheets:
+  ws_sales_by_segment:
+    columns:
+      Segment: f_segment
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_profit_by_ship_mode:
+    columns:
+      Ship Mode: f_ship_mode
+      Profit: sum(f_profit)
+    ignore: []
+    numeric: auto
+  ws_orders_by_region:
+    columns:
+      Region: f_region
+      Distinct count of Order ID: countd(f_order_id)
+    ignore: []
+    numeric: auto

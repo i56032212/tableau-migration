@@ -61,7 +61,7 @@ def test_rejects_unknown_fields(doc: Doc) -> None:
 
 
 def test_rejects_other_ir_version(doc: Doc) -> None:
-    doc["ir_version"] = "0.3"
+    doc["ir_version"] = "0.2"
     assert "ir_version" in errors_of(doc)
 
 

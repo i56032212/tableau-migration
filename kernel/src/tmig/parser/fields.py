@@ -144,7 +144,8 @@ class FilterParser:
         self.resolve = resolve
         self.scope = scope
 
-    def parse(self, element: etree._Element) -> Filter | None:
+    def parse(self, element: etree._Element, group: str | None = None) -> Filter | None:
+        """group：篩選群組；省略時依 filter-group 屬性（「套用到選取的工作表」）。"""
         column = element.get("column", "")
         resolved = self.resolve(column)
         if isinstance(resolved, str):
@@ -155,14 +156,20 @@ class FilterParser:
         kind_class = element.get("class")
         context = element.get("context") == "true"
         base_id = self.ctx.ids.make("flt", data_field.caption, data_field.name)
-        try:
-            if kind_class == "categorical":
-                return self._categorical(element, use, data_field, context, base_id)
-            if kind_class == "quantitative":
-                return self._range(element, use, data_field, context, base_id)
-        except LiteralError as exc:
-            self.ctx.flag(element, f"篩選值無法解析：{exc}")
-            return None
+        if group is None and element.get("filter-group"):
+            group = f"group:{element.get('filter-group')}"
+        if kind_class in ("categorical", "quantitative"):
+            try:
+                if kind_class == "categorical":
+                    parsed = self._categorical(element, use, data_field, context, base_id)
+                else:
+                    parsed = self._range(element, use, data_field, context, base_id)
+            except LiteralError as exc:
+                self.ctx.flag(element, f"篩選值無法解析：{exc}")
+                return None
+            if parsed is not None and group is not None and self.scope == "worksheet":
+                parsed = parsed.model_copy(update={"group": group})
+            return parsed
         if kind_class == "relative-date":
             self.ctx.flag(element, "相對日期篩選 v0 不支援")
         else:

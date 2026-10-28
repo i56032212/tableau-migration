@@ -1,0 +1,30 @@
+# 功能報表的篩選組合：每張工作表比對預設值加 3 組
+# 網址參數的寫法與 Tableau 相同：欄位顯示名稱（大小寫須相符）、日期部分寫成 year(欄位)、多值以逗號分隔
+workbook: wb_superstore_features
+# 功能報表沒有 Tableau Server；正式報表填入 https://<server>/#/site/<site>/views/<workbook>
+tableau_views_url: null
+# 由 fetch-expected 填入；功能報表的預期結果由 scripts/features_oracle.py 獨立計算，不是 Tableau 產生
+fetched_at: null
+sheets:
+  - worksheet: ws_sales_by_segment
+    view: SalesbySegment
+  - worksheet: ws_profit_by_ship_mode
+    view: ProfitbyShipMode
+  - worksheet: ws_orders_by_region
+    view: OrdersbyRegion
+cases:
+  - name: default
+    url_params: {}
+    note: 工作表的預設篩選（含全域篩選 Region 排除 Central、篩選群組 Segment）
+  - name: segment_consumer
+    url_params:
+      Segment: Consumer
+    note: 取代篩選群組的 Segment 篩選；Orders by Region 原本沒有 Segment 篩選，改為新增
+  - name: region_west
+    url_params:
+      Region: West
+    note: 取代全域篩選的 Region
+  - name: ship_first_class
+    url_params:
+      Ship Mode: First Class
+    note: 全域篩選 Ship Mode 原本為全部

@@ -16,7 +16,7 @@ def fixture_dirs() -> list[Path]:
 
 
 def test_golden_fixtures_exist() -> None:
-    assert [p.name for p in fixture_dirs()] == ["superstore_demo"]
+    assert [p.name for p in fixture_dirs()] == ["superstore_demo", "superstore_features"]
 
 
 def test_parse_matches_golden() -> None:

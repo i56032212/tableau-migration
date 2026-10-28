@@ -1,4 +1,4 @@
-"""Vega-Lite 規格（F1）：示範報表每張工作表的規格快照，且符合 Vega-Lite v6 Schema。
+"""Vega-Lite 規格（F1）：各 fixture 每張工作表的規格快照，且符合 Vega-Lite v6 Schema。
 
 規格中的資料值以浮點數加總，最後幾位可能因累加順序不同而變動，所以快照只比對結構與列數。
 更新快照：TMIG_UPDATE_SNAPSHOTS=1 uv run pytest kernel/tests/render
@@ -25,12 +25,8 @@ from tmig.verify.run import ensure_data
 ROOT = Path(__file__).resolve().parents[3]
 DEMO = ROOT / "fixtures" / "superstore_demo"
 SCHEMA = Path(__file__).parent / "data" / "vega-lite-v6.5.0.schema.json.gz"
-SHEETS = [
-    "ws_sales_by_region",
-    "ws_monthly_profit",
-    "ws_region_share_by_year",
-    "ws_sub_category_profit",
-]
+GOLDEN = sorted((ROOT / "fixtures").glob("*/golden.ir.json"))
+CASES = [(path.parent, ws.id) for path in GOLDEN for ws in load_ir(path).worksheets]
 
 
 @cache
@@ -38,11 +34,16 @@ def validator() -> jsonschema.Draft7Validator:
     return jsonschema.Draft7Validator(json.loads(gzip.decompress(SCHEMA.read_bytes())))
 
 
+@cache
+def fixture_ir(directory: Path):
+    loaded = load_ir(directory / "golden.ir.json")
+    ensure_data(directory, loaded)
+    return loaded
+
+
 @pytest.fixture(scope="module")
 def ir():
-    loaded = load_ir(DEMO / "golden.ir.json")
-    ensure_data(DEMO, loaded)
-    return loaded
+    return fixture_ir(DEMO)
 
 
 def structure(spec: dict[str, Any]) -> dict[str, Any]:
@@ -52,15 +53,17 @@ def structure(spec: dict[str, Any]) -> dict[str, Any]:
     return copy
 
 
-@pytest.mark.parametrize("worksheet", SHEETS)
-def test_spec_snapshot_and_schema(ir, worksheet: str) -> None:
+@pytest.mark.parametrize(("directory", "worksheet"), CASES, ids=[f"{d.name}/{w}" for d, w in CASES])
+def test_spec_snapshot_and_schema(directory: Path, worksheet: str) -> None:
+    ir = fixture_ir(directory)
     query = worksheet_sql(ir, worksheet)
-    result = execute(DEMO / "data" / "ds_orders.duckdb", query.sql)
+    sheet = next(w for w in ir.worksheets if w.id == worksheet)
+    result = execute(directory / "data" / f"{sheet.datasource}.duckdb", query.sql)
     rendered = build_spec(ir, worksheet, query.columns, result)
     assert rendered.spec is not None
     errors = [e.message for e in validator().iter_errors(rendered.spec)]
     assert errors == []
-    snapshot = DEMO / "specs" / f"{worksheet}.vl.json"
+    snapshot = directory / "specs" / f"{worksheet}.vl.json"
     text = json.dumps(structure(rendered.spec), ensure_ascii=False, indent=2) + "\n"
     if os.environ.get("TMIG_UPDATE_SNAPSHOTS") == "1":
         snapshot.parent.mkdir(exist_ok=True)

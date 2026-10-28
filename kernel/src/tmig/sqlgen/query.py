@@ -502,8 +502,8 @@ class WorksheetQuery:
             if isinstance(f, TopNFilter)
         ]
 
-        # 4. 維度篩選
-        conds = [self._row_condition(f) for f in stage["dimension"]] + top_conds
+        # 4. 維度篩選（「全部」的篩選沒有條件，不另建 CTE）
+        conds = [c for c in [self._row_condition(f) for f in stage["dimension"]] + top_conds if c]
         if conds:
             source = self.cte(4, "dimf", f"SELECT * FROM {source}{_where(conds)}")
             for flt in stage["dimension"]:
@@ -528,7 +528,13 @@ class WorksheetQuery:
         ]
         meas = self.cte(6, "meas", f"SELECT {', '.join(selects)} FROM {agg_name}")
         by_key = {m.key: m for m in measures}
-        conds = [self._value_condition(f, by_key[use_key(f.field)].col) for f in stage["measure"]]
+        conds = [
+            c
+            for c in (
+                self._value_condition(f, by_key[use_key(f.field)].col) for f in stage["measure"]
+            )
+            if c
+        ]
         marks = meas
         if conds:
             marks = self.cte(6, "mf", f"SELECT * FROM {meas}{_where(conds)}")

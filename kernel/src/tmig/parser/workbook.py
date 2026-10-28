@@ -1,4 +1,4 @@
-"""解析器入口：.twb／.twbx → IR v0.2（A2–A6）。
+"""解析器入口：.twb／.twbx → IR v0.3（A2–A6、H1–H4）。
 
 遇到不認得或 v0 不支援的元素一律寫進 ``unsupported``，不猜；
 刻意略過、不影響數字的元素寫進 ``ignored``。
@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from lxml import etree
 from pydantic import ValidationError
 
 from tmig.ir.models import IR, IR_VERSION, Datasource, DatasourceSettings, Workbook
-from tmig.parser.context import ParseContext
+from tmig.parser.context import ParseContext, SharedView
 from tmig.parser.dashboard import DashboardParser
-from tmig.parser.datasource import DatasourceParser, parse_parameters
+from tmig.parser.datasource import DatasourceParser, add_calc_field, analyze_calcs, parse_parameters
+from tmig.parser.fields import instance_key
 from tmig.parser.twbx import (
     WorkbookPackage,
     child,
@@ -37,8 +39,10 @@ WORKBOOK_CHILDREN = frozenset(
         "thumbnails",
         "actions",
         "external",
+        "shared-views",
     }
 )
+SHARED_VIEW_CHILDREN = frozenset({"datasources", "datasource-dependencies", "filter"})
 ACTION_KINDS = {"tsc:brush": "醒目提示", "tsc:tsl-filter": "篩選", "tsc:url": "網址"}
 
 
@@ -92,6 +96,8 @@ class WorkbookParser:
             state = DatasourceParser(ctx, ds_el).parse()
             if state is not None:
                 ctx.datasources[state.name] = state
+
+        self._shared_views(child(root, "shared-views"))
 
         worksheets = []
         for ws_el in children(child(root, "worksheets"), "worksheet"):
@@ -147,3 +153,31 @@ class WorkbookParser:
             )
         except ValidationError as exc:
             raise WorkbookParseError(f"解析結果不是合法的 IR：{exc}") from exc
+
+    def _shared_views(self, element: etree._Element | None) -> None:
+        """全域篩選：「套用到所有使用此資料源的工作表」的篩選存在 <shared-views>，工作表只在篩選架列出欄位。"""
+        ctx = self.ctx
+        for view in children(element, "shared-view"):
+            name = view.get("name", "")
+            for item in children(view):
+                if local_name(item) not in SHARED_VIEW_CHILDREN:
+                    ctx.flag(item, f"全域篩選中的未知元素 <{local_name(item)}>")
+            ds = ctx.datasources.get(name)
+            if ds is None:
+                continue  # 資料源本身無法移轉時已列為不支援
+            instances: dict[str, etree._Element] = {}
+            added = False
+            for dep in children(view, "datasource-dependencies"):
+                if dep.get("datasource") != name:
+                    continue
+                for column in children(dep, "column"):
+                    if column.get("name", "") in ds.by_name or child(column, "calculation") is None:
+                        continue
+                    if add_calc_field(ctx, ds, column) is not None:
+                        added = True
+                for inst in children(dep, "column-instance"):
+                    instances[instance_key(inst.get("name", ""))] = inst
+            if added:
+                analyze_calcs(ctx, ds)
+            filters = {instance_key(f.get("column", "")): f for f in children(view, "filter")}
+            ctx.shared_views[name] = SharedView(element=view, instances=instances, filters=filters)

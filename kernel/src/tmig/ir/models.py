@@ -1,4 +1,4 @@
-"""IR 的資料模型（v0.2）。
+"""IR 的資料模型（v0.3）。
 
 IR 是唯一的報表定義：解析器寫入，其他模組只讀，任何模組都不回頭讀 .twb。
 規則見 Spec「IR v0 資料合約」：
@@ -7,7 +7,8 @@ IR 是唯一的報表定義：解析器寫入，其他模組只讀，任何模�
 - 欄位一律以 ``id`` 參照；計算欄位同時保存原文 ``formula`` 與語法樹 ``ast``
 - dashboard 座標存換算後的像素值
 - 無法辨識的元素放進 ``unsupported``，不得默默丟棄；不影響數字、刻意略過的元素放進 ``ignored``
-- 欄位異動必須升 ``ir_version``，並重新產生 ``kernel/schema/``
+- 欄位異動必須升 ``ir_version``，並重新產生 ``kernel/schema/``；擴充階段內的相容增補（新增選填欄位）
+  沿用 0.3，但同樣要重新產生 Schema 與 golden IR
 
 跨實體的參照（欄位、參數、工作表、Table Calculation）由 ``integrity`` 檢查。
 """
@@ -27,7 +28,7 @@ from pydantic import (
     model_validator,
 )
 
-IR_VERSION = "0.2"
+IR_VERSION = "0.3"
 
 Id = Annotated[
     str,
@@ -164,6 +165,10 @@ class CategoricalFilter(IRModel):
     stage: FilterStage
     mode: Literal["include", "exclude", "all"]
     values: list[Scalar] = Field(default_factory=list)
+    group: str | None = Field(
+        default=None,
+        description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -185,6 +190,10 @@ class RangeFilter(IRModel):
     min: Scalar = None
     max: Scalar = None
     include_null: bool = False
+    group: str | None = Field(
+        default=None,
+        description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -204,6 +213,10 @@ class TopNFilter(IRModel):
     direction: Literal["top", "bottom"]
     count: Annotated[StrictInt, Field(gt=0)] | ParamRef
     by: str = Field(min_length=1, description="排名依據的 Tableau 彙總公式，例如 SUM([Sales])")
+    group: str | None = Field(
+        default=None,
+        description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -473,7 +486,7 @@ class Unsupported(IRModel):
 class IR(IRModel):
     """一份 workbook 的完整 IR。"""
 
-    ir_version: Literal["0.2"]
+    ir_version: Literal["0.3"]
     workbook: Workbook
     datasources: list[Datasource] = Field(min_length=1)
     parameters: list[Parameter] = Field(default_factory=list)

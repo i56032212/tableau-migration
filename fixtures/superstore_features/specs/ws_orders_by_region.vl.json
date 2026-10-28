@@ -1,0 +1,62 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_orders_by_region",
+    "name": "Orders by Region",
+    "rows": 3,
+    "mark": "text"
+  },
+  "data": {
+    "values": "3 列",
+    "fields": [
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "text",
+    "tooltip": true
+  },
+  "encoding": {
+    "y": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Region",
+      "axis": {
+        "orient": "left",
+        "title": "Region"
+      }
+    },
+    "text": {
+      "field": "c1_label",
+      "type": "nominal"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Region"
+      },
+      {
+        "field": "c1_label",
+        "title": "CNTD(Order ID)"
+      }
+    ]
+  }
+}

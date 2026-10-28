@@ -39,6 +39,7 @@ from tmig.parser.fields import (
 )
 from tmig.parser.twbx import child, children, local_name, text_of, xpath
 from tmig.parser.values import LiteralError
+from tmig.planner.state import use_key
 
 MARKS: dict[str, MarkType] = {
     "Automatic": "automatic",
@@ -128,6 +129,7 @@ OPAQUE = frozenset(
         "caption",
         "layout-cache",
         "page-trail-options",
+        "target",
     }
 )
 KNOWN_UNSUPPORTED = {
@@ -232,6 +234,7 @@ class SheetParser:
         sheet_id = ctx.ids.make("ws", self.name)
         table_calcs = self._table_calcs(rows, cols, mark_dims)
         filters, kinds = self._filters(view)
+        self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
         worksheet = Worksheet(
             id=sheet_id,
@@ -535,6 +538,36 @@ class SheetParser:
             filters.append(parsed)
             kinds[instance_key(element.get("column", ""))] = parsed.kind
         return filters, kinds
+
+    def _shared_filters(
+        self,
+        view: etree._Element,
+        ds_name: str,
+        filters: list[Filter],
+        kinds: dict[str, Literal["categorical", "range", "top_n"]],
+    ) -> None:
+        """篩選架（<slices>）上沒有本地 <filter> 的欄位，套用該資料源的全域篩選。"""
+        shared = self.ctx.shared_views.get(ds_name)
+        if shared is None:
+            return
+        assert self.ds is not None
+        parser = FilterParser(self.ctx, self.ds, self.resolve, "worksheet")
+        for column in children(child(view, "slices"), "column"):
+            key = instance_key(text_of(column))
+            element = shared.filters.get(key)
+            if element is None or key in kinds or key in shared.failed:
+                continue
+            if key not in self.instances and key in shared.instances:
+                self.instances[key] = shared.instances[key]
+            parsed = parser.parse(element)
+            if parsed is None:
+                shared.failed.add(key)
+                continue
+            parsed = parsed.model_copy(
+                update={"group": f"shared:{self.ds.id}:{use_key(parsed.field)}"}
+            )
+            filters.append(parsed)
+            kinds[key] = parsed.kind
 
     def _sorts(self, view: etree._Element) -> list[Sort]:
         sorts: list[Sort] = []

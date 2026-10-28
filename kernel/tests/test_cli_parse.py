@@ -16,7 +16,7 @@ DEMO = ROOT / "fixtures" / "superstore_demo" / "superstore_demo.twbx"
 def test_parse_demo_to_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     out = tmp_path / "ir.json"
     assert main(["parse", str(DEMO), "--out", str(out)]) == 0
-    assert json.loads(out.read_text(encoding="utf-8"))["ir_version"] == "0.2"
+    assert json.loads(out.read_text(encoding="utf-8"))["ir_version"] == "0.3"
     assert "unsupported 為空" in capsys.readouterr().err
 
 

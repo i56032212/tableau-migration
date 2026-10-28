@@ -1,5 +1,5 @@
 {
-  "ir_version": "0.2",
+  "ir_version": "0.3",
   "workbook": {
     "id": "wb_superstore_demo",
     "name": "superstore_demo",
@@ -545,6 +545,7 @@
           "values": [
             "United States"
           ],
+          "group": null,
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
@@ -637,6 +638,7 @@
             "Furniture",
             "Technology"
           ],
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[1]"
         },
         {
@@ -655,6 +657,7 @@
             "parameter": "p_parameter_1"
           },
           "by": "SUM([Sales])",
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[2]"
         }
       ],
@@ -746,6 +749,7 @@
           "min": "2023-01-01",
           "max": "2024-12-31",
           "include_null": false,
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter[1]"
         },
         {
@@ -762,6 +766,7 @@
           "min": 20000.0,
           "max": null,
           "include_null": false,
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter[2]"
         }
       ],
@@ -835,6 +840,7 @@
             "Consumer",
             "Corporate"
           ],
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[3]/table/view/filter"
         }
       ],
@@ -903,6 +909,7 @@
           "min": null,
           "max": 10,
           "include_null": false,
+          "group": null,
           "source_ref": "/workbook/worksheets/worksheet[4]/table/view/filter"
         }
       ],
