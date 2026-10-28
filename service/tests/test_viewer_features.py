@@ -525,3 +525,43 @@ def test_dashboard_objects(server: str) -> None:
         )
         assert errors == []
         browser.close()
+
+
+def test_donut_and_mixed_detail(server: str) -> None:
+    """J3：甜甜圈中間標示合計；長條（各地區）與依客群分色的折線疊成雙軸，各自以自己的詳細程度查詢。"""
+    from playwright.sync_api import sync_playwright
+
+    oracle = load_oracle()
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "甜甜圈")
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 2"
+        )
+        page.wait_for_timeout(300)
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+        latest = {w: data for w, _, data in renders.items}
+        assert latest["ws_category_donut"]["rows"] == 3  # 資料表以所有維度的組合（各類別）為準
+        assert latest["ws_region_sales_and_segment_profit"]["rows"] == 12
+
+        def texts(worksheet: str) -> list[str]:
+            return page.eval_on_selector_all(
+                f"[data-worksheet='{worksheet}'] svg text", "els => els.map(e => e.textContent)"
+            )
+
+        _, body = oracle.category_donut(oracle.load_rows(), oracle.Case("default", {}))
+        total = sum(row[2] for row in body)
+        assert f"{total:,.0f}" in texts("ws_category_donut")
+        bars = page.locator(
+            "[data-worksheet='ws_region_sales_and_segment_profit'] svg [aria-roledescription='bar']"
+        )
+        assert bars.count() == 4  # 各地區一根，不因折線的客群而拆開
+        assert errors == []
+        browser.close()

@@ -754,6 +754,33 @@
             "level": "row"
           },
           "source_ref": "/workbook/datasources/datasource[2]/column[12]"
+        },
+        {
+          "id": "f_zero",
+          "name": "[Calculation_7D6C2A1F00000002]",
+          "caption": "Zero",
+          "role": "measure",
+          "datatype": "integer",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "MIN(0)",
+            "ast": {
+              "node": "call",
+              "name": "MIN",
+              "args": [
+                {
+                  "node": "literal",
+                  "kind": "integer",
+                  "value": 0
+                }
+              ]
+            },
+            "level": "aggregate"
+          },
+          "source_ref": "/workbook/datasources/datasource[2]/column[13]"
         }
       ],
       "filters": [
@@ -2507,6 +2534,226 @@
       ],
       "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[23]"
+    },
+    {
+      "id": "ws_category_donut",
+      "name": "Category Donut",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_zero",
+          "agg": null,
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        },
+        {
+          "field": "f_zero",
+          "agg": null,
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "columns": [],
+      "marks": {
+        "type": "pie",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [
+        {
+          "measure": {
+            "field": "f_zero",
+            "agg": null,
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "axis": "rows",
+          "dual": false,
+          "marks": {
+            "type": "pie",
+            "color": {
+              "field": "f_category",
+              "agg": null,
+              "date": null,
+              "continuous": false,
+              "table_calc": null
+            },
+            "size": null,
+            "label": [
+              {
+                "field": "f_category",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              }
+            ],
+            "detail": [],
+            "tooltip": [],
+            "shape": null,
+            "angle": {
+              "field": "f_sales",
+              "agg": "sum",
+              "date": null,
+              "continuous": true,
+              "table_calc": null
+            },
+            "path": null
+          }
+        },
+        {
+          "measure": {
+            "field": "f_zero",
+            "agg": null,
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "axis": "rows",
+          "dual": true,
+          "marks": {
+            "type": "pie",
+            "color": null,
+            "size": null,
+            "label": [
+              {
+                "field": "f_sales",
+                "agg": "sum",
+                "date": null,
+                "continuous": true,
+                "table_calc": null
+              }
+            ],
+            "detail": [],
+            "tooltip": [],
+            "shape": null,
+            "angle": null,
+            "path": null
+          }
+        }
+      ],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "source_ref": "/workbook/worksheets/worksheet[24]"
+    },
+    {
+      "id": "ws_region_sales_and_segment_profit",
+      "name": "Region Sales and Segment Profit",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        },
+        {
+          "field": "f_profit",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "automatic",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [
+        {
+          "measure": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "axis": "rows",
+          "dual": false,
+          "marks": {
+            "type": "bar",
+            "color": null,
+            "size": null,
+            "label": [
+              {
+                "field": "f_sales",
+                "agg": "sum",
+                "date": null,
+                "continuous": true,
+                "table_calc": null
+              }
+            ],
+            "detail": [],
+            "tooltip": [],
+            "shape": null,
+            "angle": null,
+            "path": null
+          }
+        },
+        {
+          "measure": {
+            "field": "f_profit",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "axis": "rows",
+          "dual": true,
+          "marks": {
+            "type": "line",
+            "color": {
+              "field": "f_segment",
+              "agg": null,
+              "date": null,
+              "continuous": false,
+              "table_calc": null
+            },
+            "size": null,
+            "label": [],
+            "detail": [],
+            "tooltip": [],
+            "shape": null,
+            "angle": null,
+            "path": null
+          }
+        }
+      ],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "source_ref": "/workbook/worksheets/worksheet[25]"
     }
   ],
   "dashboards": [
@@ -4616,6 +4863,161 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[9]"
+    },
+    {
+      "id": "db_4272d2c1",
+      "name": "甜甜圈",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "button": null,
+          "url": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "button": null,
+              "url": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "甜甜圈",
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 636,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 396,
+                      "h": 636,
+                      "worksheet": "ws_category_donut",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 412,
+                      "y": 56,
+                      "w": 580,
+                      "h": 636,
+                      "worksheet": "ws_region_sales_and_segment_profit",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[2]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[2]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[10]"
     }
   ],
   "actions": [

@@ -1,0 +1,155 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_region_sales_and_segment_profit",
+    "name": "Region Sales and Segment Profit",
+    "rows": 12,
+    "mark": "bar+line",
+    "dimensions": {
+      "c0": "f_region",
+      "c1": "f_segment"
+    },
+    "measures": {
+      "c2": "sum(f_sales)",
+      "c3": "sum(f_profit)"
+    }
+  },
+  "data": {
+    "values": "12 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label",
+      "c2",
+      "c2_label",
+      "c3",
+      "c3_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "layer": [
+    {
+      "encoding": {
+        "y": {
+          "field": "c2",
+          "type": "quantitative",
+          "title": "Sales"
+        },
+        "x": {
+          "field": "c0_label",
+          "type": "ordinal",
+          "sort": null,
+          "title": "Region"
+        },
+        "tooltip": [
+          {
+            "field": "c0_label",
+            "title": "Region"
+          },
+          {
+            "field": "c2_label",
+            "title": "Sales"
+          }
+        ]
+      },
+      "layer": [
+        {
+          "mark": {
+            "type": "bar",
+            "tooltip": true
+          }
+        },
+        {
+          "mark": {
+            "type": "text",
+            "fontSize": 10,
+            "baseline": "bottom",
+            "dy": -3
+          },
+          "encoding": {
+            "text": {
+              "field": "c2_label"
+            },
+            "color": {
+              "value": "#1f2328"
+            }
+          }
+        }
+      ],
+      "data": {
+        "values": "4 列",
+        "fields": [
+          "__row",
+          "c0",
+          "c0_label",
+          "c2",
+          "c2_label"
+        ]
+      }
+    },
+    {
+      "mark": {
+        "type": "line",
+        "tooltip": true,
+        "point": true
+      },
+      "encoding": {
+        "y": {
+          "field": "c3",
+          "type": "quantitative",
+          "title": "Profit"
+        },
+        "x": {
+          "field": "c0_label",
+          "type": "ordinal",
+          "sort": null,
+          "title": "Region"
+        },
+        "color": {
+          "field": "c1_label",
+          "type": "nominal",
+          "title": "Segment",
+          "sort": null
+        },
+        "tooltip": [
+          {
+            "field": "c0_label",
+            "title": "Region"
+          },
+          {
+            "field": "c1_label",
+            "title": "Segment"
+          },
+          {
+            "field": "c2_label",
+            "title": "Sales"
+          },
+          {
+            "field": "c3_label",
+            "title": "Profit"
+          }
+        ]
+      }
+    }
+  ],
+  "resolve": {
+    "scale": {
+      "y": "independent"
+    }
+  }
+}

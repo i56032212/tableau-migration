@@ -1,0 +1,143 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_category_donut",
+    "name": "Category Donut",
+    "rows": 3,
+    "mark": "pie",
+    "dimensions": {
+      "c0": "f_category"
+    },
+    "measures": {
+      "c1": "f_zero",
+      "c2": "sum(f_sales)"
+    }
+  },
+  "data": {
+    "values": "3 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label",
+      "c2",
+      "c2_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "layer": [
+    {
+      "encoding": {
+        "theta": {
+          "field": "c2",
+          "type": "quantitative",
+          "stack": true
+        },
+        "color": {
+          "field": "c0_label",
+          "type": "nominal",
+          "title": "Category",
+          "sort": null
+        },
+        "tooltip": [
+          {
+            "field": "c0_label",
+            "title": "Category"
+          },
+          {
+            "field": "c1_label",
+            "title": "Zero"
+          },
+          {
+            "field": "c2_label",
+            "title": "Sales"
+          }
+        ],
+        "order": {
+          "field": "__row"
+        }
+      },
+      "layer": [
+        {
+          "mark": {
+            "type": "arc",
+            "tooltip": true,
+            "innerRadius": {
+              "expr": "min(width, height) * 0.3"
+            }
+          }
+        },
+        {
+          "mark": {
+            "type": "text",
+            "fontSize": 10,
+            "lineBreak": "\n",
+            "radius": {
+              "expr": "min(width, height) * 0.4"
+            }
+          },
+          "encoding": {
+            "text": {
+              "field": "__pie_label"
+            },
+            "color": {
+              "value": "#1f2328"
+            },
+            "theta": {
+              "field": "c2",
+              "type": "quantitative",
+              "stack": true
+            },
+            "order": {
+              "field": "__row"
+            }
+          },
+          "transform": [
+            {
+              "calculate": "datum['c0_label']",
+              "as": "__pie_label"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "data": {
+        "values": "1 列",
+        "fields": []
+      },
+      "mark": {
+        "type": "text",
+        "x": {
+          "expr": "width / 2"
+        },
+        "y": {
+          "expr": "height / 2"
+        },
+        "lineBreak": "\n",
+        "fontSize": 14,
+        "fontWeight": "bold",
+        "color": "#1f2328"
+      },
+      "encoding": {
+        "text": {
+          "value": "2,297,201"
+        }
+      }
+    }
+  ]
+}

@@ -24,6 +24,8 @@
 - Selected Region Sales：參數 Selected Region（預設 East）所選地區的銷售額，其他地區為 0
 - 移動計算：依月份排序，移動平均為前兩個月與當月（有幾個月就平均幾個月）；移動總和為前後各一個月，
   前後不足一個月時為空值（只算有資料的月份）
+- 各標記卡的詳細程度不同（甜甜圈、依客群分色的折線）時，匯出的資料以工作表上所有維度的組合計算：
+  Category Donut 為各類別（MIN(0) 為 0）、Region Sales and Segment Profit 為各地區 × 客群
 - 參考線只影響圖表：Sub-Category Sales、Region Sales Bands 的預期結果就是各標記的銷售額
 """
 
@@ -378,6 +380,24 @@ def monthly_moving_average(rows: list[Row], case: Case) -> tuple[list[str], list
     return ["Month of Order Date", "Moving Average of Sales", "Moving Sum of Sales", "Sales"], body
 
 
+def category_donut(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    body = grouped(rows, keep, "Category", lambda items: sum(r["Sales"] for r in items))
+    return ["Category", "Zero", "Sales"], [[category, 0, sales] for category, sales in body]
+
+
+def region_sales_segment_profit(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    totals: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for row in rows:
+        if keep(row):
+            item = totals[(row["Region"], row["Segment"])]
+            item[0] += row["Sales"]
+            item[1] += row["Profit"]
+    body = [[*key, sales, profit] for key, (sales, profit) in sorted(totals.items())]
+    return ["Region", "Segment", "Sales", "Profit"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -402,6 +422,8 @@ SHEETS = {
     "ws_sub_category_sales": sub_category_sales,
     "ws_region_sales_bands": region_sales_bands,
     "ws_monthly_moving_average": monthly_moving_average,
+    "ws_category_donut": category_donut,
+    "ws_region_sales_and_segment_profit": region_sales_segment_profit,
 }
 
 

@@ -19,7 +19,7 @@ import pytest
 from tmig.data.executor import QueryResult, execute
 from tmig.ir import load_ir
 from tmig.render.vegalite import build_spec
-from tmig.sqlgen.query import worksheet_sql
+from tmig.sqlgen.query import pane_sql, worksheet_sql
 from tmig.verify.run import ensure_data
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -47,9 +47,26 @@ def ir():
 
 
 def structure(spec: dict[str, Any]) -> dict[str, Any]:
+    """快照只記資料的列數與欄位（含各標記卡自己的資料）。"""
     copy = json.loads(json.dumps(spec))
-    values = copy["data"]["values"]
-    copy["data"] = {"values": f"{len(values)} 列", "fields": sorted(values[0]) if values else []}
+
+    def compact(node: Any) -> None:
+        if isinstance(node, dict):
+            data = node.get("data")
+            if isinstance(data, dict) and isinstance(data.get("values"), list):
+                values = data["values"]
+                node["data"] = {
+                    "values": f"{len(values)} 列",
+                    "fields": sorted(values[0]) if values else [],
+                }
+            for key, value in node.items():
+                if key != "data":
+                    compact(value)
+        elif isinstance(node, list):
+            for item in node:
+                compact(item)
+
+    compact(copy)
     return copy
 
 
@@ -58,8 +75,13 @@ def test_spec_snapshot_and_schema(directory: Path, worksheet: str) -> None:
     ir = fixture_ir(directory)
     query = worksheet_sql(ir, worksheet)
     sheet = next(w for w in ir.worksheets if w.id == worksheet)
-    result = execute(directory / "data" / f"{sheet.datasource}.duckdb", query.sql)
-    rendered = build_spec(ir, worksheet, query.columns, result)
+    database = directory / "data" / f"{sheet.datasource}.duckdb"
+    result = execute(database, query.sql)
+    panes = {
+        i: (pane.columns, execute(database, pane.sql))
+        for i, pane in pane_sql(ir, worksheet, query).items()
+    }
+    rendered = build_spec(ir, worksheet, query.columns, result, None, panes or None)
     assert rendered.spec is not None
     errors = [e.message for e in validator().iter_errors(rendered.spec)]
     assert errors == []

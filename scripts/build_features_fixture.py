@@ -24,6 +24,9 @@
   的移動平均（前兩個月與當月）與移動總和（前後各一個月，不足時為 Null），在「年度成長」dashboard 上
 - I2 dashboard 物件：「首頁」dashboard 上的標誌圖片、切換到 dashboard（文字按鈕）與工作表（圖片按鈕）、
   顯示／隱藏篩選欄（預設隱藏）、匯出 PDF 的按鈕，以及網頁區塊
+- J3 甜甜圈與各標記卡不同的詳細程度：Category Donut（兩個 MIN(0) 疊成雙軸，外圈為各類別的圓餅、
+  中間的洞標示合計）；Region Sales and Segment Profit（長條為各地區、疊在上面的折線依客群分色，
+  以座標軸樣式的 fold 表示雙軸），在「甜甜圈」dashboard 上
 - J4 參考線：Sub-Category Sales 每個類別（窗格）的平均線與整張表的目標常數線；Region Sales Bands 的中位數
   與平均 ± 1 個母體標準差，在「參考線」dashboard 上（只影響圖表，不影響數字）
 """
@@ -246,6 +249,12 @@ SELECTED_COLUMN = f"""      <column caption='Selected Region Sales' datatype='re
         <calculation class='tableau' formula='IF [Region] = [Parameters].[Parameter 1] THEN [Sales] ELSE 0 END' />
       </column>"""
 
+ZERO_CALC = "[Calculation_7D6C2A1F00000002]"
+ZERO_COLUMN = f"""      <column caption='Zero' datatype='integer' name='{ZERO_CALC}' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='MIN(0)' />
+      </column>"""
+"""甜甜圈的欄架：兩個 MIN(0) 疊成雙軸。"""
+
 # 群組與數值分組（計算欄位的 categorical-bin、bin 類型）
 REGION_GROUP = """      <column caption='Region (group)' datatype='string' name='[Region (group)]' role='dimension' type='nominal'>
         <calculation class='categorical-bin' column='[Region]' new-bin='true'>
@@ -355,6 +364,8 @@ def worksheets() -> str:
             sub_category_sales(),
             region_sales_bands(),
             monthly_moving_average(),
+            category_donut(),
+            region_sales_segment_profit(),
         ]
     )
 
@@ -911,6 +922,102 @@ def monthly_moving_average() -> str:
     )
 
 
+def category_donut() -> str:
+    """甜甜圈：同一個 MIN(0) 放兩次並疊成雙軸；外圈依類別分色、角度為銷售額，中間的洞標示合計。"""
+    zero = ref(f"usr:{ZERO_CALC[1:-1]}:qk")
+    panes = "\n".join(
+        [
+            pane("Pie"),
+            pane(
+                "Pie",
+                "\n".join(
+                    [
+                        f"              <color column={attr(ref('none:Category:nk'))} />",
+                        f"              <wedge-size column={attr(ref('sum:Sales:qk'))} />",
+                        f"              <text column={attr(ref('none:Category:nk'))} />",
+                    ]
+                ),
+                f" id='1' y-axis-name={attr(zero)}",
+            ),
+            pane(
+                "Pie",
+                f"              <text column={attr(ref('sum:Sales:qk'))} />",
+                f" id='2' y-axis-name={attr(zero)} y-index='1'",
+            ),
+        ]
+    )
+    return worksheet(
+        "Category Donut",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000025",
+        dependency(
+            [("[Category]", "string", "dimension", "nominal"), REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+                instance(ZERO_CALC, "User", f"[usr:{ZERO_CALC[1:-1]}:qk]", "quantitative"),
+            ],
+            [],
+        ).replace(
+            "          </datasource-dependencies>",
+            ZERO_COLUMN + "\n          </datasource-dependencies>",
+        ),
+        "",
+        panes,
+        f"({zero} + {zero})",
+        "",
+    )
+
+
+def region_sales_segment_profit() -> str:
+    """詳細程度不同的雙軸：Sales 長條為各地區；疊在上面的 Profit 折線依客群分色（多了 Segment）。
+    雙軸以座標軸樣式的 fold 表示（沒有 y-index）。"""
+    panes = "\n".join(
+        [
+            pane("Automatic"),
+            pane(
+                "Bar",
+                f"              <text column={attr(ref('sum:Sales:qk'))} />",
+                f" id='1' y-axis-name={attr(ref('sum:Sales:qk'))}",
+            ),
+            pane(
+                "Line",
+                f"              <color column={attr(ref('none:Segment:nk'))} />",
+                f" id='2' y-axis-name={attr(ref('sum:Profit:qk'))}",
+            ),
+        ]
+    )
+    style = f"""<style>
+          <style-rule element='axis'>
+            <encoding attr='space' class='0' field={attr(ref("sum:Profit:qk"))} field-type='quantitative' fold='true' scope='rows' type='space' />
+          </style-rule>
+        </style>"""
+    sheet = worksheet(
+        "Region Sales and Segment Profit",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000026",
+        dependency(
+            [
+                ("[Profit]", "real", "measure", "quantitative"),
+                ("[Segment]", "string", "dimension", "nominal"),
+                *REGION_SALES_COLUMNS,
+            ],
+            [
+                instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
+                instance("[Region]", "None", "[none:Region:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+                instance("[Segment]", "None", "[none:Segment:nk]", "nominal"),
+            ],
+            [],
+        ),
+        "",
+        panes,
+        f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        ref("none:Region:nk"),
+    )
+    return sheet.replace(
+        "        <style />\n        <panes>", f"        {style}\n        <panes>", 1
+    )
+
+
 def selected_region_sales() -> str:
     """依參數 Selected Region 計算的銷售額（參數動作的目標）。"""
     params = PARAMETERS.replace(
@@ -1223,6 +1330,25 @@ def reference_dashboard() -> str:
     </dashboard>"""
 
 
+def donut_dashboard() -> str:
+    return f"""    <dashboard name='甜甜圈'>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 636)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 56, 396, 636)} id='7' name='Category Donut' />
+              <zone {zone_box(412, 56, 580, 636)} id='8' name='Region Sales and Segment Profit' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000027}}' />
+    </dashboard>"""
+
+
 def home_dashboard() -> str:
     """首頁：標誌、導覽按鈕、顯示／隱藏篩選欄的按鈕（篩選欄預設隱藏）、匯出 PDF 按鈕與網頁區塊。"""
 
@@ -1363,7 +1489,7 @@ def twb(rows: int) -> str:
   </preferences>
   <datasources>
 {PARAMETERS}
-{demo.datasource(rows, "\n".join([REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, DATASOURCE_GROUPS]))}
+{demo.datasource(rows, "\n".join([REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, DATASOURCE_GROUPS]))}
   </datasources>
 {shared_views()}
 {actions()}
@@ -1380,6 +1506,7 @@ def twb(rows: int) -> str:
 {parameter_dashboard()}
 {reference_dashboard()}
 {home_dashboard()}
+{donut_dashboard()}
   </dashboards>
   <windows source-height='30'>
 {windows()}

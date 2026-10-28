@@ -363,19 +363,68 @@ def test_dual_axis_panes(tmp_path: Path) -> None:
     ]
 
 
-def test_panes_with_different_detail_are_unsupported(tmp_path: Path) -> None:
+def test_panes_with_different_detail(tmp_path: Path) -> None:
+    """J3：各標記卡的詳細程度可以不同（查詢時各自計算）；座標軸樣式的 fold 也表示雙軸。"""
     panes = measure_pane(
         "sum:Sales:qk", "Bar", encodings=f"<color column='{ref('none:Region:nk')}' />"
     ) + measure_pane("sum:Profit:qk", "Line").replace("id='1'", "id='2'")
+    style = (
+        "<style><style-rule element='axis'><encoding attr='space' class='0' "
+        f"field='{ref('sum:Profit:qk')}' fold='true' scope='rows' type='space' />"
+        "</style-rule></style>"
+    )
     sheets = worksheet(
         "Mixed",
         MEASURES,
         rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
         cols=ref("none:Category:nk"),
         panes_extra=panes,
-    )
+    ).replace("<style />", style, 1)
     ir = parse(tmp_path, b.workbook(worksheets=sheets))
-    assert any("詳細程度不同" in r for r in reasons(ir))
+    assert reasons(ir) == []
+    bar, line = ir.worksheets[0].panes
+    assert (bar.dual, line.dual) == (False, True)
+    assert bar.marks.color is not None and line.marks.color is None
+
+
+def donut_sheet(inner: str) -> str:
+    zero = instance("[Calculation_0]", "User", "[usr:Calculation_0:qk]", "quantitative")
+    deps = (
+        "<column caption='Zero' datatype='integer' name='[Calculation_0]' role='measure' "
+        "type='quantitative'><calculation class='tableau' formula='MIN(0)' /></column>"
+    )
+    outer = measure_pane(
+        "usr:Calculation_0:qk",
+        "Pie",
+        encodings=f"<color column='{ref('none:Region:nk')}' /><wedge-size column='{ref('sum:Sales:qk')}' />",
+    )
+    hole = measure_pane("usr:Calculation_0:qk", "Pie", " y-index='1'", inner).replace(
+        "id='1'", "id='2'"
+    )
+    return worksheet(
+        "Donut",
+        [*BASIC, zero],
+        rows=f"({ref('usr:Calculation_0:qk')} + {ref('usr:Calculation_0:qk')})",
+        mark="Pie",
+        panes_extra=outer + hole,
+        deps_extra=deps,
+    )
+
+
+def test_donut(tmp_path: Path) -> None:
+    sheet = donut_sheet(f"<text column='{ref('sum:Sales:qk')}' />")
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    outer, hole = ir.worksheets[0].panes
+    assert (outer.marks.type, hole.marks.type, hole.dual) == ("pie", "pie", True)
+    assert [u.field for u in hole.marks.label] == ["f_sales"]
+
+
+def test_multi_ring_pie_is_unsupported(tmp_path: Path) -> None:
+    """內圈有外圈沒有的維度（多層圓餅）尚不支援。"""
+    sheet = donut_sheet(f"<color column='{ref('none:Category:nk')}' />")
+    ir = parse(tmp_path, b.workbook(worksheets=sheet), lenient=True)
+    assert reasons(ir) == ["多層圓餅（內圈有外圈沒有的維度）v0 不支援"]
 
 
 # ---------------------------------------------------------------- J3 圓餅、形狀、路徑

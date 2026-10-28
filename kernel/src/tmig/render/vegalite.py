@@ -140,10 +140,29 @@ def caption(ir_field: DataField, use: FieldUse, ws: Worksheet) -> str:
 class _Builder:
     """一張工作表的規格；channels 以欄位鍵（Measure Names／Values 以其特殊 id）為鍵。"""
 
-    def __init__(self, ws: Worksheet, channels: dict[str, Channel]) -> None:
+    def __init__(
+        self,
+        ws: Worksheet,
+        channels: dict[str, Channel],
+        pane_values: dict[int, list[dict[str, Any]]] | None = None,
+    ) -> None:
         self.ws = ws
         self.channels = channels
         self.notes: list[str] = []
+        self.pane_values = pane_values or {}
+        """詳細程度較粗的標記卡（ws.panes 的索引）各自的資料列（J3）。"""
+
+    def with_pane_data(self, body: dict[str, Any], pane: Pane | None) -> dict[str, Any]:
+        """標記卡有自己的資料時，這張圖改用它；工具提示只列出資料中有的欄位。"""
+        index = next((i for i, p in enumerate(self.ws.panes) if p is pane), None)
+        if index is None or index not in self.pane_values:
+            return body
+        records = self.pane_values[index]
+        present = set(records[0]) if records else set()
+        encoding = body.get("encoding")
+        if encoding is not None and "tooltip" in encoding:
+            encoding["tooltip"] = [t for t in encoding["tooltip"] if t["field"] in present]
+        return {**body, "data": {"values": records}}
 
     def ch(self, use: FieldUse) -> Channel:
         return self.channels[use.field if use.field in SPECIAL_FIELDS else use_key(use)]
@@ -321,6 +340,7 @@ class _Builder:
                 body, kind = self.unit(marks, mark, rows_dims, cols_dims, [use], cols_meas)
             else:
                 body, kind = self.unit(marks, mark, rows_dims, cols_dims, rows_meas, [use])
+            body = self.with_pane_data(body, pane)
             kinds.append(kind)
             if pane is not None and pane.dual and charts:
                 channel = "y" if axis == "rows" else "x"
@@ -385,6 +405,53 @@ class _Builder:
         }
         return {"encoding": encoding, "layer": [{"mark": mark}, label]}
 
+    def donut(
+        self,
+        body: dict[str, Any],
+        values: list[dict[str, Any]],
+        rows_dims: list[FieldUse],
+        cols_dims: list[FieldUse],
+    ) -> dict[str, Any]:
+        """甜甜圈（J3）：圓餅與疊在上面（雙軸）、詳細程度較粗的標記卡；
+        後者畫成中間的洞，它的標籤（通常是合計）寫在中間。"""
+        holes = [(i, p) for i, p in enumerate(self.ws.panes) if i > 0 and p.dual]
+        if not holes:
+            return body
+        for layer in [body, *body.get("layer", [])]:
+            mark = layer.get("mark")
+            if isinstance(mark, dict) and mark.get("type") == "arc":
+                mark["innerRadius"] = {"expr": "min(width, height) * 0.3"}
+            elif isinstance(mark, dict) and mark.get("type") == "text" and "radius" in mark:
+                mark["radius"] = {"expr": "min(width, height) * 0.4"}
+        if rows_dims or cols_dims:
+            self.notes.append("分面的甜甜圈圖中間的標籤尚未畫出（不影響數字）")
+            return body
+        lines: list[str] = []
+        for index, pane in holes:
+            records = self.pane_values.get(index, values)
+            for use in pane.marks.label:
+                ch = self.ch(use)
+                for record in records:
+                    text = record.get(ch.label)
+                    if text not in (None, "") and str(text) not in lines:
+                        lines.append(str(text))
+        if not lines:
+            return body
+        center = {
+            "data": {"values": [{}]},
+            "mark": {
+                "type": "text",
+                "x": {"expr": "width / 2"},
+                "y": {"expr": "height / 2"},
+                "lineBreak": "\n",
+                "fontSize": 14,
+                "fontWeight": "bold",
+                "color": "#1f2328",
+            },
+            "encoding": {"text": {"value": "\n".join(lines)}},
+        }
+        return {"layer": [body, center]}
+
     def _facet(self, uses: list[FieldUse], composite: str) -> dict[str, Any]:
         if len(uses) > 1:
             title = SEPARATOR.join(self.ch(u).title for u in uses)
@@ -399,12 +466,13 @@ def build_spec(
     columns: list[OutputColumn],
     result: QueryResult,
     parameters: dict[str, Scalar] | None = None,
+    panes: dict[int, tuple[list[OutputColumn], QueryResult]] | None = None,
 ) -> RenderResult:
-    """parameters：查詢時的參數值（參數的參考線用）；省略時為 IR 的預設值。"""
+    """parameters：查詢時的參數值（參數的參考線用）；省略時為 IR 的預設值。
+    panes：詳細程度較粗的標記卡各自的查詢結果（tmig.sqlgen.query.pane_sql），以 ws.panes 的索引為鍵。"""
     ws = next(w for w in ir.worksheets if w.id == worksheet)
     ds = next(d for d in ir.datasources if d.id == ws.datasource)
     fields = {f.id: f for f in ds.fields}
-    index = {key: i for i, key in enumerate(result.columns)}
 
     channels: dict[str, Channel] = {}
     for n, column in enumerate(c for c in columns if c.role != "sort" and c.use is not None):
@@ -425,19 +493,14 @@ def build_spec(
     builder = _Builder(ws, channels)
 
     # ---------------------------------------------------------- 資料
-    values: list[dict[str, Any]] = []
-    for row in result.rows:
-        record: dict[str, Any] = {}
-        for key, ch in channels.items():
-            raw = row[index[key]]
-            use = ch.use
-            trunc = use.date.unit if use.date is not None and use.date.kind == "trunc" else None
-            record[ch.name] = _json_value(raw)
-            if use.date is not None and use.date.kind == "part" and raw is not None:
-                record[ch.label] = str(raw)
-            else:
-                record[ch.label] = format_value(raw, ch.datatype, ch.format, trunc)
-        values.append(record)
+    values = _records(channels, result)
+    pane_values = {
+        i: _records(channels, pane_result) for i, (_, pane_result) in (panes or {}).items()
+    }
+    if long and pane_values:
+        builder.notes.append("用到 Measure Values 時，各標記卡一律以工作表的詳細程度呈現")
+        pane_values = {}
+    builder.pane_values = pane_values
     if long:
         values = _fold(values, [builder.ch(u) for u in ws.measure_values])
         channels[MEASURE_NAMES] = Channel(
@@ -472,10 +535,19 @@ def build_spec(
         record[ROW] = i
         for name, members in composites.items():
             record[name] = SEPARATOR.join(record[builder.ch(u).label] for u in members)
+    for records in pane_values.values():
+        for record in records:
+            record[ROW] = -1  # 較粗的標記卡不參與選取
+            for name, members in composites.items():
+                record[name] = SEPARATOR.join(
+                    str(record.get(builder.ch(u).label, "")) for u in members
+                )
 
     mark = ws.marks.type
     if pie_marks is not None:
         body = builder.pie(pie_marks, rows_dims, cols_dims)
+        if len(ws.panes) > 1:
+            body = builder.donut(body, values, rows_dims, cols_dims)
         mark = "pie"
     elif len(rows_meas) > 1 or len(cols_meas) > 1:
         body, mark = builder.multi(rows_dims, cols_dims, rows_meas, cols_meas)
@@ -521,6 +593,26 @@ def build_spec(
         spec["autosize"] = {"type": "pad"}
     spec.update(body)
     return RenderResult(spec, len(values), mark, None, builder.notes)
+
+
+def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str, Any]]:
+    """查詢結果 → 資料列：原始值欄與顯示文字欄；只轉換結果中有的欄位。"""
+    index = {key: i for i, key in enumerate(result.columns)}
+    present = [(key, ch) for key, ch in channels.items() if key in index]
+    records: list[dict[str, Any]] = []
+    for row in result.rows:
+        record: dict[str, Any] = {}
+        for key, ch in present:
+            raw = row[index[key]]
+            use = ch.use
+            trunc = use.date.unit if use.date is not None and use.date.kind == "trunc" else None
+            record[ch.name] = _json_value(raw)
+            if use.date is not None and use.date.kind == "part" and raw is not None:
+                record[ch.label] = str(raw)
+            else:
+                record[ch.label] = format_value(raw, ch.datatype, ch.format, trunc)
+        records.append(record)
+    return records
 
 
 COMPUTATION_NAMES = {

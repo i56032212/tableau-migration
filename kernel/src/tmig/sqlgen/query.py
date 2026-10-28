@@ -49,6 +49,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     Marks,
+    Pane,
     ParamRef,
     RangeFilter,
     RelativeDateFilter,
@@ -1424,6 +1425,47 @@ def worksheet_sql(ir: IR, worksheet: str, state: QueryState | None = None) -> Wo
     return WorksheetQuery(ir, worksheet, state).build()
 
 
+def pane_sql(
+    ir: IR, worksheet: str, main: WorksheetSql, state: QueryState | None = None
+) -> dict[int, WorksheetSql]:
+    """各量值的標記卡詳細程度不同時（J3，例如甜甜圈圖中間的合計），較粗的標記卡各自查詢。
+
+    工作表的查詢（main）以所有維度的組合計算，是計算比對與資料表的依據；詳細程度較粗的標記卡
+    （欄列架與它自己的標記卡上的維度比較少）以只含這些維度與這個量值的工作表另外查詢，供圖表使用。
+    回傳 ws.panes 的索引 → 查詢。
+    """
+    ws = _find_worksheet(ir, worksheet)
+    dims = {c.key for c in main.columns if c.role == "dimension"}
+    if not ws.panes or not dims:
+        return {}
+    shelf = [u for u in [*ws.rows, *ws.columns] if use_key(u) in dims]
+    result: dict[int, WorksheetSql] = {}
+    for i, pane in enumerate(ws.panes):
+        lod = {use_key(u) for u in [*shelf, *pane.marks.uses()] if use_key(u) in dims}
+        if lod == dims:
+            continue
+
+        def keep(uses: list[FieldUse], axis: str, pane: Pane = pane) -> list[FieldUse]:
+            if axis != pane.axis:
+                return uses
+            return [u for u in uses if use_key(u) in dims or u == pane.measure]
+
+        virtual = ws.model_copy(
+            update={
+                "rows": keep(ws.rows, "rows"),
+                "columns": keep(ws.columns, "columns"),
+                "marks": pane.marks,
+                "panes": [],
+                "reference_lines": [],
+            }
+        )
+        sub = ir.model_copy(
+            update={"worksheets": [virtual if w.id == ws.id else w for w in ir.worksheets]}
+        )
+        result[i] = worksheet_sql(sub, ws.id, state)
+    return result
+
+
 __all__ = [
     "PUSHDOWN_BOUNDARY",
     "STAGES",
@@ -1433,5 +1475,6 @@ __all__ = [
     "WorksheetQuery",
     "WorksheetSql",
     "domain_sql",
+    "pane_sql",
     "worksheet_sql",
 ]

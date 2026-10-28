@@ -153,3 +153,18 @@ sheets:
       Sales: sum(f_sales)
     ignore: []
     numeric: auto
+  ws_category_donut:
+    columns:
+      Category: f_category
+      Zero: f_zero
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_region_sales_and_segment_profit:
+    columns:
+      Region: f_region
+      Segment: f_segment
+      Sales: sum(f_sales)
+      Profit: sum(f_profit)
+    ignore: []
+    numeric: auto

@@ -43,7 +43,7 @@ def test_features_pass() -> None:
     """功能報表（擴充階段的各項功能）的預期結果由 scripts/features_oracle.py 獨立計算。"""
     ensure_data(FEATURES, load_fixture_ir(FEATURES))
     _, report = verify_fixture(FEATURES)
-    assert report.summary == {"pass": 92, "fail": 0, "unsupported": 0}
+    assert report.summary == {"pass": 100, "fail": 0, "unsupported": 0}
     assert report.ok
 
 

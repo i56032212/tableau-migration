@@ -195,6 +195,18 @@ KNOWN_UNSUPPORTED = {
 }
 
 
+def _folded_axes(style: etree._Element | None) -> set[str]:
+    """座標軸樣式中疊到前一個軸（雙軸）的量值：<encoding attr='space' field=… fold='true'>。"""
+    folded: set[str] = set()
+    for rule in children(style, "style-rule"):
+        if rule.get("element") != "axis":
+            continue
+        for enc in children(rule, "encoding"):
+            if enc.get("attr") == "space" and enc.get("fold") == "true" and enc.get("field"):
+                folded.add(instance_key(enc.get("field", "")))
+    return folded
+
+
 def shelf_refs(text: str) -> tuple[list[str], set[str]]:
     """拆解欄列架文字：回傳完整參照（例如 [ds].[none:Region:nk]）與出現的運算子。"""
     refs: list[str] = []
@@ -286,7 +298,9 @@ class SheetParser:
             aggregation = child(view, "aggregation")
             if aggregation is not None and aggregation.get("value") == "false":
                 ctx.flag(aggregation, "取消彙總量值（Aggregate Measures 關閉）v0 不支援")
-        marks, panes, mark_dims = self._marks(child(table, "panes"), rows, cols)
+        marks, panes, mark_dims = self._marks(
+            child(table, "panes"), rows, cols, _folded_axes(child(table, "style"))
+        )
         measure_values = self._measure_values(view, [*rows, *cols, *marks.uses()], panes)
         card_uses = [*rows, *cols, *marks.uses(), *(u for p in panes for u in p.marks.uses())]
         if not measure_values and any(u.field == MEASURE_VALUES for u in card_uses):
@@ -488,9 +502,18 @@ class SheetParser:
         )
 
     def _marks(
-        self, panes_el: etree._Element | None, rows: list[FieldUse], cols: list[FieldUse]
+        self,
+        panes_el: etree._Element | None,
+        rows: list[FieldUse],
+        cols: list[FieldUse],
+        folded: set[str],
     ) -> tuple[Marks, list[Pane], list[FieldUse]]:
-        """標記卡：沒有 id 的 <pane> 是共用的標記卡，帶 y-axis-name／x-axis-name 的是個別量值的標記卡。"""
+        """標記卡：沒有 id 的 <pane> 是共用的標記卡，帶 y-axis-name／x-axis-name 的是個別量值的標記卡。
+
+        雙軸：個別標記卡的 y-index／x-index 大於 0，或座標軸樣式把該量值的軸疊到前一個（fold）。
+        各標記卡的詳細程度（欄列架與標記卡上的維度）可以不同，查詢時各自計算（J3）；
+        但圓餅的內圈有外圈沒有的維度（多層圓餅）尚不支援。
+        """
         panes = children(panes_el, "pane")
         if not panes:
             return Marks(type="automatic"), [], []
@@ -514,15 +537,23 @@ class SheetParser:
                 self.ctx.flag(element, f"標記卡的量值 {axis_ref} 不在欄列架上")
                 continue
             card, card_dims = self._card(element)
-            dual = (element.get("y-index") or element.get("x-index")) == "1"
+            index = element.get("y-index") or element.get("x-index") or "0"
+            dual = (index.isdigit() and int(index) > 0) or instance_key(axis_ref) in folded
             result.append(Pane(measure=measure, axis=axis, dual=dual, marks=card))
             pane_dims.append(card_dims)
         if result:
-            signatures = {frozenset(use_key(d) for d in found) for found in pane_dims}
-            if len(signatures) > 1:
+            assert self.ds is not None
+            ds = self.ds
+            shelf = {
+                use_key(u)
+                for u in [*rows, *cols]
+                if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)
+            }
+            lods = [shelf | {use_key(d) for d in found} for found in pane_dims]
+            if result[0].marks.type == "pie" and any(not lod <= lods[0] for lod in lods[1:]):
                 self.ctx.flag(
                     panes_el if panes_el is not None else self.el,
-                    "各量值的標記卡維度不同（各量值的詳細程度不同），尚不支援",
+                    "多層圓餅（內圈有外圈沒有的維度）v0 不支援",
                 )
             dims = pane_dims[0]
         return marks, result, dims

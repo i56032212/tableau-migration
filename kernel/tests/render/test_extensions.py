@@ -13,7 +13,7 @@ from tmig.data.executor import execute
 from tmig.ir import load_ir
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import build_spec
-from tmig.sqlgen.query import worksheet_sql
+from tmig.sqlgen.query import pane_sql, worksheet_sql
 from tmig.verify.run import ensure_data
 
 from ..parser import builder as b
@@ -238,3 +238,55 @@ def test_reference_line_total_of_average_is_not_drawn(tmp_path: Path, db: Path) 
     rendered = render_lines(tmp_path, db, sheet)
     assert "layer" not in rendered.spec
     assert rendered.notes == ["參考線 refline0 的合計需要重新彙總整體資料，沒有畫出"]
+
+
+# ---------------------------------------------------------------- J3 甜甜圈與各標記卡的詳細程度
+
+
+def render_with_panes(worksheet_id: str) -> tuple[Any, dict[int, Any], dict[str, Any]]:
+    ir = features()
+    database = FEATURES / "data" / "ds_orders.duckdb"
+    query = worksheet_sql(ir, worksheet_id)
+    result = execute(database, query.sql)
+    queries = pane_sql(ir, worksheet_id, query)
+    panes = {i: (q.columns, execute(database, q.sql)) for i, q in queries.items()}
+    rendered = build_spec(ir, worksheet_id, query.columns, result, None, panes or None)
+    assert rendered.spec is not None
+    assert [e.message for e in validator().iter_errors(rendered.spec)] == []
+    return query, queries, rendered.spec
+
+
+def test_pane_sql_only_for_coarser_panes() -> None:
+    _, donut, _ = render_with_panes("ws_category_donut")
+    assert list(donut) == [1]  # 中間的洞：沒有 Category
+    assert {c.key for c in donut[1].columns} == {"f_zero", "sum(f_sales)"}
+    _, mixed, _ = render_with_panes("ws_region_sales_and_segment_profit")
+    assert list(mixed) == [0]  # 長條：沒有 Segment
+    assert {c.key for c in mixed[0].columns} == {"f_region", "sum(f_sales)"}
+    _, same, _ = render_with_panes("ws_sales_and_profit_by_year")
+    assert same == {}
+
+
+def test_donut_spec() -> None:
+    _, _, spec = render_with_panes("ws_category_donut")
+    ring, center = spec["layer"]
+    arc = ring["layer"][0]["mark"] if "layer" in ring else ring["mark"]
+    assert arc["type"] == "arc" and "innerRadius" in arc
+    sales = next(n for n, key in spec["usermeta"]["measures"].items() if key == "sum(f_sales)")
+    total = sum(v[sales] for v in spec["data"]["values"])  # 外圈各類別的銷售額
+    assert center["encoding"]["text"]["value"] == f"{total:,.0f}"
+    assert center["data"] == {"values": [{}]}
+    assert len(spec["data"]["values"]) == 3
+
+
+def test_dual_axis_with_coarser_pane() -> None:
+    _, _, spec = render_with_panes("ws_region_sales_and_segment_profit")
+    bars, line = spec["layer"]
+    bar_values = bars["data"]["values"]
+    assert len(bar_values) == 4  # 各地區一根長條
+    assert {v["__row"] for v in bar_values} == {-1}  # 不參與選取
+    assert len(spec["data"]["values"]) == 12  # 折線：地區 × 客群
+    assert "data" not in line
+    assert line["encoding"]["color"]["title"] == "Segment"
+    tooltip = {t["field"] for t in bars["encoding"]["tooltip"]}
+    assert tooltip and all(field in bar_values[0] for field in tooltip)  # 只列出長條資料中有的欄位

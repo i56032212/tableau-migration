@@ -54,6 +54,10 @@ sheets:
     view: RegionSalesBands
   - worksheet: ws_monthly_moving_average
     view: MonthlyMovingAverage
+  - worksheet: ws_category_donut
+    view: CategoryDonut
+  - worksheet: ws_region_sales_and_segment_profit
+    view: RegionSalesandSegmentProfit
 cases:
   - name: default
     url_params: {}

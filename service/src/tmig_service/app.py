@@ -33,7 +33,7 @@ from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.format import display_format
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import build_spec, caption
-from tmig.sqlgen.query import QueryError, domain_sql, worksheet_sql
+from tmig.sqlgen.query import QueryError, domain_sql, pane_sql, worksheet_sql
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
 
@@ -198,11 +198,23 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
                 }
             raise HTTPException(422, str(exc)) from exc
         sheet = next(w for w in ir.worksheets if w.id == query.worksheet)
+        database = workspace.database(wb, sheet.datasource)
+        # 詳細程度較粗的標記卡（例如甜甜圈中間的合計）各自查詢，只用於圖表；查不了時以工作表的資料呈現
+        notes: list[str] = []
         try:
-            result = execute(workspace.database(wb, sheet.datasource), query.sql)
+            pane_queries = pane_sql(ir, sheet.id, query, state)
+        except QueryError as exc:
+            pane_queries = {}
+            notes.append(f"各標記卡無法另外查詢，以工作表的詳細程度呈現：{exc}")
+        try:
+            result = execute(database, query.sql)
+            panes = {i: (q.columns, execute(database, q.sql)) for i, q in pane_queries.items()}
         except ExecutionError as exc:
             raise HTTPException(500, str(exc)) from exc
-        rendered = build_spec(ir, sheet.id, query.columns, result, query.state.parameters)
+        rendered = build_spec(
+            ir, sheet.id, query.columns, result, query.state.parameters, panes or None
+        )
+        rendered.notes.extend(notes)
         fields = {f.id: f for ds in ir.datasources for f in ds.fields}
         shown = [c for c in query.columns if c.role != "sort" and c.use is not None]
         index = {key: i for i, key in enumerate(result.columns)}
