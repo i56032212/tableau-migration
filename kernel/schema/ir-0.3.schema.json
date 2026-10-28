@@ -1426,6 +1426,147 @@
       "title": "RangeFilter",
       "type": "object"
     },
+    "ReferenceLine": {
+      "additionalProperties": false,
+      "description": "參考線：在量值軸上畫出常數、參數或標記值的彙總（平均、總和、最小、最大、中位數、百分位數），\n或平均 ± 標準差的倍數。只影響圖表，不影響數字。",
+      "properties": {
+        "id": {
+          "description": "工作表內的編號，例如 refline0",
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "axis": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "畫在哪個量值的軸上"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "$ref": "#/$defs/ParamRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "計算的量值；參數時為參數的值；formula 為 constant 時為 None",
+          "title": "Value"
+        },
+        "formula": {
+          "enum": [
+            "constant",
+            "average",
+            "sum",
+            "total",
+            "min",
+            "max",
+            "median",
+            "percentile",
+            "stdev"
+          ],
+          "title": "Formula",
+          "type": "string"
+        },
+        "constant": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Constant"
+        },
+        "percentiles": {
+          "description": "formula 為 percentile 時，每個百分位數（0 到 100）各畫一條線",
+          "items": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "number"
+          },
+          "title": "Percentiles",
+          "type": "array"
+        },
+        "factors": {
+          "description": "formula 為 stdev 時，平均加上幾倍標準差（例如 -1、1），每個倍數各畫一條線",
+          "items": {
+            "type": "number"
+          },
+          "title": "Factors",
+          "type": "array"
+        },
+        "sample": {
+          "default": true,
+          "description": "標準差為樣本（true）或母體",
+          "title": "Sample",
+          "type": "boolean"
+        },
+        "scope": {
+          "enum": [
+            "table",
+            "pane",
+            "cell"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "label": {
+          "default": "automatic",
+          "enum": [
+            "none",
+            "automatic",
+            "value",
+            "computation",
+            "custom"
+          ],
+          "title": "Label",
+          "type": "string"
+        },
+        "label_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "label 為 custom 時的文字，<Value> 代入值",
+          "title": "Label Text"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "axis",
+        "formula",
+        "scope",
+        "source_ref"
+      ],
+      "title": "ReferenceLine",
+      "type": "object"
+    },
     "RelativeDateFilter": {
       "additionalProperties": false,
       "description": "相對日期：基準日所在期間往前（負數）或往後的 first 到 last 個期間，例如最近 3 個月為 -2 到 0。\n\n基準日為 anchor；沒有 anchor 時為查詢時的今天（計算比對時為抓取預期結果的日期）。",
@@ -2216,6 +2357,13 @@
             "$ref": "#/$defs/TableCalc"
           },
           "title": "Table Calcs",
+          "type": "array"
+        },
+        "reference_lines": {
+          "items": {
+            "$ref": "#/$defs/ReferenceLine"
+          },
+          "title": "Reference Lines",
           "type": "array"
         },
         "source_ref": {

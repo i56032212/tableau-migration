@@ -48,6 +48,10 @@ sheets:
     view: SalesGrowthbyYear
   - worksheet: ws_selected_region_sales
     view: SelectedRegionSales
+  - worksheet: ws_sub_category_sales
+    view: Sub-CategorySales
+  - worksheet: ws_region_sales_bands
+    view: RegionSalesBands
 cases:
   - name: default
     url_params: {}

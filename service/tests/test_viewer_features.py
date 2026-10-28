@@ -1,4 +1,5 @@
-"""功能報表的檢視器端到端：篩選群組與全域篩選（H1）、自動尺寸（I1）、擴充圖表（J1–J3）、篩選動作（L1）。
+"""功能報表的檢視器端到端：篩選群組與全域篩選（H1）、自動尺寸（I1）、擴充圖表（J1–J3）、參考線（J4）、
+群組（K1）、篩選條件（K4）、篩選、網址、參數與切換動作（L1、L2）。
 
 需要先建置檢視器（cd web && pnpm install && pnpm build）與 Playwright 的 Chromium；缺少時略過。
 """
@@ -426,5 +427,45 @@ def test_url_parameter_and_navigate_actions(server: str) -> None:
             ".action-menu button[role='menuitem']", has_text="Go to Filter Actions"
         ).click()
         page.wait_for_url(f"**/d/{filters.id}*")
+        assert errors == []
+        browser.close()
+
+
+def test_reference_lines_render(server: str) -> None:
+    """J4：參考線畫在圖上（窗格的平均為每個標記上的短線，整張表的線橫跨全圖），只有一條時顯示標籤。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "參考線")
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 2"
+        )
+        page.wait_for_timeout(300)
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+        specs = {w: data["spec"] for w, _, data in renders.items}
+
+        def texts(worksheet: str) -> list[str]:
+            return page.eval_on_selector_all(
+                f"[data-worksheet='{worksheet}'] svg text", "els => els.map(e => e.textContent)"
+            )
+
+        def count(worksheet: str, role: str) -> int:
+            return page.locator(
+                f"[data-worksheet='{worksheet}'] svg [aria-roledescription='{role}']"
+            ).count()
+
+        assert "目標 100,000" in texts("ws_sub_category_sales")
+        assert count("ws_sub_category_sales", "tick") == 17  # 每個子類別一段
+        median = specs["ws_region_sales_bands"]["data"]["values"][0]["__ref0_0"]
+        assert f"{median:,.0f}" in texts("ws_region_sales_bands")
+        assert count("ws_region_sales_bands", "rule mark") == 3  # 中位數與平均 ± 1 個標準差
         assert errors == []
         browser.close()

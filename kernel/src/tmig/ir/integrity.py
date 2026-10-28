@@ -155,6 +155,14 @@ def check_references(ir: IR) -> list[str]:
                     errors.append(
                         f"{base}.table_calcs[{tc.id}].addressing：欄位「{fid}」不在資料源「{ws.datasource}」中"
                     )
+        for line in ws.reference_lines:
+            where = f"{base}.reference_lines[{line.id}]"
+            check_use(line.axis, ws.datasource, f"{where}.axis", tcs)
+            if isinstance(line.value, ParamRef):
+                if line.value.parameter not in params:
+                    errors.append(f"{where}.value：參數「{line.value.parameter}」不存在")
+            elif line.value is not None:
+                check_use(line.value, ws.datasource, f"{where}.value", tcs)
 
     for db in ir.dashboards:
         seen: set[str] = set()

@@ -13,12 +13,16 @@
 - 離散維度依查詢結果的順序排列（查詢已套用工作表的排序）
 - 標籤與工具提示的文字依 IR 的 Tableau 格式字串在後端先格式化
 - 甘特、地圖等尚未支援的標記回傳 None，由檢視器顯示「未支援」
+- 參考線（J4）：值在後端依範圍（整張表、窗格、儲存格）以標記的值計算；離散軸上以每個標記位置的
+  短線（tick）連成參考線，連續軸或沒有另一軸時畫成橫跨整張圖的線；只有一條時加上標籤
 """
 
 from __future__ import annotations
 
+import math
+import statistics
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 from tmig.data.executor import QueryResult
 from tmig.ir.models import (
@@ -30,6 +34,9 @@ from tmig.ir.models import (
     FieldUse,
     Marks,
     Pane,
+    ParamRef,
+    ReferenceLine,
+    Scalar,
     Worksheet,
 )
 from tmig.planner.state import use_key
@@ -386,7 +393,9 @@ def build_spec(
     worksheet: str,
     columns: list[OutputColumn],
     result: QueryResult,
+    parameters: dict[str, Scalar] | None = None,
 ) -> RenderResult:
+    """parameters：查詢時的參數值（參數的參考線用）；省略時為 IR 的預設值。"""
     ws = next(w for w in ir.worksheets if w.id == worksheet)
     ds = next(d for d in ir.datasources if d.id == ws.datasource)
     fields = {f.id: f for f in ds.fields}
@@ -472,6 +481,10 @@ def build_spec(
             return RenderResult(None, len(result.rows), mark, f"標記類型 {mark} 尚未支援")
         body, mark = builder.unit(ws.marks, mark, rows_dims, cols_dims, rows_meas, cols_meas)
 
+    if ws.reference_lines:
+        params = {p.id: p.value for p in ir.parameters} | (parameters or {})
+        body = _with_reference_lines(builder, body, values, params)
+
     spec: dict[str, Any] = {
         "$schema": SCHEMA,
         "usermeta": {
@@ -503,6 +516,239 @@ def build_spec(
         spec["autosize"] = {"type": "pad"}
     spec.update(body)
     return RenderResult(spec, len(values), mark, None, builder.notes)
+
+
+COMPUTATION_NAMES = {
+    "constant": "Constant",
+    "average": "Average",
+    "sum": "Sum",
+    "total": "Total",
+    "min": "Minimum",
+    "max": "Maximum",
+    "median": "Median",
+    "percentile": "Percentile",
+    "stdev": "Std. Dev.",
+}
+SCOPE_NAMES = {"table": "Table", "pane": "Pane", "cell": "Cell"}
+REF_COLOR = "#444"
+REF = "__ref"
+"""參考線的資料欄與圖層名稱前綴；檢視器選取標記時略過這些圖層。"""
+
+
+def _with_reference_lines(
+    builder: _Builder,
+    body: dict[str, Any],
+    values: list[dict[str, Any]],
+    params: dict[str, Scalar],
+) -> dict[str, Any]:
+    """參考線圖層：每一列資料寫入所屬範圍的參考值（__ref…），再以 rule 或 tick 畫出。
+
+    範圍：整張表；窗格＝欄列架上的離散維度，但各架最內層若是離散維度則不算（它切出的是儲存格）；
+    儲存格＝欄列架上所有的離散維度。
+    """
+    ws, notes = builder.ws, builder.notes
+    encoding = body.get("encoding") if "mark" in body or "layer" in body else None
+    if encoding is None:
+        notes.append("多個量值、圓餅等圖表上的參考線尚未畫出（不影響數字）")
+        return body
+    scopes = _scope_keys(builder)
+    layers: list[dict[str, Any]] = []
+    for n, line in enumerate(ws.reference_lines):
+        axis = builder.channels.get(use_key(line.axis))
+        position = next(
+            (
+                c
+                for c in ("x", "y")
+                if axis is not None and encoding.get(c, {}).get("field") == axis.name
+            ),
+            None,
+        )
+        if axis is None or position is None:
+            notes.append(f"參考線 {line.id} 的量值不在座標軸上，沒有畫出")
+            continue
+        source = _reference_source(line, builder.channels, params)
+        if source is None:
+            notes.append(f"參考線 {line.id} 的值不在查詢結果中，沒有畫出")
+            continue
+        if line.formula == "total" and isinstance(source, str):
+            agg = line.value.agg if isinstance(line.value, FieldUse) else None
+            if agg not in ("sum", "count", "min", "max"):
+                notes.append(f"參考線 {line.id} 的合計需要重新彙總整體資料，沒有畫出")
+                continue
+        group_keys = scopes[line.scope]
+        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for record in values:
+            groups.setdefault(tuple(record.get(k) for k in group_keys), []).append(record)
+        params_of_line: list[float | None] = (
+            list(line.factors)
+            if line.formula == "stdev"
+            else list(line.percentiles)
+            if line.formula == "percentile"
+            else [None]
+        )
+        names = [f"{REF}{n}_{i}" for i in range(len(params_of_line))]
+        first: list[float] = []
+        for members in groups.values():
+            numbers = (
+                [float(v) for m in members if _is_number(v := m.get(source))]
+                if isinstance(source, str)
+                else []
+            )
+            for name, extra in zip(names, params_of_line, strict=True):
+                value = _reference_value(line, numbers, source, extra)
+                if value is not None and name == names[0]:
+                    first.append(value)
+                for m in members:
+                    m[name] = value
+        other = "y" if position == "x" else "x"
+        other_enc = encoding.get(other)
+        title = encoding[position].get("title")
+        per_mark = (
+            len(groups) > 1
+            and other_enc is not None
+            and other_enc.get("type") in ("nominal", "ordinal")
+        )
+        for name in names:
+            measure = {"field": name, "type": "quantitative", "title": title}
+            if per_mark:
+                # 離散軸：每個標記位置畫一段短線，同一範圍的短線連成該範圍的參考線
+                layers.append(
+                    {
+                        "name": name,
+                        "transform": [{"calculate": "-1", "as": ROW}],
+                        "mark": {"type": "tick", "color": REF_COLOR, "thickness": 1.5},
+                        "encoding": {position: measure, other: other_enc},
+                    }
+                )
+                continue
+            rule: dict[str, Any] = {position: {**measure, "aggregate": "max"}}
+            if len(groups) > 1:
+                rule["detail"] = [{"field": k, "type": "nominal"} for k in group_keys]
+            layers.append(
+                {
+                    "name": name,
+                    "mark": {"type": "rule", "color": REF_COLOR, "strokeDash": [5, 3]},
+                    "encoding": rule,
+                }
+            )
+        label = _reference_label(line, axis, first)
+        if label and len(groups) == 1 and len(names) == 1:
+            place: dict[str, Any] = (
+                {"y": {"value": 0}, "align": "left", "dx": 3, "dy": 0}
+                if position == "x"
+                else {"x": {"value": "width"}, "align": "right", "dx": 0, "dy": -3}
+            )
+            layers.append(
+                {
+                    "name": f"{REF}{n}_label",
+                    "mark": {
+                        "type": "text",
+                        "color": REF_COLOR,
+                        "align": place.pop("align"),
+                        "baseline": "bottom" if position == "y" else "top",
+                        "dx": place.pop("dx"),
+                        "dy": place.pop("dy"),
+                    },
+                    "encoding": {
+                        position: {
+                            "field": names[0],
+                            "type": "quantitative",
+                            "aggregate": "max",
+                            "title": title,
+                        },
+                        **place,
+                        "text": {"value": label},
+                    },
+                }
+            )
+    if not layers:
+        return body
+    return {"layer": [body, *layers]}
+
+
+def _scope_keys(builder: _Builder) -> dict[str, list[str]]:
+    """參考線範圍 → 分組用的資料欄名。"""
+    pane: list[FieldUse] = []
+    cell: list[FieldUse] = []
+    for shelf in (builder.ws.rows, builder.ws.columns):
+        discrete = [u for u in shelf if not builder.is_measure(u) and not u.continuous]
+        cell += discrete
+        innermost_discrete = bool(shelf) and bool(discrete) and shelf[-1] is discrete[-1]
+        pane += discrete[:-1] if innermost_discrete else discrete
+
+    def names(uses: list[FieldUse]) -> list[str]:
+        return [builder.ch(u).name for u in uses if u.field not in SPECIAL_FIELDS]
+
+    return {"table": [], "pane": names(pane), "cell": names(cell)}
+
+
+def _is_number(value: Any) -> TypeGuard[int | float]:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _reference_source(
+    line: ReferenceLine, channels: dict[str, Channel], params: dict[str, Scalar]
+) -> str | float | None:
+    """參考線的值來源：資料欄名（以標記的值計算），或常數、參數的值。"""
+    if isinstance(line.value, ParamRef):
+        value = params.get(line.value.parameter)
+        return float(value) if _is_number(value) else None
+    if line.formula == "constant" or line.value is None:
+        return float(line.constant) if _is_number(line.constant) else None
+    ch = channels.get(use_key(line.value))
+    return ch.name if ch is not None else None
+
+
+def _reference_value(
+    line: ReferenceLine, numbers: list[float], source: str | float, extra: float | None
+) -> float | None:
+    """一個範圍的參考值；extra 為百分位數或標準差倍數。"""
+    if not isinstance(source, str):
+        return source
+    if not numbers:
+        return None
+    formula = line.formula
+    agg = line.value.agg if isinstance(line.value, FieldUse) else None
+    if formula == "average":
+        return statistics.fmean(numbers)
+    if formula == "sum" or (formula == "total" and agg in ("sum", "count")):
+        return math.fsum(numbers)
+    if formula == "min" or (formula == "total" and agg == "min"):
+        return min(numbers)
+    if formula == "max" or (formula == "total" and agg == "max"):
+        return max(numbers)
+    if formula == "median":
+        return statistics.median(numbers)
+    if formula == "percentile":
+        ordered = sorted(numbers)
+        position = (len(ordered) - 1) * (50.0 if extra is None else extra) / 100
+        low = math.floor(position)
+        high = min(low + 1, len(ordered) - 1)
+        return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+    if formula == "stdev":
+        if len(numbers) < (2 if line.sample else 1):
+            return None
+        sd = statistics.stdev(numbers) if line.sample else statistics.pstdev(numbers)
+        return statistics.fmean(numbers) + (extra or 0.0) * sd
+    return None
+
+
+def _reference_label(line: ReferenceLine, axis: Channel, values: list[float]) -> str:
+    """只有一條線時的標籤；自動與值都顯示依量值格式化的值。"""
+    if line.label == "none" or not values:
+        return ""
+    text = format_value(values[0], "real", axis.format, None)
+    computation = COMPUTATION_NAMES[line.formula]
+    if line.label == "computation":
+        return computation
+    if line.label == "custom":
+        return (
+            (line.label_text or "")
+            .replace("<Value>", text)
+            .replace("<Computation>", computation)
+            .replace("<Scope>", SCOPE_NAMES[line.scope])
+        )
+    return text
 
 
 def _table_calc_type(ws: Worksheet, use: FieldUse) -> str | None:

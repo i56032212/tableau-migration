@@ -22,5 +22,5 @@ fixtures/<報表>/
 `superstore_demo/` 是示範報表：以 Tableau 範例資料 Superstore 手寫的仿真 workbook，預期結果由獨立的 Python 程式計算（不是 Tableau 產生，見 `superstore_demo/expected/README.md`）。
 
 `superstore_features/` 是擴充階段的功能報表：同一份資料，逐項加入擴充功能（全域篩選、篩選群組、
-Measure Names、雙軸、圓餅、排除選取、篩選／網址／參數／切換動作、群組與數值分組、相對日期與條件篩選、差異計算等），
+Measure Names、雙軸、圓餅、排除選取、篩選／網址／參數／切換動作、群組與數值分組、相對日期與條件篩選、差異計算、參考線等），
 由 `scripts/build_features_fixture.py` 產生，預期結果由 `scripts/features_oracle.py` 獨立計算（同樣不是 Tableau 產生）。

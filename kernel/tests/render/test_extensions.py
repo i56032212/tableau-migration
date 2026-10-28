@@ -1,4 +1,4 @@
-"""擴充圖表的 Vega-Lite 規格（J1–J3）。"""
+"""擴充圖表的 Vega-Lite 規格（J1–J4）。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from tmig.verify.run import ensure_data
 
 from ..parser import builder as b
 from ..parser.builder import instance, ref, worksheet
+from ..parser.test_extensions import refline
 from ..sqlgen.test_query import ROWS
 from .test_vegalite import validator
 
@@ -117,3 +118,123 @@ def test_separate_axes_are_stacked(tmp_path: Path, db: Path) -> None:
     assert top["encoding"]["y"]["title"] == "Sales"
     assert bottom["encoding"]["y"]["title"] == "Profit"
     assert "width" not in rendered.spec  # 由檢視器依區塊大小設定每張圖的寬高
+
+
+# ---------------------------------------------------------------- J4 參考線
+
+
+def layers(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {layer["name"]: layer for layer in spec["layer"] if "name" in layer}
+
+
+def test_reference_lines_per_pane_and_constant() -> None:
+    """每個類別（窗格）的平均畫成每個標記上的短線；整張表的常數線橫跨全圖並加上標籤。"""
+    spec = render_features("ws_sub_category_sales")
+    values = spec["data"]["values"]
+    by_category: dict[str, list[float]] = {}
+    for v in values:
+        by_category.setdefault(v["c0"], []).append(v["c2"])
+    for v in values:
+        members = by_category[v["c0"]]
+        assert v["__ref0_0"] == pytest.approx(sum(members) / len(members))
+        assert v["__ref1_0"] == 100000
+    named = layers(spec)
+    assert set(named) == {"__ref0_0", "__ref1_0", "__ref1_label"}
+    assert named["__ref0_0"]["mark"]["type"] == "tick"
+    assert named["__ref0_0"]["encoding"]["x"]["field"] == "__ref0_0"
+    assert named["__ref0_0"]["encoding"]["y"]["field"] == "rows_dim"
+    assert named["__ref0_0"]["transform"] == [{"calculate": "-1", "as": "__row"}]  # 不參與選取
+    assert named["__ref1_0"]["mark"]["type"] == "rule"
+    assert named["__ref1_label"]["encoding"]["text"] == {"value": "目標 100,000"}
+    assert spec["layer"][0]["mark"]["type"] == "bar"
+
+
+def test_reference_line_median_and_stdev() -> None:
+    spec = render_features("ws_region_sales_bands")
+    sales = sorted(v["c1"] for v in spec["data"]["values"])
+    mean = sum(sales) / len(sales)
+    sd = (sum((x - mean) ** 2 for x in sales) / len(sales)) ** 0.5  # 母體標準差
+    first = spec["data"]["values"][0]
+    assert first["__ref0_0"] == pytest.approx((sales[1] + sales[2]) / 2)
+    assert (first["__ref1_0"], first["__ref1_1"]) == (
+        pytest.approx(mean - sd),
+        pytest.approx(mean + sd),
+    )
+    named = layers(spec)
+    assert set(named) == {"__ref0_0", "__ref0_label", "__ref1_0", "__ref1_1"}
+    assert named["__ref0_label"]["encoding"]["text"]["value"] == f"{first['__ref0_0']:,.0f}"
+
+
+def render_lines(tmp_path: Path, db: Path, sheet: str, **parameters: Any) -> Any:
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet)))
+    assert ir.unsupported == []
+    query = worksheet_sql(ir, ir.worksheets[0].id)
+    rendered = build_spec(
+        ir, ir.worksheets[0].id, query.columns, execute(db, query.sql), parameters or None
+    )
+    assert rendered.spec is not None
+    assert [e.message for e in validator().iter_errors(rendered.spec)] == []
+    return rendered
+
+
+def test_reference_line_scopes_parameters_and_percentiles(tmp_path: Path, db: Path) -> None:
+    """欄架為 Region、Category：窗格是每個地區（最內層的 Category 切出儲存格）。"""
+    deps = [
+        instance("[Region]", "None", "[none:Region:nk]"),
+        instance("[Category]", "None", "[none:Category:nk]"),
+        instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+    ]
+    lines = "".join(
+        [
+            refline(0, "average", value="[Parameters].[Parameter 1]"),
+            refline(
+                1,
+                "percentile",
+                "per-pane",
+                values="<reference-line-value percentile='25' />"
+                "<reference-line-value percentile='75' />",
+            ),
+            refline(2, "total"),
+            refline(3, "average", "per-cell"),
+        ]
+    )
+    sheet = worksheet(
+        "Lines",
+        deps,
+        rows=ref("sum:Sales:qk"),
+        cols=f"({ref('none:Region:nk')} / {ref('none:Category:nk')})",
+        pane_extra=lines,
+    )
+    rendered = render_lines(tmp_path, db, sheet)
+    values = {(v["c0"], v["c1"]): v for v in rendered.spec["data"]["values"]}
+    assert {v["__ref0_0"] for v in values.values()} == {5}  # 參數 Top N 的預設值
+    east, west, north = (
+        values["East", "Furniture"],
+        values["West", "Technology"],
+        values["North", "Office"],
+    )
+    assert (east["__ref1_0"], east["__ref1_1"]) == (162.5, 187.5)  # 150、200 的四分位數
+    assert (west["__ref1_0"], west["__ref1_1"]) == (350, 450)
+    assert (north["__ref1_0"], north["__ref1_1"]) == (60, 60)
+    assert {v["__ref2_0"] for v in values.values()} == {1310}
+    assert all(v["__ref3_0"] == v["c2"] for v in values.values())  # 每個儲存格只有一個標記
+    assert rendered.notes == []
+    again = render_lines(tmp_path, db, sheet, p_top_n=7)
+    assert {v["__ref0_0"] for v in again.spec["data"]["values"]} == {7}
+
+
+def test_reference_line_total_of_average_is_not_drawn(tmp_path: Path, db: Path) -> None:
+    deps = [
+        instance("[Region]", "None", "[none:Region:nk]"),
+        instance("[Sales]", "Avg", "[avg:Sales:qk]", "quantitative"),
+    ]
+    sheet = worksheet(
+        "Average",
+        deps,
+        rows=ref("avg:Sales:qk"),
+        cols=ref("none:Region:nk"),
+        pane_extra=refline(0, "total", axis="avg:Sales:qk"),
+    )
+    rendered = render_lines(tmp_path, db, sheet)
+    assert "layer" not in rendered.spec
+    assert rendered.notes == ["參考線 refline0 的合計需要重新彙總整體資料，沒有畫出"]

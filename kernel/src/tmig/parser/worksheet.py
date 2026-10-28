@@ -31,6 +31,8 @@ from tmig.ir.models import (
     Marks,
     MarkType,
     Pane,
+    ParamRef,
+    ReferenceLine,
     Scalar,
     Sort,
     TableCalc,
@@ -146,6 +148,9 @@ KNOWN = frozenset(
         "bin",
         "value",
         "address",
+        # 參考線（J4）
+        "reference-line",
+        "reference-line-value",
     }
 )
 OPAQUE = frozenset(
@@ -171,8 +176,12 @@ IGNORED_ELEMENTS = {
     "mark-labels": "特定標記的標籤（標記標籤＞一律顯示）：新平台在工具提示與資料表中呈現這些值",
     "show-full-range": "顯示缺少的值（沒有資料的分組或日期）：新平台只顯示有資料的標記",
 }
+REFERENCE_FORMULAS = frozenset(
+    {"constant", "average", "sum", "total", "min", "max", "median", "percentile", "stdev"}
+)
+REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
+REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
 KNOWN_UNSUPPORTED = {
-    "reference-line": "參考線、參考區間或分布",
     "trend-line": "趨勢線",
     "forecast-specification": "預測",
     "subtotals": "小計與總計",
@@ -283,6 +292,7 @@ class SheetParser:
         filters, kinds = self._filters(view)
         self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
+        reference_lines = self._reference_lines(child(table, "panes"))
         worksheet = Worksheet(
             id=sheet_id,
             name=self.name,
@@ -295,6 +305,7 @@ class SheetParser:
             filters=filters,
             sorts=sorts,
             table_calcs=table_calcs,
+            reference_lines=reference_lines,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -386,6 +397,91 @@ class SheetParser:
             if use is not None:
                 uses.append(use)
         return uses
+
+    def _reference_lines(self, panes_el: etree._Element | None) -> list[ReferenceLine]:
+        lines: list[ReferenceLine] = []
+        for pane in children(panes_el, "pane"):
+            for element in children(pane, "reference-line"):
+                line = self._reference_line(element, len(lines))
+                if line is not None:
+                    lines.append(line)
+        return lines
+
+    def _reference_line(self, element: etree._Element, index: int) -> ReferenceLine | None:
+        """參考線：常數、參數或標記值的彙總；新平台畫不出來的種類記為不影響數字。"""
+        ctx = self.ctx
+        formula = element.get("formula", "")
+        scope = REFERENCE_SCOPES.get(element.get("scope", ""))
+        if formula not in REFERENCE_FORMULAS or scope is None:
+            ctx.ignore(
+                element,
+                f"參考線、參考區間或分布（{formula}，{element.get('scope')}）新平台不畫（不影響數字）",
+            )
+            return None
+        if element.get("paired-id") or element.get("paired-distribution-id"):
+            ctx.ignore(element, "參考區間的底色新平台不畫，只畫兩端的參考線（不影響數字）")
+        axis = self.resolve(instance_key(element.get("axis-column", "")))
+        if isinstance(axis, str) or axis.field in SPECIAL_FIELDS:
+            ctx.ignore(element, "Measure Values 軸上的參考線新平台不畫（不影響數字）")
+            return None
+        value_ref = element.get("value-column", "")
+        value: FieldUse | ParamRef | None = None
+        constant: Scalar = None
+        if value_ref.startswith("[Parameters]"):
+            param = ctx.parameter(value_ref)
+            if param is None:
+                ctx.flag(element, f"參考線的參數 {value_ref} 找不到")
+                return None
+            value = ParamRef(parameter=param.id)
+        elif formula == "constant":
+            try:
+                constant = parse_literal(element.get("value"), "real")
+            except LiteralError as exc:
+                ctx.flag(element, f"參考線的常數無法解析：{exc}")
+                return None
+        else:
+            found = self.resolve(instance_key(value_ref)) if value_ref else axis
+            if isinstance(found, str) or found.field in SPECIAL_FIELDS:
+                ctx.ignore(element, f"參考線的量值 {value_ref} 新平台不畫（不影響數字）")
+                return None
+            value = found
+        details = children(element, "reference-line-value")
+        if any(d.get("percentage") for d in details):
+            ctx.ignore(element, "百分比分布（彙總值的幾成）新平台不畫（不影響數字）")
+            return None
+        percentiles: list[float] = []
+        factors: list[float] = []
+        try:
+            if formula == "percentile":
+                percentiles = [
+                    float(d.get("percentile", "")) for d in details if d.get("percentile")
+                ]
+                percentiles = percentiles or [50.0]
+                if any(not 0 <= v <= 100 for v in percentiles):
+                    raise ValueError(percentiles)
+            if formula == "stdev":
+                factors = [float(d.get("factor", "")) for d in details if d.get("factor")]
+                factors = factors or [-1.0, 1.0]
+                if element.get("symmetric") == "true":
+                    factors = sorted({abs(f) for f in factors} | {-abs(f) for f in factors})
+        except ValueError:
+            ctx.flag(element, "參考線的百分位數或標準差倍數無法解析")
+            return None
+        label = element.get("label-type", "automatic")
+        return ReferenceLine(
+            id=element.get("id") or f"refline{index}",
+            axis=axis,
+            value=value,
+            formula=formula,  # type: ignore[arg-type]
+            constant=constant,
+            percentiles=percentiles,
+            factors=factors,
+            sample=element.get("type") != "population",
+            scope=scope,  # type: ignore[arg-type]
+            label=label if label in REFERENCE_LABELS else "automatic",  # type: ignore[arg-type]
+            label_text=element.get("label") if label == "custom" else None,
+            source_ref=xpath(element),
+        )
 
     def _marks(
         self, panes_el: etree._Element | None, rows: list[FieldUse], cols: list[FieldUse]

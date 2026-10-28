@@ -22,6 +22,7 @@
   排除 Phones 後銷售額前 3 名的子類別，都先以全部資料決定，再套用網址參數
 - 差異與差異百分比：與前一年比較，差異百分比為差異除以前一年的絕對值；第一年沒有值（匯出為空白）
 - Selected Region Sales：參數 Selected Region（預設 East）所選地區的銷售額，其他地區為 0
+- 參考線只影響圖表：Sub-Category Sales、Region Sales Bands 的預期結果就是各標記的銷售額
 """
 
 from __future__ import annotations
@@ -343,6 +344,21 @@ def parameter_action(region: str) -> tuple[list[str], list[list[Any]]]:
     return selected_region_sales(load_rows(), Case("parameter", {}), region)
 
 
+def sub_category_sales(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[tuple[str, str], float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[(row["Category"], row["Sub-Category"])] += row["Sales"]
+    return ["Category", "Sub-Category", "Sales"], [[*k, v] for k, v in sorted(sales.items())]
+
+
+def region_sales_bands(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    body = grouped(rows, keep, "Region", lambda items: sum(r["Sales"] for r in items))
+    return ["Region", "Sales"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -364,6 +380,8 @@ SHEETS = {
     "ws_top_sub_categories": top_sub_categories,
     "ws_sales_growth_by_year": sales_growth,
     "ws_selected_region_sales": selected_region_sales,
+    "ws_sub_category_sales": sub_category_sales,
+    "ws_region_sales_bands": region_sales_bands,
 }
 
 

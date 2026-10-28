@@ -268,6 +268,7 @@
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/datasource-dependencies/column-instance[3]/table-calc"
         }
       ],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -354,6 +355,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }
   ],

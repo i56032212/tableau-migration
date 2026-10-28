@@ -1,0 +1,155 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_region_sales_bands",
+    "name": "Region Sales Bands",
+    "rows": 4,
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_region"
+    },
+    "measures": {
+      "c1": "sum(f_sales)"
+    }
+  },
+  "data": {
+    "values": "4 列",
+    "fields": [
+      "__ref0_0",
+      "__ref1_0",
+      "__ref1_1",
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "layer": [
+    {
+      "mark": {
+        "type": "bar",
+        "tooltip": true
+      },
+      "encoding": {
+        "y": {
+          "field": "c1",
+          "type": "quantitative",
+          "title": "Sales"
+        },
+        "x": {
+          "field": "c0_label",
+          "type": "ordinal",
+          "sort": null,
+          "title": "Region"
+        },
+        "tooltip": [
+          {
+            "field": "c0_label",
+            "title": "Region"
+          },
+          {
+            "field": "c1_label",
+            "title": "Sales"
+          }
+        ]
+      }
+    },
+    {
+      "name": "__ref0_0",
+      "mark": {
+        "type": "rule",
+        "color": "#444",
+        "strokeDash": [
+          5,
+          3
+        ]
+      },
+      "encoding": {
+        "y": {
+          "field": "__ref0_0",
+          "type": "quantitative",
+          "title": "Sales",
+          "aggregate": "max"
+        }
+      }
+    },
+    {
+      "name": "__ref0_label",
+      "mark": {
+        "type": "text",
+        "color": "#444",
+        "align": "right",
+        "baseline": "bottom",
+        "dx": 0,
+        "dy": -3
+      },
+      "encoding": {
+        "y": {
+          "field": "__ref0_0",
+          "type": "quantitative",
+          "aggregate": "max",
+          "title": "Sales"
+        },
+        "x": {
+          "value": "width"
+        },
+        "text": {
+          "value": "590,011"
+        }
+      }
+    },
+    {
+      "name": "__ref1_0",
+      "mark": {
+        "type": "rule",
+        "color": "#444",
+        "strokeDash": [
+          5,
+          3
+        ]
+      },
+      "encoding": {
+        "y": {
+          "field": "__ref1_0",
+          "type": "quantitative",
+          "title": "Sales",
+          "aggregate": "max"
+        }
+      }
+    },
+    {
+      "name": "__ref1_1",
+      "mark": {
+        "type": "rule",
+        "color": "#444",
+        "strokeDash": [
+          5,
+          3
+        ]
+      },
+      "encoding": {
+        "y": {
+          "field": "__ref1_1",
+          "type": "quantitative",
+          "title": "Sales",
+          "aggregate": "max"
+        }
+      }
+    }
+  ]
+}

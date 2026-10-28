@@ -21,6 +21,8 @@
 - K4 篩選條件：相對日期（最近 3 個月）、彙總條件（總銷售額大於 5000 的客戶）、萬用字元
   （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別），在「篩選條件」dashboard 上
 - K3 快速 Table Calculation：Sales Growth by Year 的差異與差異百分比（與前一年比較），在「年度成長」dashboard 上
+- J4 參考線：Sub-Category Sales 每個類別（窗格）的平均線與整張表的目標常數線；Region Sales Bands 的中位數
+  與平均 ± 1 個母體標準差，在「參考線」dashboard 上（只影響圖表，不影響數字）
 """
 
 from __future__ import annotations
@@ -294,6 +296,8 @@ def worksheets() -> str:
             top_sub_categories(),
             sales_growth(),
             selected_region_sales(),
+            sub_category_sales(),
+            region_sales_bands(),
         ]
     )
 
@@ -848,6 +852,90 @@ def selected_region_sales() -> str:
     )
 
 
+def reference_line(
+    n: int, formula: str, scope: str, label_type: str, extra: str = "", values: tuple[str, ...] = ()
+) -> str:
+    """銷售額軸上的參考線（values 為 <reference-line-value> 的屬性，例如標準差倍數）。"""
+    axis = attr(ref("sum:Sales:qk"))
+    head = (
+        f"            <reference-line axis-column={axis} enable-instant-analytics='false' "
+        f"formula='{formula}' id='refline{n}' label-type='{label_type}'{extra} probability='95' "
+        f"scope='{scope}' value-column={axis} z-order='{n + 1}'"
+    )
+    if not values:
+        return head + " />"
+    body = "\n".join(f"              <reference-line-value {v} />" for v in values)
+    return f"{head}>\n{body}\n            </reference-line>"
+
+
+def with_reference_lines(sheet: str, *lines: str) -> str:
+    return sheet.replace("          </pane>", "\n".join(lines) + "\n          </pane>", 1)
+
+
+def sub_category_sales() -> str:
+    """參考線：每個類別（窗格；最內層的子類別切出的是儲存格）的平均，與整張表的目標常數線。"""
+    sheet = worksheet(
+        "Sub-Category Sales",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000001C",
+        dependency(
+            [
+                ("[Category]", "string", "dimension", "nominal"),
+                ("[Sub-Category]", "string", "dimension", "nominal"),
+                REGION_SALES_COLUMNS[1],
+            ],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance("[Sub-Category]", "None", "[none:Sub-Category:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar"),
+        f"({ref('none:Category:nk')} / {ref('none:Sub-Category:nk')})",
+        ref("sum:Sales:qk"),
+    )
+    return with_reference_lines(
+        sheet,
+        reference_line(0, "average", "per-pane", "custom", f" label={attr('Avg <Value>')}"),
+        reference_line(
+            1, "constant", "per-table", "custom", f" label={attr('目標 <Value>')} value='100000'"
+        ),
+    )
+
+
+def region_sales_bands() -> str:
+    """參考線：中位數（顯示值）與平均 ± 1 個母體標準差（對稱，不顯示標籤）。"""
+    sheet = worksheet(
+        "Region Sales Bands",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000001D",
+        dependency(
+            REGION_SALES_COLUMNS,
+            [
+                instance("[Region]", "None", "[none:Region:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar"),
+        ref("sum:Sales:qk"),
+        ref("none:Region:nk"),
+    )
+    return with_reference_lines(
+        sheet,
+        reference_line(0, "median", "per-table", "value"),
+        reference_line(
+            1,
+            "stdev",
+            "per-table",
+            "none",
+            " fill-above='false' fill-below='false' symmetric='true' type='population'",
+            ("factor='1'",),
+        ),
+    )
+
+
 ACTIONS_DASHBOARD = "篩選動作"
 PARAMETER_DASHBOARD = "參數動作"
 
@@ -1019,6 +1107,25 @@ def parameter_dashboard() -> str:
     </dashboard>"""
 
 
+def reference_dashboard() -> str:
+    return f"""    <dashboard name='參考線'>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 636)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 56, 580, 636)} id='7' name='Sub-Category Sales' />
+              <zone {zone_box(596, 56, 396, 636)} id='8' name='Region Sales Bands' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-00000000001E}}' />
+    </dashboard>"""
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
@@ -1115,6 +1222,7 @@ def twb(rows: int) -> str:
 {conditions_dashboard()}
 {growth_dashboard()}
 {parameter_dashboard()}
+{reference_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

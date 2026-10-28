@@ -637,8 +637,8 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     ws = r.worksheets
     # Measure Names／Values、多個量值與雙軸、自動尺寸、裝置專屬版面已在擴充階段支援（各標記卡的詳細程度
     # 不同時，解析時另列為不支援）
-    # 相對日期與條件篩選已在擴充階段支援（K4）
-    add("參考線或趨勢線", [w.name for w in ws if w.reference_lines or w.trend_lines])
+    # 相對日期與條件篩選已在擴充階段支援（K4）；參考線已支援（J4，只影響圖表，畫不出來的種類解析時記為略過）
+    add("趨勢線", [w.name for w in ws if w.trend_lines])
     add("地圖", [w.name for w in ws if w.maps])
     add("Story", [d.name for d in r.dashboards if d.story])
     # 群組（categorical-bin）與數值分組（bin）已在擴充階段支援（K1）

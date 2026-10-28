@@ -899,6 +899,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -993,6 +994,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -1068,6 +1070,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1145,6 +1148,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[4]"
     },
     {
@@ -1227,6 +1231,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[5]"
     },
     {
@@ -1330,6 +1335,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[6]"
     },
     {
@@ -1393,6 +1399,7 @@
           "source_ref": "/workbook/worksheets/worksheet[7]/table/view/datasource-dependencies/column-instance[2]/table-calc"
         }
       ],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[7]"
     },
     {
@@ -1441,6 +1448,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[8]"
     },
     {
@@ -1509,6 +1517,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[9]"
     },
     {
@@ -1577,6 +1586,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[10]"
     },
     {
@@ -1661,6 +1671,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[11]"
     },
     {
@@ -1709,6 +1720,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[12]"
     },
     {
@@ -1757,6 +1769,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[13]"
     },
     {
@@ -1797,6 +1810,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[14]"
     },
     {
@@ -1866,6 +1880,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[15]"
     },
     {
@@ -1932,6 +1947,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[16]"
     },
     {
@@ -1998,6 +2014,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[17]"
     },
     {
@@ -2068,6 +2085,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[18]"
     },
     {
@@ -2154,6 +2172,7 @@
           "source_ref": "/workbook/worksheets/worksheet[19]/table/view/datasource-dependencies/column-instance[3]/table-calc"
         }
       ],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[19]"
     },
     {
@@ -2202,7 +2221,200 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "reference_lines": [],
       "source_ref": "/workbook/worksheets/worksheet[20]"
+    },
+    {
+      "id": "ws_sub_category_sales",
+      "name": "Sub-Category Sales",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        },
+        {
+          "field": "f_sub_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [
+        {
+          "id": "refline0",
+          "axis": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "value": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "formula": "average",
+          "constant": null,
+          "percentiles": [],
+          "factors": [],
+          "sample": true,
+          "scope": "pane",
+          "label": "custom",
+          "label_text": "Avg <Value>",
+          "source_ref": "/workbook/worksheets/worksheet[21]/table/panes/pane/reference-line[1]"
+        },
+        {
+          "id": "refline1",
+          "axis": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "value": null,
+          "formula": "constant",
+          "constant": 100000.0,
+          "percentiles": [],
+          "factors": [],
+          "sample": true,
+          "scope": "table",
+          "label": "custom",
+          "label_text": "目標 <Value>",
+          "source_ref": "/workbook/worksheets/worksheet[21]/table/panes/pane/reference-line[2]"
+        }
+      ],
+      "source_ref": "/workbook/worksheets/worksheet[21]"
+    },
+    {
+      "id": "ws_region_sales_bands",
+      "name": "Region Sales Bands",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [
+        {
+          "id": "refline0",
+          "axis": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "value": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "formula": "median",
+          "constant": null,
+          "percentiles": [],
+          "factors": [],
+          "sample": true,
+          "scope": "table",
+          "label": "value",
+          "label_text": null,
+          "source_ref": "/workbook/worksheets/worksheet[22]/table/panes/pane/reference-line[1]"
+        },
+        {
+          "id": "refline1",
+          "axis": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "value": {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "formula": "stdev",
+          "constant": null,
+          "percentiles": [],
+          "factors": [
+            -1.0,
+            1.0
+          ],
+          "sample": false,
+          "scope": "table",
+          "label": "none",
+          "label_text": null,
+          "source_ref": "/workbook/worksheets/worksheet[22]/table/panes/pane/reference-line[2]"
+        }
+      ],
+      "source_ref": "/workbook/worksheets/worksheet[22]"
     }
   ],
   "dashboards": [
@@ -3683,6 +3895,149 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[7]"
+    },
+    {
+      "id": "db_0eea0abf",
+      "name": "參考線",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "參考線",
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 636,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 580,
+                      "h": 636,
+                      "worksheet": "ws_sub_category_sales",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 596,
+                      "y": 56,
+                      "w": 396,
+                      "h": 636,
+                      "worksheet": "ws_region_sales_bands",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[8]"
     }
   ],
   "actions": [

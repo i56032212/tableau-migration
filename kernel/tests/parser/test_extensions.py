@@ -1,4 +1,4 @@
-"""擴充階段的解析（H1–H4、I1、J1–J3、K1、L1）。"""
+"""擴充階段的解析（H1–H4、I1、J1–J4、K1–K4、L1–L2）。"""
 
 from __future__ import annotations
 
@@ -841,3 +841,121 @@ def test_parameter_and_navigate_actions(tmp_path: Path) -> None:
         "clearing": "assign",
         "clear_value": "West",
     }
+
+
+# ---------------------------------------------------------------- J4 參考線
+
+
+def refline(
+    n: int,
+    formula: str,
+    scope: str = "per-table",
+    label: str = "automatic",
+    extra: str = "",
+    values: str = "",
+    axis: str = "sum:Sales:qk",
+    value: str | None = None,
+) -> str:
+    head = (
+        f"<reference-line axis-column='{ref(axis)}' enable-instant-analytics='false' "
+        f"formula='{formula}' id='refline{n}' label-type='{label}' scope='{scope}' "
+        f"value-column='{value or ref(axis)}' z-order='{n + 1}'{extra}"
+    )
+    return head + (f">{values}</reference-line>" if values else " />")
+
+
+def test_reference_lines(tmp_path: Path) -> None:
+    lines = "".join(
+        [
+            refline(0, "average", "per-pane", "custom", " label='Avg &lt;Value&gt;'"),
+            refline(1, "constant", extra=" value='1000'"),
+            refline(2, "average", value="[Parameters].[Parameter 1]"),
+            refline(
+                3,
+                "stdev",
+                "per-cell",
+                "none",
+                " symmetric='true' type='population'",
+                "<reference-line-value factor='2' /><reference-line-value factor='1' />",
+            ),
+            refline(
+                4,
+                "percentile",
+                values="<reference-line-value percentile='25' />"
+                "<reference-line-value percentile='75' />",
+            ),
+            refline(5, "max", label="computation", extra=" paired-id='refline6'"),
+            refline(6, "median", value=ref("sum:Profit:qk")),
+        ]
+    )
+    sheet = worksheet(
+        "Lines",
+        MEASURES,
+        rows=f"({ref('none:Region:nk')} / {ref('none:Category:nk')})",
+        cols=ref("sum:Sales:qk"),
+        pane_extra=lines,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    got = [
+        (
+            line.id,
+            line.formula,
+            line.scope,
+            line.label,
+            line.label_text,
+            line.constant,
+            line.percentiles,
+            line.factors,
+            line.sample,
+        )
+        for line in ir.worksheets[0].reference_lines
+    ]
+    assert got == [
+        ("refline0", "average", "pane", "custom", "Avg <Value>", None, [], [], True),
+        ("refline1", "constant", "table", "automatic", None, 1000.0, [], [], True),
+        ("refline2", "average", "table", "automatic", None, None, [], [], True),
+        ("refline3", "stdev", "cell", "none", None, None, [], [-2.0, -1.0, 1.0, 2.0], False),
+        ("refline4", "percentile", "table", "automatic", None, None, [25.0, 75.0], [], True),
+        ("refline5", "max", "table", "computation", None, None, [], [], True),
+        ("refline6", "median", "table", "automatic", None, None, [], [], True),
+    ]
+    first, constant, param, *_, median = ir.worksheets[0].reference_lines
+    assert (first.axis.field, first.axis.agg) == ("f_sales", "sum")
+    assert first.value == first.axis
+    assert constant.value is None
+    assert param.value is not None and param.value.model_dump() == {"parameter": "p_top_n"}
+    assert median.value is not None and median.value.model_dump()["field"] == "f_profit"
+    assert any("參考區間的底色" in u.reason for u in ir.ignored)
+
+
+def test_reference_lines_not_drawn(tmp_path: Path) -> None:
+    """新平台畫不出來的參考線、區間與分布記為略過（不影響數字），找不到參數則不支援。"""
+    lines = "".join(
+        [
+            refline(0, "quantiles", extra=" tile-count='4'"),
+            refline(1, "confidence", extra=" probability='95'"),
+            refline(2, "average", values="<reference-line-value percentage='60' />"),
+            refline(3, "average", axis="Multiple Values"),
+            refline(4, "average", value="[Parameters].[Nope]"),
+            refline(5, "percentile", values="<reference-line-value percentile='150' />"),
+        ]
+    )
+    sheet = worksheet(
+        "Lines",
+        BASIC,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        pane_extra=lines,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet), lenient=True)
+    assert ir.worksheets[0].reference_lines == []
+    assert reasons(ir) == [
+        "參考線的參數 [Parameters].[Nope] 找不到",
+        "參考線的百分位數或標準差倍數無法解析",
+    ]
+    ignored = [u.reason for u in ir.ignored]
+    assert "參考線、參考區間或分布（quantiles，per-table）新平台不畫（不影響數字）" in ignored
+    assert "參考線、參考區間或分布（confidence，per-table）新平台不畫（不影響數字）" in ignored
+    assert "百分比分布（彙總值的幾成）新平台不畫（不影響數字）" in ignored
+    assert "Measure Values 軸上的參考線新平台不畫（不影響數字）" in ignored

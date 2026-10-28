@@ -177,7 +177,7 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
             result = execute(workspace.database(wb, sheet.datasource), query.sql)
         except ExecutionError as exc:
             raise HTTPException(500, str(exc)) from exc
-        rendered = build_spec(ir, sheet.id, query.columns, result)
+        rendered = build_spec(ir, sheet.id, query.columns, result, query.state.parameters)
         fields = {f.id: f for ds in ir.datasources for f in ds.fields}
         shown = [c for c in query.columns if c.role != "sort" and c.use is not None]
         index = {key: i for i, key in enumerate(result.columns)}

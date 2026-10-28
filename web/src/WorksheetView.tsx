@@ -30,16 +30,24 @@ interface Props {
 type Spec = Record<string, any>;
 
 /** 選取的標記醒目、其餘淡化：每個圖層加上依列號判斷的不透明度。 */
+/** 依序走訪規格中的每一張圖（含圖層與多張圖）。 */
+function visitSpecs(spec: Spec, visit: (node: Spec) => void) {
+  visit(spec);
+  for (const key of ["layer", "vconcat", "hconcat", "concat"]) {
+    if (Array.isArray(spec[key])) spec[key].forEach((child: Spec) => visitSpecs(child, visit));
+  }
+  if (spec.spec) visitSpecs(spec.spec, visit);
+}
+
+/** 參考線的圖層（後端以 __ref 為名稱前綴），不參與選取與醒目提示。 */
+const isReferenceLayer = (node: Spec) => typeof node.name === "string" && node.name.startsWith("__ref");
+
 function highlight(spec: Spec, rows: number[]) {
   const test = `indexof([${rows.join(",")}], datum.__row) >= 0`;
-  const visit = (node: Spec) => {
-    if (node.mark) node.encoding = { ...(node.encoding ?? {}), opacity: { condition: { test, value: 1 }, value: 0.25 } };
-    for (const key of ["layer", "vconcat", "hconcat", "concat"]) {
-      if (Array.isArray(node[key])) node[key].forEach(visit);
-    }
-    if (node.spec) visit(node.spec);
-  };
-  visit(spec);
+  visitSpecs(spec, (node) => {
+    if (node.mark && !isReferenceLayer(node))
+      node.encoding = { ...(node.encoding ?? {}), opacity: { condition: { test, value: 1 }, value: 0.25 } };
+  });
 }
 
 /** 資料列 → 標記（維度欄位鍵 → 原始值）。 */
@@ -123,7 +131,10 @@ export function WorksheetView({
     const dimensions = (original.usermeta?.dimensions ?? {}) as Record<string, string>;
     const measures = (original.usermeta?.measures ?? {}) as Record<string, string>;
     const spec = structuredClone(original) as Spec;
-    if (hideLegend && spec.encoding?.color) spec.encoding.color.legend = null;
+    if (hideLegend)
+      visitSpecs(spec, (node) => {
+        if (node.encoding?.color) node.encoding.color.legend = null;
+      });
     const marks = JSON.parse(selectedKey) as Mark[];
     if (marks.length) {
       // 以原始值比對（Vega 會把日期欄解析成 Date，所以用回應中未經處理的資料）

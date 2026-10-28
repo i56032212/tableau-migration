@@ -477,6 +477,36 @@ class Pane(IRModel):
     marks: Marks
 
 
+class ReferenceLine(IRModel):
+    """參考線：在量值軸上畫出常數、參數或標記值的彙總（平均、總和、最小、最大、中位數、百分位數），
+    或平均 ± 標準差的倍數。只影響圖表，不影響數字。"""
+
+    id: str = Field(min_length=1, description="工作表內的編號，例如 refline0")
+    axis: FieldUse = Field(description="畫在哪個量值的軸上")
+    value: FieldUse | ParamRef | None = Field(
+        default=None, description="計算的量值；參數時為參數的值；formula 為 constant 時為 None"
+    )
+    formula: Literal[
+        "constant", "average", "sum", "total", "min", "max", "median", "percentile", "stdev"
+    ]
+    constant: Scalar = None
+    percentiles: list[Annotated[float, Field(ge=0, le=100)]] = Field(
+        default_factory=list,
+        description="formula 為 percentile 時，每個百分位數（0 到 100）各畫一條線",
+    )
+    factors: list[float] = Field(
+        default_factory=list,
+        description="formula 為 stdev 時，平均加上幾倍標準差（例如 -1、1），每個倍數各畫一條線",
+    )
+    sample: bool = Field(default=True, description="標準差為樣本（true）或母體")
+    scope: Literal["table", "pane", "cell"]
+    label: Literal["none", "automatic", "value", "computation", "custom"] = "automatic"
+    label_text: str | None = Field(
+        default=None, description="label 為 custom 時的文字，<Value> 代入值"
+    )
+    source_ref: SourceRef
+
+
 class Worksheet(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -493,6 +523,7 @@ class Worksheet(IRModel):
     filters: list[Filter] = Field(default_factory=list)
     sorts: list[Sort] = Field(default_factory=list)
     table_calcs: list[TableCalc] = Field(default_factory=list)
+    reference_lines: list[ReferenceLine] = Field(default_factory=list)
     source_ref: SourceRef
 
     @model_validator(mode="after")

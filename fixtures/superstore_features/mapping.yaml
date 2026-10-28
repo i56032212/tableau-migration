@@ -132,3 +132,16 @@ sheets:
       Selected Region Sales: sum(f_selected_region_sales)
     ignore: []
     numeric: auto
+  ws_sub_category_sales:
+    columns:
+      Category: f_category
+      Sub-Category: f_sub_category
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_region_sales_bands:
+    columns:
+      Region: f_region
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
