@@ -4,11 +4,15 @@
     "worksheet": "ws_orders_by_region",
     "name": "Orders by Region",
     "rows": 3,
-    "mark": "text"
+    "mark": "text",
+    "dimensions": {
+      "c0": "f_region"
+    }
   },
   "data": {
     "values": "3 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

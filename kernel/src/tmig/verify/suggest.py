@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from tmig.data.executor import execute
-from tmig.ir.models import IR, DataField, FieldUse, Parameter, Zone
+from tmig.ir.models import IR, CategoricalFilter, DataField, FieldUse, Parameter, RangeFilter, Zone
 from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, domain_sql
 from tmig.verify.cases import CasesError, CaseSpec, case_state, load_cases
@@ -72,7 +72,7 @@ def candidates(ir: IR) -> list[Candidate]:
                 add(zone.field)
     for ws in ir.worksheets:
         for flt in ws.filters:
-            if flt.kind in ("categorical", "range") and flt.stage == "dimension":
+            if isinstance(flt, CategoricalFilter | RangeFilter) and flt.stage == "dimension":
                 add(flt.field)
     for ws in sheets.values():
         for use in (*ws.rows, *ws.columns):

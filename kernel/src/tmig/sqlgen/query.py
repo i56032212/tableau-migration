@@ -53,6 +53,7 @@ from tmig.ir.models import (
     Sort,
     TableCalc,
     TopNFilter,
+    TupleFilter,
     Worksheet,
 )
 from tmig.ir.scope import DatasourceScope
@@ -449,7 +450,10 @@ class WorksheetQuery:
         }
 
         # 篩選中的量值也要算，但不輸出
-        for flt in stage["measure"] + stage["table_calc"]:
+        value_filters = [
+            f for f in stage["measure"] + stage["table_calc"] if not isinstance(f, TupleFilter)
+        ]
+        for flt in value_filters:
             key = use_key(flt.field)
             if not any(m.key == key for m in measures):
                 measures.append(self._measure(flt.field, key, output=False, index=len(measures)))
@@ -459,7 +463,8 @@ class WorksheetQuery:
         for node in [self.field_node(d.use.field) for d in dims] + [m.node for m in measures]:
             self.register_lods(node)
         for flt in stage["datasource"] + stage["context"] + stage["dimension"]:
-            self.register_lods(self.field_node(flt.field.field))
+            for use in flt.fields if isinstance(flt, TupleFilter) else [flt.field]:
+                self.register_lods(self.field_node(use.field))
         top_nodes = {
             flt.id: self._top_by(flt)
             for flt in stage["top_n"] + stage["context"]
@@ -532,7 +537,9 @@ class WorksheetQuery:
         conds = [
             c
             for c in (
-                self._value_condition(f, by_key[use_key(f.field)].col) for f in stage["measure"]
+                self._value_condition(f, by_key[use_key(f.field)].col)
+                for f in value_filters
+                if f.stage == "measure"
             )
             if c
         ]
@@ -548,7 +555,9 @@ class WorksheetQuery:
 
         # 8. Table Calculation 篩選與輸出
         conds = [
-            self._value_condition(f, by_key[use_key(f.field)].col) for f in stage["table_calc"]
+            self._value_condition(f, by_key[use_key(f.field)].col)
+            for f in value_filters
+            if f.stage == "table_calc"
         ]
         for flt in stage["table_calc"]:
             self.note(8, f"Table Calculation 篩選 {flt.id}")
@@ -655,6 +664,8 @@ class WorksheetQuery:
 
     def _row_condition(self, flt: Filter) -> str:
         """維度上的篩選條件，在列層級計算。"""
+        if isinstance(flt, TupleFilter):
+            return self._tuple_condition(flt)
         if self.is_measure(flt.field):
             raise QueryError(f"篩選 {flt.id} 位於維度階段，欄位卻是量值")
         value = self.dim_sql(flt.field)
@@ -664,6 +675,26 @@ class WorksheetQuery:
         if isinstance(flt, RangeFilter):
             return _range(value, flt, datatype)
         raise QueryError(f"篩選 {flt.id} 的種類不支援在此階段")
+
+    def _tuple_condition(self, flt: TupleFilter) -> str:
+        """多欄位篩選：值組合以 OR 連接，組合內各欄位以 AND 連接（NULL 視為一個值）。"""
+        if flt.mode == "all":
+            return ""
+        if any(self.is_measure(u) for u in flt.fields):
+            raise QueryError(f"多欄位篩選 {flt.id} 的欄位必須是維度")
+        dims = [(self.dim_sql(u), self.dim_datatype(u)) for u in flt.fields]
+        if flt.tuples:
+            groups = [
+                " AND ".join(
+                    f"{sql} IS NOT DISTINCT FROM {_lit(v, datatype)}"
+                    for (sql, datatype), v in zip(dims, values, strict=True)
+                )
+                for values in flt.tuples
+            ]
+            member = "(" + " OR ".join(f"({g})" for g in groups) + ")"
+        else:
+            member = "FALSE"
+        return f"({member})" if flt.mode == "include" else f"(NOT {member})"
 
     def _value_condition(self, flt: Filter, col: str) -> str:
         value = ident(col)

@@ -230,7 +230,8 @@ PARAMETER_DEPENDENCY = """          <datasource-dependencies datasource='Paramet
           </datasource-dependencies>"""
 
 
-def datasource(rows: int) -> str:
+def datasource(rows: int, extra: str = "") -> str:
+    """示範報表的資料源；extra 是加在資料源最後的元素（功能報表的群組欄位等）。"""
     cols_map = "\n".join(
         f"          <map key={attr(f'[{name}]')} value={attr(f'[orders.csv].[{name}]')} />"
         for name, *_ in sorted(COLUMNS)
@@ -284,7 +285,7 @@ def datasource(rows: int) -> str:
       <filter class='categorical' column='[none:Country/Region:nk]' filter-group='2'>
         <groupfilter function='member' level='[none:Country/Region:nk]' member='&quot;United States&quot;' user:ui-domain='database' user:ui-enumeration='inclusive' user:ui-marker='enumerate' />
       </filter>
-      <layout dim-ordering='alphabetic' measure-ordering='alphabetic' show-structure='true' />
+{extra + chr(10) if extra else ""}      <layout dim-ordering='alphabetic' measure-ordering='alphabetic' show-structure='true' />
       <semantic-values>
         <semantic-value key='[Country].[Name]' value='&quot;United States&quot;' />
       </semantic-values>

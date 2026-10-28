@@ -10,6 +10,9 @@
 - J1 Measure Names／Values：文字表（Segment KPIs，手動排序與篩選順序不同）、折線（Monthly Sales vs Profit）
 - J2 同一架多個量值與雙軸：Sales and Profit by Year（長條＋折線，第二個軸）
 - J3 圓餅：Category Mix（角度為銷售額、標籤含合計百分比）
+- H4 排除選取的標記：Region Category Matrix 排除 (West, Furniture)、(East, Technology) 兩個值組合
+- L1 篩選動作：點選 Region Picker 的地區篩選 Category Detail（清除時顯示全部）
+  與 Segment Detail（清除時不顯示任何值），都在「篩選動作」dashboard 上；另有一個醒目提示動作
 """
 
 from __future__ import annotations
@@ -140,6 +143,25 @@ GLOBAL_INSTANCES = [
 ]
 
 
+# 篩選動作與排除選取產生的隱藏群組欄位（在資料源中，工作表的篩選與篩選架參照它們）
+ACTION_REGION = "Action (Region)"
+EXCLUSIONS = "Exclusions (Region,Category)"
+ACTION_CATEGORY = "[Action1_7D6C2A1F2B3C4D5E9F0A000000000101]"
+ACTION_SEGMENT = "[Action2_7D6C2A1F2B3C4D5E9F0A000000000102]"
+ACTION_BRUSH = "[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]"
+DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' name='[{ACTION_REGION}]' name-style='unqualified' user:auto-column='sheet_link'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='level-members' level='[Region]' />
+        </groupfilter>
+      </group>
+      <group hidden='true' name='[{EXCLUSIONS}]' name-style='unqualified' user:auto-column='exclude'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='level-members' level='[none:Region:nk]' />
+          <groupfilter function='level-members' level='[none:Category:nk]' />
+        </groupfilter>
+      </group>"""
+
+
 def worksheets() -> str:
     sales_by_segment = worksheet(
         "Sales by Segment",
@@ -211,6 +233,10 @@ def worksheets() -> str:
             monthly_sales_vs_profit(),
             sales_and_profit_by_year(),
             category_mix(),
+            region_picker(),
+            category_detail(),
+            segment_detail(),
+            region_category_matrix(),
         ]
     )
 
@@ -390,6 +416,185 @@ def category_mix() -> str:
     )
 
 
+REGION_SALES_COLUMNS = [
+    ("[Region]", "string", "dimension", "nominal"),
+    ("[Sales]", "real", "measure", "quantitative"),
+]
+
+
+def region_picker() -> str:
+    """篩選動作的來源：依地區的銷售額長條圖。"""
+    return worksheet(
+        "Region Picker",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000008",
+        dependency(
+            REGION_SALES_COLUMNS,
+            [
+                instance("[Region]", "None", "[none:Region:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Region:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def action_filter(action: str, show_all: bool) -> str:
+    """篩選動作在目標工作表上的篩選：沒有選取時顯示全部（level-members）或不顯示任何值（empty-level）。"""
+    if show_all:
+        attrs = "user:ui-enumeration='all' user:ui-marker='enumerate'"
+        inner = "<groupfilter function='level-members' level='[Region]' />"
+    else:
+        attrs = (
+            "user:ui-domain='relevant' user:ui-enumeration='inclusive' user:ui-marker='enumerate'"
+        )
+        inner = "<groupfilter function='empty-level' member='[Region]' />"
+    return f"""          <filter class='categorical' column={attr(ref(ACTION_REGION))}>
+            <groupfilter function='crossjoin' user:ui-action-filter={attr(action)} {attrs}>
+              {inner}
+            </groupfilter>
+          </filter>
+{slices(ACTION_REGION)}"""
+
+
+def detail(name: str, uuid: str, dimension: str, action: str, show_all: bool) -> str:
+    return worksheet(
+        name,
+        uuid,
+        dependency(
+            [(f"[{dimension}]", "string", "dimension", "nominal"), REGION_SALES_COLUMNS[1]],
+            [
+                instance(f"[{dimension}]", "None", f"[none:{dimension}:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        action_filter(action, show_all),
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref(f"none:{dimension}:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def category_detail() -> str:
+    return detail(
+        "Category Detail", "7D6C2A1F-2B3C-4D5E-9F0A-000000000009", "Category", ACTION_CATEGORY, True
+    )
+
+
+def segment_detail() -> str:
+    return detail(
+        "Segment Detail", "7D6C2A1F-2B3C-4D5E-9F0A-00000000000A", "Segment", ACTION_SEGMENT, False
+    )
+
+
+def region_category_matrix() -> str:
+    """排除選取的標記：Region × Category 文字表，排除兩個值組合。"""
+
+    def combo(region: str, category: str) -> str:
+        return f"""                <groupfilter function='crossjoin'>
+                  {member("[none:Region:nk]", region)}
+                  {member("[none:Category:nk]", category)}
+                </groupfilter>"""
+
+    exclusions = f"""          <filter class='categorical' column={attr(ref(EXCLUSIONS))}>
+            <groupfilter function='except' user:ui-domain='database' user:ui-enumeration='exclusive' user:ui-marker='enumerate'>
+              <groupfilter function='crossjoin'>
+                <groupfilter function='level-members' level='[none:Region:nk]' />
+                <groupfilter function='level-members' level='[none:Category:nk]' />
+              </groupfilter>
+              <groupfilter function='union'>
+{combo("West", "Furniture")}
+{combo("East", "Technology")}
+              </groupfilter>
+            </groupfilter>
+          </filter>
+{slices(EXCLUSIONS)}"""
+    return worksheet(
+        "Region Category Matrix",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000000B",
+        dependency(
+            [("[Category]", "string", "dimension", "nominal"), *REGION_SALES_COLUMNS],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance("[Region]", "None", "[none:Region:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        exclusions,
+        pane("Text", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Region:nk"),
+        ref("none:Category:nk"),
+    )
+
+
+ACTIONS_DASHBOARD = "篩選動作"
+
+
+def actions() -> str:
+    """兩個篩選動作（清除時顯示全部／不顯示任何值）與一個醒目提示動作。"""
+    source = (
+        f"<source dashboard={attr(ACTIONS_DASHBOARD)} type='sheet' worksheet='Region Picker' />"
+    )
+    return f"""  <actions>
+    <action caption='Filter Category Detail' name={attr(ACTION_CATEGORY)}>
+      <activation auto-clear='true' type='on-select' />
+      {source}
+      <command command='tsc:tsl-filter'>
+        <param name='exclude' value='Region Picker,Segment Detail,Region Category Matrix' />
+        <param name='special-fields' value='all' />
+        <param name='target' value={attr(ACTIONS_DASHBOARD)} />
+      </command>
+    </action>
+    <action caption='Filter Segment Detail' name={attr(ACTION_SEGMENT)}>
+      <activation auto-clear='true' type='on-select' />
+      {source}
+      <command command='tsc:tsl-filter'>
+        <param name='exclude' value='Region Picker,Category Detail,Region Category Matrix' />
+        <param name='on-empty' value='none' />
+        <param name='special-fields' value='all' />
+        <param name='target' value={attr(ACTIONS_DASHBOARD)} />
+      </command>
+    </action>
+    <action caption='Highlight Region' name={attr(ACTION_BRUSH)}>
+      <activation auto-clear='true' type='on-hover' />
+      <source dashboard={attr(ACTIONS_DASHBOARD)} type='sheet' worksheet='Region Category Matrix' />
+      <command command='tsc:brush'>
+        <param name='special-fields' value='all' />
+        <param name='target' value={attr(ACTIONS_DASHBOARD)} />
+      </command>
+    </action>
+  </actions>"""
+
+
+def actions_dashboard() -> str:
+    """篩選動作（固定尺寸）：上方來源與顯示全部的目標，下方不顯示任何值的目標與排除選取的文字表。"""
+    return f"""    <dashboard name={attr(ACTIONS_DASHBOARD)}>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 312)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 56, 488, 312)} id='7' name='Region Picker' />
+              <zone {zone_box(504, 56, 488, 312)} id='8' name='Category Detail' />
+            </zone>
+            <zone {zone_box(8, 376, 984, 316)} id='9' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 376, 488, 316)} id='10' name='Segment Detail' />
+              <zone {zone_box(504, 376, 488, 316)} id='11' name='Region Category Matrix' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000012}}' />
+    </dashboard>"""
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
@@ -470,15 +675,17 @@ def twb(rows: int) -> str:
     <preference name='ui.shelf.height' value='26' />
   </preferences>
   <datasources>
-{demo.datasource(rows)}
+{demo.datasource(rows, DATASOURCE_GROUPS)}
   </datasources>
 {shared_views()}
+{actions()}
   <worksheets>
 {worksheets()}
   </worksheets>
   <dashboards>
 {dashboard()}
 {charts_dashboard()}
+{actions_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

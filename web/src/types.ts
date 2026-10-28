@@ -47,7 +47,7 @@ export interface Parameter {
   value: Scalar;
 }
 
-export interface Filter {
+export interface FieldFilter {
   kind: "categorical" | "range" | "top_n";
   id: string;
   field: FieldUse;
@@ -59,6 +59,37 @@ export interface Filter {
   include_null?: boolean;
   /** 篩選群組：同一群組的篩選一起變更（套用到選取的工作表、全域篩選） */
   group?: string | null;
+}
+
+/** 多欄位篩選：篩選動作的目標、排除選取的標記 */
+export interface TupleFilter {
+  kind: "tuple";
+  id: string;
+  fields: FieldUse[];
+  stage: string;
+  mode: "include" | "exclude" | "all";
+  tuples: Scalar[][];
+  action: string | null;
+  group?: string | null;
+}
+
+export type Filter = FieldFilter | TupleFilter;
+
+/** 篩選動作：選取（或滑過）來源工作表的標記時，以標記的欄位值篩選目標工作表 */
+export interface Action {
+  id: string;
+  name: string;
+  caption: string;
+  kind: "filter";
+  activation: "select" | "hover" | "menu";
+  /** 只在這個 dashboard 上執行；null 表示任何地方都執行 */
+  dashboard: string | null;
+  sources: string[];
+  targets: string[];
+  /** 目標是另一個 dashboard 時，執行後切換過去 */
+  target_dashboard: string | null;
+  clearing: "show_all" | "exclude_all" | "keep";
+  single_select: boolean;
 }
 
 export interface Worksheet {
@@ -130,6 +161,7 @@ export interface IR {
   parameters: Parameter[];
   worksheets: Worksheet[];
   dashboards: Dashboard[];
+  actions: Action[];
   unsupported: Unsupported[];
 }
 
@@ -142,9 +174,14 @@ export interface FilterValue {
   max?: Scalar;
 }
 
+/** 選取的一個標記：欄位鍵 → 值 */
+export type Mark = Record<string, Scalar>;
+
 export interface QueryState {
   filters: Record<string, FilterValue>;
   parameters: Record<string, Scalar>;
+  /** 篩選動作的選取：動作 id → 選取的標記 */
+  actions?: Record<string, Mark[]>;
 }
 
 export interface WorkbookSummary {

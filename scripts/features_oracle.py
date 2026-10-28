@@ -11,6 +11,10 @@
 - 篩選群組：Segment 只保留 Consumer、Corporate，套用到 Sales by Segment 與 Profit by Ship Mode
 - 網址參數取代同欄位的既有篩選（含全域篩選）；工作表沒有該欄位的篩選時新增一個
 - Measure Names／Values 的工作表匯出為長表（Measure Names、Measure Values 兩欄），與 Tableau 相同
+- 排除選取的標記（Region Category Matrix）：排除 (West, Furniture)、(East, Technology) 兩個值組合
+- 篩選動作的目標是另一個篩選，不會被網址參數取代：沒有選取時，Category Detail 顯示全部，
+  Segment Detail 不顯示任何值（動作設定為清除時排除所有值）；選取地區時兩者都只保留那些地區。
+  篩選組合不含選取，選取的情況由 selection() 計算，供檢視器的端到端測試比對
 """
 
 from __future__ import annotations
@@ -173,6 +177,57 @@ def category_mix(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]
     return ["Category", "Sales", "% of Total Sales"], body
 
 
+def region_picker(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    body = grouped(rows, case.keep({}), "Region", lambda items: sum(r["Sales"] for r in items))
+    return ["Region", "Sales"], body
+
+
+def action_keep(regions: list[str] | None) -> dict[str, Keep]:
+    """篩選動作的篩選（鍵不是欄位名稱，所以網址參數不會取代它）。"""
+    if regions is None:
+        return {}
+    return {"action": lambda row: row["Region"] in regions}
+
+
+def category_detail(
+    rows: list[Row], case: Case, regions: list[str] | None = None
+) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep(action_keep(regions))
+    body = grouped(rows, keep, "Category", lambda items: sum(r["Sales"] for r in items))
+    return ["Category", "Sales"], body
+
+
+def segment_detail(
+    rows: list[Row], case: Case, regions: list[str] | None = None
+) -> tuple[list[str], list[list[Any]]]:
+    if not regions:
+        return ["Segment", "Sales"], []  # 清除時排除所有值
+    keep = case.keep(action_keep(regions))
+    body = grouped(rows, keep, "Segment", lambda items: sum(r["Sales"] for r in items))
+    return ["Segment", "Sales"], body
+
+
+EXCLUDED = {("West", "Furniture"), ("East", "Technology")}
+
+
+def region_category_matrix(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({"exclusions": lambda row: (row["Region"], row["Category"]) not in EXCLUDED})
+    sales: dict[tuple[str, str], float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[(row["Region"], row["Category"])] += row["Sales"]
+    body = [[region, category, value] for (region, category), value in sorted(sales.items())]
+    return ["Region", "Category", "Sales"], body
+
+
+def selection(worksheet: str, regions: list[str] | None) -> tuple[list[str], list[list[Any]]]:
+    """在 Region Picker 選取地區（None＝沒有選取）後，篩選動作目標工作表的預期結果（預設篩選組合）。"""
+    compute = {"ws_category_detail": category_detail, "ws_segment_detail": segment_detail}[
+        worksheet
+    ]
+    return compute(load_rows(), Case("selection", {}), regions)
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -181,6 +236,10 @@ SHEETS = {
     "ws_monthly_sales_vs_profit": monthly_sales_vs_profit,
     "ws_sales_and_profit_by_year": sales_and_profit_by_year,
     "ws_category_mix": category_mix,
+    "ws_region_picker": region_picker,
+    "ws_category_detail": category_detail,
+    "ws_segment_detail": segment_detail,
+    "ws_region_category_matrix": region_category_matrix,
 }
 
 

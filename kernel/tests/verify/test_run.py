@@ -1,4 +1,4 @@
-"""tmig verify 端到端（E3）：示範報表全數通過；人為修改的預期結果必須判為失敗。"""
+"""tmig verify 端到端（E3）：示範與功能報表全數通過；人為修改的預期結果必須判為失敗。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from tmig.verify.run import ensure_data, load_fixture_ir, verify_fixture
 
 ROOT = Path(__file__).resolve().parents[3]
 DEMO = ROOT / "fixtures" / "superstore_demo"
+FEATURES = ROOT / "fixtures" / "superstore_features"
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +36,14 @@ def fixture_copy(tmp_path: Path, demo_data: Path) -> Path:
 def test_demo_passes(demo_data: Path) -> None:
     _, report = verify_fixture(DEMO)
     assert report.summary == {"pass": 16, "fail": 0, "unsupported": 0}
+    assert report.ok
+
+
+def test_features_pass() -> None:
+    """功能報表（擴充階段的各項功能）的預期結果由 scripts/features_oracle.py 獨立計算。"""
+    ensure_data(FEATURES, load_fixture_ir(FEATURES))
+    _, report = verify_fixture(FEATURES)
+    assert report.summary == {"pass": 44, "fail": 0, "unsupported": 0}
     assert report.ok
 
 

@@ -408,3 +408,242 @@ def test_pie_shape_and_path_encodings(tmp_path: Path) -> None:
     assert shape_marks.type == "shape"
     assert shape_marks.shape is not None and shape_marks.shape.field == "f_category"
     assert shape_marks.path is not None and shape_marks.path.field == "f_region"
+
+
+# ---------------------------------------------------------------- H4、L1 多欄位篩選與篩選動作
+
+ACTION_GROUPS = """
+      <group caption='Action (Region)' hidden='true' name='[Action (Region)]' name-style='unqualified' user:auto-column='sheet_link'>
+        <groupfilter function='crossjoin'><groupfilter function='level-members' level='[Region]' /></groupfilter>
+      </group>
+      <group hidden='true' name='[Exclusions (Region,Category)]' name-style='unqualified' user:auto-column='exclude'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='level-members' level='[none:Region:nk]' />
+          <groupfilter function='level-members' level='[none:Category:nk]' />
+        </groupfilter>
+      </group>"""
+
+
+def action_filter(function: str = "level-members") -> str:
+    # 清除時排除所有值（empty-level）的層級寫在 member 屬性
+    level = "member='[Region]'" if function == "empty-level" else "level='[Region]'"
+    return (
+        f"<filter class='categorical' column='{ref('Action (Region)')}'>"
+        f"<groupfilter function='{function}' {level} user:ui-action-filter='[Action1]' />"
+        "</filter>"
+    )
+
+
+def action(
+    on_empty: str = "",
+    source: str = "<source dashboard='Board' type='sheet' worksheet='Source' />",
+    target: str = "Board",
+    activation: str = "on-select",
+    single_select: str = "",
+) -> str:
+    param = f"<param name='on-empty' value='{on_empty}' />" if on_empty else ""
+    if single_select:
+        param += f"<param name='single-select' value='{single_select}' />"
+    return (
+        f"<action caption='Filter Region' name='[Action1]'><activation auto-clear='true' type='{activation}' />"
+        f"{source}"
+        f"<command command='tsc:tsl-filter'><param name='special-fields' value='all' />{param}"
+        f"<param name='target' value='{target}' /></command></action>"
+    )
+
+
+def action_workbook(target_filter: str, on_empty: str = "", actions: str | None = None) -> str:
+    sheets = worksheet(
+        "Source", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+    ) + worksheet(
+        "Target",
+        BASIC,
+        rows=ref("none:Category:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=target_filter,
+    )
+    board = """
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' param='horz' type-v2='layout-flow' w='100000' x='0' y='0'>
+          <zone h='100000' id='2' name='Source' w='50000' x='0' y='0' />
+          <zone h='100000' id='3' name='Target' w='50000' x='50000' y='0' />
+        </zone>
+      </zones>
+    </dashboard>
+    <dashboard name='Detail'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones><zone h='100000' id='4' name='Target' w='100000' x='0' y='0' /></zones>
+    </dashboard>"""
+    return b.workbook(
+        b.extract_datasource(extra=ACTION_GROUPS),
+        worksheets=sheets,
+        dashboards=board,
+        actions=action(on_empty) if actions is None else actions,
+    )
+
+
+def test_filter_action_and_target_filter(tmp_path: Path) -> None:
+    ir = parse(tmp_path, action_workbook(action_filter()))
+    assert reasons(ir) == []
+    (act,) = ir.actions
+    assert (act.id, act.kind, act.activation, act.clearing) == (
+        "act_filter_region",
+        "filter",
+        "select",
+        "show_all",
+    )
+    assert (act.sources, act.targets) == (["ws_source"], ["ws_target"])
+    assert (act.dashboard, act.target_dashboard, act.single_select) == ("db_board", None, False)
+    (flt,) = ir.worksheets[1].filters
+    assert flt.kind == "tuple"
+    assert ([u.field for u in flt.fields], flt.mode, flt.tuples, flt.action) == (
+        ["f_region"],
+        "all",
+        [],
+        "act_filter_region",
+    )
+
+
+def test_filter_action_exclude_all_when_cleared(tmp_path: Path) -> None:
+    xml = action_workbook(action_filter("empty-level"), on_empty="none")
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    assert ir.actions[0].clearing == "exclude_all"
+    (flt,) = ir.worksheets[1].filters
+    assert flt.kind == "tuple" and (flt.mode, flt.tuples) == ("include", [])
+
+
+def test_filter_action_sources_and_navigation(tmp_path: Path) -> None:
+    # 來源：dashboard 上扣掉 <exclude-sheet> 的工作表；目標是另一個 dashboard 時執行後切換過去
+    source = "<source dashboard='Board' type='sheet'><exclude-sheet name='Target' /></source>"
+    xml = action_workbook(
+        action_filter(),
+        actions=action(source=source, target="Detail", activation="on-hover", single_select="true"),
+    )
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    (act,) = ir.actions
+    assert (
+        act.activation,
+        act.sources,
+        act.dashboard,
+        act.target_dashboard,
+        act.single_select,
+    ) == (
+        "hover",
+        ["ws_source"],
+        "db_board",
+        "db_detail",
+        True,
+    )
+
+
+def test_filter_action_from_datasource(tmp_path: Path) -> None:
+    # 工作表層級的動作：來源是使用該資料源的所有工作表，任何 dashboard 都執行
+    source = (
+        f"<source datasource='{b.DS}' type='datasource'><exclude-sheet name='Target' /></source>"
+    )
+    ir = parse(tmp_path, action_workbook(action_filter(), actions=action(source=source)))
+    assert reasons(ir) == []
+    (act,) = ir.actions
+    assert (act.sources, act.dashboard, act.target_dashboard) == (["ws_source"], None, "db_board")
+
+
+def test_filter_action_multi_field_exclude_all(tmp_path: Path) -> None:
+    flt = (
+        f"<filter class='categorical' column='{ref('Action (Region,Category)')}'>"
+        "<groupfilter function='crossjoin' user:ui-action-filter='[Action1]' user:ui-enumeration='inclusive'>"
+        "<groupfilter function='empty-level' member='[Region]' />"
+        "<groupfilter function='empty-level' member='[Category]' />"
+        "</groupfilter></filter>"
+    )
+    ir = parse(tmp_path, action_workbook(flt, on_empty="none"))
+    assert reasons(ir) == []
+    (tuple_filter,) = ir.worksheets[1].filters
+    assert tuple_filter.kind == "tuple"
+    assert ([u.field for u in tuple_filter.fields], tuple_filter.mode, tuple_filter.tuples) == (
+        ["f_region", "f_category"],
+        "include",
+        [],
+    )
+
+
+def test_filter_action_saved_selection(tmp_path: Path) -> None:
+    # 存檔時有選取：多個標記以 union 列出各自的值組合
+    flt = f"""<filter class='categorical' column='{ref("Action (Region,Category)")}'>
+      <groupfilter function='union' user:ui-action-filter='[Action1]'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='member' level='[Region]' member='&quot;East&quot;' />
+          <groupfilter function='member' level='[Category]' member='&quot;Technology&quot;' />
+        </groupfilter>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='member' level='[Region]' member='&quot;West&quot;' />
+          <groupfilter function='member' level='[Category]' member='%null%' />
+        </groupfilter>
+      </groupfilter>
+    </filter>"""
+    ir = parse(tmp_path, action_workbook(flt, on_empty="assign"))
+    assert reasons(ir) == []
+    assert ir.actions[0].clearing == "keep"
+    (tuple_filter,) = ir.worksheets[1].filters
+    assert tuple_filter.kind == "tuple"
+    assert (tuple_filter.mode, tuple_filter.tuples) == (
+        "include",
+        [["East", "Technology"], ["West", None]],
+    )
+
+
+def test_filter_action_unsupported_variants(tmp_path: Path) -> None:
+    # 清除選取的方式不認得：動作不轉成 IR，目標工作表的篩選維持預設狀態
+    ir = parse(tmp_path, action_workbook(action_filter(), on_empty="weird"))
+    assert reasons(ir) == ["篩選動作「Filter Region」清除選取的方式 weird v0 不支援"]
+    assert ir.actions == []
+    (flt,) = ir.worksheets[1].filters
+    assert flt.kind == "tuple" and flt.action is None  # 維持 .twb 中的預設狀態
+
+
+def test_exclusions_filter(tmp_path: Path) -> None:
+    exclusions = f"""<filter class='categorical' column='{ref("Exclusions (Region,Category)")}'>
+      <groupfilter function='except' user:ui-enumeration='exclusive'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='level-members' level='[none:Region:nk]' />
+          <groupfilter function='level-members' level='[none:Category:nk]' />
+        </groupfilter>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='member' level='[none:Region:nk]' member='&quot;East&quot;' />
+          <groupfilter function='member' level='[none:Category:nk]' member='%null%' />
+        </groupfilter>
+      </groupfilter>
+    </filter>"""
+    sheets = worksheet(
+        "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), view_extra=exclusions
+    )
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(extra=ACTION_GROUPS), worksheets=sheets))
+    assert reasons(ir) == []
+    (flt,) = ir.worksheets[0].filters
+    assert flt.kind == "tuple"
+    assert ([u.field for u in flt.fields], flt.mode, flt.tuples, flt.action) == (
+        ["f_region", "f_category"],
+        "exclude",
+        [["East", None]],
+        None,
+    )
+
+
+def test_action_filter_level_from_instance_name(tmp_path: Path) -> None:
+    flt = (
+        f"<filter class='categorical' column='{ref('Action (YEAR(Order Date))')}'>"
+        "<groupfilter function='level-members' level='[yr:Order Date:ok]' user:ui-action-filter='[Action1]' />"
+        "</filter>"
+    )
+    sheets = worksheet(
+        "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), view_extra=flt
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    (tuple_filter,) = ir.worksheets[0].filters
+    assert tuple_filter.kind == "tuple"
+    (use,) = tuple_filter.fields
+    assert use.field == "f_order_date" and use.date is not None and use.date.unit == "year"

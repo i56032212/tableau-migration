@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { caseState, DashboardView, type ViewState } from "./Dashboard";
-import { stateFor } from "./state";
+import { caseState, DashboardView } from "./Dashboard";
+import { stateFor, type ViewState } from "./state";
 import type { CaseInfo, IR, WorkbookSummary } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
@@ -169,11 +169,19 @@ function WorkbookPage({ route, caseName }: { route: Exclude<Route, { page: "home
         {ir.unsupported.length > 0 && <span className="error">不支援 {ir.unsupported.length} 筆</span>}
       </header>
       {dashboard && (
-        <DashboardView workbook={workbook} ir={ir} dashboard={dashboard} view={view} onView={(next) => setView(next)} cases={cases} />
+        <DashboardView
+          workbook={workbook}
+          ir={ir}
+          dashboard={dashboard}
+          view={view}
+          onView={(next) => setView(next)}
+          onNavigate={(id) => navigate(`/w/${encodeURIComponent(workbook)}/d/${encodeURIComponent(id)}${window.location.search}`)}
+          cases={cases}
+        />
       )}
       {worksheet && (
         <div className="single-sheet">
-          <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(worksheet.id, view.sheetFilters, view.parameters)} />
+          <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(ir, worksheet.id, view)} />
         </div>
       )}
       {!dashboard && !worksheet && <main className="error">找不到這個 dashboard 或工作表</main>}

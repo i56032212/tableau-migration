@@ -25,7 +25,7 @@ def iter_zones(zones: list[Zone]) -> Iterator[Zone]:
 
 
 def check_references(ir: IR) -> list[str]:
-    from tmig.ir.models import SPECIAL_FIELDS, ParamRef, TopNFilter
+    from tmig.ir.models import SPECIAL_FIELDS, ParamRef, TopNFilter, TupleFilter
 
     errors: list[str] = []
     owner: dict[str, str] = {}
@@ -57,8 +57,20 @@ def check_references(ir: IR) -> list[str]:
     for db in ir.dashboards:
         claim(db.id, f"dashboards[{db.id}]")
 
+    for act in ir.actions:
+        claim(act.id, f"actions[{act.id}]")
     params = {prm.id for prm in ir.parameters}
     sheets = {ws.id: ws for ws in ir.worksheets}
+    actions = {act.id for act in ir.actions}
+    boards = {db.id for db in ir.dashboards}
+    for act in ir.actions:
+        for name, ids in (("sources", act.sources), ("targets", act.targets)):
+            for sid in ids:
+                if sid not in sheets:
+                    errors.append(f"actions[{act.id}].{name}：工作表「{sid}」不存在")
+        for name, did in (("dashboard", act.dashboard), ("target_dashboard", act.target_dashboard)):
+            if did is not None and did not in boards:
+                errors.append(f"actions[{act.id}].{name}：dashboard「{did}」不存在")
 
     def check_use(
         use: FieldUse,
@@ -83,6 +95,12 @@ def check_references(ir: IR) -> list[str]:
             errors.append(f"{where}：Table Calculation「{use.table_calc}」不存在")
 
     def check_filter(flt: Filter, ds_id: str, where: str, table_calcs: set[str] | None) -> None:
+        if isinstance(flt, TupleFilter):
+            for i, use in enumerate(flt.fields):
+                check_use(use, ds_id, f"{where}.fields[{i}]", None)
+            if flt.action is not None and flt.action not in actions:
+                errors.append(f"{where}.action：篩選動作「{flt.action}」不存在")
+            return
         check_use(flt.field, ds_id, f"{where}.field", table_calcs)
         if (
             isinstance(flt, TopNFilter)

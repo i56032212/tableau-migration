@@ -4,11 +4,15 @@
     "worksheet": "ws_monthly_profit",
     "name": "Monthly Profit",
     "rows": 23,
-    "mark": "line"
+    "mark": "line",
+    "dimensions": {
+      "c0": "trunc_month(f_order_date)"
+    }
   },
   "data": {
     "values": "23 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

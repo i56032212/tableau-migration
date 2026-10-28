@@ -4,11 +4,15 @@
     "worksheet": "ws_sales_by_segment",
     "name": "Sales by Segment",
     "rows": 2,
-    "mark": "bar"
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_segment"
+    }
   },
   "data": {
     "values": "2 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

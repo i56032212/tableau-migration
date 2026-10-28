@@ -1149,6 +1149,274 @@
         }
       ],
       "source_ref": "/workbook/worksheets/worksheet[7]"
+    },
+    {
+      "id": "ws_region_picker",
+      "name": "Region Picker",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[8]"
+    },
+    {
+      "id": "ws_category_detail",
+      "name": "Category Detail",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "tuple",
+          "id": "flt_action_region",
+          "fields": [
+            {
+              "field": "f_region",
+              "agg": null,
+              "date": null,
+              "continuous": false,
+              "table_calc": null
+            }
+          ],
+          "stage": "dimension",
+          "mode": "all",
+          "tuples": [],
+          "action": "act_filter_category_detail",
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[9]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[9]"
+    },
+    {
+      "id": "ws_segment_detail",
+      "name": "Segment Detail",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_segment",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "tuple",
+          "id": "flt_action_region_2",
+          "fields": [
+            {
+              "field": "f_region",
+              "agg": null,
+              "date": null,
+              "continuous": false,
+              "table_calc": null
+            }
+          ],
+          "stage": "dimension",
+          "mode": "include",
+          "tuples": [],
+          "action": "act_filter_segment_detail",
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[10]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[10]"
+    },
+    {
+      "id": "ws_region_category_matrix",
+      "name": "Region Category Matrix",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "text",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "tuple",
+          "id": "flt_exclusions_region_category",
+          "fields": [
+            {
+              "field": "f_region",
+              "agg": null,
+              "date": null,
+              "continuous": false,
+              "table_calc": null
+            },
+            {
+              "field": "f_category",
+              "agg": null,
+              "date": null,
+              "continuous": false,
+              "table_calc": null
+            }
+          ],
+          "stage": "dimension",
+          "mode": "exclude",
+          "tuples": [
+            [
+              "West",
+              "Furniture"
+            ],
+            [
+              "East",
+              "Technology"
+            ]
+          ],
+          "action": null,
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[11]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[11]"
     }
   ],
   "dashboards": [
@@ -1668,6 +1936,251 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[2]"
+    },
+    {
+      "id": "db_577aa158",
+      "name": "篩選動作",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "篩選動作",
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 312,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 488,
+                      "h": 312,
+                      "worksheet": "ws_region_picker",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 504,
+                      "y": 56,
+                      "w": 488,
+                      "h": 312,
+                      "worksheet": "ws_category_detail",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[2]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[2]"
+                },
+                {
+                  "id": "z9",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 376,
+                  "w": 984,
+                  "h": 316,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z10",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 376,
+                      "w": 488,
+                      "h": 316,
+                      "worksheet": "ws_segment_detail",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[3]/zone[1]"
+                    },
+                    {
+                      "id": "z11",
+                      "kind": "worksheet",
+                      "x": 504,
+                      "y": 376,
+                      "w": 488,
+                      "h": 316,
+                      "worksheet": "ws_region_category_matrix",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[3]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone/zone[3]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[3]"
+    }
+  ],
+  "actions": [
+    {
+      "id": "act_filter_category_detail",
+      "name": "[Action1_7D6C2A1F2B3C4D5E9F0A000000000101]",
+      "caption": "Filter Category Detail",
+      "kind": "filter",
+      "activation": "select",
+      "dashboard": "db_577aa158",
+      "sources": [
+        "ws_region_picker"
+      ],
+      "targets": [
+        "ws_category_detail"
+      ],
+      "target_dashboard": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/action[1]"
+    },
+    {
+      "id": "act_filter_segment_detail",
+      "name": "[Action2_7D6C2A1F2B3C4D5E9F0A000000000102]",
+      "caption": "Filter Segment Detail",
+      "kind": "filter",
+      "activation": "select",
+      "dashboard": "db_577aa158",
+      "sources": [
+        "ws_region_picker"
+      ],
+      "targets": [
+        "ws_segment_detail"
+      ],
+      "target_dashboard": null,
+      "clearing": "exclude_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/action[2]"
     }
   ],
   "unsupported": [],
@@ -1677,6 +2190,12 @@
       "reason": "dashboard「功能總覽」為自動尺寸：區塊座標以 1366×768 換算，檢視時依視窗大小重排（固定大小的區塊維持像素大小，其餘依比例分配），與 Tableau 的版面重排可能略有差異",
       "element": "size",
       "xml": "<size xmlns:user=\"http://www.tableausoftware.com/xml/user\" sizing-mode=\"automatic\"/>"
+    },
+    {
+      "source_ref": "/workbook/actions/action[3]",
+      "reason": "醒目提示動作「Highlight Region」（不影響數字）",
+      "element": "action",
+      "xml": "<action xmlns:user=\"http://www.tableausoftware.com/xml/user\" caption=\"Highlight Region\" name=\"[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]\">\n      <activation auto-clear=\"true\" type=\"on-hover\"/>\n      <source dashboard=\"篩選動作\" type=\"sheet\" worksheet=\"Region Category Matrix\"/>\n      <command command=\"tsc:brush\">\n        <param name=\"special-fields\" value=\"all\"/>\n        <param name=\"target\" value=\"篩選動作\"/>\n      </command>\n    </action>"
     }
   ]
 }

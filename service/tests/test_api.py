@@ -51,6 +51,31 @@ def test_render_with_state(client: TestClient) -> None:
     assert {row[0] for row in data["table"]["rows"]} == {"West", "East"}
 
 
+def test_render_with_filter_action_selection(client: TestClient) -> None:
+    """篩選動作：檢視器以 usermeta.dimensions 把點選的標記轉成欄位鍵，放進狀態的 actions。"""
+    features = "/api/workbooks/superstore_features"
+    source = client.post(f"{features}/worksheets/ws_region_picker/render").json()
+    dimensions = source["spec"]["usermeta"]["dimensions"]
+    assert dimensions == {"c0": "f_region"}
+    east = next(r for r in source["spec"]["data"]["values"] if r["c0"] == "East")
+    mark = {key: east[name] for name, key in dimensions.items()}
+
+    url = f"{features}/worksheets/ws_category_detail/render"
+    assert client.post(url).json()["rows"] == 3  # 沒有選取：顯示全部
+    selected = client.post(url, json={"actions": {"act_filter_category_detail": [mark]}}).json()
+    everything = client.post(url).json()
+    assert selected["rows"] == 3
+    assert selected["table"]["raw"] != everything["table"]["raw"]
+
+    url = f"{features}/worksheets/ws_segment_detail/render"
+    assert client.post(url).json()["rows"] == 0  # 沒有選取：清除時排除所有值
+    state = {"actions": {"act_filter_segment_detail": [mark, {"f_region": "West"}]}}
+    assert client.post(url, json=state).json()["rows"] == 3
+    # 選取的值必須是 JSON 純量
+    bad = {"actions": {"act_filter_segment_detail": [{"f_region": ["East"]}]}}
+    assert client.post(url, json=bad).status_code == 422
+
+
 def test_render_default_and_worksheet_by_name(client: TestClient) -> None:
     by_id = client.post(f"{WB}/worksheets/ws_monthly_profit/render").json()
     by_name = client.post(f"{WB}/worksheets/Monthly%20Profit/render", json={}).json()
@@ -123,4 +148,5 @@ def test_cases(client: TestClient) -> None:
             }
         },
         "parameters": {"p_parameter_1": 2},
+        "actions": {},
     }

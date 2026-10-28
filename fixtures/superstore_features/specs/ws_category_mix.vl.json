@@ -4,12 +4,15 @@
     "worksheet": "ws_category_mix",
     "name": "Category Mix",
     "rows": 3,
-    "mark": "pie"
+    "mark": "pie",
+    "dimensions": {
+      "c0": "f_category"
+    }
   },
   "data": {
     "values": "3 列",
     "fields": [
-      "__i",
+      "__row",
       "c0",
       "c0_label",
       "c1",
@@ -59,7 +62,7 @@
       }
     ],
     "order": {
-      "field": "__i"
+      "field": "__row"
     }
   },
   "layer": [
@@ -91,7 +94,7 @@
           "stack": true
         },
         "order": {
-          "field": "__i"
+          "field": "__row"
         }
       },
       "transform": [

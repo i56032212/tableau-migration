@@ -262,7 +262,8 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         custom_sql="text" in relation_types,
         field_count=len(columns),
         calc_count=sum(classes_used.values()),
-        groups_or_sets=len(children(ds, "group")),
+        # 篩選動作、排除選取、工具提示產生的隱藏群組（user:auto-column）已在擴充階段支援
+        groups_or_sets=sum(1 for g in children(ds, "group") if attr(g, "auto-column") is None),
         datasource_filters=len(ds_filters),
         extract_filters=len(list(descendants(extract, "filter"))),
         filter_user_functions=sorted(filter_users),
@@ -633,7 +634,8 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     if special or groups:
         parts = [f"{k} {v}" for k, v in special.items()] + ([f"group {groups}"] if groups else [])
         features.append(f"群組、集合或分組（{'、'.join(parts)}）")
-    kinds = Counter(a.kind for a in r.actions)
+    # 篩選動作已在擴充階段支援（L1），醒目提示不影響數字
+    kinds = Counter(a.kind for a in r.actions if a.kind not in ("filter", "highlight"))
     if kinds:
         features.append(
             f"Dashboard action（{'、'.join(f'{k} {v}' for k, v in sorted(kinds.items()))}）"

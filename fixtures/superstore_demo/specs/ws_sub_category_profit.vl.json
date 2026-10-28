@@ -4,11 +4,15 @@
     "worksheet": "ws_sub_category_profit",
     "name": "Sub-Category Profit",
     "rows": 10,
-    "mark": "bar"
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_sub_category"
+    }
   },
   "data": {
     "values": "10 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

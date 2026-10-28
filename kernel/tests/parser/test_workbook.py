@@ -667,6 +667,7 @@ def test_table_calc_filter_stage(tmp_path: Path) -> None:
     )
     ws = sheet(parse(tmp_path, xml))
     (f,) = ws.filters
+    assert isinstance(f, RangeFilter)
     assert (f.stage, f.field.table_calc) == ("table_calc", ws.table_calcs[0].id)
 
 
@@ -805,7 +806,9 @@ def test_actions(tmp_path: Path) -> None:
         "<source dashboard='Overview' type='sheet' /><command command='tsc:tsl-filter' /></action>"
     )
     ir = parse(tmp_path, b.workbook(worksheets=basic_sheet(), actions=actions))
-    assert reasons(ir) == ["Dashboard action「Filter 1」（篩選）v0 不支援"]
+    # 篩選動作的來源 dashboard 不存在：無法轉成 IR
+    assert reasons(ir) == ["篩選動作「Filter 1」的來源工作表無法移轉"]
+    assert ir.actions == []
     assert any("醒目提示" in u.reason for u in ir.ignored)
 
 

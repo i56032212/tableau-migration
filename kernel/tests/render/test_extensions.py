@@ -76,7 +76,7 @@ def test_pie_spec() -> None:
     arc, label = spec["layer"]
     assert arc["mark"]["type"] == "arc"
     assert spec["encoding"]["theta"]["type"] == "quantitative"
-    assert spec["encoding"]["order"] == {"field": "__i"}
+    assert spec["encoding"]["order"] == {"field": "__row"}
     assert label["transform"][0]["as"] == "__pie_label"
     assert all(v["c2_label"].endswith("%") for v in spec["data"]["values"])
 

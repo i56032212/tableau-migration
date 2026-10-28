@@ -4,11 +4,16 @@
     "worksheet": "ws_sales_by_region",
     "name": "Sales by Region",
     "rows": 6,
-    "mark": "bar"
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_region",
+      "c1": "f_category"
+    }
   },
   "data": {
     "values": "6 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

@@ -82,6 +82,7 @@ VL_MARKS = {
     "square": "square",
     "shape": "point",
 }
+ROW = "__row"
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
 
@@ -344,7 +345,7 @@ class _Builder:
             encoding["theta"] = {"value": 1}
         self.common(encoding, marks)
         if marks.color is not None and encoding["color"]["type"] == "nominal":
-            encoding["order"] = {"field": "__i"}
+            encoding["order"] = {"field": ROW}
         if rows_dims:
             encoding["row"] = self._facet(rows_dims, "rows_dim")
         if cols_dims:
@@ -451,8 +452,8 @@ def build_spec(
         composites["cols_dim"] = cols_dims
     pie_marks = _pie_marks(ws)
     for i, record in enumerate(values):
-        if pie_marks is not None:
-            record["__i"] = i  # 圓餅各塊依查詢結果的順序排列
+        # 列號：檢視器選取標記時，以它找回未經 Vega 解析的原始值；圓餅各塊也依它排列
+        record[ROW] = i
         for name, members in composites.items():
             record[name] = SEPARATOR.join(record[builder.ch(u).label] for u in members)
 
@@ -471,7 +472,18 @@ def build_spec(
 
     spec: dict[str, Any] = {
         "$schema": SCHEMA,
-        "usermeta": {"worksheet": ws.id, "name": ws.name, "rows": len(values), "mark": mark},
+        "usermeta": {
+            "worksheet": ws.id,
+            "name": ws.name,
+            "rows": len(values),
+            "mark": mark,
+            # 篩選動作：標記的維度欄（資料欄名 → 欄位鍵）
+            "dimensions": {
+                ch.name: key
+                for key, ch in channels.items()
+                if ch.role == "dimension" and ch.use.field not in SPECIAL_FIELDS
+            },
+        },
         "data": {"values": values},
         "width": "container",
         "height": "container",

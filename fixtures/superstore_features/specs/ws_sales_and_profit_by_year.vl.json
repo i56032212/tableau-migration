@@ -4,11 +4,15 @@
     "worksheet": "ws_sales_and_profit_by_year",
     "name": "Sales and Profit by Year",
     "rows": 4,
-    "mark": "bar+line"
+    "mark": "bar+line",
+    "dimensions": {
+      "c0": "year(f_order_date)"
+    }
   },
   "data": {
     "values": "4 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

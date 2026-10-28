@@ -48,6 +48,8 @@ class DsState:
     instances: dict[str, etree._Element] = field(default_factory=dict)
     """資料源層級的 column-instance（資料源篩選用），以名稱（含方括號）為鍵。"""
     filters: list[Filter] = field(default_factory=list)
+    auto_groups: dict[str, str] = field(default_factory=dict)
+    """Tableau 自動產生的群組（篩選動作、工具提示、排除、只保留），名稱 → 種類（sheet_link、vit、include、exclude）。"""
     analyzer: Analyzer | None = None
     levels: dict[str, CalcLevel | None] = field(default_factory=dict)
     """計算欄位 id → 計算層級；公式無法分析時為 None。"""
@@ -111,6 +113,10 @@ class ParseContext:
     """全域篩選，以資料源的 Tableau 內部名稱為鍵。"""
     blank_sheets: set[str] = field(default_factory=set)
     """空白工作表的名稱：dashboard 上以空白區塊呈現。"""
+    action_ids: dict[str, str] = field(default_factory=dict)
+    """篩選動作的內部名稱（例如 [Action1_…]）→ IR id；解析工作表前先配發。"""
+    notes: set[str] = field(default_factory=set)
+    """已記在 ignored 的整份報表說明，避免重複。"""
 
     def flag(self, element: etree._Element, reason: str) -> None:
         """記錄 v0 不支援的元素：報表因此進人工佇列。"""

@@ -62,6 +62,31 @@ DATE_DERIVATIONS: dict[str, tuple[Literal["part", "trunc"], str]] = {
     "MDY": ("trunc", "day"),
 }
 
+NAME_PREFIXES = {
+    "none": "None",
+    "usr": "User",
+    "yr": "Year",
+    "qr": "Quarter",
+    "mn": "Month",
+    "wk": "Week",
+    "wd": "Weekday",
+    "dy": "Day",
+    "hr": "Hour",
+    "mi": "Minute",
+    "sc": "Second",
+    "tyr": "Year-Trunc",
+    "tqr": "Quarter-Trunc",
+    "tmn": "Month-Trunc",
+    "twk": "Week-Trunc",
+    "tdy": "Day-Trunc",
+    "thr": "Hour-Trunc",
+    "tmi": "Minute-Trunc",
+    "tsc": "Second-Trunc",
+    "my": "MY",
+    "mdy": "MDY",
+}
+"""欄位實例名稱的前綴（例如 [yr:Order Date:ok] 的 yr）→ 衍生方式；用於沒有 column-instance 的參照。"""
+
 Resolver = Callable[[str], "FieldUse | str"]
 """把篩選或排序參照的欄位實例（例如 [ds].[none:Region:nk]）轉成 FieldUse；失敗時回傳原因。"""
 
@@ -98,6 +123,23 @@ def use_from_instance(ds: DsState, instance: etree._Element) -> FieldUse | str:
             continuous=continuous,
         )
     return f"欄位衍生方式 {derivation}（{instance.get('name')}）v0 不支援"
+
+
+def use_from_name(ds: DsState, name: str) -> FieldUse | str:
+    """[yr:Order Date:ok]、[none:Region:nk] 等欄位實例名稱 → FieldUse（沒有 column-instance 時使用）。"""
+    bare = name[1:-1] if name.startswith("[") and name.endswith("]") else name
+    parts = bare.split(":")
+    if len(parts) < 3 or parts[0] not in NAME_PREFIXES:
+        return f"無法辨識的欄位實例名稱 {name}"
+    column = "[" + ":".join(parts[1:-1]).replace("]", "]]") + "]"
+    element = etree.Element(
+        "column-instance",
+        column=column,
+        derivation=NAME_PREFIXES[parts[0]],
+        name=name,
+        type="quantitative" if parts[-1] == "qk" else "nominal",
+    )
+    return use_from_instance(ds, element)
 
 
 def is_table_calc(ds: DsState, use: FieldUse) -> bool:

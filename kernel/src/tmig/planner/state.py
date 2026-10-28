@@ -27,6 +27,7 @@ from tmig.ir.models import (
     RangeFilter,
     Scalar,
     TopNFilter,
+    TupleFilter,
     Worksheet,
 )
 
@@ -62,6 +63,10 @@ class QueryState(BaseModel):
 
     filters: dict[str, FilterValue] = Field(default_factory=dict)
     parameters: dict[str, Scalar] = Field(default_factory=dict)
+    actions: dict[str, list[dict[str, Scalar]]] = Field(
+        default_factory=dict,
+        description="篩選動作的選取：動作 id → 選取的標記（欄位鍵 → 值）；沒有列出或為空表示沒有選取",
+    )
 
 
 def use_key(use: FieldUse) -> str:
@@ -119,7 +124,7 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
             raise StateError(f"參數「{param_id}」不存在")
         params[param_id] = value
 
-    filters: list[Filter] = list(worksheet.filters)
+    filters: list[Filter] = [_with_selection(f, state) for f in worksheet.filters]
     applied: list[str] = []
     skipped: list[str] = []
     for n, (key, value) in enumerate(state.filters.items(), start=1):
@@ -132,7 +137,7 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
             (
                 i
                 for i, flt in enumerate(filters)
-                if not isinstance(flt, TopNFilter) and _same_dimension(flt.field, use)
+                if not isinstance(flt, TopNFilter | TupleFilter) and _same_dimension(flt.field, use)
             ),
             None,
         )
@@ -143,7 +148,28 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
     return EffectiveState(filters=filters, parameters=params, applied=applied, skipped=skipped)
 
 
+def _with_selection(flt: Filter, state: QueryState) -> Filter:
+    """篩選動作：有選取時，以選取的標記中目標工作表也有的欄位篩選；沒有選取時維持預設（清除時的狀態）。"""
+    if not isinstance(flt, TupleFilter) or flt.action is None:
+        return flt
+    marks = state.actions.get(flt.action) or []
+    if not marks:
+        return flt
+    keys = [use_key(u) for u in flt.fields]
+    shared = [k for k in keys if all(k in mark for mark in marks)]
+    if not shared:
+        return flt
+    fields = [u for u, k in zip(flt.fields, keys, strict=True) if k in shared]
+    tuples: list[list[Scalar]] = []
+    for mark in marks:
+        row = [mark[k] for k in shared]
+        if row not in tuples:
+            tuples.append(row)
+    return flt.model_copy(update={"fields": fields, "mode": "include", "tuples": tuples})
+
+
 def _replace(existing: Filter, value: FilterValue) -> Filter:
+    assert not isinstance(existing, TupleFilter | TopNFilter)
     if value.is_range:
         if isinstance(existing, RangeFilter):
             return existing.model_copy(

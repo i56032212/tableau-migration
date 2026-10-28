@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
-import type { QueryState, RenderResponse } from "./types";
+import type { Mark, QueryState, RenderResponse, Scalar } from "./types";
+
+/** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
+export interface MarkEvent {
+  kind: "click" | "hover" | "leave";
+  mark: Mark | null;
+  additive: boolean;
+  x: number;
+  y: number;
+}
 
 interface Props {
   workbook: string;
@@ -10,6 +19,32 @@ interface Props {
   hideLegend?: boolean;
   showTitle?: boolean;
   onRendered?: (response: RenderResponse) => void;
+  /** 有篩選動作以這張工作表為來源時才傳入 */
+  onMarks?: (event: MarkEvent) => void;
+  /** 目前選取的標記：其餘標記淡化 */
+  selected?: Mark[];
+}
+
+type Spec = Record<string, any>;
+
+/** 選取的標記醒目、其餘淡化：每個圖層加上依列號判斷的不透明度。 */
+function highlight(spec: Spec, rows: number[]) {
+  const test = `indexof([${rows.join(",")}], datum.__row) >= 0`;
+  const visit = (node: Spec) => {
+    if (node.mark) node.encoding = { ...(node.encoding ?? {}), opacity: { condition: { test, value: 1 }, value: 0.25 } };
+    for (const key of ["layer", "vconcat", "hconcat", "concat"]) {
+      if (Array.isArray(node[key])) node[key].forEach(visit);
+    }
+    if (node.spec) visit(node.spec);
+  };
+  visit(spec);
+}
+
+/** 資料列 → 標記（維度欄位鍵 → 原始值）。 */
+function markOf(record: Record<string, unknown>, dimensions: Record<string, string>): Mark {
+  const mark: Mark = {};
+  for (const [name, key] of Object.entries(dimensions)) mark[key] = (record[name] ?? null) as Scalar;
+  return mark;
 }
 
 /** 多張圖（同一架上有多個量值）無法自動填滿容器：依區塊大小平分每張圖的寬高。 */
@@ -29,8 +64,22 @@ function sizeConcat(spec: Record<string, any>, width: number, height: number) {
 }
 
 /** 一張工作表：向查詢服務取 Vega-Lite 規格並繪製；可切換顯示資料表。 */
-export function WorksheetView({ workbook, worksheet, state, hideLegend, showTitle = true, onRendered }: Props) {
+export function WorksheetView({
+  workbook,
+  worksheet,
+  state,
+  hideLegend,
+  showTitle = true,
+  onRendered,
+  onMarks,
+  selected,
+}: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
+  // 事件處理以 ref 取最新的回呼，圖表不必因父元件重繪而重建
+  const onMarksRef = useRef(onMarks);
+  onMarksRef.current = onMarks;
+  const interactive = onMarks !== undefined;
+  const selectedKey = JSON.stringify(selected ?? []);
   const [response, setResponse] = useState<RenderResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,24 +115,81 @@ export function WorksheetView({ workbook, worksheet, state, hideLegend, showTitl
     if (!element || !response?.spec || showTable) return;
     let view: Result | null = null;
     let disposed = false;
-    const spec = structuredClone(response.spec) as Record<string, any>;
+    let leaveTimer: number | undefined;
+    const original = response.spec as Spec;
+    const records = (original.data?.values ?? []) as Record<string, unknown>[];
+    const dimensions = (original.usermeta?.dimensions ?? {}) as Record<string, string>;
+    const spec = structuredClone(original) as Spec;
     if (hideLegend && spec.encoding?.color) spec.encoding.color.legend = null;
+    const marks = JSON.parse(selectedKey) as Mark[];
+    if (marks.length) {
+      // 以原始值比對（Vega 會把日期欄解析成 Date，所以用回應中未經處理的資料）
+      const rows = records
+        .map((record, i) => [markOf(record, dimensions), i] as const)
+        .filter(([mark]) => marks.some((m) => Object.keys(m).every((k) => !(k in mark) || mark[k] === m[k])))
+        .map(([, i]) => i);
+      highlight(spec, rows);
+    }
     sizeConcat(spec, element.clientWidth, element.clientHeight);
     embed(element, spec as any, { actions: false, renderer: "svg" })
       .then((result) => {
-        if (disposed) result.finalize();
-        else view = result;
+        if (disposed) {
+          result.finalize();
+          return;
+        }
+        view = result;
+        if (!interactive) return;
+        const markAt = (item: any): Mark | null | undefined => {
+          const row = item?.datum?.__row;
+          if (typeof row === "number" && records[row]) return markOf(records[row], dimensions);
+          // 空白處（沒有項目或背景群組）＝清除選取；其餘（座標軸、圖例）不處理
+          return !item || item.mark?.marktype === "group" ? null : undefined;
+        };
+        const emit = (kind: MarkEvent["kind"], event: any, mark: Mark | null) =>
+          onMarksRef.current?.({
+            kind,
+            mark,
+            additive: Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey),
+            x: event?.clientX ?? 0,
+            y: event?.clientY ?? 0,
+          });
+        result.view.addEventListener("click", (event: any, item: any) => {
+          const mark = markAt(item);
+          if (mark !== undefined) emit("click", event, mark);
+        });
+        result.view.addEventListener("mouseover", (event: any, item: any) => {
+          const mark = markAt(item);
+          if (!mark) return;
+          window.clearTimeout(leaveTimer);
+          emit("hover", event, mark);
+        });
+        result.view.addEventListener("mouseout", (event: any) => {
+          window.clearTimeout(leaveTimer);
+          leaveTimer = window.setTimeout(() => emit("leave", event, null), 250);
+        });
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
     return () => {
       disposed = true;
+      window.clearTimeout(leaveTimer);
       view?.finalize();
     };
-  }, [response, hideLegend, showTable]);
+  }, [response, hideLegend, showTable, interactive, selectedKey]);
 
   const title = response?.name ?? worksheet;
+  const count = selected?.length ?? 0;
   const meta = (
     <span className="worksheet-meta">
+      {count > 0 && (
+        <button
+          type="button"
+          className="link selection"
+          title="清除選取"
+          onClick={() => onMarks?.({ kind: "click", mark: null, additive: false, x: 0, y: 0 })}
+        >
+          已選取 {count} 個標記 ✕
+        </button>
+      )}
       {response && !response.unsupported && <span>{response.rows} 列</span>}
       {response?.table && (
         <button type="button" className="link" onClick={() => setShowTable(!showTable)}>
@@ -93,7 +199,12 @@ export function WorksheetView({ workbook, worksheet, state, hideLegend, showTitl
     </span>
   );
   return (
-    <div className="worksheet" data-worksheet={worksheet} data-loading={loading ? "true" : "false"}>
+    <div
+      className="worksheet"
+      data-worksheet={worksheet}
+      data-loading={loading ? "true" : "false"}
+      data-interactive={interactive ? "true" : undefined}
+    >
       {showTitle ? (
         <div className="worksheet-header">
           <span className="worksheet-title">{title}</span>

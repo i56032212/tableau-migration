@@ -4,7 +4,10 @@
     "worksheet": "ws_monthly_sales_vs_profit",
     "name": "Monthly Sales vs Profit",
     "rows": 24,
-    "mark": "line"
+    "mark": "line",
+    "dimensions": {
+      "c0": "trunc_month(f_order_date)"
+    }
   },
   "data": {
     "values": "24 列",
@@ -13,6 +16,7 @@
       "__mn_i",
       "__mv",
       "__mv_label",
+      "__row",
       "c0",
       "c0_label",
       "c1",

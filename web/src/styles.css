@@ -79,3 +79,12 @@ button { font: inherit; }
 .legend-title { font-weight: 600; margin-bottom: 2px; }
 .legend-item { display: flex; align-items: center; gap: 6px; }
 .swatch { width: 12px; height: 12px; border-radius: 2px; flex: none; }
+
+/* 篩選動作：可點選的標記、選取的標記數、選單動作 */
+.worksheet[data-interactive="true"] .chart svg path,
+.worksheet[data-interactive="true"] .chart svg text { cursor: pointer; }
+.worksheet-meta .selection { color: var(--accent); font-weight: 600; }
+.action-menu { position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 2px; min-width: 160px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12); }
+.action-menu button[role="menuitem"] { border: 0; background: none; text-align: left; padding: 4px 6px; cursor: pointer; color: var(--accent); }
+.action-menu button[role="menuitem"]:hover { background: var(--page); }
+.action-menu .link { align-self: flex-end; font-size: 12px; color: var(--muted); }

@@ -4,7 +4,10 @@
     "worksheet": "ws_segment_kpis",
     "name": "Segment KPIs",
     "rows": 12,
-    "mark": "text"
+    "mark": "text",
+    "dimensions": {
+      "c0": "f_segment"
+    }
   },
   "data": {
     "values": "12 列",
@@ -13,6 +16,7 @@
       "__mn_i",
       "__mv",
       "__mv_label",
+      "__row",
       "c0",
       "c0_label",
       "c1",

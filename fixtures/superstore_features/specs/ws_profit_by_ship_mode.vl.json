@@ -4,11 +4,15 @@
     "worksheet": "ws_profit_by_ship_mode",
     "name": "Profit by Ship Mode",
     "rows": 4,
-    "mark": "text"
+    "mark": "text",
+    "dimensions": {
+      "c0": "f_ship_mode"
+    }
   },
   "data": {
     "values": "4 列",
     "fields": [
+      "__row",
       "c0",
       "c0_label",
       "c1",

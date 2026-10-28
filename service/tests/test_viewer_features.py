@@ -1,12 +1,15 @@
-"""功能報表的檢視器端到端：篩選群組與全域篩選的控制項一次更新所有相關工作表（H1）。
+"""功能報表的檢視器端到端：篩選群組與全域篩選（H1）、自動尺寸（I1）、擴充圖表（J1–J3）、篩選動作（L1）。
 
 需要先建置檢視器（cd web && pnpm install && pnpm build）與 Playwright 的 Chromium；缺少時略過。
 """
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 import time
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -198,5 +201,107 @@ def test_extended_charts_render(server: str) -> None:
         )
         order = [h for h in headers if h in ("Sales", "Profit", "CNTD(Order ID)", "利潤率")]
         assert order[:4] == ["Sales", "Profit", "CNTD(Order ID)", "利潤率"]
+        assert errors == []
+        browser.close()
+
+
+def load_oracle() -> ModuleType:
+    """scripts/features_oracle.py：以純 Python 獨立計算的預期結果（不屬於 tmig 套件）。"""
+    spec = importlib.util.spec_from_file_location(
+        "features_oracle", ROOT / "scripts" / "features_oracle.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["features_oracle"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def same_as_oracle(data: dict[str, Any], expected: tuple[list[str], list[list[Any]]]) -> None:
+    """畫面上這張工作表的資料與獨立計算的預期結果相同（數字以相對誤差 1e-9 比對）。"""
+    _, rows = expected
+    actual = [
+        [
+            float(cell) if isinstance(want, float) else cell
+            for cell, want in zip(row, wanted, strict=True)
+        ]
+        for row, wanted in zip(data["table"]["raw"], rows, strict=True)
+    ]
+    assert len(data["table"]["raw"]) == len(rows), data["worksheet"]
+    assert actual == [
+        [pytest.approx(v, rel=1e-9) if isinstance(v, float) else v for v in r] for r in rows
+    ]
+
+
+def test_filter_actions(server: str) -> None:
+    """L1：點選 Region Picker 的地區篩選兩張目標工作表；Ctrl 加選；再點一次或清除鈕清除選取。"""
+    from playwright.sync_api import sync_playwright
+
+    oracle = load_oracle()
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    targets = {"ws_category_detail", "ws_segment_detail"}
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(300)
+        first = {w: data for w, _, data in renders.items}
+        # 沒有選取：Category Detail 顯示全部，Segment Detail 不顯示任何值
+        same_as_oracle(first["ws_category_detail"], oracle.selection("ws_category_detail", None))
+        assert first["ws_segment_detail"]["rows"] == 0
+        assert first["ws_region_category_matrix"]["rows"] == 10  # 排除兩個值組合
+
+        def click(region: str, modifiers: list[str] | None = None) -> dict[str, tuple[Any, Any]]:
+            start = len(renders.items)
+            bar = "svg path[aria-roledescription='bar']"
+            page.locator(
+                f"[data-worksheet='ws_region_picker'] {bar}[aria-label$='Region: {region}']"
+            ).click(modifiers=modifiers or [])  # type: ignore[arg-type]
+            renders.wait_for(page, targets, start)
+            page.wait_for_timeout(300)
+            latest = {w: (body, data) for w, body, data in renders.items[start:]}
+            assert set(latest) == targets  # 來源與其他工作表不重新查詢
+            return latest
+
+        latest = click("East")
+        for worksheet, (body, data) in latest.items():
+            action = f"act_filter_{worksheet.removeprefix('ws_')}"
+            assert body["actions"] == {action: [{"f_region": "East"}]}
+            same_as_oracle(data, oracle.selection(worksheet, ["East"]))
+            check_numbers(ir, worksheet, body, data)
+        picker = page.locator("[data-worksheet='ws_region_picker']")
+        assert picker.locator(".selection").inner_text().startswith("已選取 1 個標記")
+
+        latest = click("West", ["Control"])
+        for worksheet, (body, data) in latest.items():
+            assert list(body["actions"].values()) == [[{"f_region": "East"}, {"f_region": "West"}]]
+            same_as_oracle(data, oracle.selection(worksheet, ["East", "West"]))
+
+        # 清除鈕：Category Detail 回到全部，Segment Detail 回到不顯示任何值
+        start = len(renders.items)
+        picker.locator(".selection").click()
+        renders.wait_for(page, targets, start)
+        page.wait_for_timeout(300)
+        latest = {w: (body, data) for w, body, data in renders.items[start:]}
+        assert latest["ws_category_detail"][0]["actions"] == {}
+        same_as_oracle(
+            latest["ws_category_detail"][1], oracle.selection("ws_category_detail", None)
+        )
+        assert latest["ws_segment_detail"][1]["rows"] == 0
+        assert picker.locator(".selection").count() == 0
+
+        # 再點一次已選取的標記＝清除
+        click("South")
+        latest = click("South")
+        assert latest["ws_segment_detail"][1]["rows"] == 0
         assert errors == []
         browser.close()

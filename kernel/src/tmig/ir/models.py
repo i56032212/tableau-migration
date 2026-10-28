@@ -231,7 +231,38 @@ class TopNFilter(IRModel):
         return self
 
 
-Filter = Annotated[CategoricalFilter | RangeFilter | TopNFilter, Field(discriminator="kind")]
+class TupleFilter(IRModel):
+    """依多個欄位的值組合篩選：篩選動作在目標工作表上的篩選、排除（Exclude）與只保留（Keep Only）。
+
+    mode 為 all 時不過濾；include 而 tuples 為空表示全部排除（篩選動作清除時「排除所有值」）。
+    """
+
+    kind: Literal["tuple"]
+    id: Id
+    fields: list[FieldUse] = Field(min_length=1)
+    stage: FilterStage
+    mode: Literal["include", "exclude", "all"]
+    tuples: list[list[Scalar]] = Field(default_factory=list)
+    action: Id | None = Field(
+        default=None, description="篩選動作的 id：選取來源工作表的標記時，以選取的值取代 tuples"
+    )
+    group: str | None = Field(default=None, description="篩選群組（見 CategoricalFilter.group）")
+    source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.stage not in ("context", "dimension"):
+            raise ValueError(f"tuple 篩選不能屬於 {self.stage} 階段")
+        if self.mode == "all" and self.tuples:
+            raise ValueError("mode 為 all 時 tuples 必須為空")
+        if any(len(t) != len(self.fields) for t in self.tuples):
+            raise ValueError("每個 tuple 的長度必須與 fields 相同")
+        return self
+
+
+Filter = Annotated[
+    CategoricalFilter | RangeFilter | TopNFilter | TupleFilter, Field(discriminator="kind")
+]
 
 
 class Datasource(IRModel):
@@ -521,6 +552,35 @@ class Workbook(IRModel):
     source_ref: SourceRef
 
 
+class Action(IRModel):
+    """Dashboard 的篩選動作：選取（或滑過）來源工作表的標記時，以標記的欄位值篩選目標工作表。
+
+    目標工作表上對應的篩選是 action 指向這個動作的 TupleFilter；清除選取時依 clearing 處理。
+    """
+
+    id: Id
+    name: str = Field(min_length=1, description="Tableau 內部名稱，例如 [Action1_…]")
+    caption: str
+    kind: Literal["filter"]
+    activation: Literal["select", "hover", "menu"]
+    dashboard: Id | None = Field(
+        default=None,
+        description="動作所屬的 dashboard，只在這個 dashboard 上執行；None 表示工作表層級的動作（任何地方都執行）",
+    )
+    sources: list[Id] = Field(min_length=1, description="來源工作表")
+    targets: list[Id] = Field(default_factory=list, description="目標工作表")
+    target_dashboard: Id | None = Field(
+        default=None,
+        description="目標是另一個 dashboard 時，執行動作後切換到該 dashboard",
+    )
+    clearing: Literal["show_all", "exclude_all", "keep"] = Field(
+        default="show_all",
+        description="清除選取時：顯示所有值、排除所有值、保留篩選的值",
+    )
+    single_select: bool = Field(default=False, description="只在選取單一標記時執行")
+    source_ref: SourceRef
+
+
 class Unsupported(IRModel):
     """解析器不認得或 v0 不支援的元素。有任何一筆，報表就進人工佇列。"""
 
@@ -539,6 +599,7 @@ class IR(IRModel):
     parameters: list[Parameter] = Field(default_factory=list)
     worksheets: list[Worksheet] = Field(default_factory=list)
     dashboards: list[Dashboard] = Field(default_factory=list)
+    actions: list[Action] = Field(default_factory=list)
     unsupported: list[Unsupported] = Field(default_factory=list)
     ignored: list[Unsupported] = Field(
         default_factory=list, description="刻意略過、不影響數字的元素，例如格式、註解、醒目提示動作"

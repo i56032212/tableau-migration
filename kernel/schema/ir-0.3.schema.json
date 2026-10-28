@@ -2,6 +2,127 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tableau 移轉 IR v0.3",
   "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "description": "Dashboard 的篩選動作：選取（或滑過）來源工作表的標記時，以標記的欄位值篩選目標工作表。\n\n目標工作表上對應的篩選是 action 指向這個動作的 TupleFilter；清除選取時依 clearing 處理。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Tableau 內部名稱，例如 [Action1_…]",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "caption": {
+          "title": "Caption",
+          "type": "string"
+        },
+        "kind": {
+          "const": "filter",
+          "title": "Kind",
+          "type": "string"
+        },
+        "activation": {
+          "enum": [
+            "select",
+            "hover",
+            "menu"
+          ],
+          "title": "Activation",
+          "type": "string"
+        },
+        "dashboard": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "動作所屬的 dashboard，只在這個 dashboard 上執行；None 表示工作表層級的動作（任何地方都執行）",
+          "title": "Dashboard"
+        },
+        "sources": {
+          "description": "來源工作表",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "targets": {
+          "description": "目標工作表",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "target_dashboard": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "目標是另一個 dashboard 時，執行動作後切換到該 dashboard",
+          "title": "Target Dashboard"
+        },
+        "clearing": {
+          "default": "show_all",
+          "description": "清除選取時：顯示所有值、排除所有值、保留篩選的值",
+          "enum": [
+            "show_all",
+            "exclude_all",
+            "keep"
+          ],
+          "title": "Clearing",
+          "type": "string"
+        },
+        "single_select": {
+          "default": false,
+          "description": "只在選取單一標記時執行",
+          "title": "Single Select",
+          "type": "boolean"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "caption",
+        "kind",
+        "activation",
+        "sources",
+        "source_ref"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
     "AllowedAll": {
       "additionalProperties": false,
       "properties": {
@@ -516,7 +637,8 @@
               "mapping": {
                 "categorical": "#/$defs/CategoricalFilter",
                 "range": "#/$defs/RangeFilter",
-                "top_n": "#/$defs/TopNFilter"
+                "top_n": "#/$defs/TopNFilter",
+                "tuple": "#/$defs/TupleFilter"
               },
               "propertyName": "kind"
             },
@@ -529,6 +651,9 @@
               },
               {
                 "$ref": "#/$defs/TopNFilter"
+              },
+              {
+                "$ref": "#/$defs/TupleFilter"
               }
             ]
           },
@@ -1360,6 +1485,123 @@
       "title": "TopNFilter",
       "type": "object"
     },
+    "TupleFilter": {
+      "additionalProperties": false,
+      "description": "依多個欄位的值組合篩選：篩選動作在目標工作表上的篩選、排除（Exclude）與只保留（Keep Only）。\n\nmode 為 all 時不過濾；include 而 tuples 為空表示全部排除（篩選動作清除時「排除所有值」）。",
+      "properties": {
+        "kind": {
+          "const": "tuple",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "minItems": 1,
+          "title": "Fields",
+          "type": "array"
+        },
+        "stage": {
+          "enum": [
+            "extract",
+            "datasource",
+            "context",
+            "top_n",
+            "dimension",
+            "measure",
+            "table_calc"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "include",
+            "exclude",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "tuples": {
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Tuples",
+          "type": "array"
+        },
+        "action": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選動作的 id：選取來源工作表的標記時，以選取的值取代 tuples",
+          "title": "Action"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選群組（見 CategoricalFilter.group）",
+          "title": "Group"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "fields",
+        "stage",
+        "mode",
+        "source_ref"
+      ],
+      "title": "TupleFilter",
+      "type": "object"
+    },
     "Unsupported": {
       "additionalProperties": false,
       "description": "解析器不認得或 v0 不支援的元素。有任何一筆，報表就進人工佇列。",
@@ -1509,7 +1751,8 @@
               "mapping": {
                 "categorical": "#/$defs/CategoricalFilter",
                 "range": "#/$defs/RangeFilter",
-                "top_n": "#/$defs/TopNFilter"
+                "top_n": "#/$defs/TopNFilter",
+                "tuple": "#/$defs/TupleFilter"
               },
               "propertyName": "kind"
             },
@@ -1522,6 +1765,9 @@
               },
               {
                 "$ref": "#/$defs/TopNFilter"
+              },
+              {
+                "$ref": "#/$defs/TupleFilter"
               }
             ]
           },
@@ -1820,6 +2066,13 @@
         "$ref": "#/$defs/Dashboard"
       },
       "title": "Dashboards",
+      "type": "array"
+    },
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Actions",
       "type": "array"
     },
     "unsupported": {

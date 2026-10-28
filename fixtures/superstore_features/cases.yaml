@@ -20,6 +20,14 @@ sheets:
     view: SalesandProfitbyYear
   - worksheet: ws_category_mix
     view: CategoryMix
+  - worksheet: ws_region_picker
+    view: RegionPicker
+  - worksheet: ws_category_detail
+    view: CategoryDetail
+  - worksheet: ws_segment_detail
+    view: SegmentDetail
+  - worksheet: ws_region_category_matrix
+    view: RegionCategoryMatrix
 cases:
   - name: default
     url_params: {}

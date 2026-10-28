@@ -34,6 +34,7 @@ from tmig.ir.models import (
     Sort,
     TableCalc,
     TableCalcPreset,
+    TupleFilter,
     Worksheet,
 )
 from tmig.parser.context import DsState, ParseContext, SheetState
@@ -44,9 +45,10 @@ from tmig.parser.fields import (
     instance_key,
     is_aggregate,
     use_from_instance,
+    use_from_name,
     value_type,
 )
-from tmig.parser.twbx import child, children, local_name, text_of, xpath
+from tmig.parser.twbx import attr, child, children, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
 
@@ -63,6 +65,13 @@ MARKS: dict[str, MarkType] = {
     "GanttBar": "gantt",
 }
 SPECIAL_KEYS = {"[:Measure Names]": MEASURE_NAMES, "[Multiple Values]": MEASURE_VALUES}
+TUPLE_PREFIXES = {
+    "[Action (": "sheet_link",
+    "[Tooltip (": "vit",
+    "[Exclusions (": "exclude",
+    "[Inclusions (": "include",
+}
+"""Tableau 自動產生的多欄位篩選欄位（資料源 <group> 沒寫 auto-column 時依名稱判斷）。"""
 ENCODINGS = ("color", "size", "text", "lod", "tooltip", "shape", "wedge-size", "path")
 ORDERING: dict[str, TableCalcPreset] = {
     "Columns": "table_down",
@@ -666,14 +675,76 @@ class SheetParser:
         filters: list[Filter] = []
         kinds: dict[str, Literal["categorical", "range", "top_n"]] = {}
         for element in children(view, "filter"):
-            if instance_key(element.get("column", "")) == "[:Measure Names]":
+            key = instance_key(element.get("column", ""))
+            if key == "[:Measure Names]":
                 continue  # 決定 Measure Values 的量值，不是資料篩選
+            tuple_kind = self.ds.auto_groups.get(key) or next(
+                (kind for prefix, kind in TUPLE_PREFIXES.items() if key.startswith(prefix)), None
+            )
+            if tuple_kind is not None:
+                found = self._tuple_filter(element, tuple_kind)
+                if found is not None:
+                    filters.append(found)
+                continue
             parsed = parser.parse(element)
-            if parsed is None:
+            if parsed is None or isinstance(parsed, TupleFilter):
                 continue
             filters.append(parsed)
             kinds[instance_key(element.get("column", ""))] = parsed.kind
         return filters, kinds
+
+    def _tuple_filter(self, element: etree._Element, kind: str) -> TupleFilter | None:
+        """篩選動作、工具提示、排除與只保留的篩選：依多個欄位的值組合篩選。"""
+        assert self.ds is not None
+        root = child(element, "groupfilter")
+        tree = _tuple_tree(root) if root is not None else None
+        if tree is None:
+            self.ctx.flag(element, "篩選動作或排除的篩選結構 v0 不支援")
+            return None
+        mode, levels, raw = tree
+        uses: list[FieldUse] = []
+        for level in levels:
+            key = instance_key(level)
+            if key in self.instances or key in self.uses:
+                resolved = self.resolve(key)
+            elif key in self.ds.by_name:
+                resolved = FieldUse(field=self.ds.by_name[key].id)
+            else:
+                resolved = use_from_name(self.ds, key)
+            if isinstance(resolved, str):
+                self.ctx.flag(element, f"多欄位篩選的欄位無法解析：{resolved}")
+                return None
+            uses.append(resolved)
+        types = [value_type(self.ds.field_by_id(u.field), u) for u in uses]
+        try:
+            tuples = [
+                [parse_literal(value, t) for value, t in zip(row, types, strict=True)]
+                for row in raw
+            ]
+        except LiteralError as exc:
+            self.ctx.flag(element, f"多欄位篩選的值無法解析：{exc}")
+            return None
+        action: str | None = None
+        if kind == "sheet_link":
+            name = attr(root, "ui-action-filter") if root is not None else None
+            action = self.ctx.action_ids.get(name or "")
+        elif kind == "vit" and "vit" not in self.ctx.notes:
+            self.ctx.notes.add("vit")
+            self.ctx.ignore(
+                element,
+                "工具提示中的工作表（Viz in Tooltip）：以一般工作表呈現，工具提示不顯示圖表",
+            )
+        caption = element.get("column", "")
+        return TupleFilter(
+            kind="tuple",
+            id=self.ctx.ids.make("flt", instance_key(caption).strip("[]"), caption),
+            fields=uses,
+            stage="context" if element.get("context") == "true" else "dimension",
+            mode=mode,  # type: ignore[arg-type]
+            tuples=tuples,
+            action=action,
+            source_ref=xpath(element),
+        )
 
     def _shared_filters(
         self,
@@ -696,7 +767,7 @@ class SheetParser:
             if key not in self.instances and key in shared.instances:
                 self.instances[key] = shared.instances[key]
             parsed = parser.parse(element)
-            if parsed is None:
+            if parsed is None or isinstance(parsed, TupleFilter):
                 shared.failed.add(key)
                 continue
             parsed = parsed.model_copy(
@@ -811,6 +882,57 @@ class SheetParser:
                 self.ctx.flag(item, f"工作表中的未知元素 <{tag}>")
                 continue
             self._check_elements(item)
+
+
+TupleTree = tuple[str, list[str], list[list[str | None]]]
+
+
+def _tuple_tree(node: etree._Element) -> TupleTree | None:
+    """groupfilter 樹 → (mode, 欄位層級, 值組合)。成員值保留 Tableau 的常值寫法。"""
+    function = node.get("function")
+    parts = children(node, "groupfilter")
+    if function == "level-members":
+        return "all", [node.get("level", "")], []
+    if function == "empty-level":
+        return "include", [node.get("member") or node.get("level", "")], []
+    if function == "member":
+        return "include", [node.get("level", "")], [[node.get("member")]]
+    if function == "crossjoin" and parts:
+        kinds = {p.get("function") for p in parts}
+        levels = [p.get("level", "") for p in parts]
+        if kinds == {"level-members"}:
+            return "all", levels, []
+        if kinds == {"member"}:
+            return "include", levels, [[p.get("member") for p in parts]]
+        if kinds == {"empty-level"}:
+            # 清除選取時排除所有值的篩選動作：層級寫在 member 屬性
+            return "include", [p.get("member") or p.get("level", "") for p in parts], []
+        return None
+    if function == "union" and parts:
+        found_levels: list[str] | None = None
+        rows: list[list[str | None]] = []
+        for part in parts:
+            sub = _tuple_tree(part)
+            if sub is None or sub[0] != "include":
+                return None
+            if found_levels is None:
+                found_levels = sub[1]
+            elif sub[1] != found_levels:
+                return None
+            rows += sub[2]
+        return "include", found_levels or [], rows
+    if function == "except" and parts:
+        first = _tuple_tree(parts[0])
+        if first is None or first[0] != "all":
+            return None
+        excluded: list[list[str | None]] = []
+        for part in parts[1:]:
+            sub = _tuple_tree(part)
+            if sub is None or sub[0] != "include" or sub[1] != first[1]:
+                return None
+            excluded += sub[2]
+        return "exclude", first[1], excluded
+    return None
 
 
 def _is_blank(table: etree._Element | None) -> bool:

@@ -30,7 +30,7 @@ from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
 from tmig.parser.ids import strip_brackets
 from tmig.parser.refs import qualified_parts
-from tmig.parser.twbx import child, children, descendants, local_name, text_of, xpath
+from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 
 METADATA_AGG: dict[str, Aggregation] = {
@@ -386,6 +386,12 @@ class DatasourceParser:
                 self._add_table_count(state, name, obj.get("caption"), obj)
 
         for group in children(self.el, "group"):
+            auto = attr(group, "auto-column")
+            if auto in ("sheet_link", "include", "exclude"):
+                # 篩選動作、工具提示中的工作表、排除與只保留：工作表上以多欄位篩選表示
+                kind = "vit" if attr(group, "ui-vit-column") == "true" else auto
+                state.auto_groups[group.get("name", "")] = kind
+                continue
             ctx.ignore(group, "群組或集合（工作表若有使用會另列為不支援）")
 
     def _add_raw(
