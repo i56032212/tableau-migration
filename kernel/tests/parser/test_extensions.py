@@ -647,3 +647,90 @@ def test_action_filter_level_from_instance_name(tmp_path: Path) -> None:
     assert tuple_filter.kind == "tuple"
     (use,) = tuple_filter.fields
     assert use.field == "f_order_date" and use.date is not None and use.date.unit == "year"
+
+
+# ---------------------------------------------------------------- K1 群組與數值分組
+
+
+def group_column(
+    calc_attrs: str, bins: str, datatype: str = "string", name: str = "Region (group)"
+) -> str:
+    return (
+        f"<column caption='{name}' datatype='{datatype}' name='[{name}]' role='dimension' type='nominal'>"
+        f"<calculation class='categorical-bin' {calc_attrs}>{bins}</calculation></column>"
+    )
+
+
+def field_formula(ir: IR, field_id: str) -> str:
+    found = next(f for ds in ir.datasources for f in ds.fields if f.id == field_id)
+    assert found.calc is not None
+    return found.calc.formula
+
+
+def test_group_formula(tmp_path: Path) -> None:
+    bins = (
+        "<bin default-name='false' value='&quot;Coasts&quot;'>"
+        "<value>&quot;East&quot;</value><value>&quot;West&quot;</value><value>%null%</value></bin>"
+        "<bin default-name='false' value='&quot;Say &quot;&quot;hi&quot;&quot;&quot;'>"
+        "<value>&quot;North&quot;</value></bin>"
+    )
+    calcs = group_column("column='[Region]' default='&quot;Other&quot;' new-bin='true'", bins)
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=calcs)))
+    assert reasons(ir) == []
+    assert field_formula(ir, "f_region_group") == (
+        'IF ISNULL([Region]) THEN "Coasts"\n'
+        'ELSEIF [Region] IN ("East", "West") THEN "Coasts"\n'
+        'ELSEIF [Region] IN ("North") THEN "Say ""hi"""\n'
+        'ELSE "Other"\n'
+        "END"
+    )
+
+
+def test_group_without_members_and_on_numbers(tmp_path: Path) -> None:
+    empty = group_column("column='[Region]' new-bin='true'", "", name="Empty (group)")
+    numbers = group_column(
+        "column='[Quantity]' new-bin='true'",
+        "<bin value='&quot;Few&quot;'><value>1</value><value>2</value></bin>",
+        name="Quantity (group)",
+    )
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=empty + numbers)))
+    assert reasons(ir) == []
+    assert field_formula(ir, "f_empty_group") == "[Region]"
+    assert field_formula(ir, "f_quantity_group") == (
+        'IF [Quantity] IN (1, 2) THEN "Few"\nELSE STR([Quantity])\nEND'
+    )
+
+
+def test_bin_formula_and_errors(tmp_path: Path) -> None:
+    pegged = (
+        "<column caption='Sales (bin)' datatype='real' name='[Sales (bin)]' role='dimension' type='ordinal'>"
+        "<calculation class='bin' decimals='1' formula='[Sales]' peg='2.5' size='10' /></column>"
+    )
+    broken = (
+        "<column caption='Profit (bin)' datatype='integer' name='[Profit (bin)]' role='dimension' type='ordinal'>"
+        "<calculation class='bin' decimals='0' formula='[Profit]' peg='0' size='0' /></column>"
+    )
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=pegged + broken)))
+    assert field_formula(ir, "f_sales_bin") == "FLOOR((([Sales]) - 2.5) / 10) * 10 + 2.5"
+    assert reasons(ir) == ["數值分組「Profit (bin)」：分組大小必須大於 0（0）"]
+
+
+def test_group_definition_in_worksheet_and_missing_values(tmp_path: Path) -> None:
+    """工作表的 datasource-dependencies 也會帶群組定義；「顯示缺少的值」不影響數字。"""
+    calcs = group_column(
+        "column='[Region]' new-bin='true'",
+        "<bin value='&quot;Coasts&quot;'><value>&quot;East&quot;</value></bin>",
+    )
+    group = instance("[Region (group)]", "None", "[none:Region (group):nk]")
+    sheet = worksheet(
+        "S",
+        [*BASIC, group],
+        rows=ref("none:Region (group):nk"),
+        cols=ref("sum:Sales:qk"),
+        deps_extra=calcs,
+        table_extra=f"<show-full-range><column>{ref('Region (group)')}</column></show-full-range>",
+    )
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=calcs), worksheets=sheet))
+    assert reasons(ir) == []
+    assert ir.worksheets[0].rows[0].field == "f_region_group"
+    assert any("顯示缺少的值" in u.reason for u in ir.ignored)

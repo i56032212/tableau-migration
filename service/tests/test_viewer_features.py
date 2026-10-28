@@ -305,3 +305,35 @@ def test_filter_actions(server: str) -> None:
         assert latest["ws_segment_detail"][1]["rows"] == 0
         assert errors == []
         browser.close()
+
+
+def test_groups_and_bins_render(server: str) -> None:
+    """K1：群組與數值分組的 dashboard 畫得出來；分組依下限排序，群組名稱取代成員。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "群組與分組")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 3"
+        )
+        page.wait_for_timeout(300)
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+
+        def texts(worksheet: str) -> list[str]:
+            return page.eval_on_selector_all(
+                f"[data-worksheet='{worksheet}'] svg text", "els => els.map(e => e.textContent)"
+            )
+
+        assert {"Coasts", "Central", "South"} <= set(texts("ws_sales_by_region_group"))
+        assert {"Fast", "Other"} <= set(texts("ws_sales_by_ship_speed"))
+        # x 軸的分組標籤依下限排序（之後的 0 是 y 軸的刻度）
+        bins = [t for t in texts("ws_sales_by_quantity_bin") if t in {"0", "3", "6", "9", "12"}]
+        assert bins[:5] == ["0", "3", "6", "9", "12"]
+        assert errors == []
+        browser.close()

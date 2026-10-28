@@ -135,6 +135,9 @@ KNOWN = frozenset(
         "simple-id",
         "repository-location",
         "breakdown",
+        # 群組定義（categorical-bin 的 <bin><value>）
+        "bin",
+        "value",
     }
 )
 OPAQUE = frozenset(
@@ -158,6 +161,7 @@ OPAQUE = frozenset(
 )
 IGNORED_ELEMENTS = {
     "mark-labels": "特定標記的標籤（標記標籤＞一律顯示）：新平台在工具提示與資料表中呈現這些值",
+    "show-full-range": "顯示缺少的值（沒有資料的分組或日期）：新平台只顯示有資料的標記",
 }
 KNOWN_UNSUPPORTED = {
     "reference-line": "參考線、參考區間或分布",

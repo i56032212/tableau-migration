@@ -28,6 +28,7 @@ from tmig.ir.models import (
 from tmig.ir.scope import DatasourceScope
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
+from tmig.parser.groups import GroupError, bin_formula, group_formula
 from tmig.parser.ids import strip_brackets
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
@@ -392,7 +393,7 @@ class DatasourceParser:
                 kind = "vit" if attr(group, "ui-vit-column") == "true" else auto
                 state.auto_groups[group.get("name", "")] = kind
                 continue
-            ctx.ignore(group, "群組或集合（工作表若有使用會另列為不支援）")
+            ctx.ignore(group, "集合或合併欄位（工作表若有使用會另列為不支援）")
 
     def _add_raw(
         self,
@@ -492,16 +493,42 @@ class DatasourceParser:
                 self.ctx.flag(item, f"資料源中的未知元素 <{name}>")
 
 
+GROUP_KINDS = {"categorical-bin": "群組", "bin": "數值分組"}
+
+
+def _source_datatype(state: DsState, source: str) -> str | None:
+    """群組來源欄位的型別：已加入的欄位，或資料源中尚未處理的 <column>。"""
+    found = state.by_name.get(source)
+    if found is not None:
+        return found.datatype
+    for column in children(state.element, "column"):
+        if column.get("name") == source:
+            return column.get("datatype")
+    return None
+
+
 def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) -> DataField | None:
     name = column.get("name", "")
     caption = column.get("caption") or strip_brackets(name)
     calc = child(column, "calculation")
     assert calc is not None
     calc_class = calc.get("class", "")
-    if calc_class != "tableau":
-        ctx.flag(column, f"計算欄位「{caption}」的類型 {calc_class}（群組、分組或集合）v0 不支援")
+    if calc_class in GROUP_KINDS:
+        # 群組與數值分組轉成等價的公式，之後與一般計算欄位相同
+        try:
+            if calc_class == "categorical-bin":
+                source = calc.get("column", "")
+                formula = group_formula(column, calc, _source_datatype(state, source))
+            else:
+                formula = bin_formula(calc)
+        except (GroupError, LiteralError) as exc:
+            ctx.flag(column, f"{GROUP_KINDS[calc_class]}「{caption}」：{exc}")
+            return None
+    elif calc_class != "tableau":
+        ctx.flag(column, f"計算欄位「{caption}」的類型 {calc_class}（集合等）v0 不支援")
         return None
-    formula = calc.get("formula")
+    else:
+        formula = calc.get("formula")
     if not formula:
         ctx.flag(column, f"計算欄位「{caption}」沒有公式")
         return None

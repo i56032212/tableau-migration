@@ -76,3 +76,21 @@ sheets:
       Sales: sum(f_sales)
     ignore: []
     numeric: auto
+  ws_sales_by_region_group:
+    columns:
+      Region (group): f_region_group
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_sales_by_ship_speed:
+    columns:
+      Ship Speed: f_ship_speed
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_sales_by_quantity_bin:
+    columns:
+      Quantity (bin): f_quantity_bin
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto

@@ -235,14 +235,18 @@ def test_calc_levels_and_ast(tmp_path: Path) -> None:
 
 
 def test_group_calcs_and_sets(tmp_path: Path) -> None:
+    # 群組（K1）轉成公式；集合與其他特殊類型的計算欄位仍不支援
     columns = (
         "<column caption='Region Group' datatype='string' name='[Region (group)]' role='dimension' type='nominal'>"
         "<calculation class='categorical-bin' column='[Region]' new-bin='true' /></column>"
+        "<column caption='Odd' datatype='string' name='[Odd]' role='dimension' type='nominal'>"
+        "<calculation class='mystery' /></column>"
     )
     extra = "<group caption='Top Customers' name='[Set 1]' name-style='unqualified' user:ui-builder='filter-group' />"
     ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=columns, extra=extra)))
-    assert any("categorical-bin" in r for r in reasons(ir))
-    assert any("群組或集合" in u.reason for u in ir.ignored)
+    assert reasons(ir) == ["計算欄位「Odd」的類型 mystery（集合等）v0 不支援"]
+    assert field(ir, "[Region (group)]").calc is not None
+    assert any("集合或合併欄位" in u.reason for u in ir.ignored)
 
 
 # ---------------------------------------------------------------- 參數

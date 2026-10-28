@@ -28,6 +28,12 @@ sheets:
     view: SegmentDetail
   - worksheet: ws_region_category_matrix
     view: RegionCategoryMatrix
+  - worksheet: ws_sales_by_region_group
+    view: SalesbyRegionGroup
+  - worksheet: ws_sales_by_ship_speed
+    view: SalesbyShipSpeed
+  - worksheet: ws_sales_by_quantity_bin
+    view: SalesbyQuantityBin
 cases:
   - name: default
     url_params: {}

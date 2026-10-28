@@ -106,7 +106,7 @@ def use_from_instance(ds: DsState, instance: etree._Element) -> FieldUse | str:
     if data_field is None:
         if column.startswith("[:"):
             return f"Measure Names／Values 等特殊欄位 {column} v0 不支援"
-        return f"欄位 {column} 不在資料源中（可能是群組、集合或分組）"
+        return f"欄位 {column} 不在資料源中（可能是集合或無法移轉的計算欄位）"
     derivation = instance.get("derivation", "None")
     continuous = instance.get("type") == "quantitative"
     if derivation in ("None", "User"):

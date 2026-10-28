@@ -13,6 +13,9 @@
 - H4 排除選取的標記：Region Category Matrix 排除 (West, Furniture)、(East, Technology) 兩個值組合
 - L1 篩選動作：點選 Region Picker 的地區篩選 Category Detail（清除時顯示全部）
   與 Segment Detail（清除時不顯示任何值），都在「篩選動作」dashboard 上；另有一個醒目提示動作
+- K1 群組與數值分組：Region (group)（East、West 合為 Coasts，其餘維持原值）、Ship Speed
+  （First Class、Same Day 合為 Fast，其餘歸入 Other）、Quantity (bin)（每 3 一格，顯示缺少的值），
+  在「群組與分組」dashboard 上
 """
 
 from __future__ import annotations
@@ -161,6 +164,27 @@ DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' nam
         </groupfilter>
       </group>"""
 
+# 群組與數值分組（計算欄位的 categorical-bin、bin 類型）
+REGION_GROUP = """      <column caption='Region (group)' datatype='string' name='[Region (group)]' role='dimension' type='nominal'>
+        <calculation class='categorical-bin' column='[Region]' new-bin='true'>
+          <bin default-name='false' value='&quot;Coasts&quot;'>
+            <value>&quot;East&quot;</value>
+            <value>&quot;West&quot;</value>
+          </bin>
+        </calculation>
+      </column>"""
+SHIP_SPEED = """      <column caption='Ship Speed' datatype='string' name='[Ship Mode (group)]' role='dimension' type='nominal'>
+        <calculation class='categorical-bin' column='[Ship Mode]' default='&quot;Other&quot;' new-bin='true'>
+          <bin default-name='false' value='&quot;Fast&quot;'>
+            <value>&quot;First Class&quot;</value>
+            <value>&quot;Same Day&quot;</value>
+          </bin>
+        </calculation>
+      </column>"""
+QUANTITY_BIN = """      <column aggregation='None' caption='Quantity (bin)' datatype='integer' name='[Quantity (bin)]' role='dimension' type='ordinal'>
+        <calculation class='bin' decimals='0' formula='[Quantity]' peg='0' size='3' />
+      </column>"""
+
 
 def worksheets() -> str:
     sales_by_segment = worksheet(
@@ -237,6 +261,9 @@ def worksheets() -> str:
             category_detail(),
             segment_detail(),
             region_category_matrix(),
+            sales_by_region_group(),
+            sales_by_ship_speed(),
+            sales_by_quantity_bin(),
         ]
     )
 
@@ -532,6 +559,73 @@ def region_category_matrix() -> str:
     )
 
 
+def sales_by_region_group() -> str:
+    """群組：East、West 合為 Coasts，沒有列入群組的成員維持原值。"""
+    return worksheet(
+        "Sales by Region Group",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000000C",
+        dependency(
+            [REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Region (group)]", "None", "[none:Region (group):nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ).replace(
+            "          </datasource-dependencies>",
+            REGION_GROUP + "\n          </datasource-dependencies>",
+        ),
+        "",
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Region (group):nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def sales_by_ship_speed() -> str:
+    """群組含「其他」：First Class、Same Day 合為 Fast，其餘歸入 Other。"""
+    return worksheet(
+        "Sales by Ship Speed",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000000D",
+        dependency(
+            [REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Ship Mode (group)]", "None", "[none:Ship Mode (group):nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Ship Mode (group):nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def sales_by_quantity_bin() -> str:
+    """數值分組：Quantity 每 3 一格，值為區間下限；顯示缺少的值（不影響數字）。"""
+    return worksheet(
+        "Sales by Quantity Bin",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000000E",
+        dependency(
+            [REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Quantity (bin)]", "None", "[none:Quantity (bin):ok]", "ordinal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar"),
+        ref("sum:Sales:qk"),
+        ref("none:Quantity (bin):ok"),
+    ).replace(
+        "        <rows>",
+        f"        <show-full-range>\n          <column>{escape(ref('Quantity (bin)'))}</column>\n        </show-full-range>\n        <rows>",
+        1,
+    )
+
+
 ACTIONS_DASHBOARD = "篩選動作"
 
 
@@ -592,6 +686,27 @@ def actions_dashboard() -> str:
         </zone>
       </zones>
       <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000012}}' />
+    </dashboard>"""
+
+
+def groups_dashboard() -> str:
+    """群組與分組（固定尺寸）：上方兩個群組，下方數值分組。"""
+    return f"""    <dashboard name='群組與分組'>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 312)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 56, 488, 312)} id='7' name='Sales by Region Group' />
+              <zone {zone_box(504, 56, 488, 312)} id='8' name='Sales by Ship Speed' />
+            </zone>
+            <zone {zone_box(8, 376, 984, 316)} id='9' name='Sales by Quantity Bin' />
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000013}}' />
     </dashboard>"""
 
 
@@ -675,7 +790,7 @@ def twb(rows: int) -> str:
     <preference name='ui.shelf.height' value='26' />
   </preferences>
   <datasources>
-{demo.datasource(rows, DATASOURCE_GROUPS)}
+{demo.datasource(rows, "\n".join([REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, DATASOURCE_GROUPS]))}
   </datasources>
 {shared_views()}
 {actions()}
@@ -686,6 +801,7 @@ def twb(rows: int) -> str:
 {dashboard()}
 {charts_dashboard()}
 {actions_dashboard()}
+{groups_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

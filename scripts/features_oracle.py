@@ -15,6 +15,8 @@
 - 篩選動作的目標是另一個篩選，不會被網址參數取代：沒有選取時，Category Detail 顯示全部，
   Segment Detail 不顯示任何值（動作設定為清除時排除所有值）；選取地區時兩者都只保留那些地區。
   篩選組合不含選取，選取的情況由 selection() 計算，供檢視器的端到端測試比對
+- 群組：Region (group) 把 East、West 合為 Coasts，其餘維持原值；Ship Speed 把 First Class、Same Day
+  合為 Fast，其餘歸入 Other。數值分組：Quantity (bin) 為 Quantity 所在區間（每 3 一格）的下限
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ def load_rows() -> list[Row]:
                     "Order ID": raw["Order ID"],
                     "Order Date": dt.date.fromisoformat(raw["Order Date"]),
                     "Category": raw["Category"],
+                    "Quantity": int(raw["Quantity"]),
                     "Sales": float(raw["Sales"]),
                     "Profit": float(raw["Profit"]),
                 }
@@ -228,6 +231,35 @@ def selection(worksheet: str, regions: list[str] | None) -> tuple[list[str], lis
     return compute(load_rows(), Case("selection", {}), regions)
 
 
+def sales_by_region_group(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[str, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            group = "Coasts" if row["Region"] in ("East", "West") else row["Region"]
+            sales[group] += row["Sales"]
+    return ["Region (group)", "Sales"], [[k, v] for k, v in sorted(sales.items())]
+
+
+def sales_by_ship_speed(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[str, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            speed = "Fast" if row["Ship Mode"] in ("First Class", "Same Day") else "Other"
+            sales[speed] += row["Sales"]
+    return ["Ship Speed", "Sales"], [[k, v] for k, v in sorted(sales.items())]
+
+
+def sales_by_quantity_bin(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[int, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[row["Quantity"] // 3 * 3] += row["Sales"]
+    return ["Quantity (bin)", "Sales"], [[k, v] for k, v in sorted(sales.items())]
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -240,6 +272,9 @@ SHEETS = {
     "ws_category_detail": category_detail,
     "ws_segment_detail": segment_detail,
     "ws_region_category_matrix": region_category_matrix,
+    "ws_sales_by_region_group": sales_by_region_group,
+    "ws_sales_by_ship_speed": sales_by_ship_speed,
+    "ws_sales_by_quantity_bin": sales_by_quantity_bin,
 }
 
 

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_sales_by_quantity_bin",
+    "name": "Sales by Quantity Bin",
+    "rows": 5,
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_quantity_bin"
+    }
+  },
+  "data": {
+    "values": "5 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "bar",
+    "tooltip": true
+  },
+  "encoding": {
+    "y": {
+      "field": "c1",
+      "type": "quantitative",
+      "title": "Sales"
+    },
+    "x": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Quantity (bin)"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Quantity (bin)"
+      },
+      {
+        "field": "c1_label",
+        "title": "Sales"
+      }
+    ]
+  }
+}

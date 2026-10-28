@@ -629,11 +629,14 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     add("參考線或趨勢線", [w.name for w in ws if w.reference_lines or w.trend_lines])
     add("地圖", [w.name for w in ws if w.maps])
     add("Story", [d.name for d in r.dashboards if d.story])
-    special = {k: v for k, v in r.calc_classes.items() if k != "tableau"}
+    # 群組（categorical-bin）與數值分組（bin）已在擴充階段支援（K1）
+    special = {
+        k: v for k, v in r.calc_classes.items() if k not in ("tableau", "bin", "categorical-bin")
+    }
     groups = sum(d.groups_or_sets for d in r.datasources)
     if special or groups:
         parts = [f"{k} {v}" for k, v in special.items()] + ([f"group {groups}"] if groups else [])
-        features.append(f"群組、集合或分組（{'、'.join(parts)}）")
+        features.append(f"集合等特殊欄位（{'、'.join(parts)}）")
     # 篩選動作已在擴充階段支援（L1），醒目提示不影響數字
     kinds = Counter(a.kind for a in r.actions if a.kind not in ("filter", "highlight"))
     if kinds:

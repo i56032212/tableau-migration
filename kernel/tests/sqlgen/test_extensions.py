@@ -229,3 +229,86 @@ def test_exclusions_filter_drops_value_combinations(run: Run) -> None:
         "South": 100.0,
         "North": 60.0,
     }
+
+
+# ---------------------------------------------------------------- K1 群組與數值分組
+
+REGION_GROUP = """<column caption='Region (group)' datatype='string' name='[Region (group)]' role='dimension' type='nominal'>
+  <calculation class='categorical-bin' column='[Region]' new-bin='true'{default}>
+    <bin default-name='false' value='&quot;Coasts&quot;'>
+      <value>&quot;East&quot;</value>
+      <value>&quot;West&quot;</value>
+    </bin>
+  </calculation>
+</column>"""
+
+
+def bin_column(name: str, formula: str, size: str) -> str:
+    size_attr = f"size-parameter='{size}'" if size.startswith("[") else f"size='{size}'"
+    return (
+        f"<column aggregation='None' caption='{name} (bin)' datatype='integer' name='[{name} (bin)]' "
+        "role='dimension' type='ordinal'>"
+        f"<calculation class='bin' decimals='0' formula='{formula}' peg='0' {size_attr} /></column>"
+    )
+
+
+def counts(rows: list[dict[str, Any]], key: str) -> dict[Any, Any]:
+    return {r[key]: r["count(f_order_id)"] for r in rows}
+
+
+ORDERS = instance("[Order ID]", "Count", "[cnt:Order ID:qk]", "quantitative")
+
+
+def test_group_keeps_ungrouped_members(run: Run) -> None:
+    group = instance("[Region (group)]", "None", "[none:Region (group):nk]")
+    sheet = worksheet(
+        "S", [group, SALES], rows=ref("none:Region (group):nk"), cols=ref("sum:Sales:qk")
+    )
+    rows = run(sheet, calcs=REGION_GROUP.format(default=""))
+    assert {r["f_region_group"]: r["sum(f_sales)"] for r in rows} == {
+        "Coasts": 1150.0,
+        "South": 100.0,
+        "North": 60.0,
+    }
+
+
+def test_group_with_other(run: Run) -> None:
+    group = instance("[Region (group)]", "None", "[none:Region (group):nk]")
+    sheet = worksheet(
+        "S", [group, SALES], rows=ref("none:Region (group):nk"), cols=ref("sum:Sales:qk")
+    )
+    rows = run(sheet, calcs=REGION_GROUP.format(default=" default='&quot;Other&quot;'"))
+    assert {r["f_region_group"]: r["sum(f_sales)"] for r in rows} == {
+        "Coasts": 1150.0,
+        "Other": 160.0,
+    }
+
+
+def test_bins_take_lower_bound(run: Run) -> None:
+    sales_bin = instance("[Sales (bin)]", "None", "[none:Sales (bin):ok]", "ordinal")
+    profit_bin = instance("[Profit (bin)]", "None", "[none:Profit (bin):ok]", "ordinal")
+    calcs = bin_column("Sales", "[Sales]", "100") + bin_column("Profit", "[Profit]", "25")
+    sheet = worksheet(
+        "S", [sales_bin, ORDERS], rows=ref("none:Sales (bin):ok"), cols=ref("cnt:Order ID:qk")
+    )
+    rows = run(sheet, calcs=calcs)
+    assert counts(rows, "f_sales_bin") == {0: 4, 100: 2, 200: 1, 300: 1, 400: 1}
+    # 負數往下取整：-5 與 -20 都在 [-25, 0)
+    sheet = worksheet(
+        "S", [profit_bin, ORDERS], rows=ref("none:Profit (bin):ok"), cols=ref("cnt:Order ID:qk")
+    )
+    assert counts(run(sheet, calcs=calcs), "f_profit_bin") == {-25: 2, 0: 5, 25: 2}
+
+
+def test_bin_size_from_parameter(run: Run) -> None:
+    quantity_bin = instance("[Quantity (bin)]", "None", "[none:Quantity (bin):ok]", "ordinal")
+    calcs = bin_column("Quantity", "[Quantity]", "[Parameters].[Parameter 1]")
+    sheet = worksheet(
+        "S",
+        [quantity_bin, ORDERS],
+        rows=ref("none:Quantity (bin):ok"),
+        cols=ref("cnt:Order ID:qk"),
+    )
+    assert counts(run(sheet, calcs=calcs), "f_quantity_bin") == {0: 9}  # Top N 預設 5
+    state = QueryState(parameters={"p_top_n": 2})
+    assert counts(run(sheet, calcs=calcs, state=state), "f_quantity_bin") == {0: 5, 2: 3, 4: 1}

@@ -527,6 +527,173 @@
             "level": "aggregate"
           },
           "source_ref": "/workbook/datasources/datasource/column[5]"
+        },
+        {
+          "id": "f_region_group",
+          "name": "[Region (group)]",
+          "caption": "Region (group)",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "IF [Region] IN (\"East\", \"West\") THEN \"Coasts\"\nELSE [Region]\nEND",
+            "ast": {
+              "node": "if",
+              "branches": [
+                {
+                  "cond": {
+                    "node": "in",
+                    "operand": {
+                      "node": "field",
+                      "ref": "[Region]",
+                      "parts": [
+                        "Region"
+                      ],
+                      "target": "field",
+                      "id": "f_region"
+                    },
+                    "values": [
+                      {
+                        "node": "literal",
+                        "kind": "string",
+                        "value": "East"
+                      },
+                      {
+                        "node": "literal",
+                        "kind": "string",
+                        "value": "West"
+                      }
+                    ]
+                  },
+                  "then": {
+                    "node": "literal",
+                    "kind": "string",
+                    "value": "Coasts"
+                  }
+                }
+              ],
+              "else": {
+                "node": "field",
+                "ref": "[Region]",
+                "parts": [
+                  "Region"
+                ],
+                "target": "field",
+                "id": "f_region"
+              }
+            },
+            "level": "row"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[9]"
+        },
+        {
+          "id": "f_ship_speed",
+          "name": "[Ship Mode (group)]",
+          "caption": "Ship Speed",
+          "role": "dimension",
+          "datatype": "string",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "IF [Ship Mode] IN (\"First Class\", \"Same Day\") THEN \"Fast\"\nELSE \"Other\"\nEND",
+            "ast": {
+              "node": "if",
+              "branches": [
+                {
+                  "cond": {
+                    "node": "in",
+                    "operand": {
+                      "node": "field",
+                      "ref": "[Ship Mode]",
+                      "parts": [
+                        "Ship Mode"
+                      ],
+                      "target": "field",
+                      "id": "f_ship_mode"
+                    },
+                    "values": [
+                      {
+                        "node": "literal",
+                        "kind": "string",
+                        "value": "First Class"
+                      },
+                      {
+                        "node": "literal",
+                        "kind": "string",
+                        "value": "Same Day"
+                      }
+                    ]
+                  },
+                  "then": {
+                    "node": "literal",
+                    "kind": "string",
+                    "value": "Fast"
+                  }
+                }
+              ],
+              "else": {
+                "node": "literal",
+                "kind": "string",
+                "value": "Other"
+              }
+            },
+            "level": "row"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[10]"
+        },
+        {
+          "id": "f_quantity_bin",
+          "name": "[Quantity (bin)]",
+          "caption": "Quantity (bin)",
+          "role": "dimension",
+          "datatype": "integer",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "FLOOR(([Quantity]) / 3) * 3",
+            "ast": {
+              "node": "binary",
+              "op": "*",
+              "left": {
+                "node": "call",
+                "name": "FLOOR",
+                "args": [
+                  {
+                    "node": "binary",
+                    "op": "/",
+                    "left": {
+                      "node": "field",
+                      "ref": "[Quantity]",
+                      "parts": [
+                        "Quantity"
+                      ],
+                      "target": "field",
+                      "id": "f_quantity"
+                    },
+                    "right": {
+                      "node": "literal",
+                      "kind": "integer",
+                      "value": 3
+                    }
+                  }
+                ]
+              },
+              "right": {
+                "node": "literal",
+                "kind": "integer",
+                "value": 3
+              }
+            },
+            "level": "row"
+          },
+          "source_ref": "/workbook/datasources/datasource/column[11]"
         }
       ],
       "filters": [
@@ -1417,6 +1584,142 @@
       "sorts": [],
       "table_calcs": [],
       "source_ref": "/workbook/worksheets/worksheet[11]"
+    },
+    {
+      "id": "ws_sales_by_region_group",
+      "name": "Sales by Region Group",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region_group",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[12]"
+    },
+    {
+      "id": "ws_sales_by_ship_speed",
+      "name": "Sales by Ship Speed",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_ship_speed",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[13]"
+    },
+    {
+      "id": "ws_sales_by_quantity_bin",
+      "name": "Sales by Quantity Bin",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_quantity_bin",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[14]"
     }
   ],
   "dashboards": [
@@ -2143,6 +2446,170 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[3]"
+    },
+    {
+      "id": "db_e90cfe8a",
+      "name": "群組與分組",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "群組與分組",
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 312,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 488,
+                      "h": 312,
+                      "worksheet": "ws_sales_by_region_group",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 504,
+                      "y": 56,
+                      "w": 488,
+                      "h": 312,
+                      "worksheet": "ws_sales_by_ship_speed",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]"
+                },
+                {
+                  "id": "z9",
+                  "kind": "worksheet",
+                  "x": 8,
+                  "y": 376,
+                  "w": 984,
+                  "h": 316,
+                  "worksheet": "ws_sales_by_quantity_bin",
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[3]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[4]"
     }
   ],
   "actions": [
@@ -2185,6 +2652,12 @@
   ],
   "unsupported": [],
   "ignored": [
+    {
+      "source_ref": "/workbook/worksheets/worksheet[14]/table/show-full-range",
+      "reason": "顯示缺少的值（沒有資料的分組或日期）：新平台只顯示有資料的標記",
+      "element": "show-full-range",
+      "xml": "<show-full-range xmlns:user=\"http://www.tableausoftware.com/xml/user\">\n          <column>[federated.0s2xs1a1g5wq1h17oo8mq0b6k5ry].[Quantity (bin)]</column>\n        </show-full-range>"
+    },
     {
       "source_ref": "/workbook/dashboards/dashboard[1]/size",
       "reason": "dashboard「功能總覽」為自動尺寸：區塊座標以 1366×768 換算，檢視時依視窗大小重排（固定大小的區塊維持像素大小，其餘依比例分配），與 Tableau 的版面重排可能略有差異",
