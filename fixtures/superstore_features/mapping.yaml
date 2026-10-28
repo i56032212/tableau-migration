@@ -145,3 +145,11 @@ sheets:
       Sales: sum(f_sales)
     ignore: []
     numeric: auto
+  ws_monthly_moving_average:
+    columns:
+      Month of Order Date: trunc_month(f_order_date)
+      Moving Average of Sales: sum(f_sales)#tc_moving_sales
+      Moving Sum of Sales: sum(f_sales)#tc_moving_sales_2
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto

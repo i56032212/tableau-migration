@@ -22,6 +22,8 @@
   排除 Phones 後銷售額前 3 名的子類別，都先以全部資料決定，再套用網址參數
 - 差異與差異百分比：與前一年比較，差異百分比為差異除以前一年的絕對值；第一年沒有值（匯出為空白）
 - Selected Region Sales：參數 Selected Region（預設 East）所選地區的銷售額，其他地區為 0
+- 移動計算：依月份排序，移動平均為前兩個月與當月（有幾個月就平均幾個月）；移動總和為前後各一個月，
+  前後不足一個月時為空值（只算有資料的月份）
 - 參考線只影響圖表：Sub-Category Sales、Region Sales Bands 的預期結果就是各標記的銷售額
 """
 
@@ -359,6 +361,23 @@ def region_sales_bands(rows: list[Row], case: Case) -> tuple[list[str], list[lis
     return ["Region", "Sales"], body
 
 
+def monthly_moving_average(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[dt.date, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[row["Order Date"].replace(day=1)] += row["Sales"]
+    months = sorted(sales)
+    values = [sales[m] for m in months]
+    body = []
+    for i, month in enumerate(months):
+        window = values[max(i - 2, 0) : i + 1]
+        average = sum(window) / len(window)
+        total = sum(values[i - 1 : i + 2]) if 0 < i < len(values) - 1 else None
+        body.append([month.isoformat(), average, total, values[i]])
+    return ["Month of Order Date", "Moving Average of Sales", "Moving Sum of Sales", "Sales"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -382,6 +401,7 @@ SHEETS = {
     "ws_selected_region_sales": selected_region_sales,
     "ws_sub_category_sales": sub_category_sales,
     "ws_region_sales_bands": region_sales_bands,
+    "ws_monthly_moving_average": monthly_moving_average,
 }
 
 

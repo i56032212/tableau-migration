@@ -119,6 +119,9 @@ def _labels(ir: IR, use: FieldUse, table_calcs: list[TableCalc]) -> list[str]:
             f"Difference in {agg_word} of {caption}",
             f"Difference from {caption}",
         ]
+    if tc.type == "moving":
+        word = AGG_WORDS.get(str(tc.options.get("aggregation", "avg")), "Average")
+        return [f"Moving {word} of {caption}", f"Moving {word} of {agg_word} of {caption}"]
     if tc.type == "percent_difference":
         return [
             f"% Difference in {caption}",

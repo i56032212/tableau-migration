@@ -87,7 +87,11 @@ QUICK_TYPES = {
     "Rank": "rank",
     "Difference": "difference",
     "PctDiff": "percent_difference",
+    "WindowTotal": "moving",
 }
+MOVING_AGGS = frozenset(
+    {"sum", "avg", "min", "max", "median", "count", "stdev", "stdevp", "var", "varp"}
+)
 RANK_TYPES = {
     "Competition": "competition",
     "Dense": "dense",
@@ -710,6 +714,26 @@ class SheetParser:
             if options["aggregation"] not in ("sum", "avg", "min", "max"):
                 self.ctx.flag(calc_el, f"累計的彙總方式 {options['aggregation']} v0 不支援")
                 return None
+        if calc_type == "moving":
+            # 移動計算：from、to 為相對於目前標記的位置（含兩端），例如 -2、0 為前兩個與目前的值
+            agg = calc_el.get("aggregation", "Avg").lower()
+            window = [w for w in (calc_el.get("window-options") or "").split(",") if w]
+            try:
+                start, end = int(calc_el.get("from", "-2")), int(calc_el.get("to", "0"))
+            except ValueError:
+                start, end = 1, 0
+            if agg not in MOVING_AGGS or start > end:
+                self.ctx.flag(
+                    calc_el,
+                    f"移動計算的設定（{agg}，{calc_el.get('from')} 到 {calc_el.get('to')}）v0 不支援",
+                )
+                return None
+            options.update(
+                aggregation=agg,
+                start=start,
+                end=end,
+                null_if_incomplete="NullIfIncomplete" in window,
+            )
         if calc_type == "rank":
             parts = [
                 p.strip() for p in calc_el.get("rank-options", "Competition,Descending").split(",")

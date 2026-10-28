@@ -82,7 +82,9 @@ TC_LABELS = {
     "rank": "排名",
     "difference": "差異",
     "percent_difference": "差異百分比",
+    "moving": "移動計算",
 }
+MOVING_LABELS = {"avg": "移動平均", "sum": "移動總和", "min": "移動最小值", "max": "移動最大值"}
 VL_MARKS = {
     "bar": "bar",
     "line": "line",
@@ -128,7 +130,10 @@ def caption(ir_field: DataField, use: FieldUse, ws: Worksheet) -> str:
     if use.table_calc is not None:
         tc = next((t for t in ws.table_calcs if t.id == use.table_calc), None)
         if tc is not None and tc.type in TC_LABELS:
-            name = f"{name}（{TC_LABELS[tc.type]}）"
+            label = TC_LABELS[tc.type]
+            if tc.type == "moving":
+                label = MOVING_LABELS.get(str(tc.options.get("aggregation")), label)
+            name = f"{name}（{label}）"
     return name
 
 

@@ -959,3 +959,65 @@ def test_reference_lines_not_drawn(tmp_path: Path) -> None:
     assert "參考線、參考區間或分布（confidence，per-table）新平台不畫（不影響數字）" in ignored
     assert "百分比分布（彙總值的幾成）新平台不畫（不影響數字）" in ignored
     assert "Measure Values 軸上的參考線新平台不畫（不影響數字）" in ignored
+
+
+# ---------------------------------------------------------------- K3 移動計算
+
+
+def moving_sheet(*calcs: str) -> str:
+    instances = [
+        *BASIC,
+        *(
+            instance("[Sales]", "Sum", f"[m{i}:sum:Sales:qk]", "quantitative").replace(
+                " />", f">{calc}</column-instance>"
+            )
+            for i, calc in enumerate(calcs)
+        ),
+    ]
+    encodings = "".join(
+        f"<tooltip column='{ref(f'm{i}:sum:Sales:qk')}' />" for i in range(len(calcs))
+    )
+    return worksheet(
+        "Moving",
+        instances,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        encodings=encodings,
+    )
+
+
+def test_moving_calculations(tmp_path: Path) -> None:
+    sheet = moving_sheet(
+        "<table-calc aggregation='Avg' from='-2' ordering-type='Columns' to='0' "
+        "type='WindowTotal' window-options='IncludeCurrent' />",
+        "<table-calc aggregation='Median' from='-1' ordering-type='Columns' to='1' "
+        "type='WindowTotal' window-options='IncludeCurrent,NullIfIncomplete' />",
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    assert [(tc.type, tc.preset, tc.options) for tc in ir.worksheets[0].table_calcs] == [
+        (
+            "moving",
+            "table_down",
+            {"aggregation": "avg", "start": -2, "end": 0, "null_if_incomplete": False},
+        ),
+        (
+            "moving",
+            "table_down",
+            {"aggregation": "median", "start": -1, "end": 1, "null_if_incomplete": True},
+        ),
+    ]
+
+
+def test_moving_calculation_unsupported_settings(tmp_path: Path) -> None:
+    sheet = moving_sheet(
+        "<table-calc aggregation='CountD' from='-2' ordering-type='Columns' to='0' type='WindowTotal' />",
+        "<table-calc aggregation='Sum' from='1' ordering-type='Columns' to='0' type='WindowTotal' />",
+        "<table-calc aggregation='Sum' from='x' ordering-type='Columns' to='0' type='WindowTotal' />",
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet), lenient=True)
+    assert reasons(ir) == [
+        "移動計算的設定（countd，-2 到 0）v0 不支援",
+        "移動計算的設定（sum，1 到 0）v0 不支援",
+        "移動計算的設定（sum，x 到 0）v0 不支援",
+    ]

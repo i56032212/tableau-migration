@@ -1,0 +1,81 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_monthly_moving_average",
+    "name": "Monthly Moving Average",
+    "rows": 48,
+    "mark": "line",
+    "dimensions": {
+      "c0": "trunc_month(f_order_date)"
+    },
+    "measures": {
+      "c1": "sum(f_sales)#tc_moving_sales",
+      "c2": "sum(f_sales)",
+      "c3": "sum(f_sales)#tc_moving_sales_2"
+    }
+  },
+  "data": {
+    "values": "48 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label",
+      "c2",
+      "c2_label",
+      "c3",
+      "c3_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "line",
+    "tooltip": true,
+    "point": true
+  },
+  "encoding": {
+    "y": {
+      "field": "c1",
+      "type": "quantitative",
+      "title": "Sales（移動平均）"
+    },
+    "x": {
+      "field": "c0",
+      "type": "temporal",
+      "timeUnit": "utcyearmonth",
+      "title": "MONTH(Order Date)"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "MONTH(Order Date)"
+      },
+      {
+        "field": "c1_label",
+        "title": "Sales（移動平均）"
+      },
+      {
+        "field": "c2_label",
+        "title": "Sales"
+      },
+      {
+        "field": "c3_label",
+        "title": "Sales（移動總和）"
+      }
+    ]
+  }
+}

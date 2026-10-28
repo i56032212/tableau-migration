@@ -2415,6 +2415,98 @@
         }
       ],
       "source_ref": "/workbook/worksheets/worksheet[22]"
+    },
+    {
+      "id": "ws_monthly_moving_average",
+      "name": "Monthly Moving Average",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": "tc_moving_sales"
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_order_date",
+          "agg": null,
+          "date": {
+            "kind": "trunc",
+            "unit": "month"
+          },
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "line",
+        "color": null,
+        "size": null,
+        "label": [],
+        "detail": [],
+        "tooltip": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": "tc_moving_sales_2"
+          }
+        ],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [
+        {
+          "id": "tc_moving_sales",
+          "type": "moving",
+          "preset": "table_across",
+          "addressing": [
+            "f_order_date"
+          ],
+          "inferred": false,
+          "options": {
+            "aggregation": "avg",
+            "start": -2,
+            "end": 0,
+            "null_if_incomplete": false
+          },
+          "source_ref": "/workbook/worksheets/worksheet[23]/table/view/datasource-dependencies/column-instance[3]/table-calc"
+        },
+        {
+          "id": "tc_moving_sales_2",
+          "type": "moving",
+          "preset": "table_across",
+          "addressing": [
+            "f_order_date"
+          ],
+          "inferred": false,
+          "options": {
+            "aggregation": "sum",
+            "start": -1,
+            "end": 1,
+            "null_if_incomplete": true
+          },
+          "source_ref": "/workbook/worksheets/worksheet[23]/table/view/datasource-dependencies/column-instance[4]/table-calc"
+        }
+      ],
+      "reference_lines": [],
+      "source_ref": "/workbook/worksheets/worksheet[23]"
     }
   ],
   "dashboards": [
@@ -3700,7 +3792,7 @@
                   "x": 8,
                   "y": 56,
                   "w": 984,
-                  "h": 636,
+                  "h": 312,
                   "worksheet": "ws_sales_growth_by_year",
                   "field": null,
                   "parameter": null,
@@ -3714,6 +3806,27 @@
                   "hidden": false,
                   "show_title": true,
                   "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]"
+                },
+                {
+                  "id": "z7",
+                  "kind": "worksheet",
+                  "x": 8,
+                  "y": 376,
+                  "w": 984,
+                  "h": 316,
+                  "worksheet": "ws_monthly_moving_average",
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[3]"
                 }
               ],
               "layout": "vertical",

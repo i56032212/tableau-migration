@@ -52,6 +52,8 @@ sheets:
     view: Sub-CategorySales
   - worksheet: ws_region_sales_bands
     view: RegionSalesBands
+  - worksheet: ws_monthly_moving_average
+    view: MonthlyMovingAverage
 cases:
   - name: default
     url_params: {}

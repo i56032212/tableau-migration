@@ -29,6 +29,7 @@ from tmig.formula.ast import (
     Binary,
     Call,
     FieldRef,
+    If,
     LiteralNode,
     Lod,
     Node,
@@ -690,6 +691,23 @@ class WorksheetQuery:
             if tc.type == "difference":
                 return diff
             return Binary(0, "/", diff, Call(0, "ABS", (other,)))
+        if tc.type == "moving":
+            # 與 Tableau 轉成計算欄位時相同：WINDOW_AVG(x, -2, 0)；視窗超出分割範圍時取現有的標記，
+            # 設定「不足時為 Null」則為 Null
+            agg = str(tc.options.get("aggregation", "avg")).upper()
+            start, end = tc.options.get("start", -2), tc.options.get("end", 0)
+            assert isinstance(start, int) and isinstance(end, int)
+            low, high = LiteralNode(0, "integer", start), LiteralNode(0, "integer", end)
+            window = Call(0, f"WINDOW_{agg}", (base, low, high))
+            if not tc.options.get("null_if_incomplete"):
+                return window
+            complete = Binary(
+                0,
+                "AND",
+                Binary(0, "<=", Call(0, "FIRST", ()), low),
+                Binary(0, ">=", Call(0, "LAST", ()), high),
+            )
+            return If(0, ((complete, window),), None)
         raise QueryError(f"快速 Table Calculation 類型 {tc.type} 尚不支援", unsupported=True)
 
     def _check_measure(self, m: Measure) -> None:

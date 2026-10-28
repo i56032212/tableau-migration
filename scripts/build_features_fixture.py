@@ -20,7 +20,8 @@
   在「群組與分組」dashboard 上
 - K4 篩選條件：相對日期（最近 3 個月）、彙總條件（總銷售額大於 5000 的客戶）、萬用字元
   （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別），在「篩選條件」dashboard 上
-- K3 快速 Table Calculation：Sales Growth by Year 的差異與差異百分比（與前一年比較），在「年度成長」dashboard 上
+- K3 快速 Table Calculation：Sales Growth by Year 的差異與差異百分比（與前一年比較）；Monthly Moving Average
+  的移動平均（前兩個月與當月）與移動總和（前後各一個月，不足時為 Null），在「年度成長」dashboard 上
 - J4 參考線：Sub-Category Sales 每個類別（窗格）的平均線與整張表的目標常數線；Region Sales Bands 的中位數
   與平均 ± 1 個母體標準差，在「參考線」dashboard 上（只影響圖表，不影響數字）
 """
@@ -298,6 +299,7 @@ def worksheets() -> str:
             selected_region_sales(),
             sub_category_sales(),
             region_sales_bands(),
+            monthly_moving_average(),
         ]
     )
 
@@ -815,6 +817,45 @@ def sales_growth() -> str:
     )
 
 
+def monthly_moving_average() -> str:
+    """移動計算：每月銷售額的移動平均（前兩個月與當月）與移動總和（前後各一個月，不足時為 Null）。"""
+
+    def moving(name: str, aggregation: str, start: int, end: int, options: str) -> str:
+        return instance(
+            "[Sales]",
+            "Sum",
+            name,
+            "quantitative",
+            f"<table-calc aggregation='{aggregation}' from='{start}' ordering-type='Rows' "
+            f"to='{end}' type='WindowTotal' window-options='{options}' />",
+        )
+
+    encodings = "\n".join(
+        [
+            f"              <tooltip column={attr(ref('sum:Sales:qk'))} />",
+            f"              <tooltip column={attr(ref('win:sum:Sales:qk:2'))} />",
+        ]
+    )
+    return worksheet(
+        "Monthly Moving Average",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000001F",
+        dependency(
+            [("[Order Date]", "date", "dimension", "ordinal"), REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Order Date]", "Month-Trunc", "[tmn:Order Date:qk]", "quantitative"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+                moving("[win:sum:Sales:qk]", "Avg", -2, 0, "IncludeCurrent"),
+                moving("[win:sum:Sales:qk:2]", "Sum", -1, 1, "IncludeCurrent,NullIfIncomplete"),
+            ],
+            [],
+        ),
+        "",
+        pane("Line", encodings),
+        ref("win:sum:Sales:qk"),
+        ref("tmn:Order Date:qk"),
+    )
+
+
 def selected_region_sales() -> str:
     """依參數 Selected Region 計算的銷售額（參數動作的目標）。"""
     params = PARAMETERS.replace(
@@ -1078,7 +1119,8 @@ def growth_dashboard() -> str:
         <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
           <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
             <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
-            <zone {zone_box(8, 56, 984, 636)} id='6' name='Sales Growth by Year' />
+            <zone {zone_box(8, 56, 984, 312)} id='6' name='Sales Growth by Year' />
+            <zone {zone_box(8, 376, 984, 316)} id='7' name='Monthly Moving Average' />
           </zone>
         </zone>
       </zones>

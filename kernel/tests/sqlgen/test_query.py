@@ -490,6 +490,47 @@ def test_difference_and_percent_difference(run: Run) -> None:
     }
 
 
+def moving_instance(name: str, aggregation: str, start: int, end: int, options: str) -> str:
+    return instance(
+        "[Sales]",
+        "Sum",
+        f"[{name}:sum:Sales:qk]",
+        "quantitative",
+        f"<table-calc aggregation='{aggregation}' from='{start}' ordering-type='Columns' "
+        f"to='{end}' type='WindowTotal' window-options='{options}' />",
+    )
+
+
+def test_moving_calculations(run: Run) -> None:
+    # 依 Region 排序：East 350、North 60、South 100、West 800
+    inst = [
+        moving_instance("mavg", "Avg", -2, 0, "IncludeCurrent"),
+        moving_instance("msum", "Sum", -1, 1, "IncludeCurrent,NullIfIncomplete"),
+    ]
+    enc = f"<text column='{ref('mavg:sum:Sales:qk')}' /><tooltip column='{ref('msum:sum:Sales:qk')}' />"
+    rows = tc_rows(run, inst, enc)
+    assert by_region(rows, "sum(f_sales)#tc_moving_sales") == approx(
+        {"East": 350, "North": 205, "South": 170, "West": 320}
+    )
+    assert by_region(rows, "sum(f_sales)#tc_moving_sales_2") == {
+        "East": None,  # 前面沒有值，不足時為 Null
+        "North": 510,
+        "South": 960,
+        "West": None,
+    }
+    rows = tc_rows(
+        run,
+        [moving_instance("mmax", "Max", 0, 1, "IncludeCurrent")],
+        f"<text column='{ref('mmax:sum:Sales:qk')}' />",
+    )
+    assert by_region(rows, "sum(f_sales)#tc_moving_sales") == {
+        "East": 350,
+        "North": 100,
+        "South": 800,
+        "West": 800,  # 視窗超出範圍時只取現有的標記
+    }
+
+
 def test_table_across_with_rows_only_is_one_partition_per_mark(run: Run) -> None:
     inst = [tc_instance(20, "Rows")]
     rows = tc_rows(run, inst, f"<text column='{ref('usr:Calculation_20:qk')}' />")
