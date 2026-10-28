@@ -7,6 +7,11 @@
     "mark": "bar",
     "dimensions": {
       "c0": "year(f_order_date)"
+    },
+    "measures": {
+      "c1": "sum(f_sales)#tc_percent_difference_sales",
+      "c2": "sum(f_sales)#tc_difference_sales",
+      "c3": "sum(f_sales)"
     }
   },
   "data": {

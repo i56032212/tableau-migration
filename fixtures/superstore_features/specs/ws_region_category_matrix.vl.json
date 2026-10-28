@@ -8,6 +8,9 @@
     "dimensions": {
       "c0": "f_region",
       "c1": "f_category"
+    },
+    "measures": {
+      "c2": "sum(f_sales)"
     }
   },
   "data": {

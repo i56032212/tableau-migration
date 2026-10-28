@@ -175,7 +175,10 @@ function WorkbookPage({ route, caseName }: { route: Exclude<Route, { page: "home
           dashboard={dashboard}
           view={view}
           onView={(next) => setView(next)}
-          onNavigate={(id) => navigate(`/w/${encodeURIComponent(workbook)}/d/${encodeURIComponent(id)}${window.location.search}`)}
+          onNavigate={(target) => {
+            const [kind, id] = target.dashboard ? ["d", target.dashboard] : ["s", target.worksheet ?? ""];
+            if (id) navigate(`/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}${window.location.search}`);
+          }}
           cases={cases}
         />
       )}

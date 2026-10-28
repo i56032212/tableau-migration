@@ -13,6 +13,8 @@
 - H4 排除選取的標記：Region Category Matrix 排除 (West, Furniture)、(East, Technology) 兩個值組合
 - L1 篩選動作：點選 Region Picker 的地區篩選 Category Detail（清除時顯示全部）
   與 Segment Detail（清除時不顯示任何值），都在「篩選動作」dashboard 上；另有一個醒目提示動作
+- L2 網址動作：Region Picker 的選單中開啟以地區與銷售額代入的網址；「參數動作」dashboard 上點選地區設定參數
+  Selected Region（Selected Region Sales 依參數計算），選單中切換到「篩選動作」dashboard
 - K1 群組與數值分組：Region (group)（East、West 合為 Coasts，其餘維持原值）、Ship Speed
   （First Class、Same Day 合為 Fast，其餘歸入 Other）、Quantity (bin)（每 3 一格，顯示缺少的值），
   在「群組與分組」dashboard 上
@@ -155,6 +157,7 @@ EXCLUSIONS = "Exclusions (Region,Category)"
 ACTION_CATEGORY = "[Action1_7D6C2A1F2B3C4D5E9F0A000000000101]"
 ACTION_SEGMENT = "[Action2_7D6C2A1F2B3C4D5E9F0A000000000102]"
 ACTION_BRUSH = "[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]"
+ACTION_URL = "[Action4_7D6C2A1F2B3C4D5E9F0A000000000104]"
 DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' name='[{ACTION_REGION}]' name-style='unqualified' user:auto-column='sheet_link'>
         <groupfilter function='crossjoin'>
           <groupfilter function='level-members' level='[Region]' />
@@ -166,6 +169,24 @@ DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' nam
           <groupfilter function='level-members' level='[none:Category:nk]' />
         </groupfilter>
       </group>"""
+
+# 參數動作：點選地區設定參數，計算欄位依參數計算
+SELECTED_CALC = "[Calculation_7D6C2A1F00000001]"
+PARAMETERS = """    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>
+      <aliases enabled='yes' />
+      <column caption='Selected Region' datatype='string' name='[Parameter 1]' param-domain-type='list' role='measure' type='nominal' value='&quot;East&quot;'>
+        <calculation class='tableau' formula='&quot;East&quot;' />
+        <members>
+          <member value='&quot;Central&quot;' />
+          <member value='&quot;East&quot;' />
+          <member value='&quot;South&quot;' />
+          <member value='&quot;West&quot;' />
+        </members>
+      </column>
+    </datasource>"""
+SELECTED_COLUMN = f"""      <column caption='Selected Region Sales' datatype='real' name='{SELECTED_CALC}' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='IF [Region] = [Parameters].[Parameter 1] THEN [Sales] ELSE 0 END' />
+      </column>"""
 
 # 群組與數值分組（計算欄位的 categorical-bin、bin 類型）
 REGION_GROUP = """      <column caption='Region (group)' datatype='string' name='[Region (group)]' role='dimension' type='nominal'>
@@ -272,6 +293,7 @@ def worksheets() -> str:
             son_customers(),
             top_sub_categories(),
             sales_growth(),
+            selected_region_sales(),
         ]
     )
 
@@ -789,7 +811,45 @@ def sales_growth() -> str:
     )
 
 
+def selected_region_sales() -> str:
+    """依參數 Selected Region 計算的銷售額（參數動作的目標）。"""
+    params = PARAMETERS.replace(
+        "    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>\n      <aliases enabled='yes' />",
+        "          <datasource-dependencies datasource='Parameters'>",
+    ).replace("    </datasource>", "          </datasource-dependencies>")
+    sheet = worksheet(
+        "Selected Region Sales",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000001A",
+        params
+        + "\n"
+        + dependency(
+            [("[Category]", "string", "dimension", "nominal"), *REGION_SALES_COLUMNS],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance(SELECTED_CALC, "Sum", f"[sum:{SELECTED_CALC[1:-1]}:qk]", "quantitative"),
+            ],
+            [],
+        ).replace(
+            "          </datasource-dependencies>",
+            SELECTED_COLUMN + "\n          </datasource-dependencies>",
+        ),
+        "",
+        pane(
+            "Bar",
+            f"              <text column={attr(ref('sum:' + SELECTED_CALC[1:-1] + ':qk'))} />",
+        ),
+        ref("none:Category:nk"),
+        ref(f"sum:{SELECTED_CALC[1:-1]}:qk"),
+    )
+    return sheet.replace(
+        f"            <datasource caption='Orders' name='{DS}' />",
+        f"            <datasource caption='Orders' name='{DS}' />\n            <datasource name='Parameters' />",
+        1,
+    )
+
+
 ACTIONS_DASHBOARD = "篩選動作"
+PARAMETER_DASHBOARD = "參數動作"
 
 
 def actions() -> str:
@@ -817,6 +877,10 @@ def actions() -> str:
         <param name='target' value={attr(ACTIONS_DASHBOARD)} />
       </command>
     </action>
+    <action caption='Search Region' name={attr(ACTION_URL)}>
+      {source}
+      <link caption='Search Region' delimiter=',' escape='\\' expression={attr("https://example.com/search?region=<[Region]>&sales=<SUM([Sales])>")} include-null='true' multi-select='true' url-escape='true' />
+    </action>
     <action caption='Highlight Region' name={attr(ACTION_BRUSH)}>
       <activation auto-clear='true' type='on-hover' />
       <source dashboard={attr(ACTIONS_DASHBOARD)} type='sheet' worksheet='Region Category Matrix' />
@@ -825,6 +889,20 @@ def actions() -> str:
         <param name='target' value={attr(ACTIONS_DASHBOARD)} />
       </command>
     </action>
+    <nav-action caption='Go to Filter Actions' name='[Action6_7D6C2A1F2B3C4D5E9F0A000000000106]'>
+      <source dashboard={attr(PARAMETER_DASHBOARD)} type='sheet' worksheet='Selected Region Sales' />
+      <params>
+        <param name='target' value={attr(ACTIONS_DASHBOARD)} />
+      </params>
+    </nav-action>
+    <edit-parameter-action caption='Set Selected Region' name='[Action5_7D6C2A1F2B3C4D5E9F0A000000000105]'>
+      <activation type='on-select' />
+      <source dashboard={attr(PARAMETER_DASHBOARD)} type='sheet' worksheet='Region Picker' />
+      <params>
+        <param name='source-field' value={attr(ref("none:Region:nk"))} />
+        <param name='target-parameter' value='[Parameters].[Parameter 1]' />
+      </params>
+    </edit-parameter-action>
   </actions>"""
 
 
@@ -920,6 +998,27 @@ def growth_dashboard() -> str:
     </dashboard>"""
 
 
+def parameter_dashboard() -> str:
+    """參數動作：點選 Region Picker 的地區設定參數 Selected Region。"""
+    return f"""    <dashboard name={attr(PARAMETER_DASHBOARD)}>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 72)} id='9' mode='compact' param='[Parameters].[Parameter 1]' type-v2='paramctrl' />
+            <zone {zone_box(8, 136, 984, 556)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 136, 488, 556)} id='7' name='Region Picker' />
+              <zone {zone_box(504, 136, 488, 556)} id='8' name='Selected Region Sales' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-00000000001B}}' />
+    </dashboard>"""
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
@@ -1000,7 +1099,8 @@ def twb(rows: int) -> str:
     <preference name='ui.shelf.height' value='26' />
   </preferences>
   <datasources>
-{demo.datasource(rows, "\n".join([REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, DATASOURCE_GROUPS]))}
+{PARAMETERS}
+{demo.datasource(rows, "\n".join([REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, DATASOURCE_GROUPS]))}
   </datasources>
 {shared_views()}
 {actions()}
@@ -1014,6 +1114,7 @@ def twb(rows: int) -> str:
 {groups_dashboard()}
 {conditions_dashboard()}
 {growth_dashboard()}
+{parameter_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

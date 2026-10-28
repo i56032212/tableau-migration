@@ -7,6 +7,10 @@
     "mark": "line",
     "dimensions": {
       "c0": "trunc_month(f_order_date)"
+    },
+    "measures": {
+      "c1": "sum(f_profit)",
+      "c2": "f_calc_1368249927221915648"
     }
   },
   "data": {

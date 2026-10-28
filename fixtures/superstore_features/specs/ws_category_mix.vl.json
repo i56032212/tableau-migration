@@ -7,6 +7,10 @@
     "mark": "pie",
     "dimensions": {
       "c0": "f_category"
+    },
+    "measures": {
+      "c1": "sum(f_sales)",
+      "c2": "sum(f_sales)#tc_percent_of_total_sales"
     }
   },
   "data": {

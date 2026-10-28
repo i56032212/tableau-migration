@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FilterControl, ParameterControl } from "./Controls";
 import { displaySize, layoutDashboard } from "./layout";
-import { fieldKey, nextSelection, runActions, sourceActions, stateFor, type ViewState } from "./state";
+import {
+  actionUrl,
+  fieldKey,
+  nextSelection,
+  parameterValue,
+  runActions,
+  sourceActions,
+  stateFor,
+  type ViewState,
+} from "./state";
 import type { Action, CaseInfo, Dashboard, FieldFilter, FilterValue, IR, Mark, RenderResponse, Scalar, Zone } from "./types";
 import { type MarkEvent, WorksheetView } from "./WorksheetView";
 
@@ -57,14 +66,16 @@ interface Props {
   dashboard: Dashboard;
   view: ViewState;
   onView: (view: ViewState) => void;
-  /** 篩選動作的目標是另一個 dashboard 時切換過去 */
-  onNavigate: (dashboard: string) => void;
+  /** 篩選動作的目標是另一個 dashboard、或切換動作時切換過去 */
+  onNavigate: (target: { dashboard?: string | null; worksheet?: string | null }) => void;
   cases: CaseInfo[];
 }
 
 interface ActionMenu {
   worksheet: string;
   marks: Mark[];
+  /** 點選的標記的維度與量值（網址動作代入用） */
+  values: Record<string, Scalar>[];
   actions: Action[];
   x: number;
   y: number;
@@ -101,33 +112,77 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
   const dashboardRef = useRef<HTMLDivElement>(null);
   const hasActions = (worksheet: string) =>
     (["select", "hover", "menu"] as const).some((a) => sourceActions(ir, worksheet, dashboard.id, a).length > 0);
+  const parameterValues = () => {
+    const values: Record<string, Scalar> = {};
+    for (const p of ir.parameters) values[p.id] = p.id in view.parameters ? view.parameters[p.id] : p.value;
+    return values;
+  };
+  /** 參數動作：回傳更新後的參數（沒有變化時回傳原物件）。 */
+  const applyParameters = (actions: Action[], values: Record<string, Scalar>[], current: Record<string, Scalar>) => {
+    let next = current;
+    for (const action of actions) {
+      if (action.kind !== "parameter" || !action.parameter) continue;
+      const value = parameterValue(action, values);
+      if (value !== undefined && next[action.parameter.parameter] !== value) {
+        next = { ...next, [action.parameter.parameter]: value };
+      }
+    }
+    return next;
+  };
+  const navigateTo = (actions: Action[]) => {
+    for (const action of actions) {
+      if (action.kind === "navigate") {
+        onNavigate({ dashboard: action.target_dashboard, worksheet: action.target_worksheet });
+        return;
+      }
+    }
+  };
   const onMarks = (worksheet: string, event: MarkEvent) => {
     if (event.kind === "click") {
       const marks = nextSelection(view.selections[worksheet] ?? [], event.mark, event.additive);
-      const result = runActions(sourceActions(ir, worksheet, dashboard.id, "select"), marks, view.actions);
-      onView({ ...view, actions: result.actions, selections: { ...view.selections, [worksheet]: marks } });
+      const selectActions = sourceActions(ir, worksheet, dashboard.id, "select");
+      const result = runActions(selectActions, marks, view.actions);
+      const values = marks.length > 0 && event.values ? [event.values] : [];
+      onView({
+        ...view,
+        actions: result.actions,
+        selections: { ...view.selections, [worksheet]: marks },
+        parameters: applyParameters(selectActions, values, view.parameters),
+      });
+      // 選取時執行的網址動作：在新分頁開啟（點選的當下開啟，瀏覽器不會擋）
+      for (const action of selectActions) {
+        if (action.kind === "url" && values.length > 0) {
+          window.open(actionUrl(action, values, parameterValues()), "_blank", "noopener");
+        }
+      }
       const menuActions = sourceActions(ir, worksheet, dashboard.id, "menu");
       const origin = dashboardRef.current?.getBoundingClientRect();
       setMenu(
         marks.length > 0 && menuActions.length > 0 && origin
-          ? { worksheet, marks, actions: menuActions, x: event.x - origin.left, y: event.y - origin.top }
+          ? { worksheet, marks, values, actions: menuActions, x: event.x - origin.left, y: event.y - origin.top }
           : null,
       );
-      if (result.navigate && result.navigate !== dashboard.id) onNavigate(result.navigate);
+      if (result.navigate && result.navigate !== dashboard.id) onNavigate({ dashboard: result.navigate });
+      else if (marks.length > 0) navigateTo(selectActions);
       return;
     }
     const hover = sourceActions(ir, worksheet, dashboard.id, "hover");
     if (hover.length === 0) return;
     const marks = event.kind === "hover" && event.mark ? [event.mark] : [];
+    const values = event.kind === "hover" && event.values ? [event.values] : [];
     const result = runActions(hover, marks, view.actions);
-    if (JSON.stringify(result.actions) !== JSON.stringify(view.actions)) onView({ ...view, actions: result.actions });
+    const parameters = applyParameters(hover, values, view.parameters);
+    if (JSON.stringify(result.actions) !== JSON.stringify(view.actions) || parameters !== view.parameters) {
+      onView({ ...view, actions: result.actions, parameters });
+    }
   };
   const runMenu = (action: Action) => {
     if (!menu) return;
     const result = runActions([action], menu.marks, view.actions);
-    onView({ ...view, actions: result.actions });
+    onView({ ...view, actions: result.actions, parameters: applyParameters([action], menu.values, view.parameters) });
     setMenu(null);
-    if (result.navigate && result.navigate !== dashboard.id) onNavigate(result.navigate);
+    if (result.navigate && result.navigate !== dashboard.id) onNavigate({ dashboard: result.navigate });
+    else navigateTo([action]);
   };
 
   // 自動與範圍尺寸：依可用空間重排；量到尺寸之前不繪製，避免工作表先以參考尺寸查詢與繪製
@@ -205,11 +260,24 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
         })}
       {menu && (
         <div className="action-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
-          {menu.actions.map((action) => (
-            <button type="button" role="menuitem" key={action.id} onClick={() => runMenu(action)}>
-              {action.caption}
-            </button>
-          ))}
+          {menu.actions.map((action) =>
+            action.kind === "url" ? (
+              <a
+                role="menuitem"
+                key={action.id}
+                href={actionUrl(action, menu.values, parameterValues())}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMenu(null)}
+              >
+                {action.caption || "開啟連結"}
+              </a>
+            ) : (
+              <button type="button" role="menuitem" key={action.id} onClick={() => runMenu(action)}>
+                {action.caption}
+              </button>
+            ),
+          )}
           <button type="button" className="link" onClick={() => setMenu(null)}>
             關閉
           </button>

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from lxml import etree
@@ -19,23 +20,31 @@ from tmig.ir.models import (
     Dashboard,
     Datasource,
     DatasourceSettings,
+    FieldUse,
+    ParameterAction,
+    Scalar,
     TupleFilter,
+    UrlAction,
+    UrlField,
     Workbook,
     Worksheet,
 )
-from tmig.parser.context import ParseContext, SharedView
+from tmig.parser.context import DsState, ParseContext, SharedView
 from tmig.parser.dashboard import DashboardParser
 from tmig.parser.datasource import DatasourceParser, add_calc_field, analyze_calcs, parse_parameters
-from tmig.parser.fields import instance_key
+from tmig.parser.fields import instance_key, use_from_name
 from tmig.parser.twbx import (
     WorkbookPackage,
     child,
     children,
     load_workbook_package,
     local_name,
+    text_of,
     xpath,
 )
+from tmig.parser.values import LiteralError, parse_literal
 from tmig.parser.worksheet import SheetParser
+from tmig.planner.state import use_key
 
 WORKBOOK_CHILDREN = frozenset(
     {
@@ -56,6 +65,54 @@ WORKBOOK_CHILDREN = frozenset(
 )
 SHARED_VIEW_CHILDREN = frozenset({"datasources", "datasource-dependencies", "filter"})
 ACTION_KINDS = {"tsc:brush": "醒目提示", "tsc:tsl-filter": "篩選", "tsc:url": "網址"}
+
+
+PARAM_ACTION_AGGS = {
+    "attr": "attr",
+    "sum": "sum",
+    "average": "avg",
+    "min": "min",
+    "max": "max",
+    "count": "count",
+    "count-d": "countd",
+}
+
+
+def worksheets_ds(worksheets: list[Worksheet], sheet_id: str) -> str | None:
+    return next((ws.datasource for ws in worksheets if ws.id == sheet_id), None)
+
+
+URL_PLACEHOLDER = re.compile(r"<([^<>]+)>")
+URL_AGGS: dict[str, str] = {
+    "sum": "sum",
+    "avg": "avg",
+    "min": "min",
+    "max": "max",
+    "count": "count",
+    "countd": "countd",
+    "median": "median",
+    "attr": "attr",
+}
+
+
+def _url_key(ctx: ParseContext, ds: DsState, text: str) -> str | None:
+    """網址中的欄位參照 → 欄位鍵：維度為欄位 id；量值加上彙總（沒寫時用預設彙總）；參數為 param:<id>。"""
+    inner = text.split("~", 1)[0].strip()
+    agg: str | None = None
+    wrapped = re.fullmatch(r"([A-Za-z]+)\((.*)\)", inner)
+    if wrapped and wrapped.group(1).lower() in URL_AGGS:
+        agg, inner = URL_AGGS[wrapped.group(1).lower()], wrapped.group(2).strip()
+    if inner.startswith("[Parameters]") or inner.startswith("Parameters."):
+        param = ctx.parameter(inner.replace("Parameters.", "[Parameters].", 1))
+        return f"param:{param.id}" if param is not None else None
+    name = instance_key(inner) if inner.startswith("[") else f"[{inner}]"
+    found = ds.by_name.get(name) or next((f for f in ds.fields if f"[{f.caption}]" == name), None)
+    if found is None:
+        return None
+    level = ds.levels.get(found.id)
+    if found.role == "measure" and level not in ("aggregate", "table_calc"):
+        return f"{agg or found.default_agg or 'sum'}({found.id})"
+    return found.id
 
 
 def _command(action: etree._Element) -> str:
@@ -181,17 +238,38 @@ class WorkbookParser:
         by_name = {state.name: state.id for state in ctx.sheets.values()}
         sheet_ds = {ws.id: ws.datasource for ws in worksheets}
         result: list[Action] = []
-        for action in children(element, "action"):
+        board_ids = {d.name: d.id for d in dashboards}
+        for item in children(element):
+            tag = local_name(item)
+            if tag in ("datasources", "datasource-dependencies"):
+                continue  # 動作用到的欄位清單
+            if tag in ("edit-parameter-action", "nav-action"):
+                found = (
+                    self._parameter_action(item, by_name, dashboards, worksheets)
+                    if tag == "edit-parameter-action"
+                    else self._nav_action(item, by_name, dashboards, worksheets)
+                )
+                if found is not None:
+                    result.append(found)
+                continue
+            if tag == "edit-group-action":
+                ctx.flag(
+                    item, f"集合動作「{item.get('caption') or item.get('name', '')}」v0 不支援"
+                )
+                continue
+            if tag != "action":
+                ctx.flag(item, f"動作清單中的未知元素 <{tag}>")
+                continue
+            action = item
             raw = _command(action)
             kind = ACTION_KINDS.get(raw, raw or "未知")
             caption = action.get("caption") or action.get("name", "")
             if raw == "tsc:brush":
                 ctx.ignore(action, f"醒目提示動作「{caption}」（不影響數字）")
                 continue
-            if raw != "tsc:tsl-filter":
+            if raw not in ("tsc:tsl-filter", "tsc:url"):
                 ctx.flag(action, f"Dashboard action「{caption}」（{kind}）v0 不支援")
                 continue
-            action_id = ctx.action_ids[action.get("name", "")]
             activation_el = child(action, "activation")
             activation = {"on-select": "select", "on-hover": "hover"}.get(
                 activation_el.get("type", "") if activation_el is not None else "", "menu"
@@ -199,12 +277,21 @@ class WorkbookParser:
             source_el = child(action, "source")
             sources = self._action_sources(source_el, by_name, dashboards, worksheets)
             if not sources:
-                ctx.flag(action, f"篩選動作「{caption}」的來源工作表無法移轉")
+                ctx.flag(action, f"{kind}動作「{caption}」的來源工作表無法移轉")
                 continue
-            board_ids = {d.name: d.id for d in dashboards}
             dashboard = (
                 board_ids.get(source_el.get("dashboard", "")) if source_el is not None else None
             )
+            if raw == "tsc:url":
+                link = child(action, "link")
+                assert link is not None
+                url_action = self._url_action(
+                    action, link, caption, activation, dashboard, sources, sheet_ds
+                )
+                if url_action is not None:
+                    result.append(url_action)
+                continue
+            action_id = ctx.action_ids[action.get("name", "")]
             params = {
                 p.get("name"): p.get("value") for p in children(child(action, "command"), "param")
             }
@@ -251,6 +338,181 @@ class WorkbookParser:
                 for f in ws.filters
             ]
         return result
+
+    def _url_action(
+        self,
+        action: etree._Element,
+        link: etree._Element,
+        caption: str,
+        activation: str,
+        dashboard: str | None,
+        sources: list[str],
+        sheet_ds: dict[str, str],
+    ) -> Action | None:
+        """網址動作：網址中的 <[欄位]> 對應到欄位鍵，檢視器以選取的標記代入。"""
+        ctx = self.ctx
+        expression = link.get("expression", "")
+        if not expression:
+            ctx.flag(action, f"網址動作「{caption}」沒有網址")
+            return None
+        ds = next(
+            (state for state in ctx.datasources.values() if state.id == sheet_ds.get(sources[0])),
+            None,
+        )
+        fields: list[UrlField] = []
+        for match in URL_PLACEHOLDER.finditer(expression):
+            key = _url_key(ctx, ds, match.group(1)) if ds is not None else None
+            if key is None:
+                ctx.ignore(
+                    action, f"網址動作「{caption}」的 {match.group(0)} 找不到欄位，代入空字串"
+                )
+                continue
+            if all(f.placeholder != match.group(0) for f in fields):
+                fields.append(UrlField(placeholder=match.group(0), key=key))
+        target = text_of(child(link, "url-action-type"))
+        if target == "specific-zone":
+            ctx.ignore(
+                action, f"網址動作「{caption}」原本開在 dashboard 的網頁物件中，新平台在新分頁開啟"
+            )
+        return Action(
+            id=ctx.ids.make("act", caption or action.get("name", ""), action.get("name", "")),
+            name=action.get("name", "") or caption,
+            caption=caption,
+            kind="url",
+            url=UrlAction(
+                template=expression,
+                fields=fields,
+                escape=link.get("url-escape", "true") != "false",
+                delimiter=link.get("delimiter") or ",",
+            ),
+            activation=activation,  # type: ignore[arg-type]
+            dashboard=dashboard,
+            sources=sources,
+            source_ref=xpath(action),
+        )
+
+    def _new_action_common(
+        self,
+        item: etree._Element,
+        by_name: dict[str, str],
+        dashboards: list[Dashboard],
+        worksheets: list[Worksheet],
+        label: str,
+    ) -> tuple[str, str, str | None, list[str], dict[str, str]] | None:
+        """參數與切換動作共用：說明、觸發方式、所屬 dashboard、來源工作表、params。"""
+        caption = item.get("caption") or item.get("name", "")
+        activation_el = child(item, "activation")
+        activation = {"on-select": "select", "on-hover": "hover"}.get(
+            activation_el.get("type", "") if activation_el is not None else "", "menu"
+        )
+        source_el = child(item, "source")
+        sources = self._action_sources(source_el, by_name, dashboards, worksheets)
+        if not sources:
+            self.ctx.flag(item, f"{label}「{caption}」的來源工作表無法移轉")
+            return None
+        board_ids = {d.name: d.id for d in dashboards}
+        dashboard = board_ids.get(source_el.get("dashboard", "")) if source_el is not None else None
+        params = {
+            p.get("name", ""): p.get("value", "") for p in children(child(item, "params"), "param")
+        }
+        return caption, activation, dashboard, sources, params
+
+    def _parameter_action(
+        self,
+        item: etree._Element,
+        by_name: dict[str, str],
+        dashboards: list[Dashboard],
+        worksheets: list[Worksheet],
+    ) -> Action | None:
+        """參數動作：source-field 的值設給 target-parameter。"""
+        ctx = self.ctx
+        common = self._new_action_common(item, by_name, dashboards, worksheets, "參數動作")
+        if common is None:
+            return None
+        caption, activation, dashboard, sources, params = common
+        param = ctx.parameter(params.get("target-parameter", ""))
+        if param is None:
+            ctx.flag(
+                item, f"參數動作「{caption}」的目標參數 {params.get('target-parameter')} 找不到"
+            )
+            return None
+        source_ref = params.get("source-field", "")
+        ds = next(
+            (s for s in ctx.datasources.values() if s.id == worksheets_ds(worksheets, sources[0])),
+            None,
+        )
+        use = use_from_name(ds, instance_key(source_ref)) if ds is not None else "沒有資料源"
+        if isinstance(use, str) and ds is not None:
+            found = ds.by_name.get(instance_key(source_ref))
+            use = FieldUse(field=found.id) if found is not None else use
+        if isinstance(use, str):
+            ctx.flag(item, f"參數動作「{caption}」的來源欄位 {source_ref} 無法解析：{use}")
+            return None
+        agg_el = child(item, "agg-type")
+        agg_text = agg_el.get("type", "attr") if agg_el is not None else "attr"
+        aggregation = PARAM_ACTION_AGGS.get(agg_text)
+        if aggregation is None:
+            ctx.flag(item, f"參數動作「{caption}」的彙總方式 {agg_text} v0 不支援")
+            return None
+        clear_el = child(item, "clear-option")
+        clearing = "keep"
+        clear_value: Scalar = None
+        if clear_el is not None and clear_el.get("type") == "assign-fixed-value":
+            clearing = "assign"
+            try:
+                clear_value = parse_literal(clear_el.get("value"), param.datatype)
+            except LiteralError as exc:
+                ctx.flag(item, f"參數動作「{caption}」清除時的值無法解析：{exc}")
+                return None
+        return Action(
+            id=ctx.ids.make("act", caption or item.get("name", ""), item.get("name", "")),
+            name=item.get("name", "") or caption,
+            caption=caption,
+            kind="parameter",
+            parameter=ParameterAction(
+                parameter=param.id,
+                field=use_key(use),
+                aggregation=aggregation,  # type: ignore[arg-type]
+                clearing=clearing,  # type: ignore[arg-type]
+                clear_value=clear_value,
+            ),
+            activation=activation,  # type: ignore[arg-type]
+            dashboard=dashboard,
+            sources=sources,
+            source_ref=xpath(item),
+        )
+
+    def _nav_action(
+        self,
+        item: etree._Element,
+        by_name: dict[str, str],
+        dashboards: list[Dashboard],
+        worksheets: list[Worksheet],
+    ) -> Action | None:
+        """切換動作（前往工作表）：切換到 target 指定的 dashboard 或工作表。"""
+        ctx = self.ctx
+        common = self._new_action_common(item, by_name, dashboards, worksheets, "切換動作")
+        if common is None:
+            return None
+        caption, activation, dashboard, sources, params = common
+        target = params.get("target", "")
+        board = next((d.id for d in dashboards if d.name == target), None)
+        sheet = by_name.get(target) if board is None else None
+        if board is None and sheet is None:
+            ctx.flag(item, f"切換動作「{caption}」的目標 {target or '（未指定）'} 找不到")
+            return None
+        return Action(
+            id=ctx.ids.make("act", caption or item.get("name", ""), item.get("name", "")),
+            name=item.get("name", "") or caption,
+            caption=caption,
+            kind="navigate",
+            activation=activation,  # type: ignore[arg-type]
+            dashboard=dashboard,
+            sources=sources,
+            target_dashboard=board,
+            target_worksheet=sheet,
+            source_ref=xpath(item),
+        )
 
     def _action_sources(
         self,

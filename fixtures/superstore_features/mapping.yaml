@@ -126,3 +126,9 @@ sheets:
       Sales: sum(f_sales)
     ignore: []
     numeric: auto
+  ws_selected_region_sales:
+    columns:
+      Category: f_category
+      Selected Region Sales: sum(f_selected_region_sales)
+    ignore: []
+    numeric: auto

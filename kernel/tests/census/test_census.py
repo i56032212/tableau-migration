@@ -167,7 +167,7 @@ def test_problems_features(problems: CensusReport) -> None:
         "地圖（Map）",
         "Story（Story 1）",
         "集合等特殊欄位（group 1）",
-        "Dashboard action（tsc:url-action 1、url 1）",
+        "Dashboard action（tsc:url-action 1）",  # 網址動作（url）已支援
     ]:
         assert expected in features
 

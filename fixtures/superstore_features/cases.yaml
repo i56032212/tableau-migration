@@ -46,6 +46,8 @@ sheets:
     view: TopSub-Categories
   - worksheet: ws_sales_growth_by_year
     view: SalesGrowthbyYear
+  - worksheet: ws_selected_region_sales
+    view: SelectedRegionSales
 cases:
   - name: default
     url_params: {}

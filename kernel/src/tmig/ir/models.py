@@ -624,16 +624,52 @@ class Workbook(IRModel):
     source_ref: SourceRef
 
 
-class Action(IRModel):
-    """Dashboard 的篩選動作：選取（或滑過）來源工作表的標記時，以標記的欄位值篩選目標工作表。
+class UrlField(IRModel):
+    """網址動作的網址中的一個欄位參照，例如 <[Customer Name]>。"""
 
-    目標工作表上對應的篩選是 action 指向這個動作的 TupleFilter；清除選取時依 clearing 處理。
+    placeholder: str = Field(min_length=1, description="網址中的原文，例如 <[Customer Name]>")
+    key: str = Field(
+        min_length=1, description="欄位鍵，例如 f_customer_name、sum(f_sales)；參數為 param:<id>"
+    )
+
+
+class UrlAction(IRModel):
+    """網址動作：以選取的標記的值代入網址後開啟。"""
+
+    template: str = Field(min_length=1, description="網址，欄位以 <[欄位]> 參照")
+    fields: list[UrlField] = Field(default_factory=list, description="網址中的欄位參照")
+    escape: bool = Field(default=True, description="代入的值是否以網址編碼")
+    delimiter: str = Field(default=",", description="選取多個標記時值的分隔字元")
+
+
+class ParameterAction(IRModel):
+    """參數動作：選取標記時，把標記的欄位值（多個標記時依 aggregation 彙總）設給參數。"""
+
+    parameter: Id
+    field: str = Field(min_length=1, description="來源欄位的欄位鍵")
+    aggregation: Literal["attr", "sum", "avg", "min", "max", "count", "countd"] = "attr"
+    clearing: Literal["keep", "assign"] = Field(
+        default="keep", description="清除選取時：保留參數目前的值，或設成 clear_value"
+    )
+    clear_value: Scalar = None
+
+
+class Action(IRModel):
+    """Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。
+
+    - filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的
+      TupleFilter，清除選取時依 clearing 處理
+    - url：以標記的欄位值代入網址後開啟
+    - parameter：把標記的欄位值設給參數
+    - navigate：切換到 target_dashboard 或 target_worksheet
     """
 
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱，例如 [Action1_…]")
     caption: str
-    kind: Literal["filter"]
+    kind: Literal["filter", "url", "parameter", "navigate"]
+    url: UrlAction | None = None
+    parameter: ParameterAction | None = None
     activation: Literal["select", "hover", "menu"]
     dashboard: Id | None = Field(
         default=None,
@@ -645,12 +681,29 @@ class Action(IRModel):
         default=None,
         description="目標是另一個 dashboard 時，執行動作後切換到該 dashboard",
     )
+    target_worksheet: Id | None = Field(
+        default=None, description="切換動作的目標是工作表時，切換到該工作表"
+    )
     clearing: Literal["show_all", "exclude_all", "keep"] = Field(
         default="show_all",
         description="清除選取時：顯示所有值、排除所有值、保留篩選的值",
     )
     single_select: bool = Field(default=False, description="只在選取單一標記時執行")
     source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if (self.kind == "url") != (self.url is not None):
+            raise ValueError("網址動作必須、也只有網址動作能指定 url")
+        if (self.kind == "parameter") != (self.parameter is not None):
+            raise ValueError("參數動作必須、也只有參數動作能指定 parameter")
+        if self.kind != "filter" and self.targets:
+            raise ValueError("只有篩選動作有目標工作表")
+        if self.kind == "navigate" and (self.target_dashboard is None) == (
+            self.target_worksheet is None
+        ):
+            raise ValueError("切換動作必須指定 target_dashboard 或 target_worksheet 其中之一")
+        return self
 
 
 class Unsupported(IRModel):

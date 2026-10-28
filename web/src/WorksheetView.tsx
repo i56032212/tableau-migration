@@ -7,6 +7,8 @@ import type { Mark, QueryState, RenderResponse, Scalar } from "./types";
 export interface MarkEvent {
   kind: "click" | "hover" | "leave";
   mark: Mark | null;
+  /** 標記的維度與量值（網址動作代入用） */
+  values?: Record<string, Scalar> | null;
   additive: boolean;
   x: number;
   y: number;
@@ -119,6 +121,7 @@ export function WorksheetView({
     const original = response.spec as Spec;
     const records = (original.data?.values ?? []) as Record<string, unknown>[];
     const dimensions = (original.usermeta?.dimensions ?? {}) as Record<string, string>;
+    const measures = (original.usermeta?.measures ?? {}) as Record<string, string>;
     const spec = structuredClone(original) as Spec;
     if (hideLegend && spec.encoding?.color) spec.encoding.color.legend = null;
     const marks = JSON.parse(selectedKey) as Mark[];
@@ -145,17 +148,24 @@ export function WorksheetView({
           // 空白處（沒有項目或背景群組）＝清除選取；其餘（座標軸、圖例）不處理
           return !item || item.mark?.marktype === "group" ? null : undefined;
         };
-        const emit = (kind: MarkEvent["kind"], event: any, mark: Mark | null) =>
+        const emit = (kind: MarkEvent["kind"], event: any, mark: Mark | null, item?: any) => {
+          const row = item?.datum?.__row;
+          const values =
+            mark && typeof row === "number" && records[row]
+              ? { ...markOf(records[row], measures), ...mark }
+              : null;
           onMarksRef.current?.({
             kind,
             mark,
+            values,
             additive: Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey),
             x: event?.clientX ?? 0,
             y: event?.clientY ?? 0,
           });
+        };
         result.view.addEventListener("click", (event: any, item: any) => {
           const mark = markAt(item);
-          if (mark !== undefined) emit("click", event, mark);
+          if (mark !== undefined) emit("click", event, mark, item);
         });
         result.view.addEventListener("mouseover", (event: any, item: any) => {
           const mark = markAt(item);

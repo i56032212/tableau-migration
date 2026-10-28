@@ -108,6 +108,57 @@ export function sameMark(a: Mark, b: Mark): boolean {
   return keys.length === Object.keys(b).length && keys.every((k) => k in b && a[k] === b[k]);
 }
 
+/** 網址動作的網址：以標記的值（多個標記以分隔字元連接）與參數值代入 <[欄位]>。 */
+export function actionUrl(
+  action: Action,
+  values: Record<string, Scalar>[],
+  parameters: Record<string, Scalar>,
+): string {
+  const spec = action.url;
+  if (!spec) return "";
+  let url = spec.template;
+  for (const field of spec.fields) {
+    let raw: Scalar[];
+    if (field.key.startsWith("param:")) raw = [parameters[field.key.slice(6)] ?? null];
+    else raw = values.map((v) => (field.key in v ? v[field.key] : null));
+    // 數字去掉浮點誤差（12 位有效數字），例如 678781.2399999991 → 678781.24
+    const unique = raw
+      .filter((v, i) => v !== null && raw.indexOf(v) === i)
+      .map((v) => (typeof v === "number" ? String(Number(v.toPrecision(12))) : String(v)));
+    const text = unique.join(spec.delimiter);
+    url = url.split(field.placeholder).join(spec.escape ? encodeURIComponent(text) : text);
+  }
+  // 找不到欄位的參照代入空字串
+  return url.replace(/<[^<>]+>/g, "");
+}
+
+/** 參數動作設給參數的值：選取標記時為標記的欄位值；清除選取時保留或設成指定的值（undefined 表示不變）。 */
+export function parameterValue(action: Action, values: Record<string, Scalar>[]): Scalar | undefined {
+  const spec = action.parameter;
+  if (!spec) return undefined;
+  if (values.length === 0) return spec.clearing === "assign" ? spec.clear_value : undefined;
+  const raw = values.map((v) => (spec.field in v ? v[spec.field] : null)).filter((v) => v !== null);
+  if (raw.length === 0) return null;
+  const numbers = raw.filter((v): v is number => typeof v === "number");
+  switch (spec.aggregation) {
+    case "sum":
+      return numbers.reduce((a, b) => a + b, 0);
+    case "avg":
+      return numbers.length ? numbers.reduce((a, b) => a + b, 0) / numbers.length : null;
+    case "min":
+      return raw.reduce((a, b) => (b! < a! ? b : a));
+    case "max":
+      return raw.reduce((a, b) => (b! > a! ? b : a));
+    case "count":
+      return raw.length;
+    case "countd":
+      return new Set(raw.map((v) => JSON.stringify(v))).size;
+    default:
+      // attr：所有值相同時為該值
+      return raw.every((v) => v === raw[0]) ? raw[0] : null;
+  }
+}
+
 /** 執行篩選動作：有選取時把標記傳給目標；清除時依動作的設定（保留篩選的動作不變）。 */
 export function runActions(
   actions: Action[],
@@ -117,6 +168,7 @@ export function runActions(
   const next = { ...current };
   let navigate: string | null = null;
   for (const action of actions) {
+    if (action.kind !== "filter") continue;
     const effective = action.single_select && marks.length > 1 ? [] : marks;
     if (effective.length === 0) {
       if (action.clearing !== "keep") delete next[action.id];

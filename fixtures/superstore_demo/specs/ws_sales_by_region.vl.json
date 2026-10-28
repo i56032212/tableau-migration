@@ -8,6 +8,10 @@
     "dimensions": {
       "c0": "f_region",
       "c1": "f_category"
+    },
+    "measures": {
+      "c2": "sum(f_sales)",
+      "c3": "sum(f_sales)#tc_running_total_sales"
     }
   },
   "data": {

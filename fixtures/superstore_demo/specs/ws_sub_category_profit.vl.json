@@ -7,6 +7,11 @@
     "mark": "bar",
     "dimensions": {
       "c0": "f_sub_category"
+    },
+    "measures": {
+      "c1": "sum(f_profit)",
+      "c2": "f_calc_5418932014720188416#tc_formula_f_calc_5418932014720188416",
+      "c3": "f_calc_5418932014720745473"
     }
   },
   "data": {

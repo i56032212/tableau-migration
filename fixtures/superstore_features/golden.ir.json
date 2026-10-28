@@ -31,7 +31,7 @@
           "hidden": true,
           "column": "Row ID",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/column[7]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
         {
           "id": "f_order_id",
@@ -44,7 +44,7 @@
           "hidden": false,
           "column": "Order ID",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[2]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
         {
           "id": "f_order_date",
@@ -57,7 +57,7 @@
           "hidden": false,
           "column": "Order Date",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[3]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
         {
           "id": "f_ship_date",
@@ -70,7 +70,7 @@
           "hidden": false,
           "column": "Ship Date",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[4]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
         {
           "id": "f_ship_mode",
@@ -83,7 +83,7 @@
           "hidden": false,
           "column": "Ship Mode",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[5]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
         {
           "id": "f_customer_id",
@@ -96,7 +96,7 @@
           "hidden": false,
           "column": "Customer ID",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[6]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
         {
           "id": "f_customer_name",
@@ -109,7 +109,7 @@
           "hidden": false,
           "column": "Customer Name",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[7]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
         {
           "id": "f_segment",
@@ -122,7 +122,7 @@
           "hidden": false,
           "column": "Segment",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[8]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
         {
           "id": "f_country_region",
@@ -135,7 +135,7 @@
           "hidden": false,
           "column": "Country/Region",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[9]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
         {
           "id": "f_city",
@@ -148,7 +148,7 @@
           "hidden": false,
           "column": "City",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[10]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
         {
           "id": "f_state_province",
@@ -161,7 +161,7 @@
           "hidden": false,
           "column": "State/Province",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/column[8]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
         {
           "id": "f_postal_code",
@@ -174,7 +174,7 @@
           "hidden": false,
           "column": "Postal Code",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/column[6]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
           "id": "f_region",
@@ -187,7 +187,7 @@
           "hidden": false,
           "column": "Region",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[13]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
         {
           "id": "f_product_id",
@@ -200,7 +200,7 @@
           "hidden": false,
           "column": "Product ID",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[14]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
         {
           "id": "f_category",
@@ -213,7 +213,7 @@
           "hidden": false,
           "column": "Category",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[15]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
         {
           "id": "f_sub_category",
@@ -226,7 +226,7 @@
           "hidden": false,
           "column": "Sub-Category",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[16]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
         {
           "id": "f_product_name",
@@ -239,7 +239,7 @@
           "hidden": false,
           "column": "Product Name",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[17]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
         {
           "id": "f_sales",
@@ -252,7 +252,7 @@
           "hidden": false,
           "column": "Sales",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[18]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
         {
           "id": "f_quantity",
@@ -265,7 +265,7 @@
           "hidden": false,
           "column": "Quantity",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[19]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
         {
           "id": "f_discount",
@@ -278,7 +278,7 @@
           "hidden": false,
           "column": "Discount",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[20]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
         {
           "id": "f_profit",
@@ -291,7 +291,7 @@
           "hidden": false,
           "column": "Profit",
           "calc": null,
-          "source_ref": "/workbook/datasources/datasource/extract/connection/metadata-records/metadata-record[21]"
+          "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
         {
           "id": "f_calc_1368249927221915648",
@@ -341,7 +341,7 @@
             },
             "level": "aggregate"
           },
-          "source_ref": "/workbook/datasources/datasource/column[1]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
           "id": "f_calc_2049003526124437504",
@@ -387,7 +387,7 @@
             },
             "level": "lod"
           },
-          "source_ref": "/workbook/datasources/datasource/column[2]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
           "id": "f_calc_2049003526124994561",
@@ -437,7 +437,7 @@
             },
             "level": "aggregate"
           },
-          "source_ref": "/workbook/datasources/datasource/column[3]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
           "id": "f_calc_5418932014720188416",
@@ -474,7 +474,7 @@
             },
             "level": "table_calc"
           },
-          "source_ref": "/workbook/datasources/datasource/column[4]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
           "id": "f_calc_5418932014720745473",
@@ -526,7 +526,7 @@
             },
             "level": "aggregate"
           },
-          "source_ref": "/workbook/datasources/datasource/column[5]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
           "id": "f_region_group",
@@ -587,7 +587,7 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource/column[9]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[9]"
         },
         {
           "id": "f_ship_speed",
@@ -644,7 +644,7 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource/column[10]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[10]"
         },
         {
           "id": "f_quantity_bin",
@@ -693,7 +693,67 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource/column[11]"
+          "source_ref": "/workbook/datasources/datasource[2]/column[11]"
+        },
+        {
+          "id": "f_selected_region_sales",
+          "name": "[Calculation_7D6C2A1F00000001]",
+          "caption": "Selected Region Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "calc": {
+            "formula": "IF [Region] = [Parameters].[Parameter 1] THEN [Sales] ELSE 0 END",
+            "ast": {
+              "node": "if",
+              "branches": [
+                {
+                  "cond": {
+                    "node": "binary",
+                    "op": "=",
+                    "left": {
+                      "node": "field",
+                      "ref": "[Region]",
+                      "parts": [
+                        "Region"
+                      ],
+                      "target": "field",
+                      "id": "f_region"
+                    },
+                    "right": {
+                      "node": "field",
+                      "ref": "[Parameters].[Parameter 1]",
+                      "parts": [
+                        "Parameters",
+                        "Parameter 1"
+                      ],
+                      "target": "param",
+                      "id": "p_selected_region"
+                    }
+                  },
+                  "then": {
+                    "node": "field",
+                    "ref": "[Sales]",
+                    "parts": [
+                      "Sales"
+                    ],
+                    "target": "field",
+                    "id": "f_sales"
+                  }
+                }
+              ],
+              "else": {
+                "node": "literal",
+                "kind": "integer",
+                "value": 0
+              }
+            },
+            "level": "row"
+          },
+          "source_ref": "/workbook/datasources/datasource[2]/column[12]"
         }
       ],
       "filters": [
@@ -713,13 +773,31 @@
             "United States"
           ],
           "group": null,
-          "source_ref": "/workbook/datasources/datasource/filter"
+          "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
-      "source_ref": "/workbook/datasources/datasource"
+      "source_ref": "/workbook/datasources/datasource[2]"
     }
   ],
-  "parameters": [],
+  "parameters": [
+    {
+      "id": "p_selected_region",
+      "name": "[Parameter 1]",
+      "caption": "Selected Region",
+      "datatype": "string",
+      "allowed": {
+        "kind": "list",
+        "values": [
+          "Central",
+          "East",
+          "South",
+          "West"
+        ]
+      },
+      "value": "East",
+      "source_ref": "/workbook/datasources/datasource[1]/column"
+    }
+  ],
   "worksheets": [
     {
       "id": "ws_sales_by_segment",
@@ -2077,6 +2155,54 @@
         }
       ],
       "source_ref": "/workbook/worksheets/worksheet[19]"
+    },
+    {
+      "id": "ws_selected_region_sales",
+      "name": "Selected Region Sales",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_selected_region_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_selected_region_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[20]"
     }
   ],
   "dashboards": [
@@ -3393,6 +3519,170 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[6]"
+    },
+    {
+      "id": "db_fbfea9a6",
+      "name": "參數動作",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "參數動作",
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z9",
+                  "kind": "parameter",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 72,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": "p_selected_region",
+                  "control": "single_dropdown",
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[2]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 136,
+                  "w": 984,
+                  "h": 556,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 136,
+                      "w": 488,
+                      "h": 556,
+                      "worksheet": "ws_region_picker",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 504,
+                      "y": 136,
+                      "w": 488,
+                      "h": 556,
+                      "worksheet": "ws_selected_region_sales",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[7]"
     }
   ],
   "actions": [
@@ -3401,6 +3691,8 @@
       "name": "[Action1_7D6C2A1F2B3C4D5E9F0A000000000101]",
       "caption": "Filter Category Detail",
       "kind": "filter",
+      "url": null,
+      "parameter": null,
       "activation": "select",
       "dashboard": "db_577aa158",
       "sources": [
@@ -3410,6 +3702,7 @@
         "ws_category_detail"
       ],
       "target_dashboard": null,
+      "target_worksheet": null,
       "clearing": "show_all",
       "single_select": false,
       "source_ref": "/workbook/actions/action[1]"
@@ -3419,6 +3712,8 @@
       "name": "[Action2_7D6C2A1F2B3C4D5E9F0A000000000102]",
       "caption": "Filter Segment Detail",
       "kind": "filter",
+      "url": null,
+      "parameter": null,
       "activation": "select",
       "dashboard": "db_577aa158",
       "sources": [
@@ -3428,9 +3723,87 @@
         "ws_segment_detail"
       ],
       "target_dashboard": null,
+      "target_worksheet": null,
       "clearing": "exclude_all",
       "single_select": false,
       "source_ref": "/workbook/actions/action[2]"
+    },
+    {
+      "id": "act_search_region",
+      "name": "[Action4_7D6C2A1F2B3C4D5E9F0A000000000104]",
+      "caption": "Search Region",
+      "kind": "url",
+      "url": {
+        "template": "https://example.com/search?region=<[Region]>&sales=<SUM([Sales])>",
+        "fields": [
+          {
+            "placeholder": "<[Region]>",
+            "key": "f_region"
+          },
+          {
+            "placeholder": "<SUM([Sales])>",
+            "key": "sum(f_sales)"
+          }
+        ],
+        "escape": true,
+        "delimiter": ","
+      },
+      "parameter": null,
+      "activation": "menu",
+      "dashboard": "db_577aa158",
+      "sources": [
+        "ws_region_picker"
+      ],
+      "targets": [],
+      "target_dashboard": null,
+      "target_worksheet": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/action[3]"
+    },
+    {
+      "id": "act_go_to_filter_actions",
+      "name": "[Action6_7D6C2A1F2B3C4D5E9F0A000000000106]",
+      "caption": "Go to Filter Actions",
+      "kind": "navigate",
+      "url": null,
+      "parameter": null,
+      "activation": "menu",
+      "dashboard": "db_fbfea9a6",
+      "sources": [
+        "ws_selected_region_sales"
+      ],
+      "targets": [],
+      "target_dashboard": "db_577aa158",
+      "target_worksheet": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/nav-action"
+    },
+    {
+      "id": "act_set_selected_region",
+      "name": "[Action5_7D6C2A1F2B3C4D5E9F0A000000000105]",
+      "caption": "Set Selected Region",
+      "kind": "parameter",
+      "url": null,
+      "parameter": {
+        "parameter": "p_selected_region",
+        "field": "f_region",
+        "aggregation": "attr",
+        "clearing": "keep",
+        "clear_value": null
+      },
+      "activation": "select",
+      "dashboard": "db_fbfea9a6",
+      "sources": [
+        "ws_region_picker"
+      ],
+      "targets": [],
+      "target_dashboard": null,
+      "target_worksheet": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/edit-parameter-action"
     }
   ],
   "unsupported": [],
@@ -3448,7 +3821,7 @@
       "xml": "<size xmlns:user=\"http://www.tableausoftware.com/xml/user\" sizing-mode=\"automatic\"/>"
     },
     {
-      "source_ref": "/workbook/actions/action[3]",
+      "source_ref": "/workbook/actions/action[4]",
       "reason": "醒目提示動作「Highlight Region」（不影響數字）",
       "element": "action",
       "xml": "<action xmlns:user=\"http://www.tableausoftware.com/xml/user\" caption=\"Highlight Region\" name=\"[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]\">\n      <activation auto-clear=\"true\" type=\"on-hover\"/>\n      <source dashboard=\"篩選動作\" type=\"sheet\" worksheet=\"Region Category Matrix\"/>\n      <command command=\"tsc:brush\">\n        <param name=\"special-fields\" value=\"all\"/>\n        <param name=\"target\" value=\"篩選動作\"/>\n      </command>\n    </action>"

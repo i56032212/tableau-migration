@@ -4,7 +4,7 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
-      "description": "Dashboard 的篩選動作：選取（或滑過）來源工作表的標記時，以標記的欄位值篩選目標工作表。\n\n目標工作表上對應的篩選是 action 指向這個動作的 TupleFilter；清除選取時依 clearing 處理。",
+      "description": "Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。\n\n- filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的\n  TupleFilter，清除選取時依 clearing 處理\n- url：以標記的欄位值代入網址後開啟\n- parameter：把標記的欄位值設給參數\n- navigate：切換到 target_dashboard 或 target_worksheet",
       "properties": {
         "id": {
           "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
@@ -23,9 +23,36 @@
           "type": "string"
         },
         "kind": {
-          "const": "filter",
+          "enum": [
+            "filter",
+            "url",
+            "parameter",
+            "navigate"
+          ],
           "title": "Kind",
           "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UrlAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParameterAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "activation": {
           "enum": [
@@ -86,6 +113,21 @@
           "default": null,
           "description": "目標是另一個 dashboard 時，執行動作後切換到該 dashboard",
           "title": "Target Dashboard"
+        },
+        "target_worksheet": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "切換動作的目標是工作表時，切換到該工作表",
+          "title": "Target Worksheet"
         },
         "clearing": {
           "default": "show_all",
@@ -1207,6 +1249,75 @@
       "title": "Parameter",
       "type": "object"
     },
+    "ParameterAction": {
+      "additionalProperties": false,
+      "description": "參數動作：選取標記時，把標記的欄位值（多個標記時依 aggregation 彙總）設給參數。",
+      "properties": {
+        "parameter": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Parameter",
+          "type": "string"
+        },
+        "field": {
+          "description": "來源欄位的欄位鍵",
+          "minLength": 1,
+          "title": "Field",
+          "type": "string"
+        },
+        "aggregation": {
+          "default": "attr",
+          "enum": [
+            "attr",
+            "sum",
+            "avg",
+            "min",
+            "max",
+            "count",
+            "countd"
+          ],
+          "title": "Aggregation",
+          "type": "string"
+        },
+        "clearing": {
+          "default": "keep",
+          "description": "清除選取時：保留參數目前的值，或設成 clear_value",
+          "enum": [
+            "keep",
+            "assign"
+          ],
+          "title": "Clearing",
+          "type": "string"
+        },
+        "clear_value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clear Value"
+        }
+      },
+      "required": [
+        "parameter",
+        "field"
+      ],
+      "title": "ParameterAction",
+      "type": "object"
+    },
     "RangeFilter": {
       "additionalProperties": false,
       "description": "以範圍篩選；min、max 為 None 表示該側不設限。",
@@ -1899,6 +2010,67 @@
         "reason"
       ],
       "title": "Unsupported",
+      "type": "object"
+    },
+    "UrlAction": {
+      "additionalProperties": false,
+      "description": "網址動作：以選取的標記的值代入網址後開啟。",
+      "properties": {
+        "template": {
+          "description": "網址，欄位以 <[欄位]> 參照",
+          "minLength": 1,
+          "title": "Template",
+          "type": "string"
+        },
+        "fields": {
+          "description": "網址中的欄位參照",
+          "items": {
+            "$ref": "#/$defs/UrlField"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "escape": {
+          "default": true,
+          "description": "代入的值是否以網址編碼",
+          "title": "Escape",
+          "type": "boolean"
+        },
+        "delimiter": {
+          "default": ",",
+          "description": "選取多個標記時值的分隔字元",
+          "title": "Delimiter",
+          "type": "string"
+        }
+      },
+      "required": [
+        "template"
+      ],
+      "title": "UrlAction",
+      "type": "object"
+    },
+    "UrlField": {
+      "additionalProperties": false,
+      "description": "網址動作的網址中的一個欄位參照，例如 <[Customer Name]>。",
+      "properties": {
+        "placeholder": {
+          "description": "網址中的原文，例如 <[Customer Name]>",
+          "minLength": 1,
+          "title": "Placeholder",
+          "type": "string"
+        },
+        "key": {
+          "description": "欄位鍵，例如 f_customer_name、sum(f_sales)；參數為 param:<id>",
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "placeholder",
+        "key"
+      ],
+      "title": "UrlField",
       "type": "object"
     },
     "Workbook": {

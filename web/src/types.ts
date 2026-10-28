@@ -83,11 +83,37 @@ export interface TupleFilter {
 export type Filter = FieldFilter | TupleFilter;
 
 /** 篩選動作：選取（或滑過）來源工作表的標記時，以標記的欄位值篩選目標工作表 */
+export interface UrlField {
+  placeholder: string;
+  /** 欄位鍵；參數為 param:<參數 id> */
+  key: string;
+}
+
+export interface UrlAction {
+  template: string;
+  fields: UrlField[];
+  escape: boolean;
+  delimiter: string;
+}
+
+export interface ParameterAction {
+  parameter: string;
+  /** 來源欄位的欄位鍵 */
+  field: string;
+  aggregation: string;
+  clearing: "keep" | "assign";
+  clear_value: Scalar;
+}
+
 export interface Action {
   id: string;
   name: string;
   caption: string;
-  kind: "filter";
+  kind: "filter" | "url" | "parameter" | "navigate";
+  url?: UrlAction | null;
+  parameter?: ParameterAction | null;
+  /** 切換動作的目標工作表 */
+  target_worksheet?: string | null;
   activation: "select" | "hover" | "menu";
   /** 只在這個 dashboard 上執行；null 表示任何地方都執行 */
   dashboard: string | null;

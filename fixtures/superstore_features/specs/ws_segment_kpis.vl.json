@@ -7,6 +7,12 @@
     "mark": "text",
     "dimensions": {
       "c0": "f_segment"
+    },
+    "measures": {
+      "c1": "sum(f_sales)",
+      "c2": "sum(f_profit)",
+      "c3": "countd(f_order_id)",
+      "c4": "f_calc_1368249927221915648"
     }
   },
   "data": {

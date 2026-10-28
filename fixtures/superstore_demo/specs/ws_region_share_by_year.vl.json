@@ -8,6 +8,10 @@
     "dimensions": {
       "c0": "f_region",
       "c1": "year(f_order_date)"
+    },
+    "measures": {
+      "c2": "f_calc_2049003526124994561",
+      "c3": "sum(f_sales)"
     }
   },
   "data": {

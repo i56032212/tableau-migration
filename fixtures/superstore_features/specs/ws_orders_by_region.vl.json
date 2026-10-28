@@ -7,6 +7,9 @@
     "mark": "text",
     "dimensions": {
       "c0": "f_region"
+    },
+    "measures": {
+      "c1": "countd(f_order_id)"
     }
   },
   "data": {

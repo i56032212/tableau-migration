@@ -103,6 +103,13 @@ AGG_PREFIXES = frozenset(
     {"sum", "avg", "min", "max", "cnt", "ctd", "med", "attr", "std", "stp", "var", "vrp"}
 )
 COMMANDS = {"tsc:brush": "highlight", "tsc:tsl-filter": "filter"}
+NEW_ACTIONS = {
+    "nav-action": "navigate",
+    "edit-parameter-action": "parameter",
+    "edit-group-action": "set",
+}
+SUPPORTED_ACTIONS = frozenset({"filter", "highlight", "url", "navigate", "parameter"})
+"""擴充階段已支援（L1、L2）或不影響數字的動作種類。"""
 MAP_MARKS = frozenset({"Map", "Multipolygon"})
 DATA_FILE_CLASSES = frozenset({"hyper", "dataengine"})
 
@@ -130,7 +137,11 @@ def run_census(path: str | Path, *, extracts_omitted: bool = False) -> CensusRep
 
     worksheets = [_worksheet(ws) for ws in children(child(root, "worksheets"), "worksheet")]
     dashboards = [_dashboard(db) for db in children(child(root, "dashboards"), "dashboard")]
-    actions = [_action(act) for act in children(child(root, "actions"), "action")]
+    actions = [
+        _action(act)
+        for act in children(child(root, "actions"))
+        if local_name(act) in ("action", *NEW_ACTIONS)
+    ]
 
     functions: Counter[str] = Counter()
     lod: Counter[str] = Counter()
@@ -428,7 +439,9 @@ def _action(act: etree._Element) -> ActionInfo:
     source = child(act, "source")
     command = child(act, "command")
     raw = command.get("command", "") if command is not None else ""
-    if not raw:
+    if local_name(act) in NEW_ACTIONS:
+        raw = NEW_ACTIONS[local_name(act)]
+    elif not raw:
         # URL 動作沒有 <command>，只有 <link>
         raw = "url" if child(act, "link") is not None else "unknown"
     where = ""
@@ -636,8 +649,8 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     if special or groups:
         parts = [f"{k} {v}" for k, v in special.items()] + ([f"group {groups}"] if groups else [])
         features.append(f"集合等特殊欄位（{'、'.join(parts)}）")
-    # 篩選動作已在擴充階段支援（L1），醒目提示不影響數字
-    kinds = Counter(a.kind for a in r.actions if a.kind not in ("filter", "highlight"))
+    # 篩選、網址、參數與切換動作已在擴充階段支援（L1、L2），醒目提示不影響數字
+    kinds = Counter(a.kind for a in r.actions if a.kind not in SUPPORTED_ACTIONS)
     if kinds:
         features.append(
             f"Dashboard action（{'、'.join(f'{k} {v}' for k, v in sorted(kinds.items()))}）"

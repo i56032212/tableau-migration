@@ -765,3 +765,79 @@ def test_difference_quick_calcs(tmp_path: Path) -> None:
     assert reasons(ir) == ["差異計算的比較對象（Absolute：First）v0 不支援"]
     (tc,) = ir.worksheets[0].table_calcs
     assert (tc.type, tc.preset, tc.options) == ("difference", "table_down", {"offset": -1})
+
+
+# ---------------------------------------------------------------- L2 網址、參數與切換動作
+
+
+def test_url_action(tmp_path: Path) -> None:
+    link = (
+        "<link caption='Search' delimiter=';' expression='https://example.com/?r=&lt;[Region]&gt;"
+        "&amp;s=&lt;SUM([Sales])&gt;&amp;p=&lt;[Parameters].[Parameter 2]&gt;&amp;x=&lt;[Nope]&gt;' "
+        "url-escape='false' />"
+    )
+    actions = (
+        "<action caption='Search' name='[Action9]'>"
+        "<source dashboard='Board' type='sheet' worksheet='Source' />"
+        f"{link}</action>"
+    )
+    ir = parse(tmp_path, action_workbook(action_filter(), actions=actions))
+    assert reasons(ir) == []
+    (act,) = ir.actions
+    assert (act.kind, act.activation, act.sources) == ("url", "menu", ["ws_source"])
+    assert act.url is not None
+    assert [(f.placeholder, f.key) for f in act.url.fields] == [
+        ("<[Region]>", "f_region"),
+        ("<SUM([Sales])>", "sum(f_sales)"),
+        ("<[Parameters].[Parameter 2]>", "param:p_region_pick"),
+    ]
+    assert (act.url.escape, act.url.delimiter) == (False, ";")
+    assert any("<[Nope]> 找不到欄位" in u.reason for u in ir.ignored)
+
+
+def test_parameter_and_navigate_actions(tmp_path: Path) -> None:
+    actions = f"""
+      <nav-action caption='Go Detail' name='[Action7]'>
+        <source dashboard='Board' type='sheet' worksheet='Target' />
+        <params><param name='target' value='Detail' /></params>
+      </nav-action>
+      <nav-action caption='Go Sheet' name='[Action8]'>
+        <activation type='on-select' />
+        <source dashboard='Board' type='sheet' worksheet='Target' />
+        <params><param name='target' value='Source' /></params>
+      </nav-action>
+      <edit-parameter-action caption='Pick Region' name='[Action5]'>
+        <activation type='on-select' />
+        <source dashboard='Board' type='sheet' worksheet='Source' />
+        <agg-type type='sum' />
+        <clear-option type='assign-fixed-value' value='&quot;West&quot;' />
+        <params>
+          <param name='source-field' value='{ref("none:Region:nk")}' />
+          <param name='target-parameter' value='[Parameters].[Parameter 2]' />
+        </params>
+      </edit-parameter-action>
+      <edit-group-action caption='Set Members' name='[Action6]'>
+        <source dashboard='Board' type='sheet' worksheet='Source' />
+      </edit-group-action>
+      <weird-action name='[Action10]' />"""
+    ir = parse(tmp_path, action_workbook(action_filter(), actions=actions))
+    assert reasons(ir) == [
+        "集合動作「Set Members」v0 不支援",
+        "動作清單中的未知元素 <weird-action>",
+    ]
+    nav, sheet_nav, param = ir.actions
+    assert (nav.kind, nav.activation, nav.target_dashboard, nav.target_worksheet) == (
+        "navigate",
+        "menu",
+        "db_detail",
+        None,
+    )
+    assert (sheet_nav.activation, sheet_nav.target_worksheet) == ("select", "ws_source")
+    assert param.parameter is not None
+    assert param.parameter.model_dump() == {
+        "parameter": "p_region_pick",
+        "field": "f_region",
+        "aggregation": "sum",
+        "clearing": "assign",
+        "clear_value": "West",
+    }

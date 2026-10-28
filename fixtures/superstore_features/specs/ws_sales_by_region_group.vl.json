@@ -7,6 +7,9 @@
     "mark": "bar",
     "dimensions": {
       "c0": "f_region_group"
+    },
+    "measures": {
+      "c1": "sum(f_sales)"
     }
   },
   "data": {

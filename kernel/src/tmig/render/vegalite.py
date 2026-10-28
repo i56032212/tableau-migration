@@ -479,11 +479,16 @@ def build_spec(
             "name": ws.name,
             "rows": len(values),
             "mark": mark,
-            # 篩選動作：標記的維度欄（資料欄名 → 欄位鍵）
+            # 篩選與網址動作：標記的維度欄與量值欄（資料欄名 → 欄位鍵）
             "dimensions": {
                 ch.name: key
                 for key, ch in channels.items()
                 if ch.role == "dimension" and ch.use.field not in SPECIAL_FIELDS
+            },
+            "measures": {
+                ch.name: key
+                for key, ch in channels.items()
+                if ch.role == "measure" and ch.use.field not in SPECIAL_FIELDS
             },
         },
         "data": {"values": values},

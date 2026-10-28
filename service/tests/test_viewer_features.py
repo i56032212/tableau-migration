@@ -368,3 +368,63 @@ def test_condition_filters_render(server: str) -> None:
         assert "CONTAINS" in condition
         assert errors == []
         browser.close()
+
+
+def test_url_parameter_and_navigate_actions(server: str) -> None:
+    """L2：網址動作在選單中以標記的值代入網址；參數動作設定參數；切換動作切到另一個 dashboard。"""
+    from playwright.sync_api import sync_playwright
+
+    oracle = load_oracle()
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    filters = next(d for d in ir.dashboards if d.name == "篩選動作")
+    params = next(d for d in ir.dashboards if d.name == "參數動作")
+    renders = Renders()
+    bar = "svg path[aria-roledescription='bar']"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+
+        # 網址動作（選單）：點選 East 後選單中的連結
+        page.goto(f"{server}/w/superstore_features/d/{filters.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.locator(
+            f"[data-worksheet='ws_region_picker'] {bar}[aria-label$='Region: East']"
+        ).click()
+        link = page.locator(".action-menu a[role='menuitem']")
+        link.wait_for()
+        href = link.get_attribute("href") or ""
+        assert href.startswith("https://example.com/search?region=East&sales=678781.24")
+        assert link.inner_text() == "Search Region"
+
+        # 參數動作：點選 West 把 Selected Region 設成 West
+        page.goto(f"{server}/w/superstore_features/d/{params.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 2"
+        )
+        start = len(renders.items)
+        page.locator(
+            f"[data-worksheet='ws_region_picker'] {bar}[aria-label$='Region: West']"
+        ).click()
+        renders.wait_for(page, {"ws_selected_region_sales"}, start)
+        page.wait_for_timeout(300)
+        body, data = next(
+            (b, d) for w, b, d in reversed(renders.items) if w == "ws_selected_region_sales"
+        )
+        assert body["parameters"] == {"p_selected_region": "West"}
+        same_as_oracle(data, oracle.parameter_action("West"))
+        assert page.locator("[data-zone='z9'] select").input_value() == '"West"'
+
+        # 切換動作（選單）：點選 Selected Region Sales 的標記，選單中切到「篩選動作」
+        page.locator(f"[data-worksheet='ws_selected_region_sales'] {bar}").first.click()
+        page.locator(
+            ".action-menu button[role='menuitem']", has_text="Go to Filter Actions"
+        ).click()
+        page.wait_for_url(f"**/d/{filters.id}*")
+        assert errors == []
+        browser.close()

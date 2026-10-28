@@ -71,6 +71,12 @@ def check_references(ir: IR) -> list[str]:
         for name, did in (("dashboard", act.dashboard), ("target_dashboard", act.target_dashboard)):
             if did is not None and did not in boards:
                 errors.append(f"actions[{act.id}].{name}：dashboard「{did}」不存在")
+        if act.target_worksheet is not None and act.target_worksheet not in sheets:
+            errors.append(
+                f"actions[{act.id}].target_worksheet：工作表「{act.target_worksheet}」不存在"
+            )
+        if act.parameter is not None and act.parameter.parameter not in params:
+            errors.append(f"actions[{act.id}].parameter：參數「{act.parameter.parameter}」不存在")
 
     def check_use(
         use: FieldUse,

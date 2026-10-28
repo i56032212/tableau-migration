@@ -7,6 +7,9 @@
     "mark": "bar",
     "dimensions": {
       "c0": "f_segment"
+    },
+    "measures": {
+      "c1": "countd(f_customer_name)"
     }
   },
   "data": {
