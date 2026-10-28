@@ -77,8 +77,11 @@ DS_CHILDREN = frozenset(
         "drill-paths",
         "default-sorts",
         "date-options",
+        "field-sort-info",
     }
 )
+TABLE_ID_PREFIX = "[__tableau_internal_object_id__]."
+"""物件模型中每張邏輯資料表的筆數欄位（Tableau 2020.2 起的「資料表 (計數)」）。"""
 
 
 @dataclass(frozen=True)
@@ -216,7 +219,9 @@ class DatasourceParser:
             ctx.flag(el, f"資料源「{self.caption}」沒有可用的欄位")
             return None
         analyze_calcs(ctx, state)
-        state.instances = {inst.get("name", ""): inst for inst in children(el, "column-instance")}
+        state.instances = {
+            instance_key(inst.get("name", "")): inst for inst in children(el, "column-instance")
+        }
         self._filters(state)
         self._check_children()
         return state
@@ -361,13 +366,24 @@ class DatasourceParser:
             if child(column, "calculation") is not None:
                 self._add_calc(state, column)
                 continue
-            if name.startswith("[:") or column.get("datatype") == "table":
-                continue  # Measure Names 等虛擬欄位、物件模型的內部欄位
+            if column.get("datatype") == "table" or name.startswith(TABLE_ID_PREFIX):
+                self._add_table_count(state, name, column.get("caption"), column)
+                continue
+            if name.startswith("[:"):
+                continue  # Measure Names 等虛擬欄位
             if not records:
                 # 沒有 metadata-records 的舊檔：以 <column> 為準
                 self._add_raw(state, name, column.get("datatype", ""), column, None, physical)
                 continue
             ctx.flag(column, f"欄位 {name} 找不到資料來源")
+
+        # 物件模型的邏輯資料表：沒有明寫 datatype='table' 欄位時，依 object-graph 補上筆數欄位
+        graph = child(self.el, "object-graph")
+        for obj in children(child(graph, "objects"), "object"):
+            object_id = obj.get("id")
+            if object_id:
+                name = f"{TABLE_ID_PREFIX}[{object_id.replace(']', ']]')}]"
+                self._add_table_count(state, name, obj.get("caption"), obj)
 
         for group in children(self.el, "group"):
             ctx.ignore(group, "群組或集合（工作表若有使用會另列為不支援）")
@@ -407,6 +423,29 @@ class DatasourceParser:
                 hidden=column is not None and column.get("hidden") == "true",
                 column=physical.get(name, strip_brackets(name)),
                 calc=None,
+                source_ref=xpath(anchor),
+            )
+        )
+
+    def _add_table_count(
+        self, state: DsState, name: str, caption: str | None, anchor: etree._Element
+    ) -> None:
+        """資料表的筆數欄位：以公式 1 表示，COUNT 後即為列數（單表萃取）。"""
+        if name in state.by_name:
+            return
+        label = caption or strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
+        state.add_field(
+            DataField(
+                id=self.ctx.ids.make("f", f"{label} count", name),
+                name=name,
+                caption=label,
+                role="measure",
+                datatype="integer",
+                default_agg="count",
+                format=None,
+                hidden=False,
+                column=None,
+                calc=Calc(formula="1"),
                 source_ref=xpath(anchor),
             )
         )

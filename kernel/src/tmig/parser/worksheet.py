@@ -130,8 +130,12 @@ OPAQUE = frozenset(
         "layout-cache",
         "page-trail-options",
         "target",
+        "semantic-values",
     }
 )
+IGNORED_ELEMENTS = {
+    "mark-labels": "特定標記的標籤（標記標籤＞一律顯示）：新平台在工具提示與資料表中呈現這些值",
+}
 KNOWN_UNSUPPORTED = {
     "reference-line": "參考線、參考區間或分布",
     "trend-line": "趨勢線",
@@ -206,7 +210,11 @@ class SheetParser:
         sources = [d.get("name", "") for d in children(child(view, "datasources"), "datasource")]
         main = [s for s in sources if s != "Parameters"]
         if not main:
-            ctx.flag(el, f"工作表「{self.name}」沒有資料源")
+            if _is_blank(table):
+                ctx.ignore(el, f"空白工作表「{self.name}」（沒有資料源）：以空白區塊呈現")
+                ctx.blank_sheets.add(self.name)
+            else:
+                ctx.flag(el, f"工作表「{self.name}」沒有資料源")
             return None
         if len(main) > 1:
             ctx.flag(
@@ -274,7 +282,8 @@ class SheetParser:
                 if add_calc_field(self.ctx, self.ds, column) is not None:
                     added = True
             for inst in children(dep, "column-instance"):
-                self.instances[inst.get("name", "")] = inst
+                # 物件模型的欄位實例名稱含資料表前綴，例如 [__tableau_internal_object_id__].[cnt:…:qk]
+                self.instances[instance_key(inst.get("name", ""))] = inst
         if added:
             analyze_calcs(self.ctx, self.ds)
 
@@ -609,6 +618,8 @@ class SheetParser:
             return self._simple(element, column, "alphabetic")
         if sort_class == "datasource":
             return self._simple(element, column, "data_source")
+        if sort_class == "natural":
+            return self._simple(element, column, "alphabetic")
         if sort_class == "manual":
             return self._manual(element)
         self.ctx.flag(element, f"排序方式 {sort_class} v0 不支援")
@@ -661,6 +672,9 @@ class SheetParser:
             tag = local_name(item)
             if tag in OPAQUE:
                 continue
+            if tag in IGNORED_ELEMENTS:
+                self.ctx.ignore(item, IGNORED_ELEMENTS[tag])
+                continue
             if tag in KNOWN_UNSUPPORTED:
                 self.ctx.flag(item, f"{KNOWN_UNSUPPORTED[tag]} v0 不支援")
                 continue
@@ -668,6 +682,17 @@ class SheetParser:
                 self.ctx.flag(item, f"工作表中的未知元素 <{tag}>")
                 continue
             self._check_elements(item)
+
+
+def _is_blank(table: etree._Element | None) -> bool:
+    """欄列架與標記卡都是空的工作表（常用來當作標題或留白）。"""
+    if table is None:
+        return True
+    if text_of(child(table, "rows")) or text_of(child(table, "cols")):
+        return False
+    return not any(
+        len(children(child(p, "encodings"))) for p in children(child(table, "panes"), "pane")
+    )
 
 
 def _pane_signature(pane: etree._Element) -> tuple[str, tuple[tuple[str, str], ...]]:

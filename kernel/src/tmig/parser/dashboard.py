@@ -25,11 +25,13 @@ FILTER_MODES: dict[str, ControlType] = {
     "typein": "type_in",
     "type_in": "type_in",
     "pattern": "type_in",
+    "typeinlist": "type_in",
 }
 PARAM_MODES: dict[str, ControlType] = {
     "slider": "single_slider",
     "compact": "single_dropdown",
     "radiolist": "single_list",
+    "list": "single_list",
     "typein": "type_in",
     "type_in": "type_in",
 }
@@ -116,6 +118,8 @@ class DashboardParser:
         if child_zones:
             self.ctx.flag(element, "非容器的區塊含有子區塊")
         if kind_attr is None and name:
+            if name in self.ctx.blank_sheets:
+                return Zone(kind="blank", **base)
             sheet = self._sheet(element, name)
             if sheet is None:
                 return Zone(kind="blank", **base)
@@ -131,6 +135,9 @@ class DashboardParser:
                 return Zone(kind="blank", **base)
             return Zone(kind="image", image=image.replace("\\", "/"), **base)
         if kind_attr == "empty":
+            return Zone(kind="blank", **base)
+        if kind_attr == "highlighter":
+            self.ctx.ignore(element, "醒目提示控制項（只影響醒目提示，不影響數字）：以空白區塊呈現")
             return Zone(kind="blank", **base)
         if kind_attr == "filter":
             return self._filter_zone(element, name, base)

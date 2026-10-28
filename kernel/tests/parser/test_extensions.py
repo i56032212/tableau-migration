@@ -136,3 +136,112 @@ def test_dashboard_control_for_shared_filter(tmp_path: Path) -> None:
     control = next(z for z in iter_zones(ir.dashboards[0].zones) if z.id == "z3")
     assert control.kind == "filter"
     assert control.field is not None and control.field.field == "f_region"
+
+
+# ---------------------------------------------------------------- H2 資料表筆數欄位
+
+TABLE = "[__tableau_internal_object_id__].[Orders_ABC123]"
+COUNT = instance(TABLE, "Count", "[__tableau_internal_object_id__].[cnt:Orders_ABC123:qk]")
+COUNT_REF = ref("__tableau_internal_object_id__].[cnt:Orders_ABC123:qk")
+
+
+def test_table_count_from_object_graph(tmp_path: Path) -> None:
+    graph = "<object-graph><objects><object caption='Orders' id='Orders_ABC123' /></objects></object-graph>"
+    sheets = worksheet("Counts", [*BASIC, COUNT], rows=ref("none:Region:nk"), cols=COUNT_REF)
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(extra=graph), worksheets=sheets))
+    assert reasons(ir) == []
+    count = next(f for f in ir.datasources[0].fields if f.name == TABLE)
+    assert (count.id, count.caption, count.role, count.datatype) == (
+        "f_orders_count",
+        "Orders",
+        "measure",
+        "integer",
+    )
+    assert count.calc is not None and count.calc.formula == "1"
+    (use,) = ir.worksheets[0].columns
+    assert (use.field, use.agg) == ("f_orders_count", "count")
+
+
+def test_table_count_from_table_column(tmp_path: Path) -> None:
+    column = f"<column caption='Orders' datatype='table' name='{TABLE}' role='measure' type='quantitative' />"
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=column)))
+    assert reasons(ir) == []
+    assert any(f.name == TABLE and f.caption == "Orders" for f in ir.datasources[0].fields)
+
+
+# ---------------------------------------------------------------- H3 不影響數字的元素
+
+
+def test_blank_worksheet_becomes_blank_zone(tmp_path: Path) -> None:
+    blank = """
+    <worksheet name='Spacer'>
+      <table>
+        <view><datasources /><aggregation value='true' /></view>
+        <style />
+        <panes><pane><view><breakdown value='auto' /></view><mark class='Automatic' /></pane></panes>
+        <rows /><cols />
+      </table>
+    </worksheet>"""
+    board = """
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones><zone h='100000' id='2' name='Spacer' w='100000' x='0' y='0' /></zones>
+    </dashboard>"""
+    ir = parse(tmp_path, b.workbook(worksheets=blank, dashboards=board))
+    assert reasons(ir) == []
+    assert ir.worksheets == []
+    (zone,) = ir.dashboards[0].zones
+    assert zone.kind == "blank"
+    assert any("空白工作表" in u.reason for u in ir.ignored)
+
+
+def test_mark_labels_and_semantic_values_do_not_block(tmp_path: Path) -> None:
+    deps = "<column datatype='string' name='[Region]' role='dimension' type='nominal'><semantic-values><semantic-value key='[Country].[Name]' value='&quot;US&quot;' /></semantic-values></column>"
+    sheets = worksheet(
+        "S",
+        BASIC,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        deps_extra=deps,
+        table_extra="<mark-labels><mark-label id='0' /></mark-labels>",
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    assert any("標記標籤" in u.reason for u in ir.ignored)
+
+
+def test_control_modes_and_highlighter(tmp_path: Path) -> None:
+    flt = f"""<filter class='categorical' column='{ref("none:Region:nk")}'>
+          <groupfilter function='level-members' level='[none:Region:nk]' />
+        </filter>"""
+    sheets = worksheet(
+        "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), view_extra=flt
+    )
+    board = f"""
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='30000' id='2' mode='typeinlist' name='S' param='{ref("none:Region:nk")}' type-v2='filter' w='50000' x='0' y='0' />
+          <zone h='30000' id='3' mode='list' param='[Parameters].[Parameter 2]' type-v2='paramctrl' w='50000' x='50000' y='0' />
+          <zone h='30000' id='4' name='S' param='{ref("none:Region:nk")}' type-v2='highlighter' w='50000' x='0' y='30000' />
+        </zone>
+      </zones>
+    </dashboard>"""
+    ir = parse(tmp_path, b.workbook(worksheets=sheets, dashboards=board))
+    assert reasons(ir) == []
+    zones = {z.id: z for z in iter_zones(ir.dashboards[0].zones)}
+    assert (zones["z2"].kind, zones["z2"].control) == ("filter", "type_in")
+    assert (zones["z3"].kind, zones["z3"].control) == ("parameter", "single_list")
+    assert zones["z4"].kind == "blank"
+
+
+def test_natural_sort_is_alphabetic(tmp_path: Path) -> None:
+    sort = f"<sort class='natural' column='{ref('none:Region:nk')}' direction='DESC' />"
+    sheets = worksheet(
+        "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), view_extra=sort
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    (sort_ir,) = ir.worksheets[0].sorts
+    assert (sort_ir.kind, sort_ir.order) == ("alphabetic", "desc")

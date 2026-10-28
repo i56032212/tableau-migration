@@ -78,8 +78,11 @@ class Run:
         calcs: str = "",
         ds_extra: str = "",
         state: QueryState | None = None,
+        extra: str = "",
     ) -> list[dict[str, Any]]:
-        xml = b.workbook(b.extract_datasource(columns=calcs, extra=ds_extra), worksheets=sheet)
+        xml = b.workbook(
+            b.extract_datasource(columns=calcs, extra=ds_extra), worksheets=sheet, extra=extra
+        )
         ir = parse_workbook(b.write_twb(self.tmp_path, xml))
         assert ir.unsupported == [], [u.reason for u in ir.unsupported]
         query = worksheet_sql(ir, ir.worksheets[0].id, state)

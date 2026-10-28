@@ -109,6 +109,8 @@ class ParseContext:
     """以工作表名稱為鍵。"""
     shared_views: dict[str, SharedView] = field(default_factory=dict)
     """全域篩選，以資料源的 Tableau 內部名稱為鍵。"""
+    blank_sheets: set[str] = field(default_factory=set)
+    """空白工作表的名稱：dashboard 上以空白區塊呈現。"""
 
     def flag(self, element: etree._Element, reason: str) -> None:
         """記錄 v0 不支援的元素：報表因此進人工佇列。"""
