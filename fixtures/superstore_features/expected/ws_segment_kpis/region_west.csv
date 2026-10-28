@@ -1,0 +1,13 @@
+Segment,Measure Names,Measure Values
+Consumer,Sales,362880.773
+Consumer,Profit,57450.60399999999
+Consumer,Distinct count of Order ID,825
+Consumer,利潤率,0.15831812615765123
+Corporate,Sales,225855.2745
+Corporate,Profit,34437.429899999996
+Corporate,Distinct count of Order ID,485
+Corporate,利潤率,0.1524756505077768
+Home Office,Sales,136721.777
+Home Office,Profit,16530.414999999997
+Home Office,Distinct count of Order ID,301
+Home Office,利潤率,0.12090550139646003

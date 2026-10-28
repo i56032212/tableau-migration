@@ -166,3 +166,37 @@ def test_automatic_dashboard_layout(server: str, viewport: tuple[int, int]) -> N
         assert page.locator("[data-zone='z9'] .worksheet-title").count() == 0
         assert page.locator("[data-zone='z7'] .worksheet-title").count() == 1
         browser.close()
+
+
+def test_extended_charts_render(server: str) -> None:
+    """Measure Names／Values、雙軸與圓餅都畫得出來，沒有錯誤或「未支援」。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "圖表擴充")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(500)
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+        for name in (
+            "ws_segment_kpis",
+            "ws_monthly_sales_vs_profit",
+            "ws_sales_and_profit_by_year",
+            "ws_category_mix",
+        ):
+            assert page.locator(f"[data-worksheet='{name}'] svg").count() >= 1, name
+        # 文字表的 Measure Names 依 Measure Values 卡的順序
+        headers = page.eval_on_selector_all(
+            "[data-worksheet='ws_segment_kpis'] svg text", "els => els.map(e => e.textContent)"
+        )
+        order = [h for h in headers if h in ("Sales", "Profit", "CNTD(Order ID)", "利潤率")]
+        assert order[:4] == ["Sales", "Profit", "CNTD(Order ID)", "利潤率"]
+        assert errors == []
+        browser.close()

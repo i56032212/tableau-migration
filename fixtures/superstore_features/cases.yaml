@@ -12,6 +12,14 @@ sheets:
     view: ProfitbyShipMode
   - worksheet: ws_orders_by_region
     view: OrdersbyRegion
+  - worksheet: ws_segment_kpis
+    view: SegmentKPIs
+  - worksheet: ws_monthly_sales_vs_profit
+    view: MonthlySalesvsProfit
+  - worksheet: ws_sales_and_profit_by_year
+    view: SalesandProfitbyYear
+  - worksheet: ws_category_mix
+    view: CategoryMix
 cases:
   - name: default
     url_params: {}

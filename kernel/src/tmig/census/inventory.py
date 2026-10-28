@@ -508,8 +508,8 @@ def render_inventory(result: InventoryResult) -> str:
     )
     lines.append("")
     lines.append(
-        "起步條件：單一資料源、資料在 .twbx 的單表萃取內、沒有列層級權限與 Data Blending、"
-        "dashboard 為固定尺寸。候選依「不支援數少 → 注意事項少 → 檢視次數多」排序。"
+        "起步條件：單一資料源、資料在 .twbx 的單表萃取內、沒有列層級權限與 Data Blending"
+        "（dashboard 不是固定尺寸時列為需注意）。候選依「不支援數少 → 注意事項少 → 檢視次數多」排序。"
     )
 
     groups: list[tuple[Literal["A", "B"], str]] = [

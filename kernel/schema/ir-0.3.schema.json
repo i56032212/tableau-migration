@@ -784,12 +784,81 @@
           },
           "title": "Tooltip",
           "type": "array"
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "angle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "圓餅每一塊的角度（wedge-size）"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "折線或多邊形的連接順序"
         }
       },
       "required": [
         "type"
       ],
       "title": "Marks",
+      "type": "object"
+    },
+    "Pane": {
+      "additionalProperties": false,
+      "description": "個別量值的標記卡：同一架上有多個量值（各自一個軸）或雙軸時，每個量值可以有自己的標記設定。",
+      "properties": {
+        "measure": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "這張標記卡對應的軸上量值"
+        },
+        "axis": {
+          "enum": [
+            "rows",
+            "columns"
+          ],
+          "title": "Axis",
+          "type": "string"
+        },
+        "dual": {
+          "default": false,
+          "description": "雙軸中的第二個軸（與前一個量值重疊）",
+          "title": "Dual",
+          "type": "boolean"
+        },
+        "marks": {
+          "$ref": "#/$defs/Marks"
+        }
+      },
+      "required": [
+        "measure",
+        "axis",
+        "marks"
+      ],
+      "title": "Pane",
       "type": "object"
     },
     "ParamRef": {
@@ -1417,6 +1486,22 @@
         },
         "marks": {
           "$ref": "#/$defs/Marks"
+        },
+        "panes": {
+          "description": "個別量值的標記卡；空的表示所有量值共用 marks",
+          "items": {
+            "$ref": "#/$defs/Pane"
+          },
+          "title": "Panes",
+          "type": "array"
+        },
+        "measure_values": {
+          "description": "Measure Values 卡上的量值，依顯示順序",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Measure Values",
+          "type": "array"
         },
         "filters": {
           "items": {

@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict
 from tmig.data.executor import ExecutionError, execute, format_value
 from tmig.ir import IR
 from tmig.planner.state import QueryState, StateError, parse_key
+from tmig.render.format import display_format
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import build_spec, caption
 from tmig.sqlgen.query import QueryError, domain_sql, worksheet_sql
@@ -178,9 +179,9 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
                     cells.append(str(value))
                 else:
                     trunc = use.date.unit if use.date is not None else None
-                    cells.append(
-                        display_value(value, column.datatype, fields[use.field].format, trunc)
-                    )
+                    tc = next((t for t in sheet.table_calcs if t.id == use.table_calc), None)
+                    fmt = display_format(fields[use.field].format, tc.type if tc else None)
+                    cells.append(display_value(value, column.datatype, fmt, trunc))
             table_rows.append(cells)
         return {
             "worksheet": sheet.id,

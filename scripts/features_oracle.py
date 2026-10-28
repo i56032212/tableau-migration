@@ -10,11 +10,13 @@
 - 全域篩選（<shared-views>）：Region 排除 Central，套用到篩選架上有 Region 的工作表
 - 篩選群組：Segment 只保留 Consumer、Corporate，套用到 Sales by Segment 與 Profit by Ship Mode
 - 網址參數取代同欄位的既有篩選（含全域篩選）；工作表沒有該欄位的篩選時新增一個
+- Measure Names／Values 的工作表匯出為長表（Measure Names、Measure Values 兩欄），與 Tableau 相同
 """
 
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import gzip
 from collections import defaultdict
 from collections.abc import Callable
@@ -44,6 +46,8 @@ def load_rows() -> list[Row]:
                     "Segment": raw["Segment"],
                     "Ship Mode": raw["Ship Mode"],
                     "Order ID": raw["Order ID"],
+                    "Order Date": dt.date.fromisoformat(raw["Order Date"]),
+                    "Category": raw["Category"],
                     "Sales": float(raw["Sales"]),
                     "Profit": float(raw["Profit"]),
                 }
@@ -107,10 +111,76 @@ def orders_by_region(rows: list[Row], case: Case) -> tuple[list[str], list[list[
     return ["Region", "Distinct count of Order ID"], body
 
 
+def segment_kpis(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    """Measure Names／Values 文字表：匯出為長表（Measure Names、Measure Values）。"""
+    keep = case.keep({})
+    groups: dict[str, list[Row]] = defaultdict(list)
+    for row in rows:
+        if keep(row):
+            groups[row["Segment"]].append(row)
+    body: list[list[Any]] = []
+    for segment, items in sorted(groups.items()):
+        sales = sum(r["Sales"] for r in items)
+        profit = sum(r["Profit"] for r in items)
+        orders = len({r["Order ID"] for r in items})
+        for name, value in (
+            ("Sales", sales),
+            ("Profit", profit),
+            ("Distinct count of Order ID", orders),
+            ("利潤率", profit / sales),
+        ):
+            body.append([segment, name, value])
+    return ["Segment", "Measure Names", "Measure Values"], body
+
+
+def monthly_sales_vs_profit(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[dt.date, float] = defaultdict(float)
+    profit: dict[dt.date, float] = defaultdict(float)
+    for row in rows:
+        if row["Order Date"].year != 2024 or not keep(row):
+            continue
+        month = row["Order Date"].replace(day=1)
+        sales[month] += row["Sales"]
+        profit[month] += row["Profit"]
+    body: list[list[Any]] = []
+    for month in sorted(sales):
+        body.append([month.isoformat(), "Sales", sales[month]])
+        body.append([month.isoformat(), "Profit", profit[month]])
+    return ["Month of Order Date", "Measure Names", "Measure Values"], body
+
+
+def sales_and_profit_by_year(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[int, float] = defaultdict(float)
+    profit: dict[int, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[row["Order Date"].year] += row["Sales"]
+            profit[row["Order Date"].year] += row["Profit"]
+    body = [[year, sales[year], profit[year]] for year in sorted(sales)]
+    return ["Year of Order Date", "Sales", "Profit"], body
+
+
+def category_mix(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[str, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[row["Category"]] += row["Sales"]
+    total = sum(sales.values())
+    body = [[name, value, value / total] for name, value in sorted(sales.items())]
+    return ["Category", "Sales", "% of Total Sales"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
     "ws_orders_by_region": orders_by_region,
+    "ws_segment_kpis": segment_kpis,
+    "ws_monthly_sales_vs_profit": monthly_sales_vs_profit,
+    "ws_sales_and_profit_by_year": sales_and_profit_by_year,
+    "ws_category_mix": category_mix,
 }
 
 

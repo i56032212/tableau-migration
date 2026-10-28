@@ -60,6 +60,11 @@ Aggregation = Literal[
 DatePart = Literal["year", "quarter", "month", "week", "weekday", "day", "hour", "minute", "second"]
 WeekDay = Literal["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 CalcLevel = Literal["row", "aggregate", "lod", "table_calc"]
+MEASURE_NAMES = "measure_names"
+MEASURE_VALUES = "measure_values"
+SPECIAL_FIELDS = frozenset({MEASURE_NAMES, MEASURE_VALUES})
+"""Measure Names／Values：不是資料源的欄位，只出現在工作表的欄列架與標記卡。"""
+
 FilterStage = Literal[
     "extract", "datasource", "context", "top_n", "dimension", "measure", "table_calc"
 ]
@@ -353,6 +358,23 @@ class Marks(IRModel):
     label: list[FieldUse] = Field(default_factory=list)
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
+    shape: FieldUse | None = None
+    angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
+    path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")
+
+    def uses(self) -> list[FieldUse]:
+        """標記卡上的所有欄位使用。"""
+        singles = [self.color, self.size, self.shape, self.angle, self.path]
+        return [u for u in singles if u is not None] + [*self.label, *self.detail, *self.tooltip]
+
+
+class Pane(IRModel):
+    """個別量值的標記卡：同一架上有多個量值（各自一個軸）或雙軸時，每個量值可以有自己的標記設定。"""
+
+    measure: FieldUse = Field(description="這張標記卡對應的軸上量值")
+    axis: Literal["rows", "columns"]
+    dual: bool = Field(default=False, description="雙軸中的第二個軸（與前一個量值重疊）")
+    marks: Marks
 
 
 class Worksheet(IRModel):
@@ -362,6 +384,12 @@ class Worksheet(IRModel):
     rows: list[FieldUse] = Field(default_factory=list)
     columns: list[FieldUse] = Field(default_factory=list)
     marks: Marks
+    panes: list[Pane] = Field(
+        default_factory=list, description="個別量值的標記卡；空的表示所有量值共用 marks"
+    )
+    measure_values: list[FieldUse] = Field(
+        default_factory=list, description="Measure Values 卡上的量值，依顯示順序"
+    )
     filters: list[Filter] = Field(default_factory=list)
     sorts: list[Sort] = Field(default_factory=list)
     table_calcs: list[TableCalc] = Field(default_factory=list)
@@ -372,6 +400,10 @@ class Worksheet(IRModel):
         for flt in self.filters:
             if flt.stage in ("extract", "datasource"):
                 raise ValueError(f"工作表上的篩選 {flt.id} 不能屬於 {flt.stage} 階段")
+        uses = [*self.rows, *self.columns, *self.marks.uses()]
+        uses += [u for pane in self.panes for u in pane.marks.uses()]
+        if any(u.field == MEASURE_VALUES for u in uses) and not self.measure_values:
+            raise ValueError("用到 Measure Values 時必須列出 measure_values")
         return self
 
 

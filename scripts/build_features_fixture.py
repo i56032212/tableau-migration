@@ -7,6 +7,9 @@
 
 - H1 全域篩選（<shared-views>）與篩選群組（filter-group）：Region 為全域篩選，Segment 篩選套用到兩張工作表
 - I1 自動尺寸的 dashboard：右側篩選欄固定 212 像素寬、一個工作表不顯示標題、一個隱藏的文字區塊
+- J1 Measure Names／Values：文字表（Segment KPIs，手動排序與篩選順序不同）、折線（Monthly Sales vs Profit）
+- J2 同一架多個量值與雙軸：Sales and Profit by Year（長條＋折線，第二個軸）
+- J3 圓餅：Category Mix（角度為銷售額、標籤含合計百分比）
 """
 
 from __future__ import annotations
@@ -199,7 +202,192 @@ def worksheets() -> str:
         ref("none:Region:nk"),
         "",
     )
-    return "\n".join([sales_by_segment, profit_by_ship_mode, orders_by_region])
+    return "\n".join(
+        [
+            sales_by_segment,
+            profit_by_ship_mode,
+            orders_by_region,
+            segment_kpis(),
+            monthly_sales_vs_profit(),
+            sales_and_profit_by_year(),
+            category_mix(),
+        ]
+    )
+
+
+PROFIT_RATIO = demo.CALC_PROFIT_RATIO
+
+
+def measure_names(*instances: str, order: tuple[str, ...] | None = None) -> str:
+    """Measure Names 的篩選（Measure Values 卡上的量值）與手動排序。"""
+    members = "\n".join(f"              {member('[:Measure Names]', ref(i))}" for i in instances)
+    buckets = "\n".join(
+        f"              <bucket>{escape(chr(34) + ref(i) + chr(34))}</bucket>"
+        for i in (order or instances)
+    )
+    return f"""          <filter class='categorical' column={attr(ref(":Measure Names"))}>
+            <groupfilter function='union' user:op='manual'>
+{members}
+            </groupfilter>
+          </filter>
+          <manual-sort column={attr(ref(":Measure Names"))} direction='ASC'>
+            <dictionary>
+{buckets}
+            </dictionary>
+          </manual-sort>"""
+
+
+def segment_kpis() -> str:
+    measures = (
+        "sum:Sales:qk",
+        "sum:Profit:qk",
+        "usr:Calculation_1368249927221915648:qk",
+        "ctd:Order ID:qk",
+    )
+    order = (
+        "sum:Sales:qk",
+        "sum:Profit:qk",
+        "ctd:Order ID:qk",
+        "usr:Calculation_1368249927221915648:qk",
+    )
+    return worksheet(
+        "Segment KPIs",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000004",
+        dependency(
+            [
+                ("[Order ID]", "string", "dimension", "nominal"),
+                ("[Profit]", "real", "measure", "quantitative"),
+                ("[Sales]", "real", "measure", "quantitative"),
+                ("[Segment]", "string", "dimension", "nominal"),
+            ],
+            [
+                instance(
+                    PROFIT_RATIO, "User", "[usr:Calculation_1368249927221915648:qk]", "quantitative"
+                ),
+                instance("[Order ID]", "CountD", "[ctd:Order ID:qk]", "quantitative"),
+                instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+                instance("[Segment]", "None", "[none:Segment:nk]", "nominal"),
+            ],
+            [PROFIT_RATIO],
+        ),
+        measure_names(*measures, order=order) + "\n" + slices(":Measure Names"),
+        pane("Automatic", f"              <text column={attr(ref('Multiple Values'))} />"),
+        ref("none:Segment:nk"),
+        ref(":Measure Names"),
+    )
+
+
+def monthly_sales_vs_profit() -> str:
+    return worksheet(
+        "Monthly Sales vs Profit",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000005",
+        dependency(
+            [
+                ("[Order Date]", "date", "dimension", "ordinal"),
+                ("[Profit]", "real", "measure", "quantitative"),
+                ("[Sales]", "real", "measure", "quantitative"),
+            ],
+            [
+                instance("[Order Date]", "None", "[none:Order Date:qk]", "quantitative"),
+                instance("[Order Date]", "Month-Trunc", "[tmn:Order Date:qk]", "quantitative"),
+                instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        measure_names("sum:Sales:qk", "sum:Profit:qk")
+        + f"""
+          <filter class='quantitative' column={attr(ref("none:Order Date:qk"))} included-values='in-range'>
+            <min>#2024-01-01#</min>
+            <max>#2024-12-31#</max>
+          </filter>
+"""
+        + slices(":Measure Names", "none:Order Date:qk"),
+        pane("Line", f"              <color column={attr(ref(':Measure Names'))} />"),
+        ref("Multiple Values"),
+        ref("tmn:Order Date:qk"),
+    )
+
+
+def sales_and_profit_by_year() -> str:
+    """雙軸：Sales 為長條（第一個軸），Profit 為折線（第二個軸）。"""
+    panes = "\n".join(
+        [
+            pane("Automatic"),
+            pane(
+                "Bar",
+                f"              <text column={attr(ref('sum:Sales:qk'))} />",
+                f" id='1' y-axis-name={attr(ref('sum:Sales:qk'))}",
+            ),
+            pane(
+                "Line",
+                "",
+                f" id='2' y-axis-name={attr(ref('sum:Profit:qk'))} y-index='1'",
+            ),
+        ]
+    )
+    return worksheet(
+        "Sales and Profit by Year",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000006",
+        dependency(
+            [
+                ("[Order Date]", "date", "dimension", "ordinal"),
+                ("[Profit]", "real", "measure", "quantitative"),
+                ("[Sales]", "real", "measure", "quantitative"),
+            ],
+            [
+                instance("[Order Date]", "Year", "[yr:Order Date:ok]", "ordinal"),
+                instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        panes,
+        f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        ref("yr:Order Date:ok"),
+    )
+
+
+def category_mix() -> str:
+    """圓餅：顏色為 Category，角度為 SUM(Sales)，標籤為類別與合計百分比。"""
+    return worksheet(
+        "Category Mix",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000007",
+        dependency(
+            [
+                ("[Category]", "string", "dimension", "nominal"),
+                ("[Sales]", "real", "measure", "quantitative"),
+            ],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance(
+                    "[Sales]",
+                    "Sum",
+                    "[pcto:sum:Sales:qk]",
+                    "quantitative",
+                    "<table-calc ordering-type='Rows' type='PctTotal' />",
+                ),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane(
+            "Pie",
+            "\n".join(
+                [
+                    f"              <color column={attr(ref('none:Category:nk'))} />",
+                    f"              <wedge-size column={attr(ref('sum:Sales:qk'))} />",
+                    f"              <text column={attr(ref('none:Category:nk'))} />",
+                    f"              <text column={attr(ref('pcto:sum:Sales:qk'))} />",
+                ]
+            ),
+        ),
+        "",
+        "",
+    )
 
 
 def dashboard() -> str:
@@ -235,6 +423,37 @@ def dashboard() -> str:
     </dashboard>"""
 
 
+def charts_dashboard() -> str:
+    """擴充的圖表：Measure Names／Values、雙軸與圓餅（固定尺寸）。"""
+    w, h = 1200, 800
+
+    def box(x: int, y: int, bw: int, bh: int) -> str:
+        return (
+            f"h='{round(bh * 100000 / h)}' w='{round(bw * 100000 / w)}' "
+            f"x='{round(x * 100000 / w)}' y='{round(y * 100000 / h)}'"
+        )
+
+    return f"""    <dashboard name='圖表擴充'>
+      <style />
+      <size maxheight='{h}' maxwidth='{w}' minheight='{h}' minwidth='{w}' sizing-mode='fixed' />
+      <zones>
+        <zone {box(0, 0, 1200, 800)} id='3' type-v2='layout-basic'>
+          <zone {box(8, 8, 1184, 784)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {box(8, 8, 1184, 388)} id='5' param='horz' type-v2='layout-flow'>
+              <zone {box(8, 8, 588, 388)} id='6' name='Segment KPIs' />
+              <zone {box(604, 8, 588, 388)} id='7' name='Monthly Sales vs Profit' />
+            </zone>
+            <zone {box(8, 404, 1184, 388)} id='8' param='horz' type-v2='layout-flow'>
+              <zone {box(8, 404, 588, 388)} id='9' name='Sales and Profit by Year' />
+              <zone {box(604, 404, 588, 388)} id='10' name='Category Mix' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000011}}' />
+    </dashboard>"""
+
+
 def twb(rows: int) -> str:
     return f"""<?xml version='1.0' encoding='utf-8' ?>
 
@@ -259,6 +478,7 @@ def twb(rows: int) -> str:
   </worksheets>
   <dashboards>
 {dashboard()}
+{charts_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

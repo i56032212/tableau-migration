@@ -570,8 +570,9 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
     if not boards:
         status, detail = "warn", "沒有 dashboard"
     elif loose:
-        status = "fail"
-        detail = "；".join(f"「{d.name}」為 {d.sizing}" for d in loose)
+        # 自動與範圍尺寸依視窗大小重排（I1），版面為近似，所以只列為需注意
+        status = "warn"
+        detail = "；".join(f"「{d.name}」為 {d.sizing}（依視窗大小重排）" for d in loose)
     else:
         sizes = "、".join(
             f"「{d.name}」{d.size.get('maxwidth', '?')}×{d.size.get('maxheight', '?')}"
@@ -620,17 +621,13 @@ def features_outside_v0(r: CensusReport) -> list[str]:
             features.append(f"{label}（{'、'.join(sheets)}）")
 
     ws = r.worksheets
-    add("Measure Names／Values", [w.name for w in ws if w.measure_names_values])
-    add(
-        "雙軸、合併軸或多個標記卡",
-        [w.name for w in ws if w.pane_count > 1 or {"+", "*"} & set(w.shelf_operators)],
-    )
+    # Measure Names／Values、多個量值與雙軸、自動尺寸、裝置專屬版面已在擴充階段支援（各標記卡的詳細程度
+    # 不同時，解析時另列為不支援）
     add("相對日期篩選", [w.name for w in ws if any(f.kind == "relative_date" for f in w.filters)])
     add("條件篩選", [w.name for w in ws if any(f.kind == "condition" for f in w.filters)])
     add("參考線或趨勢線", [w.name for w in ws if w.reference_lines or w.trend_lines])
     add("地圖", [w.name for w in ws if w.maps])
     add("Story", [d.name for d in r.dashboards if d.story])
-    add("裝置專屬版面", [d.name for d in r.dashboards if d.device_layouts])
     special = {k: v for k, v in r.calc_classes.items() if k != "tableau"}
     groups = sum(d.groups_or_sets for d in r.datasources)
     if special or groups:

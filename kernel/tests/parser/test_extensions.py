@@ -276,3 +276,135 @@ def test_range_dashboard_and_zone_layout(tmp_path: Path) -> None:
     assert (zones["z2"].show_title, zones["z2"].fixed) == (False, None)
     assert (zones["z3"].layout, zones["z3"].fixed, zones["z3"].w) == ("vertical", 240, 240)
     assert zones["z4"].hidden is True
+
+
+# ---------------------------------------------------------------- J1 Measure Names／Values
+
+PROFIT = instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative")
+MEASURES = [*BASIC, PROFIT]
+
+
+def measure_names_filter(*instances: str, order: tuple[str, ...] | None = None) -> str:
+    members = "".join(
+        f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref(i)}&quot;' />"
+        for i in instances
+    )
+    buckets = "".join(f"<bucket>&quot;{ref(i)}&quot;</bucket>" for i in (order or instances))
+    return (
+        f"<filter class='categorical' column='{ref(':Measure Names')}'><groupfilter function='union'>{members}</groupfilter></filter>"
+        f"<manual-sort column='{ref(':Measure Names')}' direction='ASC'><dictionary>{buckets}</dictionary></manual-sort>"
+    )
+
+
+def test_measure_names_and_values(tmp_path: Path) -> None:
+    sheets = worksheet(
+        "KPIs",
+        MEASURES,
+        rows=ref("none:Region:nk"),
+        cols=ref(":Measure Names"),
+        mark="Automatic",
+        encodings=f"<text column='{ref('Multiple Values')}' />",
+        view_extra=measure_names_filter(
+            "sum:Sales:qk", "sum:Profit:qk", order=("sum:Profit:qk", "sum:Sales:qk")
+        ),
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    sheet = ir.worksheets[0]
+    assert [u.field for u in sheet.columns] == ["measure_names"]
+    assert [u.field for u in sheet.marks.label] == ["measure_values"]
+    assert [(u.field, u.agg) for u in sheet.measure_values] == [
+        ("f_profit", "sum"),
+        ("f_sales", "sum"),
+    ]
+    assert sheet.filters == [] and sheet.sorts == []
+
+
+def test_measure_values_without_names_filter_is_unsupported(tmp_path: Path) -> None:
+    sheets = worksheet(
+        "KPIs",
+        MEASURES,
+        rows=ref("none:Region:nk"),
+        encodings=f"<text column='{ref('Multiple Values')}' />",
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert any("Measure Names 篩選" in r for r in reasons(ir))
+
+
+# ---------------------------------------------------------------- J2 多個量值與雙軸
+
+
+def measure_pane(measure: str, mark: str, extra: str = "", encodings: str = "") -> str:
+    return (
+        f"<pane id='1' y-axis-name='{ref(measure)}'{extra}><view><breakdown value='auto' /></view>"
+        f"<mark class='{mark}' /><encodings>{encodings}</encodings></pane>"
+    )
+
+
+def test_dual_axis_panes(tmp_path: Path) -> None:
+    panes = measure_pane("sum:Sales:qk", "Bar") + measure_pane(
+        "sum:Profit:qk", "Line", " y-index='1'"
+    ).replace("id='1'", "id='2'")
+    sheets = worksheet(
+        "Dual",
+        MEASURES,
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("none:Category:nk"),
+        mark="Automatic",
+        panes_extra=panes,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    sheet = ir.worksheets[0]
+    assert [(u.field, u.agg) for u in sheet.rows] == [("f_sales", "sum"), ("f_profit", "sum")]
+    assert [(p.measure.field, p.axis, p.dual, p.marks.type) for p in sheet.panes] == [
+        ("f_sales", "rows", False, "bar"),
+        ("f_profit", "rows", True, "line"),
+    ]
+
+
+def test_panes_with_different_detail_are_unsupported(tmp_path: Path) -> None:
+    panes = measure_pane(
+        "sum:Sales:qk", "Bar", encodings=f"<color column='{ref('none:Region:nk')}' />"
+    ) + measure_pane("sum:Profit:qk", "Line").replace("id='1'", "id='2'")
+    sheets = worksheet(
+        "Mixed",
+        MEASURES,
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("none:Category:nk"),
+        panes_extra=panes,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert any("詳細程度不同" in r for r in reasons(ir))
+
+
+# ---------------------------------------------------------------- J3 圓餅、形狀、路徑
+
+
+def test_pie_shape_and_path_encodings(tmp_path: Path) -> None:
+    pie = worksheet(
+        "Pie",
+        MEASURES,
+        mark="Pie",
+        encodings=(
+            f"<color column='{ref('none:Category:nk')}' />"
+            f"<wedge-size column='{ref('sum:Sales:qk')}' />"
+            f"<text column='{ref('none:Category:nk')}' />"
+        ),
+    )
+    shapes = worksheet(
+        "Shapes",
+        MEASURES,
+        rows=ref("sum:Profit:qk"),
+        cols=ref("sum:Sales:qk"),
+        mark="Shape",
+        encodings=f"<shape column='{ref('none:Category:nk')}' /><path column='{ref('none:Region:nk')}' />",
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=pie + shapes))
+    assert reasons(ir) == []
+    pie_marks, shape_marks = ir.worksheets[0].marks, ir.worksheets[1].marks
+    assert pie_marks.type == "pie"
+    assert pie_marks.angle is not None and pie_marks.angle.field == "f_sales"
+    assert shape_marks.type == "shape"
+    assert shape_marks.shape is not None and shape_marks.shape.field == "f_category"
+    assert shape_marks.path is not None and shape_marks.path.field == "f_region"

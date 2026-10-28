@@ -21,3 +21,33 @@ sheets:
       Distinct count of Order ID: countd(f_order_id)
     ignore: []
     numeric: auto
+  ws_segment_kpis:
+    columns:
+      Segment: f_segment
+      Sales: sum(f_sales)
+      Profit: sum(f_profit)
+      Distinct count of Order ID: countd(f_order_id)
+      利潤率: f_calc_1368249927221915648
+    ignore: []
+    numeric: auto
+  ws_monthly_sales_vs_profit:
+    columns:
+      Month of Order Date: trunc_month(f_order_date)
+      Sales: sum(f_sales)
+      Profit: sum(f_profit)
+    ignore: []
+    numeric: auto
+  ws_sales_and_profit_by_year:
+    columns:
+      Year of Order Date: year(f_order_date)
+      Sales: sum(f_sales)
+      Profit: sum(f_profit)
+    ignore: []
+    numeric: auto
+  ws_category_mix:
+    columns:
+      Category: f_category
+      Sales: sum(f_sales)
+      '% of Total Sales': sum(f_sales)#tc_percent_of_total_sales
+    ignore: []
+    numeric: auto

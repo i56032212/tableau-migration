@@ -619,8 +619,13 @@
             "continuous": true,
             "table_calc": "tc_running_total_sales"
           }
-        ]
+        ],
+        "shape": null,
+        "angle": null,
+        "path": null
       },
+      "panes": [],
+      "measure_values": [],
       "filters": [
         {
           "kind": "categorical",
@@ -732,8 +737,13 @@
             "continuous": true,
             "table_calc": null
           }
-        ]
+        ],
+        "shape": null,
+        "angle": null,
+        "path": null
       },
+      "panes": [],
+      "measure_values": [],
       "filters": [
         {
           "kind": "range",
@@ -821,8 +831,13 @@
             "continuous": true,
             "table_calc": null
           }
-        ]
+        ],
+        "shape": null,
+        "angle": null,
+        "path": null
       },
+      "panes": [],
+      "measure_values": [],
       "filters": [
         {
           "kind": "categorical",
@@ -892,8 +907,13 @@
             "continuous": true,
             "table_calc": null
           }
-        ]
+        ],
+        "shape": null,
+        "angle": null,
+        "path": null
       },
+      "panes": [],
+      "measure_values": [],
       "filters": [
         {
           "kind": "range",

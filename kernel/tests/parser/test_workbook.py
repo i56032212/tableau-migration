@@ -310,9 +310,7 @@ def test_nested_dimensions_and_dates(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"cols": f"({ref('sum:Sales:qk')} + {ref('sum:Sales:qk')})"}, "合併軸或雙軸"),
-        ({"cols": f"[{DS}].[:Measure Names]"}, "Measure Names"),
-        ({"encodings": f"<shape column='{ref('none:Category:nk')}' />"}, "標記編碼 <shape>"),
+        ({"encodings": f"<geometry column='{ref('none:Category:nk')}' />"}, "標記編碼 <geometry>"),
         ({"pane_extra": "<reference-line axis-column='x' />"}, "參考線"),
         ({"view_extra": "<strange-element />"}, "未知元素 <strange-element>"),
         ({"mark": "Map"}, "標記類型 Map"),

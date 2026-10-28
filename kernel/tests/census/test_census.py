@@ -139,7 +139,7 @@ def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
         "single_table": "fail",
         "no_rls": "fail",
         "no_blending": "fail",
-        "fixed_dashboards": "fail",
+        "fixed_dashboards": "warn",
         "v0_functions": "warn",
         "v0_features": "warn",
     }
@@ -162,14 +162,11 @@ def test_problems_details(problems: CensusReport) -> None:
 def test_problems_features(problems: CensusReport) -> None:
     features = detail(problems, "v0_features")
     for expected in [
-        "Measure Names／Values（Blended）",
-        "雙軸、合併軸或多個標記卡（Blended）",
         "相對日期篩選（Blended）",
         "條件篩選（Blended）",
         "參考線或趨勢線（Blended）",
         "地圖（Map）",
         "Story（Story 1）",
-        "裝置專屬版面（Auto）",
         "群組、集合或分組（categorical-bin 1、group 1）",
         "Dashboard action（filter 1、highlight 1、tsc:url-action 1、url 1）",
     ]:
@@ -212,7 +209,7 @@ def test_markdown_report(pilot: CensusReport, problems: CensusReport) -> None:
     assert "| 函式 | 用到的計算欄位數 | v0 函式集 |" in text
     assert "| Overview | fixed 1200×800 |" in text
     bad = render_markdown(problems)
-    assert "- 起步條件：不符合 6 項" in bad
+    assert "- 起步條件：不符合 5 項" in bad
     assert 'IF [REGION] IN ("North", "South") THEN ATTR([REGION]) ELSE "[Other]" END' in bad
 
 

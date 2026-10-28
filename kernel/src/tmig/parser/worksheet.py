@@ -8,6 +8,11 @@ Table Calculation 的計算方向（Tableau 的 Compute Using）依真實 .twb �
 - 未寫 ``ordering-type`` 時依 Tableau 預設 Table (across)，並標記為推定（``inferred``）
 
 其餘未納入的分割方式一律列為不支援，等真實報表出現再補。
+
+同一架上有多個量值時，Tableau 以 ``+`` 連接，每個量值各有一張標記卡（帶 ``y-axis-name`` 或
+``x-axis-name`` 的 <pane>；``y-index='1'`` 表示雙軸的第二個軸）。各標記卡的維度必須相同，
+否則各量值的詳細程度不同，列為不支援。Measure Names／Values 以特殊欄位 ``measure_names``、
+``measure_values`` 表示，Measure Values 的量值與順序取自 Measure Names 的篩選與手動排序。
 """
 
 from __future__ import annotations
@@ -17,10 +22,14 @@ from typing import Literal
 from lxml import etree
 
 from tmig.ir.models import (
+    MEASURE_NAMES,
+    MEASURE_VALUES,
+    SPECIAL_FIELDS,
     FieldUse,
     Filter,
     Marks,
     MarkType,
+    Pane,
     Scalar,
     Sort,
     TableCalc,
@@ -38,7 +47,7 @@ from tmig.parser.fields import (
     value_type,
 )
 from tmig.parser.twbx import child, children, local_name, text_of, xpath
-from tmig.parser.values import LiteralError
+from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
 
 MARKS: dict[str, MarkType] = {
@@ -53,6 +62,8 @@ MARKS: dict[str, MarkType] = {
     "Pie": "pie",
     "GanttBar": "gantt",
 }
+SPECIAL_KEYS = {"[:Measure Names]": MEASURE_NAMES, "[Multiple Values]": MEASURE_VALUES}
+ENCODINGS = ("color", "size", "text", "lod", "tooltip", "shape", "wedge-size", "path")
 ORDERING: dict[str, TableCalcPreset] = {
     "Columns": "table_down",
     "Rows": "table_across",
@@ -106,6 +117,9 @@ KNOWN = frozenset(
         "text",
         "lod",
         "tooltip",
+        "shape",
+        "wedge-size",
+        "path",
         "rows",
         "cols",
         "pages",
@@ -238,7 +252,11 @@ class SheetParser:
             aggregation = child(view, "aggregation")
             if aggregation is not None and aggregation.get("value") == "false":
                 ctx.flag(aggregation, "取消彙總量值（Aggregate Measures 關閉）v0 不支援")
-        marks, mark_dims = self._marks(child(table, "panes"))
+        marks, panes, mark_dims = self._marks(child(table, "panes"), rows, cols)
+        measure_values = self._measure_values(view, [*rows, *cols, *marks.uses()], panes)
+        card_uses = [*rows, *cols, *marks.uses(), *(u for p in panes for u in p.marks.uses())]
+        if not measure_values and any(u.field == MEASURE_VALUES for u in card_uses):
+            return None  # 無法得知 Measure Values 的量值（已列為不支援）
         sheet_id = ctx.ids.make("ws", self.name)
         table_calcs = self._table_calcs(rows, cols, mark_dims)
         filters, kinds = self._filters(view)
@@ -251,6 +269,8 @@ class SheetParser:
             rows=rows,
             columns=cols,
             marks=marks,
+            panes=panes,
+            measure_values=measure_values,
             filters=filters,
             sorts=sorts,
             table_calcs=table_calcs,
@@ -299,12 +319,16 @@ class SheetParser:
         key = instance_key(ref)
         if key in self.uses:
             return self.uses[key]
+        if key in SPECIAL_KEYS:
+            use = FieldUse(field=SPECIAL_KEYS[key])
+            self.uses[key] = use
+            return use
         inst = self.instances.get(key)
         if inst is None:
             data_field = self.ds.by_name.get(key)
             if data_field is None:
-                if key in ("[:Measure Names]", "[Multiple Values]") or key.startswith("[:"):
-                    return f"Measure Names／Values {key} v0 不支援"
+                if key.startswith("[:"):
+                    return f"特殊欄位 {key} v0 不支援"
                 return f"找不到欄位實例 {ref}"
             use = FieldUse(field=data_field.id)
         else:
@@ -333,9 +357,8 @@ class SheetParser:
         text = text_of(element)
         if not text:
             return []
-        refs, operators = shelf_refs(text)
-        if "+" in operators:
-            self.ctx.flag(element, "合併軸或雙軸 v0 不支援")
+        refs, _operators = shelf_refs(text)
+        # 「+」連接同一架上的多個量值（各自一個軸，或以 y-index 組成雙軸）
         uses: list[FieldUse] = []
         for ref in refs:
             use = self._use(ref, element, f"{local_name(element)} 架")
@@ -343,43 +366,75 @@ class SheetParser:
                 uses.append(use)
         return uses
 
-    def _marks(self, panes_el: etree._Element | None) -> tuple[Marks, list[FieldUse]]:
+    def _marks(
+        self, panes_el: etree._Element | None, rows: list[FieldUse], cols: list[FieldUse]
+    ) -> tuple[Marks, list[Pane], list[FieldUse]]:
+        """標記卡：沒有 id 的 <pane> 是共用的標記卡，帶 y-axis-name／x-axis-name 的是個別量值的標記卡。"""
         panes = children(panes_el, "pane")
         if not panes:
-            return Marks(type="automatic"), []
-        main = panes[0]
-        signature = _pane_signature(main)
-        for extra in panes[1:]:
-            if _pane_signature(extra) != signature:
-                self.ctx.flag(extra, "多個標記卡（雙軸或個別量值的標記設定）v0 不支援")
-        mark_el = child(main, "mark")
+            return Marks(type="automatic"), [], []
+        main = next((p for p in panes if p.get("id") is None), panes[0])
+        marks, dims = self._card(main)
+        result: list[Pane] = []
+        pane_dims: list[list[FieldUse]] = []
+        for element in panes:
+            if element is main:
+                continue
+            axis_ref = element.get("y-axis-name") or element.get("x-axis-name")
+            axis = "rows" if element.get("y-axis-name") else "columns"
+            if not axis_ref:
+                if _pane_signature(element) != _pane_signature(main):
+                    self.ctx.flag(element, "多個標記卡（沒有對應的量值，設定也不同）v0 不支援")
+                continue
+            measure = self._use(axis_ref, element, "標記卡的量值")
+            if measure is None:
+                continue
+            if measure not in (rows if axis == "rows" else cols):
+                self.ctx.flag(element, f"標記卡的量值 {axis_ref} 不在欄列架上")
+                continue
+            card, card_dims = self._card(element)
+            dual = (element.get("y-index") or element.get("x-index")) == "1"
+            result.append(Pane(measure=measure, axis=axis, dual=dual, marks=card))
+            pane_dims.append(card_dims)
+        if result:
+            signatures = {frozenset(use_key(d) for d in found) for found in pane_dims}
+            if len(signatures) > 1:
+                self.ctx.flag(
+                    panes_el if panes_el is not None else self.el,
+                    "各量值的標記卡維度不同（各量值的詳細程度不同），尚不支援",
+                )
+            dims = pane_dims[0]
+        return marks, result, dims
+
+    def _card(self, pane: etree._Element) -> tuple[Marks, list[FieldUse]]:
+        """一張標記卡：標記類型與編碼；回傳標記卡與其中的維度。"""
+        mark_el = child(pane, "mark")
         mark_class = mark_el.get("class", "Automatic") if mark_el is not None else "Automatic"
         mark_type = MARKS.get(mark_class)
         if mark_type is None:
             self.ctx.flag(
-                mark_el if mark_el is not None else main, f"標記類型 {mark_class} v0 不支援"
+                mark_el if mark_el is not None else pane, f"標記類型 {mark_class} v0 不支援"
             )
             mark_type = "automatic"
         marks = Marks(type=mark_type)
         dims: list[FieldUse] = []
-        for enc in children(child(main, "encodings")):
+        singles = {"color": "color", "size": "size", "shape": "shape", "wedge-size": "angle"}
+        for enc in children(child(pane, "encodings")):
             tag = local_name(enc)
-            if tag not in ("color", "size", "text", "lod", "tooltip"):
+            if tag not in ENCODINGS:
                 self.ctx.flag(enc, f"標記編碼 <{tag}> v0 不支援")
                 continue
             use = self._use(enc.get("column"), enc, f"標記編碼 {tag}")
             if use is None:
                 continue
-            if tag == "color":
-                if marks.color is not None:
-                    self.ctx.flag(enc, "顏色重複設定")
+            if tag in singles:
+                attr_name = singles[tag]
+                if getattr(marks, attr_name) is not None:
+                    self.ctx.flag(enc, f"標記編碼 {tag} 重複設定")
                     continue
-                marks.color = use
-            elif tag == "size":
-                if marks.size is not None:
-                    self.ctx.flag(enc, "大小重複設定")
-                    continue
-                marks.size = use
+                setattr(marks, attr_name, use)
+            elif tag == "path":
+                marks.path = use
             elif tag == "text":
                 marks.label.append(use)
             elif tag == "lod":
@@ -387,9 +442,79 @@ class SheetParser:
             else:
                 marks.tooltip.append(use)
             assert self.ds is not None
-            if not is_aggregate(self.ds, use):
+            if use.field not in SPECIAL_FIELDS and not is_aggregate(self.ds, use):
                 dims.append(use)
         return marks, dims
+
+    # ------------------------------------------------------------ Measure Names／Values
+
+    def _measure_values(
+        self, view: etree._Element, uses: list[FieldUse], panes: list[Pane]
+    ) -> list[FieldUse]:
+        """Measure Values 卡上的量值：Measure Names 篩選選取的量值，依手動排序的順序。"""
+        all_uses = uses + [u for p in panes for u in p.marks.uses()]
+        used = any(u.field == MEASURE_VALUES for u in all_uses)
+        names_used = any(u.field == MEASURE_NAMES for u in all_uses)
+        element = next(
+            (
+                f
+                for f in children(view, "filter")
+                if instance_key(f.get("column", "")) == "[:Measure Names]"
+            ),
+            None,
+        )
+        if element is None:
+            if used:
+                self.ctx.flag(view, "用到 Measure Values，卻沒有 Measure Names 篩選列出量值")
+            return []
+        if not used and not names_used:
+            return []
+        refs = self._member_refs(child(element, "groupfilter"))
+        if refs is None:
+            self.ctx.flag(element, "Measure Names 篩選不是逐一列出量值（例如「全部」），尚不支援")
+            return []
+        order = next(
+            (
+                e
+                for e in children(view, "manual-sort")
+                if instance_key(e.get("column", "")) == "[:Measure Names]"
+            ),
+            None,
+        )
+        if order is not None:
+            ranked = [
+                str(parse_literal(text_of(b), "string"))
+                for b in children(child(order, "dictionary"), "bucket")
+                if text_of(b) != "%all%"
+            ]
+            refs.sort(key=lambda r: ranked.index(r) if r in ranked else len(ranked))
+        result: list[FieldUse] = []
+        for ref in refs:
+            use = self._use(ref, element, "Measure Values 的量值")
+            if use is None:
+                continue
+            assert self.ds is not None
+            if not is_aggregate(self.ds, use):
+                self.ctx.flag(element, f"Measure Values 中的 {ref} 不是量值")
+                continue
+            result.append(use)
+        return result
+
+    def _member_refs(self, group: etree._Element | None) -> list[str] | None:
+        if group is None:
+            return None
+        function = group.get("function")
+        if function == "member":
+            return [str(parse_literal(group.get("member"), "string"))]
+        if function != "union":
+            return None
+        refs: list[str] = []
+        for part in children(group, "groupfilter"):
+            found = self._member_refs(part)
+            if found is None:
+                return None
+            refs.extend(found)
+        return refs
 
     # ------------------------------------------------------------ Table Calculation
 
@@ -398,8 +523,8 @@ class SheetParser:
     ) -> list[TableCalc]:
         assert self.ds is not None
         ds = self.ds
-        row_dims = [u for u in rows if not is_aggregate(ds, u)]
-        col_dims = [u for u in cols if not is_aggregate(ds, u)]
+        row_dims = [u for u in rows if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)]
+        col_dims = [u for u in cols if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)]
         result: list[TableCalc] = []
         # 依工作表相依清單的順序處理；只出現在篩選上的 Table Calculation 也要先建立
         for key, inst in self.instances.items():
@@ -541,6 +666,8 @@ class SheetParser:
         filters: list[Filter] = []
         kinds: dict[str, Literal["categorical", "range", "top_n"]] = {}
         for element in children(view, "filter"):
+            if instance_key(element.get("column", "")) == "[:Measure Names]":
+                continue  # 決定 Measure Values 的量值，不是資料篩選
             parsed = parser.parse(element)
             if parsed is None:
                 continue
@@ -582,6 +709,8 @@ class SheetParser:
         sorts: list[Sort] = []
         for element in children(view):
             tag = local_name(element)
+            if instance_key(element.get("column", "")) == "[:Measure Names]":
+                continue  # Measure Names 的順序已反映在 measure_values
             try:
                 if tag in ("sort", "computed-sort"):
                     parsed = self._sort(element, tag)

@@ -41,6 +41,7 @@ from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
     IR,
+    SPECIAL_FIELDS,
     CategoricalFilter,
     DataField,
     FieldUse,
@@ -583,19 +584,18 @@ class WorksheetQuery:
     # ------------------------------------------------------------ 檢視欄位
 
     def _view_fields(self) -> tuple[list[Dim], list[Measure]]:
+        """檢視中的維度與量值：欄列架、各標記卡、Measure Values 卡（Measure Names／Values 本身不查詢）。"""
         ws = self.worksheet
-        uses: list[FieldUse] = [*ws.rows, *ws.columns]
-        marks = ws.marks
-        for single in (marks.color, marks.size):
-            if single is not None:
-                uses.append(single)
-        uses += [*marks.label, *marks.detail, *marks.tooltip]
+        uses: list[FieldUse] = [*ws.rows, *ws.columns, *ws.marks.uses()]
+        for pane in ws.panes:
+            uses += pane.marks.uses()
+        uses += ws.measure_values
         dims: list[Dim] = []
         measures: list[Measure] = []
         seen: set[str] = set()
         for use in uses:
             key = use_key(use)
-            if key in seen:
+            if key in seen or use.field in SPECIAL_FIELDS:
                 continue
             seen.add(key)
             if self.is_measure(use):

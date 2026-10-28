@@ -7,8 +7,6 @@ Tableau 匯出 CSV 的欄名用顯示名稱（例如 ``Sales``、``Year of Order
 
 from __future__ import annotations
 
-import csv
-import io
 import re
 from pathlib import Path
 from typing import Literal
@@ -161,9 +159,11 @@ def suggest_sheet(
 
 
 def csv_headers(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8-sig")
-    reader = csv.reader(io.StringIO(text))
-    return next(reader, [])
+    """預期 CSV 的欄名；Measure Names／Values 長表先轉成寬表（每個量值一欄）。"""
+    from tmig.verify.compare import read_csv
+
+    headers, _ = read_csv(path.read_text(encoding="utf-8-sig"))
+    return headers
 
 
 def dump_mapping(mapping: MappingFile, notes: dict[str, list[str]]) -> str:

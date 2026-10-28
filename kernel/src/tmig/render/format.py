@@ -27,6 +27,18 @@ class NumberFormat:
     percent: bool = False
 
 
+PERCENT_TABLE_CALCS = frozenset({"percent_of_total", "percent_difference"})
+PERCENT_DEFAULT = "p0.00%"
+"""百分比類的快速 Table Calculation 在 Tableau 預設以百分比、兩位小數顯示。"""
+
+
+def display_format(field_format: str | None, table_calc_type: str | None) -> str | None:
+    """量值的顯示格式：百分比類的快速 Table Calculation 改以百分比顯示，其餘沿用欄位格式。"""
+    if table_calc_type in PERCENT_TABLE_CALCS:
+        return PERCENT_DEFAULT
+    return field_format
+
+
 def parse_format(text: str | None) -> NumberFormat | None:
     if not text:
         return None

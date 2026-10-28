@@ -3,7 +3,8 @@
 規則：
 
 - 除了區塊（zone）之外，所有 id 在整份 IR 中唯一；區塊 id 在所屬 dashboard 中唯一
-- 工作表的欄位使用、篩選、排序、Table Calculation 只能參照該工作表資料源的欄位
+- 工作表的欄位使用、篩選、排序、Table Calculation 只能參照該工作表資料源的欄位；
+  欄列架與標記卡另可使用 Measure Names／Values（measure_names、measure_values）
 - 參照的參數、工作表、Table Calculation 必須存在
 """
 
@@ -24,7 +25,7 @@ def iter_zones(zones: list[Zone]) -> Iterator[Zone]:
 
 
 def check_references(ir: IR) -> list[str]:
-    from tmig.ir.models import ParamRef, TopNFilter
+    from tmig.ir.models import SPECIAL_FIELDS, ParamRef, TopNFilter
 
     errors: list[str] = []
     owner: dict[str, str] = {}
@@ -59,7 +60,19 @@ def check_references(ir: IR) -> list[str]:
     params = {prm.id for prm in ir.parameters}
     sheets = {ws.id: ws for ws in ir.worksheets}
 
-    def check_use(use: FieldUse, ds_id: str, where: str, table_calcs: set[str] | None) -> None:
+    def check_use(
+        use: FieldUse,
+        ds_id: str,
+        where: str,
+        table_calcs: set[str] | None,
+        special: bool = False,
+    ) -> None:
+        if special and use.field in SPECIAL_FIELDS:
+            if use.agg is not None or use.date is not None or use.table_calc is not None:
+                errors.append(
+                    f"{where}：Measure Names／Values 不能彙總、日期衍生或套用 Table Calculation"
+                )
+            return
         if use.field not in fields_by_ds.get(ds_id, set()):
             errors.append(f"{where}：欄位「{use.field}」不在資料源「{ds_id}」中")
         if use.table_calc is None:
@@ -88,14 +101,21 @@ def check_references(ir: IR) -> list[str]:
             errors.append(f"{base}.datasource：資料源「{ws.datasource}」不存在")
             continue
         tcs = {tc.id for tc in ws.table_calcs}
-        shelves = [("rows", ws.rows), ("columns", ws.columns), ("marks.label", ws.marks.label)]
-        shelves += [("marks.detail", ws.marks.detail), ("marks.tooltip", ws.marks.tooltip)]
-        for name, uses in shelves:
+        for name, uses in (("rows", ws.rows), ("columns", ws.columns)):
             for i, use in enumerate(uses):
-                check_use(use, ws.datasource, f"{base}.{name}[{i}]", tcs)
-        for name, single in (("marks.color", ws.marks.color), ("marks.size", ws.marks.size)):
-            if single is not None:
-                check_use(single, ws.datasource, f"{base}.{name}", tcs)
+                check_use(use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True)
+        cards = [("marks", ws.marks)] + [
+            (f"panes[{i}].marks", p.marks) for i, p in enumerate(ws.panes)
+        ]
+        for name, card in cards:
+            for i, use in enumerate(card.uses()):
+                check_use(use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True)
+        for i, pane in enumerate(ws.panes):
+            check_use(pane.measure, ws.datasource, f"{base}.panes[{i}].measure", tcs)
+            if pane.measure not in (ws.rows if pane.axis == "rows" else ws.columns):
+                errors.append(f"{base}.panes[{i}].measure：量值不在{pane.axis}架上")
+        for i, use in enumerate(ws.measure_values):
+            check_use(use, ws.datasource, f"{base}.measure_values[{i}]", tcs)
         for flt in ws.filters:
             check_filter(flt, ws.datasource, f"{base}.filters[{flt.id}]", tcs)
         for i, srt in enumerate(ws.sorts):

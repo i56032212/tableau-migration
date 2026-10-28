@@ -1,0 +1,103 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_segment_kpis",
+    "name": "Segment KPIs",
+    "rows": 12,
+    "mark": "text"
+  },
+  "data": {
+    "values": "12 列",
+    "fields": [
+      "__mn",
+      "__mn_i",
+      "__mv",
+      "__mv_label",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label",
+      "c2",
+      "c2_label",
+      "c3",
+      "c3_label",
+      "c4",
+      "c4_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "text",
+    "tooltip": true
+  },
+  "encoding": {
+    "y": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Segment",
+      "axis": {
+        "orient": "left",
+        "title": "Segment"
+      }
+    },
+    "x": {
+      "field": "__mn",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Measure Names",
+      "axis": {
+        "orient": "top",
+        "labelAngle": 0,
+        "title": "Measure Names"
+      }
+    },
+    "text": {
+      "field": "__mv_label",
+      "type": "nominal"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Segment"
+      },
+      {
+        "field": "c1_label",
+        "title": "Sales"
+      },
+      {
+        "field": "c2_label",
+        "title": "Profit"
+      },
+      {
+        "field": "c3_label",
+        "title": "CNTD(Order ID)"
+      },
+      {
+        "field": "c4_label",
+        "title": "利潤率"
+      },
+      {
+        "field": "__mn",
+        "title": "Measure Names"
+      },
+      {
+        "field": "__mv_label",
+        "title": "Measure Values"
+      }
+    ]
+  }
+}
