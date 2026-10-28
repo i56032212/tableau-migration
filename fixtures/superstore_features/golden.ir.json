@@ -1991,6 +1991,92 @@
       "sorts": [],
       "table_calcs": [],
       "source_ref": "/workbook/worksheets/worksheet[18]"
+    },
+    {
+      "id": "ws_sales_growth_by_year",
+      "name": "Sales Growth by Year",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_order_date",
+          "agg": null,
+          "date": {
+            "kind": "part",
+            "unit": "year"
+          },
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": "tc_percent_difference_sales"
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": "tc_difference_sales"
+          }
+        ],
+        "detail": [],
+        "tooltip": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [
+        {
+          "id": "tc_percent_difference_sales",
+          "type": "percent_difference",
+          "preset": "table_down",
+          "addressing": [
+            "f_order_date"
+          ],
+          "inferred": false,
+          "options": {
+            "offset": -1
+          },
+          "source_ref": "/workbook/worksheets/worksheet[19]/table/view/datasource-dependencies/column-instance[2]/table-calc"
+        },
+        {
+          "id": "tc_difference_sales",
+          "type": "difference",
+          "preset": "table_down",
+          "addressing": [
+            "f_order_date"
+          ],
+          "inferred": false,
+          "options": {
+            "offset": -1
+          },
+          "source_ref": "/workbook/worksheets/worksheet[19]/table/view/datasource-dependencies/column-instance[3]/table-calc"
+        }
+      ],
+      "source_ref": "/workbook/worksheets/worksheet[19]"
     }
   ],
   "dashboards": [
@@ -3207,6 +3293,106 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[5]"
+    },
+    {
+      "id": "db_5901f0fb",
+      "name": "年度成長",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "年度成長",
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "worksheet",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 636,
+                  "worksheet": "ws_sales_growth_by_year",
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[6]"
     }
   ],
   "actions": [

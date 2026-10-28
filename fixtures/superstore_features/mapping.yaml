@@ -118,3 +118,11 @@ sheets:
       Sales: sum(f_sales)
     ignore: []
     numeric: auto
+  ws_sales_growth_by_year:
+    columns:
+      Year of Order Date: year(f_order_date)
+      '% Difference in Sales': sum(f_sales)#tc_percent_difference_sales
+      Difference in Sales: sum(f_sales)#tc_difference_sales
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto

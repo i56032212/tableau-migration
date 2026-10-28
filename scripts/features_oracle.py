@@ -20,6 +20,7 @@
 - 相對日期：以 cases.yaml 的 today 為基準日，最近 3 個月為基準日所在月份與前 2 個月
 - 彙總條件與 Top N 以其他維度篩選（含網址參數）之前的資料計算：總銷售額大於 5000 的客戶、
   排除 Phones 後銷售額前 3 名的子類別，都先以全部資料決定，再套用網址參數
+- 差異與差異百分比：與前一年比較，差異百分比為差異除以前一年的絕對值；第一年沒有值（匯出為空白）
 """
 
 from __future__ import annotations
@@ -306,6 +307,23 @@ def top_sub_categories(rows: list[Row], case: Case) -> tuple[list[str], list[lis
     return ["Sub-Category", "Sales"], body
 
 
+def sales_growth(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+    sales: dict[int, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            sales[row["Order Date"].year] += row["Sales"]
+    body: list[list[Any]] = []
+    previous: float | None = None
+    for year in sorted(sales):
+        diff = None if previous is None else sales[year] - previous
+        pct = None if diff is None or not previous else diff / abs(previous)
+        body.append([year, pct, diff, sales[year]])
+        previous = sales[year]
+    headers = ["Year of Order Date", "% Difference in Sales", "Difference in Sales", "Sales"]
+    return headers, body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -325,10 +343,13 @@ SHEETS = {
     "ws_big_customers_by_segment": big_customers,
     "ws_son_customers_by_region": son_customers,
     "ws_top_sub_categories": top_sub_categories,
+    "ws_sales_growth_by_year": sales_growth,
 }
 
 
 def text(value: Any) -> str:
+    if value is None:
+        return ""  # Tableau 匯出的空值
     return repr(value) if isinstance(value, float) else str(value)
 
 

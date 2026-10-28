@@ -17,6 +17,7 @@ Table Calculation 的計算方向（Tableau 的 Compute Using）依真實 .twb �
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from lxml import etree
@@ -78,7 +79,13 @@ ORDERING: dict[str, TableCalcPreset] = {
     "Rows": "table_across",
     "Field": "specific",
 }
-QUICK_TYPES = {"CumTotal": "running_total", "PctTotal": "percent_of_total", "Rank": "rank"}
+QUICK_TYPES = {
+    "CumTotal": "running_total",
+    "PctTotal": "percent_of_total",
+    "Rank": "rank",
+    "Difference": "difference",
+    "PctDiff": "percent_difference",
+}
 RANK_TYPES = {
     "Competition": "competition",
     "Dense": "dense",
@@ -135,9 +142,10 @@ KNOWN = frozenset(
         "simple-id",
         "repository-location",
         "breakdown",
-        # 群組定義（categorical-bin 的 <bin><value>）
+        # 群組定義（categorical-bin 的 <bin><value>）；差異計算的相對位置（<address><value>）
         "bin",
         "value",
+        "address",
     }
 )
 OPAQUE = frozenset(
@@ -616,6 +624,17 @@ class SheetParser:
                 return None
             options["rank_type"] = rank_type
             options["direction"] = "asc" if len(parts) > 1 and parts[1] == "Ascending" else "desc"
+        if calc_type in ("difference", "percent_difference"):
+            # 與前一個（address -1）或其他相對位置的值比較；與第一個、最後一個比較尚不支援
+            mode = calc_el.get("diff-options", "Relative")
+            values = [text_of(v) for v in children(child(calc_el, "address"), "value")]
+            if mode != "Relative" or len(values) != 1 or not re.fullmatch(r"-?\d+", values[0]):
+                self.ctx.flag(
+                    calc_el,
+                    f"差異計算的比較對象（{mode}：{'、'.join(values) or '未指定'}）v0 不支援",
+                )
+                return None
+            options["offset"] = int(values[0])
         ordering = calc_el.get("ordering-type")
         inferred = ordering is None
         preset: TableCalcPreset

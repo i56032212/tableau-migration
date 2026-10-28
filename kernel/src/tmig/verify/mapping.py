@@ -113,6 +113,18 @@ def _labels(ir: IR, use: FieldUse, table_calcs: list[TableCalc]) -> list[str]:
         ]
     if tc.type == "rank":
         return [f"Rank of {caption}", f"Rank of {agg_word} of {caption}"]
+    if tc.type == "difference":
+        return [
+            f"Difference in {caption}",
+            f"Difference in {agg_word} of {caption}",
+            f"Difference from {caption}",
+        ]
+    if tc.type == "percent_difference":
+        return [
+            f"% Difference in {caption}",
+            f"% Difference in {agg_word} of {caption}",
+            f"Percent Difference in {caption}",
+        ]
     return base
 
 

@@ -73,6 +73,8 @@ TC_LABELS = {
     "running_total": "累計",
     "percent_of_total": "合計百分比",
     "rank": "排名",
+    "difference": "差異",
+    "percent_difference": "差異百分比",
 }
 VL_MARKS = {
     "bar": "bar",

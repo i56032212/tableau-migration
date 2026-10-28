@@ -734,3 +734,34 @@ def test_group_definition_in_worksheet_and_missing_values(tmp_path: Path) -> Non
     assert reasons(ir) == []
     assert ir.worksheets[0].rows[0].field == "f_region_group"
     assert any("顯示缺少的值" in u.reason for u in ir.ignored)
+
+
+# ---------------------------------------------------------------- K3 差異與差異百分比
+
+
+def test_difference_quick_calcs(tmp_path: Path) -> None:
+    def diff(kind: str, prefix: str, mode: str, value: str) -> str:
+        return instance(
+            "[Sales]",
+            "Sum",
+            f"[{prefix}:sum:Sales:qk]",
+            "quantitative",
+            f"<table-calc diff-options='{mode}' ordering-type='Columns' type='{kind}'>"
+            f"<address><value>{value}</value></address></table-calc>",
+        )
+
+    sheet = worksheet(
+        "S",
+        [
+            *BASIC,
+            diff("Difference", "diff", "Relative", "-1"),
+            diff("PctDiff", "pcdf", "Absolute", "First"),
+        ],
+        rows=ref("none:Region:nk"),
+        cols=ref("diff:sum:Sales:qk"),
+        encodings=f"<text column='{ref('pcdf:sum:Sales:qk')}' />",
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet), lenient=True)
+    assert reasons(ir) == ["差異計算的比較對象（Absolute：First）v0 不支援"]
+    (tc,) = ir.worksheets[0].table_calcs
+    assert (tc.type, tc.preset, tc.options) == ("difference", "table_down", {"offset": -1})

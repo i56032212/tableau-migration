@@ -451,6 +451,45 @@ def test_percent_of_total_and_rank(run: Run) -> None:
     }
 
 
+def diff_instance(kind: str, name: str, offset: int) -> str:
+    return instance(
+        "[Sales]",
+        "Sum",
+        f"[{name}:sum:Sales:qk]",
+        "quantitative",
+        f"<table-calc diff-options='Relative' ordering-type='Columns' type='{kind}'>"
+        f"<address><value>{offset}</value></address></table-calc>",
+    )
+
+
+def test_difference_and_percent_difference(run: Run) -> None:
+    # 依 Region 排序：East 350、North 60、South 100、West 800
+    inst = [diff_instance("Difference", "diff", -1), diff_instance("PctDiff", "pcdf", -1)]
+    enc = f"<text column='{ref('diff:sum:Sales:qk')}' /><tooltip column='{ref('pcdf:sum:Sales:qk')}' />"
+    rows = tc_rows(run, inst, enc)
+    assert by_region(rows, "sum(f_sales)#tc_difference_sales") == {
+        "East": None,
+        "North": -290.0,
+        "South": 40.0,
+        "West": 700.0,
+    }
+    assert by_region(rows, "sum(f_sales)#tc_percent_difference_sales") == approx(
+        {"East": None, "North": -290 / 350, "South": 40 / 60, "West": 7.0}
+    )
+    # 與下一個比較
+    rows = tc_rows(
+        run,
+        [diff_instance("Difference", "diff", 1)],
+        f"<text column='{ref('diff:sum:Sales:qk')}' />",
+    )
+    assert by_region(rows, "sum(f_sales)#tc_difference_sales") == {
+        "East": 290.0,
+        "North": -40.0,
+        "South": -700.0,
+        "West": None,
+    }
+
+
 def test_table_across_with_rows_only_is_one_partition_per_mark(run: Run) -> None:
     inst = [tc_instance(20, "Rows")]
     rows = tc_rows(run, inst, f"<text column='{ref('usr:Calculation_20:qk')}' />")

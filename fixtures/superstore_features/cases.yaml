@@ -44,6 +44,8 @@ sheets:
     view: SonCustomersbyRegion
   - worksheet: ws_top_sub_categories
     view: TopSub-Categories
+  - worksheet: ws_sales_growth_by_year
+    view: SalesGrowthbyYear
 cases:
   - name: default
     url_params: {}

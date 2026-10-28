@@ -614,9 +614,17 @@ def test_rank_and_percent_of_total(tmp_path: Path) -> None:
 def test_unsupported_table_calcs(tmp_path: Path) -> None:
     ir = parse(
         tmp_path,
+        b.workbook(
+            worksheets=tc_sheet("<table-calc ordering-type='Columns' type='MovingCalculation' />")
+        ),
+    )
+    assert any("MovingCalculation" in r for r in reasons(ir))
+    # 差異計算沒有指定比較對象
+    ir = parse(
+        tmp_path,
         b.workbook(worksheets=tc_sheet("<table-calc ordering-type='Columns' type='Difference' />")),
     )
-    assert any("Difference" in r for r in reasons(ir))
+    assert any("差異計算的比較對象" in r for r in reasons(ir))
     ir = parse(
         tmp_path,
         b.workbook(worksheets=tc_sheet("<table-calc ordering-type='PaneDown' type='CumTotal' />")),

@@ -18,6 +18,7 @@
   在「群組與分組」dashboard 上
 - K4 篩選條件：相對日期（最近 3 個月）、彙總條件（總銷售額大於 5000 的客戶）、萬用字元
   （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別），在「篩選條件」dashboard 上
+- K3 快速 Table Calculation：Sales Growth by Year 的差異與差異百分比（與前一年比較），在「年度成長」dashboard 上
 """
 
 from __future__ import annotations
@@ -270,6 +271,7 @@ def worksheets() -> str:
             big_customers(),
             son_customers(),
             top_sub_categories(),
+            sales_growth(),
         ]
     )
 
@@ -748,6 +750,45 @@ def top_sub_categories() -> str:
     )
 
 
+def sales_growth() -> str:
+    """差異與差異百分比：與前一年比較（Table (down)，沿著列上的年份）。"""
+
+    def diff(kind: str, prefix: str) -> str:
+        return instance(
+            "[Sales]",
+            "Sum",
+            f"[{prefix}:sum:Sales:qk]",
+            "quantitative",
+            f"<table-calc diff-options='Relative' ordering-type='Columns' type='{kind}'>"
+            "<address><value>-1</value></address></table-calc>",
+        )
+
+    encodings = "\n".join(
+        [
+            f"              <text column={attr(ref('diff:sum:Sales:qk'))} />",
+            f"              <tooltip column={attr(ref('sum:Sales:qk'))} />",
+        ]
+    )
+    return worksheet(
+        "Sales Growth by Year",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000018",
+        dependency(
+            [("[Order Date]", "date", "dimension", "ordinal"), REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Order Date]", "Year", "[yr:Order Date:ok]", "ordinal"),
+                diff("PctDiff", "pcdf"),
+                diff("Difference", "diff"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar", encodings),
+        ref("yr:Order Date:ok"),
+        ref("pcdf:sum:Sales:qk"),
+    )
+
+
 ACTIONS_DASHBOARD = "篩選動作"
 
 
@@ -863,6 +904,22 @@ def conditions_dashboard() -> str:
     </dashboard>"""
 
 
+def growth_dashboard() -> str:
+    return f"""    <dashboard name='年度成長'>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 636)} id='6' name='Sales Growth by Year' />
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000019}}' />
+    </dashboard>"""
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
@@ -956,6 +1013,7 @@ def twb(rows: int) -> str:
 {actions_dashboard()}
 {groups_dashboard()}
 {conditions_dashboard()}
+{growth_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

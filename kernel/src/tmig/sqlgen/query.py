@@ -680,6 +680,16 @@ class WorksheetQuery:
             name = RANK_FUNCTIONS[str(tc.options.get("rank_type", "competition"))]
             direction = str(tc.options.get("direction", "desc"))
             return Call(0, name, (base, LiteralNode(0, "string", direction)))
+        if tc.type in ("difference", "percent_difference"):
+            # 與 Tableau 轉成計算欄位時相同：ZN(x) - LOOKUP(ZN(x), -1)，百分比再除以 ABS(LOOKUP(...))
+            offset = tc.options.get("offset", -1)
+            assert isinstance(offset, int)
+            zn = Call(0, "ZN", (base,))
+            other = Call(0, "LOOKUP", (zn, LiteralNode(0, "integer", offset)))
+            diff = Binary(0, "-", zn, other)
+            if tc.type == "difference":
+                return diff
+            return Binary(0, "/", diff, Call(0, "ABS", (other,)))
         raise QueryError(f"快速 Table Calculation 類型 {tc.type} 尚不支援", unsupported=True)
 
     def _check_measure(self, m: Measure) -> None:
