@@ -431,6 +431,15 @@ class Zone(IRModel):
     text: str | None = None
     image: str | None = Field(default=None, description=".twbx 內的圖片路徑")
     children: list[Zone] = Field(default_factory=list, description="只有 container 可以有子區塊")
+    layout: Literal["tiled", "horizontal", "vertical"] | None = Field(
+        default=None,
+        description="container 的排列：tiled＝子區塊各自定位（layout-basic），horizontal／vertical＝沿水平或垂直方向排列（layout-flow）",
+    )
+    fixed: int | None = Field(
+        default=None, ge=0, description="固定大小（像素）：沿父容器排列方向的寬或高，視窗縮放時不變"
+    )
+    hidden: bool = Field(default=False, description="使用者隱藏的區塊（例如以按鈕切換顯示的容器）")
+    show_title: bool = Field(default=True, description="工作表區塊是否顯示標題")
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -459,7 +468,13 @@ class Size(IRModel):
 class Dashboard(IRModel):
     id: Id
     name: str = Field(min_length=1)
-    size: Size = Field(description="固定尺寸，單位為像素")
+    size: Size = Field(description="區塊座標換算時的尺寸（像素）；固定尺寸即為 dashboard 的大小")
+    sizing: Literal["fixed", "automatic", "range"] = Field(
+        default="fixed",
+        description="fixed＝固定尺寸；automatic＝隨視窗縮放；range＝隨視窗縮放但限制在 min_size 與 max_size 之間",
+    )
+    min_size: Size | None = None
+    max_size: Size | None = None
     zones: list[Zone] = Field(default_factory=list)
     source_ref: SourceRef
 

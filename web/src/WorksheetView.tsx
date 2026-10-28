@@ -65,20 +65,26 @@ export function WorksheetView({ workbook, worksheet, state, hideLegend, showTitl
   }, [response, hideLegend, showTable]);
 
   const title = response?.name ?? worksheet;
+  const meta = (
+    <span className="worksheet-meta">
+      {response && !response.unsupported && <span>{response.rows} 列</span>}
+      {response?.table && (
+        <button type="button" className="link" onClick={() => setShowTable(!showTable)}>
+          {showTable ? "圖表" : "資料"}
+        </button>
+      )}
+    </span>
+  );
   return (
     <div className="worksheet" data-worksheet={worksheet} data-loading={loading ? "true" : "false"}>
-      {showTitle && (
+      {showTitle ? (
         <div className="worksheet-header">
           <span className="worksheet-title">{title}</span>
-          <span className="worksheet-meta">
-            {response && !response.unsupported && <span>{response.rows} 列</span>}
-            {response?.table && (
-              <button type="button" className="link" onClick={() => setShowTable(!showTable)}>
-                {showTable ? "圖表" : "資料"}
-              </button>
-            )}
-          </span>
+          {meta}
         </div>
+      ) : (
+        // Tableau 不顯示標題時，列數與資料切換浮在右上角，不占圖表空間
+        <div className="worksheet-overlay">{meta}</div>
       )}
       <div className="worksheet-body">
         {error && <div className="placeholder error">查詢失敗：{error}</div>}

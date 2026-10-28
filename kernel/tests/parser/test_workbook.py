@@ -776,7 +776,7 @@ def test_dashboard_zones(tmp_path: Path) -> None:
     assert ir.unsupported[0].source_ref == zones["z11"].source_ref
 
 
-def test_automatic_dashboard_is_unsupported(tmp_path: Path) -> None:
+def test_automatic_dashboard_is_supported(tmp_path: Path) -> None:
     xml = b.workbook(
         worksheets=basic_sheet(),
         dashboards=dashboard(
@@ -784,8 +784,10 @@ def test_automatic_dashboard_is_unsupported(tmp_path: Path) -> None:
         ),
     )
     ir = parse(tmp_path, xml)
-    assert ir.dashboards[0].size.width == 1366
-    assert any("不是固定尺寸" in r for r in reasons(ir))
+    board = ir.dashboards[0]
+    assert (board.size.width, board.size.height, board.sizing) == (1366, 768, "automatic")
+    assert reasons(ir) == []
+    assert any("自動尺寸" in u.reason for u in ir.ignored)
 
 
 def test_zone_for_missing_worksheet(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@
 每加入一項擴充功能就在這裡補上對應的工作表或 dashboard 設定：
 
 - H1 全域篩選（<shared-views>）與篩選群組（filter-group）：Region 為全域篩選，Segment 篩選套用到兩張工作表
+- I1 自動尺寸的 dashboard：右側篩選欄固定 212 像素寬、一個工作表不顯示標題、一個隱藏的文字區塊
 """
 
 from __future__ import annotations
@@ -204,20 +205,27 @@ def worksheets() -> str:
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
-      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <size sizing-mode='automatic' />
       <zones>
         <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
           <zone {zone_box(8, 8, 984, 684)} id='4' param='horz' type-v2='layout-flow'>
             <zone {zone_box(8, 8, 764, 684)} id='5' param='vert' type-v2='layout-flow'>
               <zone {zone_box(8, 8, 764, 40)} id='6' type-v2='title' />
-              <zone {zone_box(8, 56, 376, 316)} id='7' name='Sales by Segment' />
-              <zone {zone_box(392, 56, 380, 316)} id='8' name='Profit by Ship Mode' />
-              <zone {zone_box(8, 380, 764, 312)} id='9' name='Orders by Region' />
+              <zone {zone_box(8, 56, 764, 316)} id='16' param='horz' type-v2='layout-flow'>
+                <zone {zone_box(8, 56, 376, 316)} id='7' name='Sales by Segment' />
+                <zone {zone_box(392, 56, 380, 316)} id='8' name='Profit by Ship Mode' />
+              </zone>
+              <zone {zone_box(8, 380, 764, 312)} id='9' name='Orders by Region' show-title='false' />
             </zone>
-            <zone {zone_box(780, 56, 212, 636)} id='10' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(780, 56, 212, 636)} fixed-size='212' id='10' is-fixed='true' param='vert' type-v2='layout-flow'>
               <zone {zone_box(780, 56, 212, 96)} id='11' mode='checkdropdown' name='Sales by Segment' param={attr(ref("none:Segment:nk"))} type-v2='filter' />
               <zone {zone_box(780, 160, 212, 96)} id='12' mode='checkdropdown' name='Orders by Region' param={attr(ref("none:Region:nk"))} type-v2='filter' />
               <zone {zone_box(780, 264, 212, 96)} id='13' mode='checkdropdown' name='Profit by Ship Mode' param={attr(ref("none:Ship Mode:nk"))} type-v2='filter' />
+              <zone {zone_box(780, 368, 212, 96)} fixed-size='96' hidden-by-user='true' id='15' is-fixed='true' type-v2='text'>
+                <formatted-text>
+                  <run>隱藏的說明文字</run>
+                </formatted-text>
+              </zone>
               <zone {zone_box(780, 368, 212, 324)} id='14' type-v2='empty' />
             </zone>
           </zone>

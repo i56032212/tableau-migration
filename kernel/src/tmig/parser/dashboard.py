@@ -1,10 +1,15 @@
-"""dashboard：固定尺寸、區塊樹與座標換算（A5）。
+"""dashboard：尺寸、區塊樹與座標換算（A5、I1）。
 
 .twb 以 dashboard 尺寸的 100000 分之一記錄區塊座標；換算為像素時 x、w 依寬度，y、h 依高度。
+自動與範圍尺寸的 dashboard 以參考尺寸換算，並記下容器的排列方向與固定大小的區塊，
+檢視時依視窗大小重排（見 tmig.render.layout）。
 不支援的區塊以 blank 佔位，並記錄在 unsupported（檢視器依 source_ref 顯示「未支援」）。
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
 
 from lxml import etree
 
@@ -66,11 +71,14 @@ class DashboardParser:
             ctx.flag(el, f"Story「{self.name}」v0 不支援")
             return None
         size_el = child(el, "size")
-        width, height, fixed = _size(size_el)
-        if not fixed:
-            ctx.flag(
+        sizing = _size(size_el)
+        width, height = sizing.width, sizing.height
+        if sizing.mode != "fixed":
+            label = "自動尺寸" if sizing.mode == "automatic" else "範圍尺寸"
+            ctx.ignore(
                 size_el if size_el is not None else el,
-                f"dashboard「{self.name}」不是固定尺寸，v0 不支援；暫以 {width}×{height} 換算座標",
+                f"dashboard「{self.name}」為{label}：區塊座標以 {width}×{height} 換算，檢視時依視窗大小重排"
+                "（固定大小的區塊維持像素大小，其餘依比例分配），與 Tableau 的版面重排可能略有差異",
             )
         self.width, self.height = width, height
         for item in children(el):
@@ -84,6 +92,9 @@ class DashboardParser:
             id=ctx.ids.make("db", self.name),
             name=self.name,
             size=Size(width=width, height=height),
+            sizing=sizing.mode,
+            min_size=sizing.min_size,
+            max_size=sizing.max_size,
             zones=zones,
             source_ref=xpath(el),
         )
@@ -102,7 +113,7 @@ class DashboardParser:
         kind_attr = attr(element, "type-v2") or attr(element, "type")
         name = element.get("name")
         zone_id = f"z{element.get('id', '0')}"
-        base = {
+        base: dict = {
             "id": zone_id if zone_id[1:].isdigit() else "z0",
             "x": self._px(element, "x", self.width),
             "y": self._px(element, "y", self.height),
@@ -110,11 +121,23 @@ class DashboardParser:
             "h": self._px(element, "h", self.height),
             "source_ref": xpath(element),
         }
+        if element.get("is-fixed") == "true" and (element.get("fixed-size") or "").isdigit():
+            base["fixed"] = int(element.get("fixed-size", "0"))
+        if element.get("hidden-by-user") == "true":
+            base["hidden"] = True
         child_zones = children(element, "zone")
         self._check(element)
 
         if kind_attr in ("layout-basic", "layout-flow", "layout-free"):
-            return Zone(kind="container", children=[self._zone(z) for z in child_zones], **base)
+            layout = "tiled"
+            if kind_attr == "layout-flow":
+                layout = "vertical" if element.get("param") == "vert" else "horizontal"
+            return Zone(
+                kind="container",
+                layout=layout,
+                children=[self._zone(z) for z in child_zones],
+                **base,
+            )
         if child_zones:
             self.ctx.flag(element, "非容器的區塊含有子區塊")
         if kind_attr is None and name:
@@ -123,7 +146,8 @@ class DashboardParser:
             sheet = self._sheet(element, name)
             if sheet is None:
                 return Zone(kind="blank", **base)
-            return Zone(kind="worksheet", worksheet=sheet.id, **base)
+            show_title = element.get("show-title") != "false"
+            return Zone(kind="worksheet", worksheet=sheet.id, show_title=show_title, **base)
         if kind_attr == "title":
             return Zone(kind="title", text=_runs(element) or self.name, **base)
         if kind_attr == "text":
@@ -223,9 +247,20 @@ class DashboardParser:
             self.ctx.flag(item, f"dashboard 區塊中的未知元素 <{tag}>")
 
 
-def _size(size: etree._Element | None) -> tuple[int, int, bool]:
+@dataclass(frozen=True)
+class Sizing:
+    mode: Literal["fixed", "automatic", "range"]
+    width: int
+    height: int
+    """區塊座標換算時的尺寸。"""
+    min_size: Size | None = None
+    max_size: Size | None = None
+
+
+def _size(size: etree._Element | None) -> Sizing:
+    """dashboard 尺寸：固定、自動（隨視窗）、範圍（隨視窗但有上下限）。"""
     if size is None:
-        return REFERENCE_SIZE[0], REFERENCE_SIZE[1], False
+        return Sizing("automatic", *REFERENCE_SIZE)
 
     def num(name: str) -> int | None:
         raw = size.get(name)
@@ -248,9 +283,17 @@ def _size(size: etree._Element | None) -> tuple[int, int, bool]:
         and max_h is not None
         and max_h == min_h
     )
-    width = max_w or min_w or REFERENCE_SIZE[0]
-    height = max_h or min_h or REFERENCE_SIZE[1]
-    return width, height, fixed
+    if fixed:
+        return Sizing(
+            "fixed", max_w or min_w or REFERENCE_SIZE[0], max_h or min_h or REFERENCE_SIZE[1]
+        )
+    if mode == "automatic" or not any((max_w, max_h, min_w, min_h)):
+        return Sizing("automatic", *REFERENCE_SIZE)
+    low = Size(width=min_w, height=min_h) if min_w and min_h else None
+    high = Size(width=max_w, height=max_h) if max_w and max_h else None
+    reference = high or low
+    width, height = (reference.width, reference.height) if reference else REFERENCE_SIZE
+    return Sizing("range", width, height, low, high)
 
 
 def _runs(element: etree._Element) -> str | None:

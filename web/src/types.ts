@@ -94,13 +94,27 @@ export interface Zone {
   text: string | null;
   image: string | null;
   children: Zone[];
+  /** container 的排列：tiled＝各自定位，horizontal／vertical＝沿方向排列 */
+  layout?: "tiled" | "horizontal" | "vertical" | null;
+  /** 固定大小（像素），沿父容器的排列方向 */
+  fixed?: number | null;
+  hidden?: boolean;
+  show_title?: boolean;
   source_ref: string;
+}
+
+export interface Size {
+  width: number;
+  height: number;
 }
 
 export interface Dashboard {
   id: string;
   name: string;
-  size: { width: number; height: number };
+  size: Size;
+  sizing?: "fixed" | "automatic" | "range";
+  min_size?: Size | null;
+  max_size?: Size | null;
   zones: Zone[];
 }
 

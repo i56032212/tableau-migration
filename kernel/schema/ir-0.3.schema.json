@@ -289,7 +289,40 @@
         },
         "size": {
           "$ref": "#/$defs/Size",
-          "description": "固定尺寸，單位為像素"
+          "description": "區塊座標換算時的尺寸（像素）；固定尺寸即為 dashboard 的大小"
+        },
+        "sizing": {
+          "default": "fixed",
+          "description": "fixed＝固定尺寸；automatic＝隨視窗縮放；range＝隨視窗縮放但限制在 min_size 與 max_size 之間",
+          "enum": [
+            "fixed",
+            "automatic",
+            "range"
+          ],
+          "title": "Sizing",
+          "type": "string"
+        },
+        "min_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "zones": {
           "items": {
@@ -1599,6 +1632,50 @@
           },
           "title": "Children",
           "type": "array"
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "enum": [
+                "tiled",
+                "horizontal",
+                "vertical"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "container 的排列：tiled＝子區塊各自定位（layout-basic），horizontal／vertical＝沿水平或垂直方向排列（layout-flow）",
+          "title": "Layout"
+        },
+        "fixed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "固定大小（像素）：沿父容器排列方向的寬或高，視窗縮放時不變",
+          "title": "Fixed"
+        },
+        "hidden": {
+          "default": false,
+          "description": "使用者隱藏的區塊（例如以按鈕切換顯示的容器）",
+          "title": "Hidden",
+          "type": "boolean"
+        },
+        "show_title": {
+          "default": true,
+          "description": "工作表區塊是否顯示標題",
+          "title": "Show Title",
+          "type": "boolean"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

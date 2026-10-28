@@ -122,3 +122,47 @@ def test_filter_group_and_global_filter_controls(server: str) -> None:
             assert body["filters"]["f_region"] == {"mode": "include", "values": ["South", "West"]}
             check_numbers(ir, worksheet, body, data)
         browser.close()
+
+
+@pytest.mark.parametrize("viewport", [(1400, 1000), (1100, 760)])
+def test_automatic_dashboard_layout(server: str, viewport: tuple[int, int]) -> None:
+    from playwright.sync_api import sync_playwright
+
+    from tmig.ir import iter_zones
+    from tmig.render.layout import layout_dashboard
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = ir.dashboards[0]
+    assert board.sizing == "automatic"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": viewport[0], "height": viewport[1]})
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_selector("[data-zone='z7']")
+        origin = page.locator(".dashboard").bounding_box()
+        assert origin is not None
+        # 自動尺寸：寬度占滿可用空間
+        page_box = page.locator(".dashboard-wrapper").bounding_box()
+        assert page_box is not None
+        assert origin["width"] == pytest.approx(page_box["width"], abs=1)
+        expected = layout_dashboard(board, origin["width"], origin["height"])
+        for zone in iter_zones(board.zones):
+            if zone.kind == "container":
+                continue
+            locator = page.locator(f"[data-zone='{zone.id}']")
+            if zone.hidden:
+                assert locator.count() == 0, zone.id
+                continue
+            box = locator.bounding_box()
+            assert box is not None, zone.id
+            actual = (box["x"] - origin["x"], box["y"] - origin["y"], box["width"], box["height"])
+            want = expected[zone.id]
+            assert actual == pytest.approx((want.x, want.y, want.w, want.h), abs=1.5), zone.id
+        # 固定 212 像素寬的篩選欄
+        control = page.locator("[data-zone='z11']").bounding_box()
+        assert control is not None
+        assert control["width"] == pytest.approx(212, abs=1)
+        # 不顯示標題的工作表沒有標題列
+        assert page.locator("[data-zone='z9'] .worksheet-title").count() == 0
+        assert page.locator("[data-zone='z7'] .worksheet-title").count() == 1
+        browser.close()

@@ -40,7 +40,9 @@ button { font: inherit; }
 .zone-worksheet { border: 1px solid #eef0f3; }
 .single-sheet { width: min(1100px, 100%); height: 640px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
 
-.worksheet { display: flex; flex-direction: column; width: 100%; height: 100%; }
+.worksheet { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; }
+.worksheet-overlay { position: absolute; top: 0; right: 2px; z-index: 1; font-size: 11px; opacity: 0.55; }
+.worksheet-overlay:hover { opacity: 1; }
 .worksheet-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; padding: 0 2px 4px; }
 .worksheet-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .worksheet-meta { display: inline-flex; gap: 10px; color: var(--muted); white-space: nowrap; }

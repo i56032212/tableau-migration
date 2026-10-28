@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FilterControl, ParameterControl } from "./Controls";
+import { displaySize, layoutDashboard } from "./layout";
 import { fieldKey, stateFor } from "./state";
 import type { CaseInfo, Dashboard, FilterValue, IR, RenderResponse, Scalar, Zone } from "./types";
 import { WorksheetView } from "./WorksheetView";
@@ -80,24 +81,58 @@ export function DashboardView({ workbook, ir, dashboard, view, onView }: Props) 
   const setParameter = (id: string, value: Scalar) =>
     onView({ ...view, parameters: { ...view.parameters, [id]: value } });
 
+  // 自動與範圍尺寸：依可用空間重排；量到尺寸之前不繪製，避免工作表先以參考尺寸查詢與繪製
+  const fixed = !dashboard.sizing || dashboard.sizing === "fixed";
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [available, setAvailable] = useState<[number, number] | null>(null);
+  useLayoutEffect(() => {
+    if (fixed) return;
+    const element = wrapperRef.current;
+    if (!element) return;
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      const height = Math.max(window.innerHeight - rect.top - 24, 320);
+      setAvailable([Math.floor(rect.width), Math.floor(height)]);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [fixed]);
+  const [width, height] = fixed
+    ? [dashboard.size.width, dashboard.size.height]
+    : available
+      ? displaySize(dashboard, available[0], available[1])
+      : [0, 0];
+  const boxes = useMemo(() => layoutDashboard(dashboard, width, height), [dashboard, width, height]);
+
   const flat: Zone[] = [];
-  const collect = (zones: Zone[]) =>
+  const collect = (zones: Zone[], hidden: boolean) =>
     zones.forEach((z) => {
-      flat.push(z);
-      collect(z.children);
+      // 隱藏的區塊（含其中的子區塊）不繪製
+      if (!hidden && !z.hidden) flat.push(z);
+      collect(z.children, hidden || Boolean(z.hidden));
     });
-  collect(dashboard.zones);
+  collect(dashboard.zones, false);
+  const ready = fixed || available !== null;
 
   return (
-    <div className="dashboard" style={{ width: dashboard.size.width, height: dashboard.size.height }}>
-      {flat
+    <div className="dashboard-wrapper" ref={wrapperRef}>
+      <div className="dashboard" data-sizing={dashboard.sizing ?? "fixed"} style={{ width, height }}>
+      {ready && flat
         .filter((z) => z.kind !== "container")
-        .map((zone) => (
+        .map((zone) => {
+          const box = boxes.get(zone.id) ?? { x: zone.x, y: zone.y, w: zone.w, h: zone.h };
+          return (
           <div
             key={zone.id}
             className={`zone zone-${zone.kind}`}
             data-zone={zone.id}
-            style={{ left: zone.x, top: zone.y, width: zone.w, height: zone.h }}
+            style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
           >
             {unsupported.has(zone.source_ref) ? (
               <div className="placeholder unsupported">未支援：{unsupported.get(zone.source_ref)}</div>
@@ -116,7 +151,9 @@ export function DashboardView({ workbook, ir, dashboard, view, onView }: Props) 
               />
             )}
           </div>
-        ))}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -143,6 +180,7 @@ function ZoneContent({ zone, workbook, ir, dashboard, view, renders, hideLegend,
           worksheet={zone.worksheet!}
           state={stateFor(zone.worksheet!, view.sheetFilters, view.parameters)}
           hideLegend={hideLegend}
+          showTitle={zone.show_title !== false}
           onRendered={onRendered}
         />
       );

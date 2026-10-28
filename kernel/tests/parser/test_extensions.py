@@ -245,3 +245,34 @@ def test_natural_sort_is_alphabetic(tmp_path: Path) -> None:
     assert reasons(ir) == []
     (sort_ir,) = ir.worksheets[0].sorts
     assert (sort_ir.kind, sort_ir.order) == ("alphabetic", "desc")
+
+
+# ---------------------------------------------------------------- I1 自動與範圍尺寸
+
+
+def test_range_dashboard_and_zone_layout(tmp_path: Path) -> None:
+    sheets = worksheet("S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+    board = """
+    <dashboard name='Board'>
+      <size maxheight='800' maxwidth='1200' minheight='600' minwidth='900' sizing-mode='range' />
+      <zones>
+        <zone h='100000' id='1' param='horz' type-v2='layout-flow' w='100000' x='0' y='0'>
+          <zone h='100000' id='2' name='S' show-title='false' w='80000' x='0' y='0' />
+          <zone fixed-size='240' h='100000' id='3' is-fixed='true' param='vert' type-v2='layout-flow' w='20000' x='80000' y='0'>
+            <zone h='50000' hidden-by-user='true' id='4' type-v2='empty' w='20000' x='80000' y='0' />
+          </zone>
+        </zone>
+      </zones>
+    </dashboard>"""
+    ir = parse(tmp_path, b.workbook(worksheets=sheets, dashboards=board))
+    assert reasons(ir) == []
+    dashboard = ir.dashboards[0]
+    assert dashboard.sizing == "range"
+    assert (dashboard.size.width, dashboard.size.height) == (1200, 800)
+    assert dashboard.min_size is not None and dashboard.max_size is not None
+    assert (dashboard.min_size.width, dashboard.max_size.height) == (900, 800)
+    zones = {z.id: z for z in iter_zones(dashboard.zones)}
+    assert zones["z1"].layout == "horizontal"
+    assert (zones["z2"].show_title, zones["z2"].fixed) == (False, None)
+    assert (zones["z3"].layout, zones["z3"].fixed, zones["z3"].w) == ("vertical", 240, 240)
+    assert zones["z4"].hidden is True
