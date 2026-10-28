@@ -17,6 +17,7 @@ from tmig.ir.models import (
     Parameter,
     Unsupported,
     WeekDay,
+    Zone,
 )
 from tmig.parser.ids import IdAllocator
 from tmig.parser.twbx import WorkbookPackage, local_name, xpath
@@ -120,6 +121,17 @@ class ParseContext:
     """篩選動作的內部名稱（例如 [Action1_…]）→ IR id；解析工作表前先配發。"""
     notes: set[str] = field(default_factory=set)
     """已記在 ignored 的整份報表說明，避免重複。"""
+    windows: dict[str, tuple[str, str]] = field(default_factory=dict)
+    """<windows> 中各視窗的 simple-id（大寫、不含大括號）→（類型、名稱），導覽按鈕以它找目標。"""
+    dashboard_ids: dict[str, str] = field(default_factory=dict)
+    """dashboard 名稱 → IR id；導覽按鈕可能先參照之後才解析的 dashboard，所以第一次用到時配發。"""
+    navigations: list[tuple[etree._Element, Zone]] = field(default_factory=list)
+    """導覽到 dashboard 的按鈕：所有 dashboard 解析完後確認目標存在。"""
+
+    def dashboard_id(self, name: str) -> str:
+        if name not in self.dashboard_ids:
+            self.dashboard_ids[name] = self.ids.make("db", name)
+        return self.dashboard_ids[name]
 
     def flag(self, element: etree._Element, reason: str) -> None:
         """記錄 v0 不支援的元素：報表因此進人工佇列。"""

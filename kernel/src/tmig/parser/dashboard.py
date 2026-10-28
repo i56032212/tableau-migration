@@ -3,20 +3,23 @@
 .twb 以 dashboard 尺寸的 100000 分之一記錄區塊座標；換算為像素時 x、w 依寬度，y、h 依高度。
 自動與範圍尺寸的 dashboard 以參考尺寸換算，並記下容器的排列方向與固定大小的區塊，
 檢視時依視窗大小重排（見 tmig.render.layout）。
+按鈕（I2）：導覽到 dashboard 或工作表、顯示或隱藏區塊、匯出；網頁區塊記下網址。
 不支援的區塊以 blank 佔位，並記錄在 unsupported（檢視器依 source_ref 顯示「未支援」）。
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from lxml import etree
 
-from tmig.ir.models import ControlType, Dashboard, Size, Zone
+from tmig.ir.integrity import iter_zones
+from tmig.ir.models import Button, ControlType, Dashboard, Size, Unsupported, Zone
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.fields import instance_key
-from tmig.parser.twbx import attr, child, children, descendants, local_name, xpath
+from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 
 UNITS = 100000
 REFERENCE_SIZE = (1366, 768)
@@ -54,7 +57,15 @@ DASHBOARD_CHILDREN = frozenset(
         "devicelayouts",
     }
 )
-ZONE_OPAQUE = frozenset({"zone-style", "formatted-text", "layout-cache", "format"})
+ZONE_OPAQUE = frozenset({"zone-style", "formatted-text", "layout-cache", "format", "button"})
+WINDOW_ID = re.compile(r'window-id="\{?([0-9A-Fa-f-]+)\}?"')
+TOGGLE_ZONES = re.compile(r"zone-ids=\[([\d,\s]*)\]")
+EXPORT_TYPE = re.compile(r'dashboard-button-export-type="(\w+)"')
+
+
+def _image_path(state: etree._Element | None) -> str | None:
+    path = text_of(child(state, "image-path"))
+    return path.replace("\\", "/") if path else None
 
 
 class DashboardParser:
@@ -88,8 +99,9 @@ class DashboardParser:
             elif tag not in DASHBOARD_CHILDREN:
                 ctx.flag(item, f"dashboard 中的未知元素 <{tag}>")
         zones = [self._zone(z) for z in children(child(el, "zones"), "zone")]
+        self._check_toggles(zones)
         return Dashboard(
-            id=ctx.ids.make("db", self.name),
+            id=ctx.dashboard_id(self.name),
             name=self.name,
             size=Size(width=width, height=height),
             sizing=sizing.mode,
@@ -160,6 +172,18 @@ class DashboardParser:
             return Zone(kind="image", image=image.replace("\\", "/"), **base)
         if kind_attr == "empty":
             return Zone(kind="blank", **base)
+        if kind_attr == "dashboard-object":
+            button = child(element, "button")
+            if button is None:
+                self.ctx.flag(element, "dashboard 物件（不是按鈕）v0 不支援")
+                return Zone(kind="blank", **base)
+            return self._button_zone(element, button, base)
+        if kind_attr == "web":
+            url = (element.get("param") or "").strip()
+            if not url:
+                self.ctx.ignore(element, "沒有指定網址的網頁區塊：以空白區塊呈現")
+                return Zone(kind="blank", **base)
+            return Zone(kind="web", url=url, **base)
         if kind_attr == "highlighter":
             self.ctx.ignore(element, "醒目提示控制項（只影響醒目提示，不影響數字）：以空白區塊呈現")
             return Zone(kind="blank", **base)
@@ -179,6 +203,83 @@ class DashboardParser:
             )
         self.ctx.flag(element, f"dashboard 區塊類型 {kind_attr or '（未標示）'} v0 不支援")
         return Zone(kind="blank", **base)
+
+    def _button_zone(self, element: etree._Element, button: etree._Element, base: dict) -> Zone:
+        """按鈕：導覽（goto-sheet）、顯示或隱藏區塊（toggle-action）、匯出（export-button-action）。"""
+        ctx = self.ctx
+        states = children(button, "button-visual-state")
+        first = states[0] if states else None
+        font = child(first, "button-caption-font-style")
+        style: dict[str, Any] = {
+            "caption": text_of(child(first, "caption")) or None,
+            "tooltip": text_of(child(first, "tooltip-text")) or None,
+            "image": _image_path(first),
+            "color": font.get("fontcolor") if font is not None else None,
+            "background": next(
+                (
+                    f.get("value")
+                    for f in children(first, "format")
+                    if f.get("attr") == "background-color"
+                ),
+                None,
+            ),
+        }
+        action = button.get("action") or ""
+        toggle = child(button, "toggle-action")
+        export = child(button, "export-button-action")
+        if action.startswith("tabdoc:goto-sheet"):
+            found = WINDOW_ID.search(action)
+            window = ctx.windows.get(found.group(1).upper()) if found else None
+            if window is None:
+                ctx.flag(element, "導覽按鈕的目標視窗找不到")
+                return Zone(kind="blank", **base)
+            kind, name = window
+            if kind == "worksheet" and name in ctx.sheets:
+                target = Button(action="navigate", target_worksheet=ctx.sheets[name].id, **style)
+                return Zone(kind="button", button=target, **base)
+            if kind == "dashboard":
+                target = Button(action="navigate", target_dashboard=ctx.dashboard_id(name), **style)
+                zone = Zone(kind="button", button=target, **base)
+                ctx.navigations.append((element, zone))
+                return zone
+            ctx.flag(element, f"導覽按鈕的目標「{name}」（{kind}）無法移轉")
+            return Zone(kind="blank", **base)
+        if toggle is not None:
+            found = TOGGLE_ZONES.search(text_of(toggle))
+            zones = [f"z{n}" for n in re.findall(r"\d+", found.group(1))] if found else []
+            if not zones:
+                ctx.flag(element, "顯示／隱藏按鈕沒有指定區塊")
+                return Zone(kind="blank", **base)
+            hidden = _image_path(states[1]) if len(states) > 1 else None
+            target = Button(action="toggle", zones=zones, image_hidden=hidden, **style)
+            return Zone(kind="button", button=target, **base)
+        if export is not None:
+            found = EXPORT_TYPE.search(text_of(export))
+            kind = found.group(1).lower() if found else ""
+            if kind not in ("pdf", "image", "powerpoint"):
+                ctx.flag(element, f"匯出按鈕的格式 {kind or '（未指定）'} v0 不支援")
+                return Zone(kind="blank", **base)
+            target = Button(action="export", export=kind, **style)
+            return Zone(kind="button", button=target, **base)
+        ctx.flag(element, f"按鈕的動作 {action or '（未指定）'} v0 不支援")
+        return Zone(kind="blank", **base)
+
+    def _check_toggles(self, zones: list[Zone]) -> None:
+        """顯示／隱藏按鈕的區塊必須在同一個 dashboard 上；找不到時改為空白區塊。"""
+        ids = {z.id for z in iter_zones(zones)}
+        for zone in iter_zones(zones):
+            if zone.button is None or zone.button.action != "toggle":
+                continue
+            missing = [z for z in zone.button.zones if z not in ids]
+            if missing:
+                self.ctx.unsupported.append(
+                    Unsupported(
+                        source_ref=zone.source_ref,
+                        reason=f"顯示／隱藏按鈕的區塊 {'、'.join(missing)} 不在此 dashboard 上",
+                        element="zone",
+                    )
+                )
+                zone.kind, zone.button = "blank", None
 
     def _sheet(self, element: etree._Element, name: str | None) -> SheetState | None:
         sheet = self.ctx.sheets.get(name or "")

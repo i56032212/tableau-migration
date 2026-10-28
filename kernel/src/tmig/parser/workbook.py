@@ -187,11 +187,25 @@ class WorkbookParser:
             if sheet is not None:
                 worksheets.append(sheet)
 
+        for window in children(child(root, "windows"), "window"):
+            simple_id = child(window, "simple-id")
+            uuid = simple_id.get("uuid", "") if simple_id is not None else ""
+            if uuid:
+                ctx.windows[uuid.strip("{}").upper()] = (
+                    window.get("class", ""),
+                    window.get("name", ""),
+                )
         dashboards = []
         for db_el in children(child(root, "dashboards"), "dashboard"):
             board = DashboardParser(ctx, db_el).parse()
             if board is not None:
                 dashboards.append(board)
+        parsed = {d.id for d in dashboards}
+        for element, zone in ctx.navigations:
+            assert zone.button is not None
+            if zone.button.target_dashboard not in parsed:
+                ctx.flag(element, "導覽按鈕的目標 dashboard 無法移轉")
+                zone.kind, zone.button = "blank", None
 
         actions = self._actions(child(root, "actions"), worksheets, dashboards)
 

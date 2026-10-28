@@ -292,6 +292,161 @@
       "title": "AllowedRange",
       "type": "object"
     },
+    "Button": {
+      "additionalProperties": false,
+      "description": "dashboard 按鈕（I2）：切換到 dashboard 或工作表、顯示或隱藏區塊、匯出。",
+      "properties": {
+        "action": {
+          "enum": [
+            "navigate",
+            "toggle",
+            "export"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "target_dashboard": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "navigate：目標 dashboard",
+          "title": "Target Dashboard"
+        },
+        "target_worksheet": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "navigate：目標工作表",
+          "title": "Target Worksheet"
+        },
+        "zones": {
+          "description": "toggle：顯示或隱藏的區塊（同一個 dashboard 上）",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Zones",
+          "type": "array"
+        },
+        "export": {
+          "anyOf": [
+            {
+              "enum": [
+                "pdf",
+                "image",
+                "powerpoint"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "export：匯出的格式",
+          "title": "Export"
+        },
+        "caption": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字按鈕的文字",
+          "title": "Caption"
+        },
+        "tooltip": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tooltip"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "圖片按鈕在 .twbx 內的圖片路徑；toggle 時為區塊顯示中的圖片",
+          "title": "Image"
+        },
+        "image_hidden": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "toggle：區塊隱藏時的圖片",
+          "title": "Image Hidden"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字顏色，例如 #ffffff",
+          "title": "Color"
+        },
+        "background": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "背景顏色",
+          "title": "Background"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "Button",
+      "type": "object"
+    },
     "Calc": {
       "additionalProperties": false,
       "description": "計算欄位。解析器只填 formula；ast 與 level 由公式引擎（B2）補上。",
@@ -2403,7 +2558,9 @@
             "text",
             "image",
             "title",
-            "blank"
+            "blank",
+            "button",
+            "web"
           ],
           "title": "Kind",
           "type": "string"
@@ -2535,6 +2692,30 @@
           "default": null,
           "description": ".twbx 內的圖片路徑",
           "title": "Image"
+        },
+        "button": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Button"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "網頁區塊的網址",
+          "title": "Url"
         },
         "children": {
           "description": "只有 container 可以有子區塊",

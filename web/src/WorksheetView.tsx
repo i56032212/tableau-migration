@@ -31,7 +31,7 @@ type Spec = Record<string, any>;
 
 /** 選取的標記醒目、其餘淡化：每個圖層加上依列號判斷的不透明度。 */
 /** 依序走訪規格中的每一張圖（含圖層與多張圖）。 */
-function visitSpecs(spec: Spec, visit: (node: Spec) => void) {
+export function visitSpecs(spec: Spec, visit: (node: Spec) => void) {
   visit(spec);
   for (const key of ["layer", "vconcat", "hconcat", "concat"]) {
     if (Array.isArray(spec[key])) spec[key].forEach((child: Spec) => visitSpecs(child, visit));

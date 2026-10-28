@@ -62,6 +62,13 @@ button { font: inherit; }
 
 .title { font-size: 20px; font-weight: 600; padding: 4px 6px; }
 .text { font-size: 13px; white-space: pre-wrap; padding: 4px 6px; }
+.zone-image { width: 100%; height: 100%; object-fit: contain; display: block; }
+.zone-web { width: 100%; height: 100%; border: 0; display: block; }
+.dashboard-button { width: 100%; height: 100%; border: 0; border-radius: 4px; cursor: pointer; font: 600 13px/1.2 inherit; color: #fff; background: #4c78a8; padding: 4px 8px; overflow: hidden; }
+.dashboard-button.image { background: transparent; padding: 0; }
+.dashboard-button.image img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.dashboard-button:disabled { cursor: not-allowed; opacity: 0.5; }
+.dashboard-button:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 1px; }
 
 .control { border: 0; margin: 0; padding: 2px 4px; font-size: 13px; min-width: 0; height: 100%; display: flex; flex-direction: column; gap: 4px; }
 .control legend { font-weight: 600; padding: 0 0 4px; }
@@ -91,3 +98,9 @@ button { font: inherit; }
 
 /* 相對日期與條件篩選：唯讀顯示 */
 .control .fixed-filter { padding: 3px 6px; border: 1px dashed var(--line); color: var(--ink); font-size: 13px; }
+
+/* 匯出 PDF 按鈕以瀏覽器列印：只印 dashboard */
+@media print {
+  .toolbar, .action-menu, .dashboard-button { display: none !important; }
+  body { background: #fff; }
+}

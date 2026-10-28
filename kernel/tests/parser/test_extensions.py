@@ -1,4 +1,4 @@
-"""擴充階段的解析（H1–H4、I1、J1–J4、K1–K4、L1–L2）。"""
+"""擴充階段的解析（H1–H4、I1–I2、J1–J4、K1–K4、L1–L2）。"""
 
 from __future__ import annotations
 
@@ -1021,3 +1021,150 @@ def test_moving_calculation_unsupported_settings(tmp_path: Path) -> None:
         "移動計算的設定（sum，1 到 0）v0 不支援",
         "移動計算的設定（sum，x 到 0）v0 不支援",
     ]
+
+
+# ---------------------------------------------------------------- I2 dashboard 物件
+
+
+WINDOW_IDS = {
+    "Detail": "00000000-0000-0000-0000-0000000000D1",
+    "Target": "00000000-0000-0000-0000-0000000000A1",
+}
+
+
+def windows(extra: str = "") -> str:
+    rows = [
+        f"<window class='dashboard' name='Detail'><simple-id uuid='{{{WINDOW_IDS['Detail']}}}' /></window>",
+        f"<window class='worksheet' name='Target'><simple-id uuid='{{{WINDOW_IDS['Target']}}}' /></window>",
+        "<window class='storyboard' name='Story'><simple-id uuid='{00000000-0000-0000-0000-0000000000E1}' /></window>",
+    ]
+    return "<windows>" + "".join(rows) + extra + "</windows>"
+
+
+def object_zone(zid: int, button: str) -> str:
+    return (
+        f"<zone h='10000' id='{zid}' type-v2='dashboard-object' w='10000' x='0' y='0'>"
+        f"<button {button}</button></zone>"
+    )
+
+
+def goto(window: str, state: str = "") -> str:
+    return f"action='tabdoc:goto-sheet window-id=&quot;{{{window}}}&quot;'>{state}"
+
+
+def board(name: str, zones: str) -> str:
+    return f"""
+    <dashboard name='{name}'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones><zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>{zones}</zone></zones>
+    </dashboard>"""
+
+
+def test_buttons_and_web_zones(tmp_path: Path) -> None:
+    text_state = (
+        "<button-visual-state><caption>Go</caption><tooltip-text>Open detail</tooltip-text>"
+        "<button-caption-font-style fontcolor='#ffffff' fontname='Tableau Bold' fontsize='12' />"
+        "<format attr='background-color' value='#00aa00' /></button-visual-state>"
+    )
+    image_state = (
+        "<button-visual-state><image-path>Image\\go.png</image-path></button-visual-state>"
+    )
+    toggle = (
+        "action=''><toggle-action>tabdoc:toggle-button-click-action window-id=&quot;{X}&quot; "
+        "zone-id=&quot;5&quot; zone-ids=[6, 7]</toggle-action>"
+        "<button-visual-state><image-path>Image/hide.png</image-path></button-visual-state>"
+        "<button-visual-state><image-path>Image/show.png</image-path></button-visual-state>"
+    )
+    export = (
+        "action='' button-click-action-metadata='pdf'><export-button-action>"
+        "tabdoc:abstract-dashboard-button-export-wrapper dashboard-button-export-type=&quot;pdf&quot; "
+        "dashboarddoc-id=&quot;{X}&quot;</export-button-action>"
+        "<button-visual-state><image-path>Image/pdf.png</image-path></button-visual-state>"
+    )
+    zones = "".join(
+        [
+            object_zone(2, goto(WINDOW_IDS["Detail"], text_state)),
+            object_zone(3, goto(WINDOW_IDS["Target"].lower(), image_state)),
+            object_zone(4, export),
+            object_zone(5, toggle),
+            "<zone h='10000' id='6' type-v2='text' w='10000' x='0' y='0' hidden-by-user='true'>"
+            "<formatted-text><run>Note</run></formatted-text></zone>",
+            "<zone h='10000' id='7' type-v2='empty' w='10000' x='0' y='0' />",
+            "<zone h='10000' id='8' param='https://example.com/' type-v2='web' w='10000' x='0' y='0' />",
+            "<zone h='10000' id='9' type-v2='web' w='10000' x='0' y='0' />",
+        ]
+    )
+    sheet = worksheet("Target", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+    xml = b.workbook(
+        worksheets=sheet, dashboards=board("Home", zones) + board("Detail", "")
+    ).replace("<windows />", windows())
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    home, detail = ir.dashboards
+    by_id = {z.id: z for z in iter_zones(home.zones)}
+    nav, sheet_nav, export_button, toggle_button = (by_id[f"z{i}"].button for i in range(2, 6))
+    assert nav is not None and nav.model_dump(exclude_none=True) == {
+        "action": "navigate",
+        "target_dashboard": detail.id,
+        "zones": [],
+        "caption": "Go",
+        "tooltip": "Open detail",
+        "color": "#ffffff",
+        "background": "#00aa00",
+    }
+    assert sheet_nav is not None
+    assert (sheet_nav.target_worksheet, sheet_nav.image) == ("ws_target", "Image/go.png")
+    assert export_button is not None
+    assert (export_button.action, export_button.export) == ("export", "pdf")
+    assert toggle_button is not None
+    assert (toggle_button.zones, toggle_button.image, toggle_button.image_hidden) == (
+        ["z6", "z7"],
+        "Image/hide.png",
+        "Image/show.png",
+    )
+    assert by_id["z6"].hidden
+    assert (by_id["z8"].kind, by_id["z8"].url) == ("web", "https://example.com/")
+    assert by_id["z9"].kind == "blank"
+    assert any("沒有指定網址的網頁區塊" in u.reason for u in ir.ignored)
+
+
+def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:
+    zones = "".join(
+        [
+            object_zone(2, goto("00000000-0000-0000-0000-0000000000FF")),
+            object_zone(3, goto("00000000-0000-0000-0000-0000000000E1")),
+            object_zone(4, goto(WINDOW_IDS["Detail"])),  # Detail 是 Story，不會成為 dashboard
+            object_zone(
+                5,
+                "action=''><toggle-action>tabdoc:toggle-button-click-action zone-ids=[99]</toggle-action>",
+            ),
+            object_zone(
+                6,
+                "action=''><export-button-action>dashboard-button-export-type=&quot;crosstab&quot;"
+                "</export-button-action>",
+            ),
+            object_zone(7, "action='tabdoc:something-else'>"),
+            "<zone h='10000' id='8' type-v2='dashboard-object' w='10000' x='0' y='0' />",
+        ]
+    )
+    story = """
+    <dashboard name='Detail' type='storyboard'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones />
+    </dashboard>"""
+    xml = b.workbook(dashboards=board("Home", zones) + story).replace("<windows />", windows())
+    ir = parse(tmp_path, xml, lenient=True)
+    assert sorted(reasons(ir)) == sorted(
+        [
+            "導覽按鈕的目標視窗找不到",
+            "導覽按鈕的目標「Story」（storyboard）無法移轉",
+            "導覽按鈕的目標 dashboard 無法移轉",
+            "顯示／隱藏按鈕的區塊 z99 不在此 dashboard 上",
+            "匯出按鈕的格式 crosstab v0 不支援",
+            "按鈕的動作 tabdoc:something-else v0 不支援",
+            "dashboard 物件（不是按鈕）v0 不支援",
+            "Story「Detail」v0 不支援",
+        ]
+    )
+    home = ir.dashboards[0]
+    assert all(z.kind in ("container", "blank") for z in iter_zones(home.zones))

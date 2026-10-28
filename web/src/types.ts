@@ -141,7 +141,25 @@ export type ZoneKind =
   | "text"
   | "image"
   | "title"
-  | "blank";
+  | "blank"
+  | "button"
+  | "web";
+
+/** dashboard 按鈕：導覽、顯示或隱藏區塊、匯出。 */
+export interface Button {
+  action: "navigate" | "toggle" | "export";
+  target_dashboard: string | null;
+  target_worksheet: string | null;
+  zones: string[];
+  export: "pdf" | "image" | "powerpoint" | null;
+  caption: string | null;
+  tooltip: string | null;
+  /** .twbx 內的圖片；toggle 時為區塊顯示中的圖片 */
+  image: string | null;
+  image_hidden: string | null;
+  color: string | null;
+  background: string | null;
+}
 
 export interface Zone {
   id: string;
@@ -157,6 +175,9 @@ export interface Zone {
   legend: string | null;
   text: string | null;
   image: string | null;
+  button?: Button | null;
+  /** 網頁區塊的網址 */
+  url?: string | null;
   children: Zone[];
   /** container 的排列：tiled＝各自定位，horizontal／vertical＝沿方向排列 */
   layout?: "tiled" | "horizontal" | "vertical" | null;

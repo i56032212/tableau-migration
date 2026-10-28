@@ -5,7 +5,8 @@
 - 除了區塊（zone）之外，所有 id 在整份 IR 中唯一；區塊 id 在所屬 dashboard 中唯一
 - 工作表的欄位使用、篩選、排序、Table Calculation 只能參照該工作表資料源的欄位；
   欄列架與標記卡另可使用 Measure Names／Values（measure_names、measure_values）
-- 參照的參數、工作表、Table Calculation 必須存在
+- 參照的參數、工作表、Table Calculation 必須存在；按鈕的目標 dashboard、工作表必須存在，
+  顯示或隱藏的區塊必須在同一個 dashboard 上
 """
 
 from __future__ import annotations
@@ -166,11 +167,21 @@ def check_references(ir: IR) -> list[str]:
 
     for db in ir.dashboards:
         seen: set[str] = set()
+        zone_ids = {zone.id for zone in iter_zones(db.zones)}
         for zone in iter_zones(db.zones):
             where = f"dashboards[{db.id}].zones[{zone.id}]"
             if zone.id in seen:
                 errors.append(f"{where}：區塊 id 重複")
             seen.add(zone.id)
+            button = zone.button
+            if button is not None:
+                if button.target_dashboard is not None and button.target_dashboard not in boards:
+                    errors.append(f"{where}.button：dashboard「{button.target_dashboard}」不存在")
+                if button.target_worksheet is not None and button.target_worksheet not in sheets:
+                    errors.append(f"{where}.button：工作表「{button.target_worksheet}」不存在")
+                for target in button.zones:
+                    if target not in zone_ids:
+                        errors.append(f"{where}.button：區塊「{target}」不在此 dashboard 上")
             if zone.parameter is not None and zone.parameter not in params:
                 errors.append(f"{where}：參數「{zone.parameter}」不存在")
             if zone.worksheet is None:

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { fileUrl } from "./api";
 import { FilterControl, ParameterControl } from "./Controls";
 import { displaySize, layoutDashboard } from "./layout";
 import {
@@ -11,8 +12,20 @@ import {
   stateFor,
   type ViewState,
 } from "./state";
-import type { Action, CaseInfo, Dashboard, FieldFilter, FilterValue, IR, Mark, RenderResponse, Scalar, Zone } from "./types";
-import { type MarkEvent, WorksheetView } from "./WorksheetView";
+import type {
+  Action,
+  Button,
+  CaseInfo,
+  Dashboard,
+  FieldFilter,
+  FilterValue,
+  IR,
+  Mark,
+  RenderResponse,
+  Scalar,
+  Zone,
+} from "./types";
+import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
 
 // Vega 預設的類別色（與 Vega-Lite 的 nominal 顏色相同）
 const TABLEAU10 = ["#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b", "#eeca3b", "#b279a2", "#ff9da6", "#9d755d", "#bab0ac"];
@@ -214,12 +227,39 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
       : [0, 0];
   const boxes = useMemo(() => layoutDashboard(dashboard, width, height), [dashboard, width, height]);
 
+  // 顯示／隱藏按鈕切換過的區塊（相對於 IR 中的初始狀態）
+  const [toggled, setToggled] = useState<Set<string>>(() => new Set());
+  useEffect(() => setToggled(new Set()), [workbook, dashboard.id]);
+  const isHidden = (zone: Zone) => Boolean(zone.hidden) !== toggled.has(zone.id);
+  const onButton = (button: Button) => {
+    if (button.action === "navigate") {
+      onNavigate({ dashboard: button.target_dashboard, worksheet: button.target_worksheet });
+    } else if (button.action === "toggle") {
+      const next = new Set(toggled);
+      for (const id of button.zones) {
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      }
+      setToggled(next);
+    } else if (button.export === "pdf") {
+      window.print();
+    }
+  };
+  const zoneById = new Map<string, Zone>();
+  const index = (zones: Zone[]) =>
+    zones.forEach((z) => {
+      zoneById.set(z.id, z);
+      index(z.children);
+    });
+  index(dashboard.zones);
+
   const flat: Zone[] = [];
   const collect = (zones: Zone[], hidden: boolean) =>
     zones.forEach((z) => {
       // 隱藏的區塊（含其中的子區塊）不繪製
-      if (!hidden && !z.hidden) flat.push(z);
-      collect(z.children, hidden || Boolean(z.hidden));
+      const self = hidden || isHidden(z);
+      if (!self) flat.push(z);
+      collect(z.children, self);
     });
   collect(dashboard.zones, false);
   const ready = fixed || available !== null;
@@ -253,6 +293,15 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
                 onMarks={zone.worksheet && hasActions(zone.worksheet) ? (e) => onMarks(zone.worksheet!, e) : undefined}
                 setFilter={setFilter}
                 setParameter={setParameter}
+                onButton={onButton}
+                targetsShown={
+                  zone.button?.action === "toggle"
+                    ? zone.button.zones.some((id) => {
+                        const target = zoneById.get(id);
+                        return target !== undefined && !isHidden(target);
+                      })
+                    : true
+                }
               />
             )}
           </div>
@@ -300,9 +349,26 @@ interface ZoneProps {
   onMarks?: (event: MarkEvent) => void;
   setFilter: (worksheet: string, key: string, value: FilterValue) => void;
   setParameter: (id: string, value: Scalar) => void;
+  onButton: (button: Button) => void;
+  /** 顯示／隱藏按鈕的區塊目前是否顯示 */
+  targetsShown: boolean;
 }
 
-function ZoneContent({ zone, workbook, ir, dashboard, view, renders, hideLegend, onRendered, onMarks, setFilter, setParameter }: ZoneProps) {
+function ZoneContent({
+  zone,
+  workbook,
+  ir,
+  dashboard,
+  view,
+  renders,
+  hideLegend,
+  onRendered,
+  onMarks,
+  setFilter,
+  setParameter,
+  onButton,
+  targetsShown,
+}: ZoneProps) {
   switch (zone.kind) {
     case "worksheet":
       return (
@@ -347,15 +413,69 @@ function ZoneContent({ zone, workbook, ir, dashboard, view, renders, hideLegend,
     case "text":
       return <div className="text">{zone.text}</div>;
     case "image":
-      return <div className="placeholder">圖片：{zone.image}</div>;
+      return <img className="zone-image" src={fileUrl(workbook, zone.image!)} alt="" />;
+    case "web":
+      // 只嵌入 http(s) 網頁；沙箱中的網頁不能存取檢視器
+      return /^https?:\/\//i.test(zone.url ?? "") ? (
+        <iframe
+          className="zone-web"
+          src={zone.url!}
+          title={zone.url!}
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <div className="placeholder">網頁：{zone.url}</div>
+      );
+    case "button":
+      return <DashboardButton workbook={workbook} button={zone.button!} shown={targetsShown} onClick={onButton} />;
     default:
       return null;
   }
 }
 
+const EXPORT_LABELS = { pdf: "匯出 PDF", image: "匯出圖片", powerpoint: "匯出 PowerPoint" };
+
+function DashboardButton({
+  workbook,
+  button,
+  shown,
+  onClick,
+}: {
+  workbook: string;
+  button: Button;
+  shown: boolean;
+  onClick: (button: Button) => void;
+}) {
+  // 匯出圖片與 PowerPoint 新平台不支援（不影響數字）；PDF 以瀏覽器列印另存
+  const disabled = button.action === "export" && button.export !== "pdf";
+  const image = button.action === "toggle" && !shown && button.image_hidden ? button.image_hidden : button.image;
+  const label = button.caption ?? (button.export ? EXPORT_LABELS[button.export] : null);
+  const title = disabled ? "新平台不支援此匯出" : (button.tooltip ?? label ?? undefined);
+  return (
+    <button
+      type="button"
+      className={`dashboard-button${image ? " image" : ""}`}
+      data-action={button.action}
+      data-shown={button.action === "toggle" ? String(shown) : undefined}
+      disabled={disabled}
+      title={title}
+      style={image ? undefined : { color: button.color ?? undefined, background: button.background ?? undefined }}
+      onClick={() => onClick(button)}
+    >
+      {image ? <img src={fileUrl(workbook, image)} alt={label ?? title ?? ""} /> : (label ?? "按鈕")}
+    </button>
+  );
+}
+
 function Legend({ response, kind }: { response: RenderResponse | undefined; kind: string | null }) {
   const spec = response?.spec as Record<string, any> | undefined;
-  const color = spec?.encoding?.color;
+  // 參考線等圖層包住主圖時，顏色在第一個有顏色的圖層
+  let color: Record<string, any> | undefined;
+  if (spec)
+    visitSpecs(spec, (node) => {
+      color ??= node.encoding?.color;
+    });
   if (!spec || !color) return <div className="legend" />;
   if (kind !== "color" || color.type !== "nominal") {
     return <div className="legend"><div className="legend-title">{color.title}</div></div>;

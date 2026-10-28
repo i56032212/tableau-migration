@@ -20,6 +20,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const wb = (id: string) => `/api/workbooks/${encodeURIComponent(id)}`;
 
+/** .twbx 內的圖片網址（圖片區塊與圖片按鈕）。 */
+export const fileUrl = (id: string, path: string) =>
+  `${wb(id)}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+
 export const api = {
   workbooks: () => request<WorkbookSummary[]>("/api/workbooks"),
   ir: (id: string) => request<IR>(`${wb(id)}/ir`),

@@ -9,19 +9,22 @@ API：
 - ``POST /api/workbooks/{wb}/worksheets/{ws}/render``：依篩選與參數狀態查詢，回傳 Vega-Lite 規格（資料內嵌）與結果列數
 - ``POST /api/workbooks/{wb}/fields/{field}/domain``：篩選器的可選值，或最小值與最大值
 - ``GET  /api/workbooks/{wb}/cases``：cases.yaml 的篩選組合（已轉成篩選狀態），供檢視器切換
+- ``GET  /api/workbooks/{wb}/files/{path}``：.twbx 內的圖片（圖片區塊與圖片按鈕）
 
 其餘路徑提供檢視器（web/dist）。
 """
 
 from __future__ import annotations
 
+import mimetypes
 import threading
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from tmig.data.executor import ExecutionError, execute, format_value
@@ -35,6 +38,9 @@ from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+IMAGE_TYPES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp"})
 
 
 class DomainRequest(BaseModel):
@@ -150,6 +156,25 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
             return load_cases(path).as_of()
         except CasesError:
             return None
+
+    @app.get("/api/workbooks/{wb}/files/{path:path}")
+    def package_file(wb: str, path: str) -> Response:
+        """.twbx 內的圖片；只提供圖片，路徑須與封裝內的檔名完全相同（反斜線視為斜線）。"""
+        loaded = workspace.get(wb)
+        if Path(path).suffix.lower() not in IMAGE_TYPES:
+            raise HTTPException(404, "只提供圖片檔")
+        for package in sorted(loaded.directory.glob("*.twbx")):
+            with zipfile.ZipFile(package) as archive:
+                names = {n.replace("\\", "/"): n for n in archive.namelist()}
+                if path in names:
+                    media = mimetypes.guess_type(path)[0] or "application/octet-stream"
+                    # 報表內的 SVG 可能含指令碼：直接開啟時也不執行
+                    headers = {
+                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+                        "X-Content-Type-Options": "nosniff",
+                    }
+                    return Response(archive.read(names[path]), media_type=media, headers=headers)
+        raise HTTPException(404, f"找不到檔案「{path}」")
 
     @app.post("/api/workbooks/{wb}/worksheets/{ws}/render")
     def render(wb: str, ws: str, state: QueryState | None = None) -> dict[str, Any]:

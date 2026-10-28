@@ -469,3 +469,59 @@ def test_reference_lines_render(server: str) -> None:
         assert count("ws_region_sales_bands", "rule mark") == 3  # 中位數與平均 ± 1 個標準差
         assert errors == []
         browser.close()
+
+
+def test_dashboard_objects(server: str) -> None:
+    """I2：圖片、顯示／隱藏篩選欄的按鈕、匯出 PDF（瀏覽器列印）、切換到 dashboard 與工作表的按鈕、網頁區塊。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    home = next(d for d in ir.dashboards if d.name == "首頁")
+    target = next(d for d in ir.dashboards if d.name == "篩選動作")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/d/{home.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 1"
+        )
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+        # 圖片區塊與圖片按鈕都從 .twbx 取得
+        page.wait_for_function(
+            "[...document.querySelectorAll('.zone img')].every(i => i.complete && i.naturalWidth > 0)"
+        )
+        assert page.locator(".zone img").count() == 3  # 標誌、工作表按鈕、顯示／隱藏按鈕
+        assert (
+            page.locator("[data-zone='z13'] iframe").get_attribute("src") == "https://example.com/"
+        )
+
+        # 篩選欄預設隱藏；按鈕切換顯示與隱藏，圖片隨之改變
+        toggle = page.locator("[data-zone='z9'] button")
+        assert page.locator("[data-zone='z12']").count() == 0
+        assert toggle.get_attribute("data-shown") == "false"
+        assert (toggle.locator("img").get_attribute("src") or "").endswith("show-filters.png")
+        toggle.click()
+        page.locator("[data-zone='z12'] .control").wait_for()
+        assert toggle.get_attribute("data-shown") == "true"
+        assert (toggle.locator("img").get_attribute("src") or "").endswith("hide-filters.png")
+        toggle.click()
+        page.wait_for_function("!document.querySelector(\"[data-zone='z12']\")")
+
+        # 匯出 PDF：以瀏覽器列印
+        page.evaluate("window.print = () => { window.__printed = true; }")
+        page.locator("[data-zone='z8'] button").click()
+        assert page.evaluate("window.__printed") is True
+
+        # 圖片按鈕切換到工作表，文字按鈕切換到 dashboard
+        page.locator("[data-zone='z7'] button").click()
+        page.wait_for_url("**/s/ws_region_sales_bands**")
+        page.go_back()
+        page.locator("[data-zone='z6'] button").click()
+        page.wait_for_url(f"**/d/{target.id}**")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        assert errors == []
+        browser.close()

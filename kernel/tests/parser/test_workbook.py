@@ -749,7 +749,8 @@ def test_dashboard_zones(tmp_path: Path) -> None:
             ),
             zone(9, 80000, 70000, 20000, 10000, "param='Image/logo.png' type-v2='bitmap'"),
             zone(10, 80000, 80000, 20000, 10000, "type-v2='empty'"),
-            zone(11, 80000, 90000, 20000, 10000, "type-v2='web'"),
+            zone(11, 80000, 90000, 20000, 10000, "type-v2='extension'"),
+            zone(12, 60000, 90000, 20000, 10000, "param='https://example.com/' type-v2='web'"),
         ]
     )
     root = zone(
@@ -783,7 +784,8 @@ def test_dashboard_zones(tmp_path: Path) -> None:
     assert (zones["z9"].kind, zones["z9"].image) == ("image", "Image/logo.png")
     assert zones["z10"].kind == "blank"
     assert zones["z11"].kind == "blank"
-    assert reasons(ir) == ["dashboard 區塊類型 web v0 不支援"]
+    assert (zones["z12"].kind, zones["z12"].url) == ("web", "https://example.com/")
+    assert reasons(ir) == ["dashboard 區塊類型 extension v0 不支援"]
     assert ir.unsupported[0].source_ref == zones["z11"].source_ref
 
 

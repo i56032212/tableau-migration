@@ -162,3 +162,17 @@ def test_cases(client: TestClient) -> None:
         "actions": {},
         "today": None,
     }
+
+
+def test_package_images(client: TestClient) -> None:
+    """圖片區塊與圖片按鈕：只提供 .twbx 內的圖片。"""
+    features = "/api/workbooks/superstore_features"
+    response = client.get(f"{features}/files/Image/logo.png")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG")
+    assert "default-src 'none'" in response.headers["content-security-policy"]
+    assert client.get(f"{features}/files/Image/missing.png").status_code == 404
+    assert client.get(f"{features}/files/superstore_features.twb").status_code == 404
+    assert client.get(f"{features}/files/Data/Extracts/x.hyper").status_code == 404
+    assert client.get("/api/workbooks/nope/files/Image/logo.png").status_code == 404

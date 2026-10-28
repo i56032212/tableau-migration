@@ -22,6 +22,8 @@
   （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別），在「篩選條件」dashboard 上
 - K3 快速 Table Calculation：Sales Growth by Year 的差異與差異百分比（與前一年比較）；Monthly Moving Average
   的移動平均（前兩個月與當月）與移動總和（前後各一個月，不足時為 Null），在「年度成長」dashboard 上
+- I2 dashboard 物件：「首頁」dashboard 上的標誌圖片、切換到 dashboard（文字按鈕）與工作表（圖片按鈕）、
+  顯示／隱藏篩選欄（預設隱藏）、匯出 PDF 的按鈕，以及網頁區塊
 - J4 參考線：Sub-Category Sales 每個類別（窗格）的平均線與整張表的目標常數線；Region Sales Bands 的中位數
   與平均 ± 1 個母體標準差，在「參考線」dashboard 上（只影響圖表，不影響數字）
 """
@@ -29,9 +31,11 @@
 from __future__ import annotations
 
 import io
+import struct
 import sys
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -50,6 +54,57 @@ member = demo.member
 dependency = demo.dependency
 
 DASHBOARD_W, DASHBOARD_H = 1000, 700
+HOME_DASHBOARD = "首頁"
+IMAGES = {
+    "Image/logo.png": (160, 48, (76, 120, 168)),
+    "Image/show-filters.png": (32, 32, (84, 162, 75)),
+    "Image/hide-filters.png": (32, 32, (228, 87, 86)),
+    "Image/bands.png": (48, 32, (245, 133, 24)),
+}
+"""封裝在 .twbx 內的圖片：路徑 →（寬、高、顏色）。"""
+
+
+def png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """單色 PNG（不依賴影像套件）。"""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    row = b"\x00" + bytes(rgb) * width
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(row * height))
+        + chunk(b"IEND", b"")
+    )
+
+
+WINDOWS = {
+    "功能總覽": "7D6C2A1F-2B3C-4D5E-9F0A-000000000020",
+    "篩選動作": "7D6C2A1F-2B3C-4D5E-9F0A-000000000021",
+    "Region Sales Bands": "7D6C2A1F-2B3C-4D5E-9F0A-000000000022",
+    HOME_DASHBOARD: "7D6C2A1F-2B3C-4D5E-9F0A-000000000023",
+}
+"""<windows> 中的視窗（simple-id）：導覽按鈕以它指定目標。"""
+
+
+def windows() -> str:
+    lines = []
+    for name, uuid in WINDOWS.items():
+        kind = "worksheet" if name == "Region Sales Bands" else "dashboard"
+        maximized = " maximized='true'" if name == "功能總覽" else ""
+        lines.append(
+            f"""    <window class='{kind}'{maximized} name={attr(name)}>
+      <viewpoints />
+      <active id='-1' />
+      <simple-id uuid='{{{uuid}}}' />
+    </window>"""
+        )
+    return "\n".join(lines)
+
+
 SEGMENT_GROUP = "5"
 """Segment 篩選套用到「Sales by Segment」與「Profit by Ship Mode」兩張工作表（套用到選取的工作表）。"""
 
@@ -1168,6 +1223,65 @@ def reference_dashboard() -> str:
     </dashboard>"""
 
 
+def home_dashboard() -> str:
+    """首頁：標誌、導覽按鈕、顯示／隱藏篩選欄的按鈕（篩選欄預設隱藏）、匯出 PDF 按鈕與網頁區塊。"""
+
+    def button(zid: int, box: str, inner: str, extra: str = "") -> str:
+        return f"""            <zone {box} id='{zid}' type-v2='dashboard-object'{extra}>
+              <button {inner}
+              </button>
+            </zone>"""
+
+    goto = f"action='tabdoc:goto-sheet window-id=&quot;{{{WINDOWS['篩選動作']}}}&quot;' button-type='text'>"
+    text_state = """
+                <button-visual-state>
+                  <caption>前往篩選動作</caption>
+                  <tooltip-text>切換到「篩選動作」dashboard</tooltip-text>
+                  <button-caption-font-style fontcolor='#ffffff' fontname='Tableau Bold' fontsize='12' />
+                  <format attr='background-color' value='#1f6f43' />
+                </button-visual-state>"""
+    sheet = f"action='tabdoc:goto-sheet window-id=&quot;{{{WINDOWS['Region Sales Bands']}}}&quot;'>"
+    sheet_state = """
+                <button-visual-state>
+                  <image-path>Image/bands.png</image-path>
+                  <tooltip-text>開啟 Region Sales Bands</tooltip-text>
+                </button-visual-state>"""
+    toggle = f"""action=''>
+                <toggle-action>tabdoc:toggle-button-click-action window-id="{{{WINDOWS[HOME_DASHBOARD]}}}" zone-id="9" zone-ids=[11]</toggle-action>
+                <button-visual-state>
+                  <image-path>Image/hide-filters.png</image-path>
+                </button-visual-state>
+                <button-visual-state>
+                  <image-path>Image/show-filters.png</image-path>
+                </button-visual-state>"""
+    export = f"""action='' button-click-action-metadata='pdf' button-type='text'>
+                <export-button-action>tabdoc:abstract-dashboard-button-export-wrapper dashboard-button-export-type="pdf" dashboarddoc-id="{{{WINDOWS[HOME_DASHBOARD]}}}"</export-button-action>
+                <button-visual-state>
+                  <caption>匯出 PDF</caption>
+                  <format attr='background-color' value='#4c78a8' />
+                </button-visual-state>"""
+    return f"""    <dashboard name={attr(HOME_DASHBOARD)}>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 160, 48)} id='4' is-scaled='1' param='Image/logo.png' type-v2='bitmap' />
+          <zone {zone_box(176, 8, 400, 48)} id='5' type-v2='title' />
+{button(6, zone_box(584, 12, 140, 40), goto + text_state)}
+{button(7, zone_box(732, 12, 48, 40), sheet + sheet_state)}
+{button(8, zone_box(788, 12, 100, 40), export)}
+{button(9, zone_box(896, 12, 40, 40), toggle)}
+          <zone {zone_box(8, 64, 560, 628)} id='10' name='Orders by Region' />
+          <zone {zone_box(576, 64, 416, 140)} hidden-by-user='true' id='11' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(576, 64, 416, 140)} id='12' mode='checklist' name='Orders by Region' param={attr(ref("none:Region:nk"))} type-v2='filter' />
+          </zone>
+          <zone {zone_box(576, 212, 416, 480)} id='13' param='https://example.com/' type-v2='web' />
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000024}}' />
+    </dashboard>"""
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
@@ -1265,13 +1379,10 @@ def twb(rows: int) -> str:
 {growth_dashboard()}
 {parameter_dashboard()}
 {reference_dashboard()}
+{home_dashboard()}
   </dashboards>
   <windows source-height='30'>
-    <window class='dashboard' maximized='true' name='功能總覽'>
-      <viewpoints />
-      <active id='-1' />
-      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000020}}' />
-    </window>
+{windows()}
   </windows>
 </workbook>
 """
@@ -1286,9 +1397,11 @@ def main() -> None:
         demo.build_hyper(rows, hyper, work)
         data = io.BytesIO()
         with zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED) as archive:
+            images = [(path, png(*spec)) for path, spec in IMAGES.items()]
             for name, payload in (
                 ("superstore_features.twb", twb(len(rows)).encode("utf-8")),
                 (demo.HYPER_PATH, hyper.read_bytes()),
+                *images,
             ):
                 info = zipfile.ZipInfo(name, date_time=(2026, 10, 28, 9, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED

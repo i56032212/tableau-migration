@@ -550,6 +550,8 @@ ZoneKind = Literal[
     "image",
     "title",
     "blank",
+    "button",
+    "web",
 ]
 ControlType = Literal[
     "single_dropdown",
@@ -565,7 +567,17 @@ ControlType = Literal[
 ]
 """篩選控制項；relative_date、condition 為顯示目前的相對日期或條件（檢視器尚不能修改）。"""
 
-_ZONE_ATTRS = ("worksheet", "field", "parameter", "control", "legend", "text", "image")
+_ZONE_ATTRS = (
+    "worksheet",
+    "field",
+    "parameter",
+    "control",
+    "legend",
+    "text",
+    "image",
+    "button",
+    "url",
+)
 _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {
     "container": (),
     "worksheet": ("worksheet",),
@@ -576,7 +588,44 @@ _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {
     "image": ("image",),
     "title": (),
     "blank": (),
+    "button": ("button",),
+    "web": ("url",),
 }
+
+
+class Button(IRModel):
+    """dashboard 按鈕（I2）：切換到 dashboard 或工作表、顯示或隱藏區塊、匯出。"""
+
+    action: Literal["navigate", "toggle", "export"]
+    target_dashboard: Id | None = Field(default=None, description="navigate：目標 dashboard")
+    target_worksheet: Id | None = Field(default=None, description="navigate：目標工作表")
+    zones: list[Id] = Field(
+        default_factory=list, description="toggle：顯示或隱藏的區塊（同一個 dashboard 上）"
+    )
+    export: Literal["pdf", "image", "powerpoint"] | None = Field(
+        default=None, description="export：匯出的格式"
+    )
+    caption: str | None = Field(default=None, description="文字按鈕的文字")
+    tooltip: str | None = None
+    image: str | None = Field(
+        default=None, description="圖片按鈕在 .twbx 內的圖片路徑；toggle 時為區塊顯示中的圖片"
+    )
+    image_hidden: str | None = Field(default=None, description="toggle：區塊隱藏時的圖片")
+    color: str | None = Field(default=None, description="文字顏色，例如 #ffffff")
+    background: str | None = Field(default=None, description="背景顏色")
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        targets = [t for t in (self.target_dashboard, self.target_worksheet) if t is not None]
+        if (self.action == "navigate") != (len(targets) == 1) or len(targets) > 1:
+            raise ValueError("navigate 按鈕必須、也只能指定一個目標 dashboard 或工作表")
+        if (self.action == "toggle") != bool(self.zones):
+            raise ValueError("只有 toggle 按鈕必須、也只能指定 zones")
+        if (self.action == "export") != (self.export is not None):
+            raise ValueError("只有 export 按鈕必須、也只能指定 export")
+        return self
+
+
 _ZONE_OPTIONAL: dict[str, tuple[str, ...]] = {"title": ("text",)}
 
 
@@ -596,6 +645,8 @@ class Zone(IRModel):
     legend: Literal["color", "size", "shape"] | None = None
     text: str | None = None
     image: str | None = Field(default=None, description=".twbx 內的圖片路徑")
+    button: Button | None = None
+    url: str | None = Field(default=None, description="網頁區塊的網址")
     children: list[Zone] = Field(default_factory=list, description="只有 container 可以有子區塊")
     layout: Literal["tiled", "horizontal", "vertical"] | None = Field(
         default=None,
