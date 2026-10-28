@@ -37,7 +37,7 @@ from tmig.ir.models import (
     TupleFilter,
     Worksheet,
 )
-from tmig.parser.context import DsState, ParseContext, SheetState
+from tmig.parser.context import DsState, FilterKind, ParseContext, SheetState
 from tmig.parser.datasource import add_calc_field, analyze_calcs
 from tmig.parser.fields import (
     FilterParser,
@@ -671,13 +671,11 @@ class SheetParser:
 
     # ------------------------------------------------------------ 篩選與排序
 
-    def _filters(
-        self, view: etree._Element
-    ) -> tuple[list[Filter], dict[str, Literal["categorical", "range", "top_n"]]]:
+    def _filters(self, view: etree._Element) -> tuple[list[Filter], dict[str, FilterKind]]:
         assert self.ds is not None
         parser = FilterParser(self.ctx, self.ds, self.resolve, "worksheet")
         filters: list[Filter] = []
-        kinds: dict[str, Literal["categorical", "range", "top_n"]] = {}
+        kinds: dict[str, FilterKind] = {}
         for element in children(view, "filter"):
             key = instance_key(element.get("column", ""))
             if key == "[:Measure Names]":
@@ -755,7 +753,7 @@ class SheetParser:
         view: etree._Element,
         ds_name: str,
         filters: list[Filter],
-        kinds: dict[str, Literal["categorical", "range", "top_n"]],
+        kinds: dict[str, FilterKind],
     ) -> None:
         """篩選架（<slices>）上沒有本地 <filter> 的欄位，套用該資料源的全域篩選。"""
         shared = self.ctx.shared_views.get(ds_name)

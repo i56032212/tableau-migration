@@ -191,7 +191,7 @@ def test_title_zone_text_is_optional(doc: Doc) -> None:
 @pytest.mark.parametrize(
     ("index", "stage", "message"),
     [
-        (0, "measure", "categorical 篩選不能屬於 measure 階段"),
+        (0, "top_n", "categorical 篩選不能屬於 top_n 階段"),
         (1, "dimension", "top_n 篩選不能屬於 dimension 階段"),
         (0, "datasource", "工作表上的篩選 flt_category 不能屬於 datasource 階段"),
     ],

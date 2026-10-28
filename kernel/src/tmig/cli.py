@@ -167,9 +167,13 @@ def _query_inputs(args: argparse.Namespace):
 
     ir = load_ir(args.ir)
     state = QueryState()
+    cases_path = args.cases or args.ir.parent / "cases.yaml"
     if args.case:
-        cases_path = args.cases or args.ir.parent / "cases.yaml"
-        state = case_state(ir, load_cases(cases_path).case(args.case))
+        spec = load_cases(cases_path)
+        state = case_state(ir, spec.case(args.case), spec.as_of())
+    elif cases_path.is_file():
+        # 沒有指定篩選組合時，相對日期篩選仍以 cases.yaml 的基準日計算
+        state = QueryState(today=load_cases(cases_path).as_of())
     return ir, state
 
 

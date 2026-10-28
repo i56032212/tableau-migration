@@ -76,6 +76,17 @@ def test_render_with_filter_action_selection(client: TestClient) -> None:
     assert client.post(url, json=bad).status_code == 422
 
 
+def test_relative_date_defaults_to_cases_today(client: TestClient) -> None:
+    """相對日期篩選的基準日：沒有指定時用 cases.yaml 的 today（與計算比對相同）。"""
+    url = "/api/workbooks/superstore_features/worksheets/ws_recent_sales_by_category/render"
+    assert client.post(url).json()["rows"] == 3
+    # 指定的基準日在資料之後：最近 3 個月沒有資料
+    assert client.post(url, json={"today": "2030-01-15"}).json()["rows"] == 0
+    assert client.post(url, json={"today": "2030/01/15"}).status_code == 422
+    case = client.get("/api/workbooks/superstore_features/cases").json()[0]
+    assert case["state"]["today"] == "2024-12-31"
+
+
 def test_render_default_and_worksheet_by_name(client: TestClient) -> None:
     by_id = client.post(f"{WB}/worksheets/ws_monthly_profit/render").json()
     by_name = client.post(f"{WB}/worksheets/Monthly%20Profit/render", json={}).json()
@@ -149,4 +160,5 @@ def test_cases(client: TestClient) -> None:
         },
         "parameters": {"p_parameter_1": 2},
         "actions": {},
+        "today": None,
     }

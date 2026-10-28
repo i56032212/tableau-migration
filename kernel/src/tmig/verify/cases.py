@@ -48,8 +48,21 @@ class CasesFile(BaseModel):
     workbook: str
     tableau_views_url: str | None = None
     fetched_at: str | None = None
+    today: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="相對日期篩選的基準日；沒有時取 fetched_at 的日期（Tableau 匯出預期結果的那一天）",
+    )
     sheets: list[SheetSpec]
     cases: list[CaseSpec]
+
+    def as_of(self) -> str | None:
+        """相對日期篩選的基準日：today，或抓取預期結果的日期。"""
+        if self.today is not None:
+            return self.today
+        if self.fetched_at and re.match(r"^\d{4}-\d{2}-\d{2}", self.fetched_at):
+            return self.fetched_at[:10]
+        return None
 
     def case(self, name: str) -> CaseSpec:
         for case in self.cases:
@@ -101,14 +114,14 @@ def _value(text: str, datatype: str) -> Scalar:
         raise CasesError(f"值「{text}」不是 {datatype}：{exc}") from exc
 
 
-def case_state(ir: IR, case: CaseSpec) -> QueryState:
-    """網址參數 → 篩選與參數狀態。"""
+def case_state(ir: IR, case: CaseSpec, today: str | None = None) -> QueryState:
+    """網址參數 → 篩選與參數狀態；today 為相對日期篩選的基準日（見 CasesFile.as_of）。"""
     fields: dict[str, DataField] = {}
     for ds in ir.datasources:
         for item in ds.fields:
             fields.setdefault(item.caption, item)
     params = {p.caption: p for p in ir.parameters}
-    state = QueryState()
+    state = QueryState(today=today)
     for name, raw in case.url_params.items():
         text = (
             raw if isinstance(raw, str) else str(raw).lower() if isinstance(raw, bool) else str(raw)

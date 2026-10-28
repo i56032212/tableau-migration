@@ -17,6 +17,9 @@
   篩選組合不含選取，選取的情況由 selection() 計算，供檢視器的端到端測試比對
 - 群組：Region (group) 把 East、West 合為 Coasts，其餘維持原值；Ship Speed 把 First Class、Same Day
   合為 Fast，其餘歸入 Other。數值分組：Quantity (bin) 為 Quantity 所在區間（每 3 一格）的下限
+- 相對日期：以 cases.yaml 的 today 為基準日，最近 3 個月為基準日所在月份與前 2 個月
+- 彙總條件與 Top N 以其他維度篩選（含網址參數）之前的資料計算：總銷售額大於 5000 的客戶、
+  排除 Phones 後銷售額前 3 名的子類別，都先以全部資料決定，再套用網址參數
 """
 
 from __future__ import annotations
@@ -54,6 +57,8 @@ def load_rows() -> list[Row]:
                     "Order ID": raw["Order ID"],
                     "Order Date": dt.date.fromisoformat(raw["Order Date"]),
                     "Category": raw["Category"],
+                    "Sub-Category": raw["Sub-Category"],
+                    "Customer Name": raw["Customer Name"],
                     "Quantity": int(raw["Quantity"]),
                     "Sales": float(raw["Sales"]),
                     "Profit": float(raw["Profit"]),
@@ -260,6 +265,47 @@ def sales_by_quantity_bin(rows: list[Row], case: Case) -> tuple[list[str], list[
     return ["Quantity (bin)", "Sales"], [[k, v] for k, v in sorted(sales.items())]
 
 
+TODAY = dt.date(2024, 12, 31)
+
+
+def recent_sales(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    """最近 3 個月：基準日所在月份的第一天往前 2 個月起，到該月底。"""
+    start = dt.date(TODAY.year, TODAY.month, 1)
+    for _ in range(2):
+        start = (start - dt.timedelta(days=1)).replace(day=1)
+    end = (dt.date(TODAY.year, TODAY.month, 28) + dt.timedelta(days=4)).replace(day=1)
+    keep = case.keep({"Order Date": lambda row: start <= row["Order Date"] < end})
+    body = grouped(rows, keep, "Category", lambda items: sum(r["Sales"] for r in items))
+    return ["Category", "Sales"], body
+
+
+def big_customers(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    totals: dict[str, float] = defaultdict(float)
+    for row in rows:
+        totals[row["Customer Name"]] += row["Sales"]  # 以網址參數之前的資料計算
+    big = {name for name, total in totals.items() if total > 5000}
+    keep = case.keep({"Customer Name": lambda row: row["Customer Name"] in big})
+    body = grouped(rows, keep, "Segment", lambda items: len({r["Customer Name"] for r in items}))
+    return ["Segment", "Distinct count of Customer Name"], body
+
+
+def son_customers(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({"Customer Name": lambda row: "son" in row["Customer Name"].lower()})
+    body = grouped(rows, keep, "Region", lambda items: sum(r["Sales"] for r in items))
+    return ["Region", "Sales"], body
+
+
+def top_sub_categories(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    totals: dict[str, float] = defaultdict(float)
+    for row in rows:
+        if row["Sub-Category"] != "Phones":
+            totals[row["Sub-Category"]] += row["Sales"]
+    top = {name for name, _ in sorted(totals.items(), key=lambda item: (-item[1], item[0]))[:3]}
+    keep = case.keep({"Sub-Category": lambda row: row["Sub-Category"] in top})
+    body = grouped(rows, keep, "Sub-Category", lambda items: sum(r["Sales"] for r in items))
+    return ["Sub-Category", "Sales"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -275,6 +321,10 @@ SHEETS = {
     "ws_sales_by_region_group": sales_by_region_group,
     "ws_sales_by_ship_speed": sales_by_ship_speed,
     "ws_sales_by_quantity_bin": sales_by_quantity_bin,
+    "ws_recent_sales_by_category": recent_sales,
+    "ws_big_customers_by_segment": big_customers,
+    "ws_son_customers_by_region": son_customers,
+    "ws_top_sub_categories": top_sub_categories,
 }
 
 

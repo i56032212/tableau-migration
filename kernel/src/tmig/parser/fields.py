@@ -7,9 +7,13 @@ from typing import Literal
 
 from lxml import etree
 
+from tmig.formula.lexer import FormulaSyntaxError
+from tmig.formula.parser import parse_formula
+from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
     Aggregation,
     CategoricalFilter,
+    ConditionFilter,
     DataField,
     DateDerivation,
     FieldUse,
@@ -17,6 +21,7 @@ from tmig.ir.models import (
     FilterStage,
     ParamRef,
     RangeFilter,
+    RelativeDateFilter,
     Scalar,
     TopNFilter,
 )
@@ -168,6 +173,26 @@ def _literal(text: str | None, datatype: str) -> Scalar:
     return parse_literal(text, datatype)
 
 
+RELATIVE_PERIODS = ("year", "quarter", "month", "week", "day")
+
+Selection = tuple[Literal["include", "exclude", "all"], list[Scalar]]
+
+
+def _intersect(a: Selection, b: Selection) -> Selection:
+    """兩個成員選取的交集。"""
+    if a[0] == "all":
+        return b
+    if b[0] == "all":
+        return a
+    if a[0] == "include" and b[0] == "include":
+        return "include", [v for v in a[1] if v in b[1]]
+    if a[0] == "include":
+        return "include", [v for v in a[1] if v not in b[1]]
+    if b[0] == "include":
+        return "include", [v for v in b[1] if v not in a[1]]
+    return "exclude", a[1] + [v for v in b[1] if v not in a[1]]
+
+
 # ---------------------------------------------------------------- 篩選
 
 
@@ -213,10 +238,52 @@ class FilterParser:
                 parsed = parsed.model_copy(update={"group": group})
             return parsed
         if kind_class == "relative-date":
-            self.ctx.flag(element, "相對日期篩選 v0 不支援")
-        else:
-            self.ctx.flag(element, f"篩選類型 {kind_class} v0 不支援")
+            relative = self._relative_date(element, use, data_field, context, base_id)
+            if relative is not None and group is not None and self.scope == "worksheet":
+                relative = relative.model_copy(update={"group": group})
+            return relative
+        self.ctx.flag(element, f"篩選類型 {kind_class} v0 不支援")
         return None
+
+    def _relative_date(
+        self,
+        element: etree._Element,
+        use: FieldUse,
+        data_field: DataField,
+        context: bool,
+        filter_id: str,
+    ) -> RelativeDateFilter | None:
+        """相對日期：例如最近 3 個月（first-period=-2、last-period=0、period-type=month）。"""
+        if data_field.datatype not in ("date", "datetime"):
+            self.ctx.flag(element, f"相對日期篩選的欄位「{data_field.caption}」不是日期")
+            return None
+        period = element.get("period-type-v2") or element.get("period-type") or ""
+        if period not in RELATIVE_PERIODS:
+            self.ctx.flag(element, f"相對日期篩選的期間 {period} v0 不支援")
+            return None
+        try:
+            first = int(element.get("first-period", "0"))
+            last = int(element.get("last-period", "0"))
+            anchor_text = element.get("anchor")
+            anchor = _literal(anchor_text, "date") if anchor_text else None
+        except (ValueError, LiteralError) as exc:
+            self.ctx.flag(element, f"相對日期篩選的設定無法解析：{exc}")
+            return None
+        if first > last:
+            first, last = last, first
+        return RelativeDateFilter(
+            kind="relative_date",
+            id=filter_id,
+            field=FieldUse(field=use.field),  # 一律以日期本身計算（與欄位實例的日期部分無關）
+            stage=self._stage_for_dimension(element, context),
+            period=period,  # type: ignore[arg-type]
+            first=first,
+            last=last,
+            include_future=element.get("include-future", "true") == "true",
+            include_null=element.get("include-null") == "true",
+            anchor=str(anchor) if anchor is not None else None,
+            source_ref=_xpath(element),
+        )
 
     def _stage_for_dimension(self, element: etree._Element, context: bool) -> FilterStage:
         if self.scope == "extract":
@@ -238,13 +305,14 @@ class FilterParser:
             self.ctx.flag(element, "沒有選取任何值或結構不明的類別篩選 v0 不支援")
             return None
         root = groups[0]
-        if is_aggregate(self.ds, use):
-            self.ctx.flag(element, "量值上的類別篩選 v0 不支援")
-            return None
         function = root.get("function")
-        if function == "end":
-            return self._top_n(element, root, use, context, filter_id)
         datatype = value_type(data_field, use)
+        if is_aggregate(self.ds, use):
+            return self._measure_selection(element, root, use, datatype, filter_id)
+        if function == "end":
+            return self._top_n(element, root, use, datatype, context, filter_id)
+        if function == "filter":
+            return self._condition(element, root, use, datatype, context, filter_id)
         selection = self._selection(root, datatype)
         if selection is None:
             self.ctx.flag(element, f"類別篩選的條件（function={function}）v0 不支援")
@@ -262,6 +330,83 @@ class FilterParser:
             source_ref=_xpath(element),
         )
 
+    def _measure_selection(
+        self,
+        element: etree._Element,
+        root: etree._Element,
+        use: FieldUse,
+        datatype: str,
+        filter_id: str,
+    ) -> Filter | None:
+        """離散的彙總計算欄位上的類別篩選：在每個標記的彙總值上判斷（量值篩選階段）。"""
+        if self.scope != "worksheet":
+            self.ctx.flag(element, "資料源上的量值類別篩選 v0 不支援")
+            return None
+        selection = self._selection(root, datatype)
+        if selection is None:
+            self.ctx.flag(
+                element, f"量值上的類別篩選條件（function={root.get('function')}）v0 不支援"
+            )
+            return None
+        mode, values = selection
+        table_calc = use.table_calc is not None or self.ds.levels.get(use.field) == "table_calc"
+        return CategoricalFilter(
+            kind="categorical",
+            id=filter_id,
+            field=use,
+            stage="table_calc" if table_calc else "measure",
+            mode=mode,
+            values=values,
+            source_ref=_xpath(element),
+        )
+
+    def _condition(
+        self,
+        element: etree._Element,
+        root: etree._Element,
+        use: FieldUse,
+        datatype: str,
+        context: bool,
+        filter_id: str,
+    ) -> Filter | None:
+        """萬用字元與條件：groupfilter function='filter' 的 expression，內層為先選取的成員。"""
+        expression = root.get("expression")
+        if not expression:
+            self.ctx.flag(element, "條件篩選缺少條件公式")
+            return None
+        inner = child(root, "groupfilter")
+        selection = ("all", []) if inner is None else self._selection(inner, datatype)
+        if selection is None:
+            self.ctx.flag(element, "條件篩選同時設定了無法解析的一般選取，v0 不支援")
+            return None
+        analyzer = self.ds.analyzer
+        if analyzer is not None:
+            try:
+                info = analyzer.analyze(parse_formula(expression))
+            except (FormulaSyntaxError, FormulaSemanticError) as exc:
+                self.ctx.flag(element, f"條件篩選的公式「{expression}」：{exc}")
+                return None
+            if info.datatype not in ("boolean", "null"):
+                self.ctx.flag(element, f"條件篩選的公式「{expression}」不是布林值")
+                return None
+            if info.level == "tc":
+                self.ctx.flag(element, "條件篩選的公式含 Table Calculation，v0 不支援")
+                return None
+            if info.level == "agg" and self.scope != "worksheet":
+                self.ctx.flag(element, "資料源上的彙總條件篩選 v0 不支援")
+                return None
+        mode, values = selection
+        return ConditionFilter(
+            kind="condition",
+            id=filter_id,
+            field=use,
+            stage=self._stage_for_dimension(element, context),
+            condition=expression,
+            mode=mode,
+            values=values,
+            source_ref=_xpath(element),
+        )
+
     def _selection(
         self, group: etree._Element, datatype: str
     ) -> tuple[Literal["include", "exclude", "all"], list[Scalar]] | None:
@@ -273,6 +418,16 @@ class FilterParser:
             return None if members is None else ("include", members)
         if function == "level-members":
             return "all", []
+        if function == "empty-level":
+            return "include", []
+        if function == "intersection":
+            result: tuple[Literal["include", "exclude", "all"], list[Scalar]] = ("all", [])
+            for part in children(group, "groupfilter"):
+                sub = self._selection(part, datatype)
+                if sub is None:
+                    return None
+                result = _intersect(result, sub)
+            return result
         if function == "except":
             parts = children(group, "groupfilter")
             if not parts or parts[0].get("function") != "level-members":
@@ -310,6 +465,7 @@ class FilterParser:
         element: etree._Element,
         group: etree._Element,
         use: FieldUse,
+        datatype: str,
         context: bool,
         filter_id: str,
     ) -> Filter | None:
@@ -321,8 +477,9 @@ class FilterParser:
             self.ctx.flag(element, "Top N 篩選缺少排名依據")
             return None
         inner = child(order, "groupfilter")
-        if inner is None or inner.get("function") != "level-members":
-            self.ctx.flag(element, "Top N 篩選同時設定了一般選取或其他條件，v0 不支援")
+        selection = ("all", []) if inner is None else self._selection(inner, datatype)
+        if selection is None:
+            self.ctx.flag(element, "Top N 篩選同時設定了條件或無法解析的選取，v0 不支援")
             return None
         end = group.get("end", "top")
         if end not in ("top", "bottom"):
@@ -357,6 +514,8 @@ class FilterParser:
             direction="top" if largest else "bottom",
             count=count,
             by=order.get("expression", ""),
+            mode=selection[0],
+            values=selection[1],
             source_ref=_xpath(element),
         )
 

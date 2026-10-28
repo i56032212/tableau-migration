@@ -48,7 +48,7 @@ export interface Parameter {
 }
 
 export interface FieldFilter {
-  kind: "categorical" | "range" | "top_n";
+  kind: "categorical" | "range" | "top_n" | "condition" | "relative_date";
   id: string;
   field: FieldUse;
   stage: string;
@@ -59,6 +59,13 @@ export interface FieldFilter {
   include_null?: boolean;
   /** 篩選群組：同一群組的篩選一起變更（套用到選取的工作表、全域篩選） */
   group?: string | null;
+  /** 條件篩選的公式 */
+  condition?: string;
+  /** 相對日期：期間與範圍（例如最近 3 個月為 month、-2、0） */
+  period?: "year" | "quarter" | "month" | "week" | "day";
+  first?: number;
+  last?: number;
+  anchor?: string | null;
 }
 
 /** 多欄位篩選：篩選動作的目標、排除選取的標記 */
@@ -182,6 +189,8 @@ export interface QueryState {
   parameters: Record<string, Scalar>;
   /** 篩選動作的選取：動作 id → 選取的標記 */
   actions?: Record<string, Mark[]>;
+  /** 相對日期篩選的基準日（yyyy-mm-dd）；省略時由查詢服務決定 */
+  today?: string | null;
 }
 
 export interface WorkbookSummary {

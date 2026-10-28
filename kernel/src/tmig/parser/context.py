@@ -23,6 +23,9 @@ from tmig.parser.twbx import WorkbookPackage, local_name, xpath
 
 SNIPPET_LIMIT = 600
 
+FilterKind = Literal["categorical", "range", "top_n", "condition", "relative_date"]
+"""單一欄位篩選的種類（dashboard 依此決定篩選控制項）。"""
+
 DATATYPES = frozenset({"string", "integer", "real", "boolean", "date", "datetime"})
 
 
@@ -75,7 +78,7 @@ class SheetState:
     instances: dict[str, etree._Element]
     uses: dict[str, FieldUse]
     """已解析的欄位實例，以名稱（含方括號）為鍵。"""
-    filter_kinds: dict[str, Literal["categorical", "range", "top_n"]]
+    filter_kinds: dict[str, FilterKind]
     """工作表上的篩選種類，以欄位實例名稱為鍵；dashboard 依此決定控制項。"""
 
 

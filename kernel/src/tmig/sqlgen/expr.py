@@ -375,7 +375,7 @@ class ExprCompiler:
             )
         if name == "DATEADD":
             part = self._part(node, 0, _TRUNC)
-            return f"CAST(({a[2]} + {_interval(part, a[1])}) AS TIMESTAMP)"
+            return f"CAST(({a[2]} + {interval(part, a[1])}) AS TIMESTAMP)"
         if name == "DATEDIFF":
             part = self._part(node, 0, _TRUNC)
             if part == "week":
@@ -522,7 +522,7 @@ def icu_replacement(text: str) -> str:
     return "".join(out)
 
 
-def _interval(part: str, amount: str) -> str:
+def interval(part: str, amount: str) -> str:
     n = f"CAST({amount} AS INTEGER)"
     return {
         "year": f"to_years({n})",
@@ -536,4 +536,4 @@ def _interval(part: str, amount: str) -> str:
     }[part]
 
 
-__all__ = ["ExprCompiler", "SqlEnv", "week_offset", "window_offset"]
+__all__ = ["ExprCompiler", "SqlEnv", "interval", "week_offset", "window_offset"]

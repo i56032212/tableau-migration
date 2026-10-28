@@ -187,7 +187,7 @@ def _check(
         base.diff = f"mapping.yaml 沒有工作表 {worksheet}"
         return base
     try:
-        query = worksheet_sql(ir, worksheet, case_state(ir, case))
+        query = worksheet_sql(ir, worksheet, case_state(ir, case, cases.as_of()))
         ws = next(w for w in ir.worksheets if w.id == worksheet)
         result = execute(root / "data" / f"{ws.datasource}.duckdb", query.sql)
     except QueryError as exc:

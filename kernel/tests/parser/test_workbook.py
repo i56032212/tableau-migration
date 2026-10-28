@@ -477,16 +477,16 @@ def test_range_filters(tmp_path: Path) -> None:
     ("xml", "message"),
     [
         (
-            f"<filter class='relative-date' column='{ref('none:Order Date:qk')}' period-type='year' />",
-            "相對日期",
+            f"<filter class='relative-date' column='{ref('none:Order Date:qk')}' period-type='hour' />",
+            "相對日期篩選的期間 hour",
         ),
         (
-            f"<filter class='categorical' column='{ref('none:Region:nk')}'><groupfilter function='filter' expression='SUM([Sales]) &gt; 0' /></filter>",
-            "function=filter",
+            f"<filter class='categorical' column='{ref('none:Region:nk')}'><groupfilter function='filter' expression='RANK(SUM([Sales])) = 1' /></filter>",
+            "含 Table Calculation",
         ),
         (
-            f"<filter class='categorical' column='{ref('sum:Sales:qk')}'><groupfilter function='level-members' /></filter>",
-            "量值上的類別篩選",
+            f"<filter class='categorical' column='{ref('sum:Sales:qk')}'><groupfilter function='range' from='1' to='2' /></filter>",
+            "量值上的類別篩選條件（function=range）",
         ),
         (
             f"<filter class='categorical' column='{ref('none:Missing:nk')}'><groupfilter function='level-members' /></filter>",

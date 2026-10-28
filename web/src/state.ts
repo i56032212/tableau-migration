@@ -8,6 +8,8 @@ export interface ViewState {
   actions: Record<string, Mark[]>;
   /** 來源工作表 id → 目前選取的標記（畫面上醒目顯示） */
   selections: Record<string, Mark[]>;
+  /** 相對日期篩選的基準日；null 表示由查詢服務決定（cases.yaml 的基準日或今天） */
+  today?: string | null;
 }
 
 /** 篩選狀態的欄位鍵，與查詢服務相同：f_region、year(f_order_date)、trunc_month(f_order_date)。 */
@@ -56,7 +58,34 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
     const marks = view.actions[action.id];
     if (marks && action.targets.includes(worksheet)) actions[action.id] = marks;
   }
-  return { filters: view.sheetFilters[worksheet] ?? {}, parameters: view.parameters, actions };
+  const state: QueryState = { filters: view.sheetFilters[worksheet] ?? {}, parameters: view.parameters, actions };
+  if (view.today) state.today = view.today;
+  return state;
+}
+
+const PERIODS: Record<string, [string, string, string, string]> = {
+  // 單位、本期、上一期、下一期
+  year: ["年", "今年", "去年", "明年"],
+  quarter: ["季", "本季", "上一季", "下一季"],
+  month: ["個月", "本月", "上個月", "下個月"],
+  week: ["週", "本週", "上週", "下週"],
+  day: ["天", "今天", "昨天", "明天"],
+};
+
+/** 相對日期篩選的說明，例如「最近 3 個月」。 */
+export function describeRelative(filter: FieldFilter): string {
+  const [unit, current, previous, next] = PERIODS[filter.period ?? "day"] ?? PERIODS.day;
+  const first = filter.first ?? 0;
+  const last = filter.last ?? 0;
+  if (first === last) {
+    if (first === 0) return current;
+    if (first === -1) return previous;
+    if (first === 1) return next;
+    return first < 0 ? `${-first} ${unit}前` : `${first} ${unit}後`;
+  }
+  if (last === 0 && first < 0) return `最近 ${1 - first} ${unit}`;
+  if (first === 0 && last > 0) return `接下來 ${last + 1} ${unit}`;
+  return `第 ${first} 到 ${last} ${unit}`;
 }
 
 /** 這張工作表在這個 dashboard 上、以某種方式觸發的篩選動作。 */

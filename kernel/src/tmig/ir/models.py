@@ -178,7 +178,8 @@ class CategoricalFilter(IRModel):
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        if self.stage not in ("extract", "datasource", "context", "dimension"):
+        # measure、table_calc：以離散的彙總計算欄位篩選（每個標記的值是否在清單中）
+        if self.stage == "top_n":
             raise ValueError(f"categorical 篩選不能屬於 {self.stage} 階段")
         if self.mode == "all" and self.values:
             raise ValueError("mode 為 all 時 values 必須為空")
@@ -209,7 +210,7 @@ class RangeFilter(IRModel):
 
 
 class TopNFilter(IRModel):
-    """依某個彙總運算式取前 N 或後 N。"""
+    """依某個彙總運算式取前 N 或後 N；mode、values 為排名前先選取的成員（篩選對話框的「一般」頁）。"""
 
     kind: Literal["top_n"]
     id: Id
@@ -218,6 +219,8 @@ class TopNFilter(IRModel):
     direction: Literal["top", "bottom"]
     count: Annotated[StrictInt, Field(gt=0)] | ParamRef
     by: str = Field(min_length=1, description="排名依據的 Tableau 彙總公式，例如 SUM([Sales])")
+    mode: Literal["include", "exclude", "all"] = "all"
+    values: list[Scalar] = Field(default_factory=list)
     group: str | None = Field(
         default=None,
         description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
@@ -228,6 +231,64 @@ class TopNFilter(IRModel):
     def _check(self) -> Self:
         if self.stage not in ("context", "top_n"):
             raise ValueError(f"top_n 篩選不能屬於 {self.stage} 階段")
+        return self
+
+
+class ConditionFilter(IRModel):
+    """依條件篩選維度的成員（篩選對話框的「萬用字元」與「條件」頁）。
+
+    condition 為 Tableau 公式：列層級公式逐列判斷（萬用字元，例如 CONTAINS([Region], "a")）；
+    彙總公式在該維度的層級計算（例如 SUM([Sales]) > 100），與 Top N 一樣以內容篩選後、
+    其他維度篩選前的資料計算。mode、values 為先選取的成員。
+    """
+
+    kind: Literal["condition"]
+    id: Id
+    field: FieldUse = Field(description="被篩選的維度")
+    stage: FilterStage
+    condition: str = Field(min_length=1, description="條件的 Tableau 公式")
+    mode: Literal["include", "exclude", "all"] = "all"
+    values: list[Scalar] = Field(default_factory=list)
+    group: str | None = Field(default=None, description="篩選群組（見 CategoricalFilter.group）")
+    source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.stage not in ("extract", "datasource", "context", "dimension"):
+            raise ValueError(f"condition 篩選不能屬於 {self.stage} 階段")
+        if self.mode == "all" and self.values:
+            raise ValueError("mode 為 all 時 values 必須為空")
+        return self
+
+
+RelativePeriod = Literal["year", "quarter", "month", "week", "day"]
+
+
+class RelativeDateFilter(IRModel):
+    """相對日期：基準日所在期間往前（負數）或往後的 first 到 last 個期間，例如最近 3 個月為 -2 到 0。
+
+    基準日為 anchor；沒有 anchor 時為查詢時的今天（計算比對時為抓取預期結果的日期）。
+    """
+
+    kind: Literal["relative_date"]
+    id: Id
+    field: FieldUse
+    stage: FilterStage
+    period: RelativePeriod
+    first: StrictInt
+    last: StrictInt
+    include_future: bool = Field(default=True, description="false 時只保留到基準日（含）")
+    include_null: bool = False
+    anchor: str | None = Field(default=None, description="固定的基準日（ISO 日期）")
+    group: str | None = Field(default=None, description="篩選群組（見 CategoricalFilter.group）")
+    source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.stage not in ("extract", "datasource", "context", "dimension"):
+            raise ValueError(f"relative_date 篩選不能屬於 {self.stage} 階段")
+        if self.first > self.last:
+            raise ValueError("first 不能大於 last")
         return self
 
 
@@ -261,8 +322,16 @@ class TupleFilter(IRModel):
 
 
 Filter = Annotated[
-    CategoricalFilter | RangeFilter | TopNFilter | TupleFilter, Field(discriminator="kind")
+    CategoricalFilter
+    | RangeFilter
+    | TopNFilter
+    | TupleFilter
+    | ConditionFilter
+    | RelativeDateFilter,
+    Field(discriminator="kind"),
 ]
+FieldFilter = CategoricalFilter | RangeFilter | TopNFilter | ConditionFilter | RelativeDateFilter
+"""單一欄位的篩選（TupleFilter 以外）。"""
 
 
 class Datasource(IRModel):
@@ -460,7 +529,10 @@ ControlType = Literal[
     "single_slider",
     "date_range",
     "type_in",
+    "relative_date",
+    "condition",
 ]
+"""篩選控制項；relative_date、condition 為顯示目前的相對日期或條件（檢視器尚不能修改）。"""
 
 _ZONE_ATTRS = ("worksheet", "field", "parameter", "control", "legend", "text", "image")
 _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {

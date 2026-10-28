@@ -94,3 +94,27 @@ sheets:
       Sales: sum(f_sales)
     ignore: []
     numeric: auto
+  ws_recent_sales_by_category:
+    columns:
+      Category: f_category
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_big_customers_by_segment:
+    columns:
+      Segment: f_segment
+      Distinct count of Customer Name: countd(f_customer_name)
+    ignore: []
+    numeric: auto
+  ws_son_customers_by_region:
+    columns:
+      Region: f_region
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_top_sub_categories:
+    columns:
+      Sub-Category: f_sub_category
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { currentFilter, displayScalar, fieldCaption, fieldKey, selectedValues } from "./state";
+import { currentFilter, describeRelative, displayScalar, fieldCaption, fieldKey, findFilter, selectedValues } from "./state";
 import type { FilterValue, IR, Parameter, Scalar, Zone } from "./types";
 
 interface FilterProps {
@@ -12,7 +12,32 @@ interface FilterProps {
 }
 
 /** 依 IR 的篩選控制項：單選、多選、範圍、日期範圍、輸入。 */
-export function FilterControl({ ir, workbook, zone, state, onChange }: FilterProps) {
+export function FilterControl(props: FilterProps) {
+  const { ir, zone } = props;
+  const control = zone.control ?? "multi_list";
+  if (control === "relative_date" || control === "condition") {
+    // 相對日期與條件篩選：顯示目前的設定（檢視器尚不能修改）
+    const use = zone.field!;
+    const filter = findFilter(ir, zone.worksheet!, fieldKey({ ...use, date: null }));
+    const text =
+      control === "relative_date" && filter?.kind === "relative_date"
+        ? describeRelative(filter)
+        : filter?.kind === "condition"
+          ? `條件：${filter.condition}`
+          : "（找不到篩選）";
+    return (
+      <fieldset className="control" data-control={control}>
+        <legend>{fieldCaption(ir, use)}</legend>
+        <div className="fixed-filter" title="此篩選在 Tableau 中設定，檢視器尚不能修改">
+          {text}
+        </div>
+      </fieldset>
+    );
+  }
+  return <SelectionControl {...props} />;
+}
+
+function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) {
   const use = zone.field!;
   const key = fieldKey(use);
   const control = zone.control ?? "multi_list";

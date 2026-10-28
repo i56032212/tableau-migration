@@ -134,19 +134,32 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
                     "name": case.name,
                     "note": case.note,
                     "url_params": case.url_params,
-                    "state": case_state(loaded.ir, case).model_dump(mode="json"),
+                    "state": case_state(loaded.ir, case, spec.as_of()).model_dump(mode="json"),
                 }
                 for case in spec.cases
             ]
         except CasesError as exc:
             raise HTTPException(422, str(exc)) from exc
 
+    def as_of(directory: Path) -> str | None:
+        """相對日期篩選的預設基準日：cases.yaml 的 today 或抓取預期結果的日期（與計算比對相同）。"""
+        path = directory / "cases.yaml"
+        if not path.is_file():
+            return None
+        try:
+            return load_cases(path).as_of()
+        except CasesError:
+            return None
+
     @app.post("/api/workbooks/{wb}/worksheets/{ws}/render")
     def render(wb: str, ws: str, state: QueryState | None = None) -> dict[str, Any]:
         loaded = workspace.get(wb)
         ir = loaded.ir
+        state = state or QueryState()
+        if state.today is None:
+            state = state.model_copy(update={"today": as_of(loaded.directory)})
         try:
-            query = worksheet_sql(ir, ws, state or QueryState())
+            query = worksheet_sql(ir, ws, state)
         except StateError as exc:
             raise HTTPException(422, str(exc)) from exc
         except QueryError as exc:

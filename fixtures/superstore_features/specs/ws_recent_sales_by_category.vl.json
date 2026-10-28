@@ -1,0 +1,77 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_recent_sales_by_category",
+    "name": "Recent Sales by Category",
+    "rows": 0,
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_category"
+    }
+  },
+  "data": {
+    "values": "0 列",
+    "fields": []
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "encoding": {
+    "x": {
+      "field": "c1",
+      "type": "quantitative",
+      "title": "Sales"
+    },
+    "y": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Category"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Category"
+      },
+      {
+        "field": "c1_label",
+        "title": "Sales"
+      }
+    ]
+  },
+  "layer": [
+    {
+      "mark": {
+        "type": "bar",
+        "tooltip": true
+      }
+    },
+    {
+      "mark": {
+        "type": "text",
+        "fontSize": 10,
+        "align": "left",
+        "dx": 3
+      },
+      "encoding": {
+        "text": {
+          "field": "c1_label"
+        },
+        "color": {
+          "value": "#1f2328"
+        }
+      }
+    }
+  ]
+}

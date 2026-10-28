@@ -394,6 +394,108 @@
       "title": "CategoricalFilter",
       "type": "object"
     },
+    "ConditionFilter": {
+      "additionalProperties": false,
+      "description": "依條件篩選維度的成員（篩選對話框的「萬用字元」與「條件」頁）。\n\ncondition 為 Tableau 公式：列層級公式逐列判斷（萬用字元，例如 CONTAINS([Region], \"a\")）；\n彙總公式在該維度的層級計算（例如 SUM([Sales]) > 100），與 Top N 一樣以內容篩選後、\n其他維度篩選前的資料計算。mode、values 為先選取的成員。",
+      "properties": {
+        "kind": {
+          "const": "condition",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "被篩選的維度"
+        },
+        "stage": {
+          "enum": [
+            "extract",
+            "datasource",
+            "context",
+            "top_n",
+            "dimension",
+            "measure",
+            "table_calc"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "condition": {
+          "description": "條件的 Tableau 公式",
+          "minLength": 1,
+          "title": "Condition",
+          "type": "string"
+        },
+        "mode": {
+          "default": "all",
+          "enum": [
+            "include",
+            "exclude",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選群組（見 CategoricalFilter.group）",
+          "title": "Group"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "field",
+        "stage",
+        "condition",
+        "source_ref"
+      ],
+      "title": "ConditionFilter",
+      "type": "object"
+    },
     "Dashboard": {
       "additionalProperties": false,
       "properties": {
@@ -636,7 +738,9 @@
             "discriminator": {
               "mapping": {
                 "categorical": "#/$defs/CategoricalFilter",
+                "condition": "#/$defs/ConditionFilter",
                 "range": "#/$defs/RangeFilter",
+                "relative_date": "#/$defs/RelativeDateFilter",
                 "top_n": "#/$defs/TopNFilter",
                 "tuple": "#/$defs/TupleFilter"
               },
@@ -654,6 +758,12 @@
               },
               {
                 "$ref": "#/$defs/TupleFilter"
+              },
+              {
+                "$ref": "#/$defs/ConditionFilter"
+              },
+              {
+                "$ref": "#/$defs/RelativeDateFilter"
               }
             ]
           },
@@ -1205,6 +1315,113 @@
       "title": "RangeFilter",
       "type": "object"
     },
+    "RelativeDateFilter": {
+      "additionalProperties": false,
+      "description": "相對日期：基準日所在期間往前（負數）或往後的 first 到 last 個期間，例如最近 3 個月為 -2 到 0。\n\n基準日為 anchor；沒有 anchor 時為查詢時的今天（計算比對時為抓取預期結果的日期）。",
+      "properties": {
+        "kind": {
+          "const": "relative_date",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "stage": {
+          "enum": [
+            "extract",
+            "datasource",
+            "context",
+            "top_n",
+            "dimension",
+            "measure",
+            "table_calc"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "period": {
+          "enum": [
+            "year",
+            "quarter",
+            "month",
+            "week",
+            "day"
+          ],
+          "title": "Period",
+          "type": "string"
+        },
+        "first": {
+          "title": "First",
+          "type": "integer"
+        },
+        "last": {
+          "title": "Last",
+          "type": "integer"
+        },
+        "include_future": {
+          "default": true,
+          "description": "false 時只保留到基準日（含）",
+          "title": "Include Future",
+          "type": "boolean"
+        },
+        "include_null": {
+          "default": false,
+          "title": "Include Null",
+          "type": "boolean"
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "固定的基準日（ISO 日期）",
+          "title": "Anchor"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選群組（見 CategoricalFilter.group）",
+          "title": "Group"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "field",
+        "stage",
+        "period",
+        "first",
+        "last",
+        "source_ref"
+      ],
+      "title": "RelativeDateFilter",
+      "type": "object"
+    },
     "Size": {
       "additionalProperties": false,
       "properties": {
@@ -1396,7 +1613,7 @@
     },
     "TopNFilter": {
       "additionalProperties": false,
-      "description": "依某個彙總運算式取前 N 或後 N。",
+      "description": "依某個彙總運算式取前 N 或後 N；mode、values 為排名前先選取的成員（篩選對話框的「一般」頁）。",
       "properties": {
         "kind": {
           "const": "top_n",
@@ -1451,6 +1668,39 @@
           "minLength": 1,
           "title": "By",
           "type": "string"
+        },
+        "mode": {
+          "default": "all",
+          "enum": [
+            "include",
+            "exclude",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
         },
         "group": {
           "anyOf": [
@@ -1750,7 +2000,9 @@
             "discriminator": {
               "mapping": {
                 "categorical": "#/$defs/CategoricalFilter",
+                "condition": "#/$defs/ConditionFilter",
                 "range": "#/$defs/RangeFilter",
+                "relative_date": "#/$defs/RelativeDateFilter",
                 "top_n": "#/$defs/TopNFilter",
                 "tuple": "#/$defs/TupleFilter"
               },
@@ -1768,6 +2020,12 @@
               },
               {
                 "$ref": "#/$defs/TupleFilter"
+              },
+              {
+                "$ref": "#/$defs/ConditionFilter"
+              },
+              {
+                "$ref": "#/$defs/RelativeDateFilter"
               }
             ]
           },
@@ -1903,7 +2161,9 @@
                 "range_slider",
                 "single_slider",
                 "date_range",
-                "type_in"
+                "type_in",
+                "relative_date",
+                "condition"
               ],
               "type": "string"
             },

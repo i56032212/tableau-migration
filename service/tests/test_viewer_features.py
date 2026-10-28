@@ -337,3 +337,34 @@ def test_groups_and_bins_render(server: str) -> None:
         assert bins[:5] == ["0", "3", "6", "9", "12"]
         assert errors == []
         browser.close()
+
+
+def test_condition_filters_render(server: str) -> None:
+    """K4：相對日期與條件篩選的工作表畫得出來，篩選控制項顯示目前的設定。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "篩選條件")
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(300)
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+        rows = {w: data["rows"] for w, _, data in renders.items}
+        assert rows["ws_recent_sales_by_category"] == 3
+        assert rows["ws_top_sub_categories"] == 3
+        assert rows["ws_son_customers_by_region"] >= 1
+        relative = page.locator("[data-zone='z14'] .fixed-filter").inner_text()
+        assert relative == "最近 3 個月"
+        condition = page.locator("[data-zone='z15'] .fixed-filter").inner_text()
+        assert "CONTAINS" in condition
+        assert errors == []
+        browser.close()

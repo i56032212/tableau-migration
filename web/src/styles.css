@@ -88,3 +88,6 @@ button { font: inherit; }
 .action-menu button[role="menuitem"] { border: 0; background: none; text-align: left; padding: 4px 6px; cursor: pointer; color: var(--accent); }
 .action-menu button[role="menuitem"]:hover { background: var(--page); }
 .action-menu .link { align-self: flex-end; font-size: 12px; color: var(--muted); }
+
+/* 相對日期與條件篩選：唯讀顯示 */
+.control .fixed-filter { padding: 3px 6px; border: 1px dashed var(--line); color: var(--ink); font-size: 13px; }

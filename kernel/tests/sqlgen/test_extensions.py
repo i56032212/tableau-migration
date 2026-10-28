@@ -15,7 +15,7 @@ from tmig.sqlgen.query import worksheet_sql
 
 from ..parser import builder as b
 from ..parser.builder import instance, ref, worksheet
-from .test_query import CATEGORY, REGION, ROWS, SALES, YEAR, Run, by_region
+from .test_query import CATEGORY, DATE, REGION, ROWS, SALES, YEAR, Run, by_region
 
 
 @pytest.fixture(scope="module")
@@ -312,3 +312,125 @@ def test_bin_size_from_parameter(run: Run) -> None:
     assert counts(run(sheet, calcs=calcs), "f_quantity_bin") == {0: 9}  # Top N 預設 5
     state = QueryState(parameters={"p_top_n": 2})
     assert counts(run(sheet, calcs=calcs, state=state), "f_quantity_bin") == {0: 5, 2: 3, 4: 1}
+
+
+# ---------------------------------------------------------------- K4 條件、萬用字元、相對日期與 Top N 的選取
+
+
+def region_filtered(run: Run, flt: str, state: QueryState | None = None, calcs: str = "") -> dict:
+    sheet = worksheet(
+        "S",
+        [REGION, CATEGORY, SALES, DATE],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=flt,
+    )
+    return by_region(run(sheet, calcs=calcs, state=state), "sum(f_sales)")
+
+
+def condition(
+    expression: str,
+    inner: str = "<groupfilter function='level-members' level='[none:Region:nk]' />",
+) -> str:
+    from xml.sax.saxutils import quoteattr
+
+    return (
+        f"<filter class='categorical' column='{ref('none:Region:nk')}'>"
+        f"<groupfilter expression={quoteattr(expression)} function='filter'>{inner}</groupfilter></filter>"
+    )
+
+
+def test_wildcard_condition(run: Run) -> None:
+    assert region_filtered(run, condition("CONTAINS([Region], 'st')")) == {
+        "East": 350.0,
+        "West": 800.0,
+    }
+
+
+def test_aggregate_condition_runs_before_dimension_filters(run: Run) -> None:
+    # 每區總銷售額（不受 Category 篩選影響）大於 200 的是 East 350、West 800
+    flt = condition("SUM([Sales]) > 200") + (
+        f"<filter class='categorical' column='{ref('none:Category:nk')}'>"
+        "<groupfilter function='member' level='[none:Category:nk]' member='&quot;Furniture&quot;' />"
+        "</filter>"
+    )
+    assert region_filtered(run, flt) == {"East": 150.0, "West": 300.0}
+    # 條件與一般選取同時設定：先排除 West
+    inner = (
+        "<groupfilter function='except'><groupfilter function='level-members' level='[none:Region:nk]' />"
+        "<groupfilter function='member' level='[none:Region:nk]' member='&quot;West&quot;' /></groupfilter>"
+    )
+    assert region_filtered(run, condition("SUM([Sales]) > 90", inner)) == {
+        "East": 350.0,
+        "South": 100.0,
+    }
+
+
+def relative(first: int, last: int, period: str, future: str = "true") -> str:
+    return (
+        f"<filter class='relative-date' column='{ref('none:Order Date:qk')}' first-period='{first}' "
+        f"include-future='{future}' include-null='false' last-period='{last}' period-type-v2='{period}' />"
+    )
+
+
+def test_relative_date(run: Run) -> None:
+    today = QueryState(today="2024-03-20")
+    # 最近 2 個月：2024-02-01 到 2024-03-31
+    assert region_filtered(run, relative(-1, 0, "month"), today) == {"South": 100.0, "North": 60.0}
+    # 不含基準日之後：2024-03-10 為基準日時不含 03-15
+    early = QueryState(today="2024-03-10")
+    assert region_filtered(run, relative(-1, 0, "month", "false"), early) == {"South": 100.0}
+    # 去年
+    assert region_filtered(run, relative(-1, -1, "year"), today) == {"East": 350.0, "West": 300.0}
+    # 上週與本週（週日起算）：2024-01-14 到 2024-01-27
+    wednesday = QueryState(today="2024-01-24")
+    assert region_filtered(run, relative(-1, 0, "week"), wednesday) == {"West": 500.0}
+
+
+def test_top_n_within_selection(run: Run) -> None:
+    inner = "".join(
+        f"<groupfilter function='member' level='[none:Region:nk]' member='&quot;{r}&quot;' />"
+        for r in ("East", "South", "North")
+    )
+    flt = (
+        f"<filter class='categorical' column='{ref('none:Region:nk')}'>"
+        "<groupfilter count='1' end='top' function='end' units='records'>"
+        "<groupfilter direction='DESC' expression='SUM([Sales])' function='order'>"
+        f"<groupfilter function='union'>{inner}</groupfilter>"
+        "</groupfilter></groupfilter></filter>"
+    )
+    assert region_filtered(run, flt) == {"East": 350.0}
+
+
+def test_categorical_filter_on_discrete_aggregate(run: Run) -> None:
+    calcs = b.calc(
+        "Calculation_90",
+        "Size",
+        'IF SUM([Sales]) > 200 THEN "Big" ELSE "Small" END',
+        "string",
+        "dimension",
+    )
+    size = instance("[Calculation_90]", "User", "[usr:Calculation_90:nk]")
+    flt = (
+        f"<filter class='categorical' column='{ref('usr:Calculation_90:nk')}'>"
+        "<groupfilter function='member' level='[usr:Calculation_90:nk]' member='&quot;Big&quot;' /></filter>"
+    )
+    sheet = worksheet(
+        "S",
+        [REGION, SALES, size],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=flt,
+    )
+    assert by_region(run(sheet, calcs=calcs), "sum(f_sales)") == {"East": 350.0, "West": 800.0}
+
+
+def test_intersection_with_empty_level_keeps_nothing(run: Run) -> None:
+    flt = (
+        f"<filter class='categorical' column='{ref('none:Region:nk')}'>"
+        "<groupfilter function='intersection'>"
+        "<groupfilter function='empty-level' member='[none:Region:nk]' />"
+        "<groupfilter function='level-members' level='[none:Region:nk]' />"
+        "</groupfilter></filter>"
+    )
+    assert region_filtered(run, flt) == {}

@@ -5,6 +5,8 @@ workbook: wb_superstore_features
 tableau_views_url: null
 # 由 fetch-expected 填入；功能報表的預期結果由 scripts/features_oracle.py 獨立計算，不是 Tableau 產生
 fetched_at: null
+# 相對日期篩選的基準日（沒有時取 fetched_at 的日期）；功能報表固定為資料的最後一天
+today: '2024-12-31'
 sheets:
   - worksheet: ws_sales_by_segment
     view: SalesbySegment
@@ -34,6 +36,14 @@ sheets:
     view: SalesbyShipSpeed
   - worksheet: ws_sales_by_quantity_bin
     view: SalesbyQuantityBin
+  - worksheet: ws_recent_sales_by_category
+    view: RecentSalesbyCategory
+  - worksheet: ws_big_customers_by_segment
+    view: BigCustomersbySegment
+  - worksheet: ws_son_customers_by_region
+    view: SonCustomersbyRegion
+  - worksheet: ws_top_sub_categories
+    view: TopSub-Categories
 cases:
   - name: default
     url_params: {}

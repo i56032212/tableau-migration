@@ -110,7 +110,7 @@ def test_shared_filter_failure_is_reported_once(tmp_path: Path) -> None:
         for name in ("A", "B")
     )
     ir = parse(tmp_path, b.workbook(worksheets=sheets, extra=shared))
-    assert reasons(ir) == ["相對日期篩選 v0 不支援"]
+    assert reasons(ir) == ["相對日期篩選的欄位「Category」不是日期"]
 
 
 def test_dashboard_control_for_shared_filter(tmp_path: Path) -> None:

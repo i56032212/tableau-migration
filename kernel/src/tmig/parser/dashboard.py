@@ -205,7 +205,9 @@ class DashboardParser:
             return Zone(kind="blank", **base)
         mode = element.get("mode")
         control: ControlType
-        if filter_kind == "range":
+        if filter_kind in ("relative_date", "condition"):
+            control = filter_kind
+        elif filter_kind == "range":
             datatype = sheet.ds.field_by_id(use.field).datatype
             is_date = datatype in ("date", "datetime") and use.date is None
             control = "date_range" if is_date else "range_slider"

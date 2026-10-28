@@ -1,0 +1,83 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_son_customers_by_region",
+    "name": "Son Customers by Region",
+    "rows": 4,
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_region"
+    }
+  },
+  "data": {
+    "values": "4 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "encoding": {
+    "x": {
+      "field": "c1",
+      "type": "quantitative",
+      "title": "Sales"
+    },
+    "y": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Region"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Region"
+      },
+      {
+        "field": "c1_label",
+        "title": "Sales"
+      }
+    ]
+  },
+  "layer": [
+    {
+      "mark": {
+        "type": "bar",
+        "tooltip": true
+      }
+    },
+    {
+      "mark": {
+        "type": "text",
+        "fontSize": 10,
+        "align": "left",
+        "dx": 3
+      },
+      "encoding": {
+        "text": {
+          "field": "c1_label"
+        },
+        "color": {
+          "value": "#1f2328"
+        }
+      }
+    }
+  ]
+}

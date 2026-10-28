@@ -43,12 +43,14 @@ from tmig.ir.models import (
     IR,
     SPECIAL_FIELDS,
     CategoricalFilter,
+    ConditionFilter,
     DataField,
     FieldUse,
     Filter,
     Marks,
     ParamRef,
     RangeFilter,
+    RelativeDateFilter,
     Scalar,
     Sort,
     TableCalc,
@@ -58,7 +60,7 @@ from tmig.ir.models import (
 )
 from tmig.ir.scope import DatasourceScope
 from tmig.planner.state import EffectiveState, QueryState, apply_state, use_key
-from tmig.sqlgen.expr import ExprCompiler, week_offset
+from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
 from tmig.sqlgen.sql import ident, literal
 
 AGG_FUNCTIONS = {
@@ -274,6 +276,8 @@ class WorksheetQuery:
         self.ctes: list[tuple[str, str]] = []
         self.plan: dict[int, StageNote] = {n: StageNote(n, [], []) for n in STAGES}
         self.lods: dict[Lod, LodSpec] = {}
+        self.cond_nodes: dict[str, Node] = {}
+        """條件篩選 id → 條件的語法樹。"""
         self.attached: set[Lod] = set()
         self.row = ExprCompiler(self.analyzer, _RowEnv(self))
         self._names: dict[str, int] = {}
@@ -486,6 +490,20 @@ class WorksheetQuery:
         }
         for node in top_nodes.values():
             self.register_lods(node)
+        # 條件篩選：列層級的條件逐列判斷；彙總條件與 Top N 一樣先算出符合的成員
+        for flt in filters:
+            if isinstance(flt, ConditionFilter):
+                self.cond_nodes[flt.id] = self._condition_node(flt)
+                self.register_lods(self.cond_nodes[flt.id])
+        agg_conds = {
+            fid
+            for fid, node in self.cond_nodes.items()
+            if self.analyzer.analyze(node).level == "agg"
+        }
+
+        def member_set(flt: Filter) -> bool:
+            return isinstance(flt, TopNFilter) or flt.id in agg_conds
+
         for sort in sorts.values():
             if sort.by is not None:
                 self.register_lods(self.measure_node(sort.by))
@@ -502,28 +520,29 @@ class WorksheetQuery:
         for flt in stage["datasource"]:
             self.note(1, f"資料源篩選 {flt.id}")
 
-        # 2. 內容篩選（內容 Top N 以其他內容篩選後的資料排名）
-        ctx_dims = [f for f in stage["context"] if not isinstance(f, TopNFilter)]
-        ctx_top = [f for f in stage["context"] if isinstance(f, TopNFilter)]
+        # 2. 內容篩選（內容 Top N 與彙總條件以其他內容篩選後的資料計算）
+        ctx_dims = [f for f in stage["context"] if not member_set(f)]
+        ctx_top = [f for f in stage["context"] if member_set(f)]
         source = "src"
         if ctx_dims or ctx_top:
             conds = [self._row_condition(f) for f in ctx_dims]
             source = self.cte(2, "ctx_pre", f"SELECT * FROM src{_where(conds)}")
-            top_conds = [self._top_n(f, top_nodes[f.id], source, 2) for f in ctx_top]
+            top_conds = [self._member_set(f, top_nodes, source, 2) for f in ctx_top]
             source = self.cte(2, "ctx", f"SELECT * FROM {source}{_where(top_conds)}")
             for flt in stage["context"]:
                 self.note(2, f"內容篩選 {flt.id}")
 
-        # 3. FIXED LOD 與 Top N
+        # 3. FIXED LOD、Top N 與彙總條件（以內容篩選後、其他維度篩選前的資料計算）
         source = self._attach(fixed, source, "ctx_ext", 3, view_dims=None)
         top_conds = [
-            self._top_n(f, top_nodes[f.id], source, 3)
-            for f in stage["top_n"]
-            if isinstance(f, TopNFilter)
+            self._member_set(f, top_nodes, source, 3)
+            for f in stage["top_n"] + stage["dimension"]
+            if member_set(f)
         ]
 
         # 4. 維度篩選（「全部」的篩選沒有條件，不另建 CTE）
-        conds = [c for c in [self._row_condition(f) for f in stage["dimension"]] + top_conds if c]
+        dimension = [f for f in stage["dimension"] if not member_set(f)]
+        conds = [c for c in [self._row_condition(f) for f in dimension] + top_conds if c]
         if conds:
             source = self.cte(4, "dimf", f"SELECT * FROM {source}{_where(conds)}")
             for flt in stage["dimension"]:
@@ -688,7 +707,68 @@ class WorksheetQuery:
             return _categorical(value, flt, datatype)
         if isinstance(flt, RangeFilter):
             return _range(value, flt, datatype)
+        if isinstance(flt, RelativeDateFilter):
+            return self._relative(flt, value)
+        if isinstance(flt, ConditionFilter):
+            node = self.cond_nodes[flt.id]
+            cond = self._compile(lambda: self.row.row(node))
+            selected = _members(value, flt.mode, flt.values, datatype)
+            return " AND ".join(c for c in (f"({cond})", selected) if c)
         raise QueryError(f"篩選 {flt.id} 的種類不支援在此階段")
+
+    def _relative(self, flt: RelativeDateFilter, value: str) -> str:
+        """相對日期：基準日所在期間的 first 到 last 個期間（含），不含之後的期間。"""
+        if flt.anchor is not None:
+            anchor = literal(flt.anchor, "date")
+        elif self.state.today is not None:
+            anchor = literal(self.state.today, "date")
+        else:
+            anchor = "current_date"
+        ws = week_offset(self.datasource.settings.week_start)
+        base = self.row.date_trunc(flt.period, anchor, "date", ws)
+        start = f"({base} + {interval(flt.period, str(flt.first))})"
+        end = f"({base} + {interval(flt.period, str(flt.last + 1))})"
+        parts = [f"{value} >= {start}", f"{value} < {end}"]
+        if not flt.include_future:
+            parts.append(f"{value} < ({anchor} + INTERVAL 1 DAY)")
+        cond = " AND ".join(parts)
+        return f"(({cond}) OR {value} IS NULL)" if flt.include_null else f"({cond})"
+
+    def _condition_node(self, flt: ConditionFilter) -> Node:
+        try:
+            node = parse_formula(flt.condition)
+            info = self.analyzer.analyze(node)
+        except (FormulaSyntaxError, FormulaSemanticError) as exc:
+            raise QueryError(f"條件篩選 {flt.id} 的公式「{flt.condition}」：{exc}") from exc
+        if info.level == "tc":
+            raise QueryError(f"條件篩選 {flt.id} 含 Table Calculation，尚不支援", unsupported=True)
+        if info.level == "agg" and (
+            any(lod.kind != "fixed" for lod in self.lods_in(node))
+            or any(lod.kind != "fixed" for a in self.aggregates_in(node) for lod in self.lods_in(a))
+        ):
+            raise QueryError("條件篩選含 INCLUDE／EXCLUDE LOD，尚不支援", unsupported=True)
+        return node
+
+    def _member_set(self, flt: Filter, top_nodes: dict[str, Node], source: str, stage: int) -> str:
+        if isinstance(flt, TopNFilter):
+            return self._top_n(flt, top_nodes[flt.id], source, stage)
+        assert isinstance(flt, ConditionFilter)
+        node = self.cond_nodes[flt.id]
+        dim = self.dim_sql(flt.field)
+        agg_name, agg_cols, keys = self.aggregate(
+            "cond_agg", self.aggregates_in(node), [dim], source, stage, None
+        )
+        value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(node))
+        name = self.name("cond")
+        self.cte(
+            stage,
+            name,
+            f"SELECT {ident(keys[0])} AS {ident('__member')} FROM {agg_name} WHERE {value}",
+        )
+        self.note(stage, f"條件篩選 {flt.id}：{flt.condition}")
+        member = f"EXISTS (SELECT 1 FROM {name} WHERE {name}.{ident('__member')} IS NOT DISTINCT FROM {dim})"
+        selected = _members(dim, flt.mode, flt.values, self.dim_datatype(flt.field))
+        return f"({member} AND {selected})" if selected else member
 
     def _tuple_condition(self, flt: TupleFilter) -> str:
         """多欄位篩選：值組合以 OR 連接，組合內各欄位以 AND 連接（NULL 視為一個值）。"""
@@ -715,7 +795,11 @@ class WorksheetQuery:
         if isinstance(flt, RangeFilter):
             datatype = "real"
             return _range(value, flt, datatype)
-        raise QueryError(f"量值篩選 {flt.id} 只支援範圍篩選", unsupported=True)
+        if isinstance(flt, CategoricalFilter):
+            # 離散的彙總計算欄位：每個標記的值是否在清單中
+            numeric = all(isinstance(v, int | float) for v in flt.values if v is not None)
+            return _categorical(value, flt, "real" if numeric else "string")
+        raise QueryError(f"量值篩選 {flt.id} 只支援範圍與類別篩選", unsupported=True)
 
     def _top_by(self, flt: TopNFilter) -> Node:
         try:
@@ -741,6 +825,12 @@ class WorksheetQuery:
         if count < 0:
             raise QueryError(f"Top N 篩選 {flt.id} 的數量不能是負數")
         dim = self.dim_sql(flt.field)
+        selected = _members(dim, flt.mode, flt.values, self.dim_datatype(flt.field))
+        if selected:
+            # 先選取的成員（篩選對話框的「一般」頁）中再排名
+            source = self.cte(
+                stage, self.name("topn_src"), f"SELECT * FROM {source} WHERE {selected}"
+            )
         nodes = self.aggregates_in(by)
         agg_name, agg_cols, keys = self.aggregate("topn_agg", nodes, [dim], source, stage, None)
         value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(by))
@@ -1195,13 +1285,18 @@ def _where(conds: list[str]) -> str:
 
 
 def _categorical(value: str, flt: CategoricalFilter, datatype: str) -> str:
-    if flt.mode == "all":
+    return _members(value, flt.mode, flt.values, datatype)
+
+
+def _members(value: str, mode: str, values: list[Scalar], datatype: str) -> str:
+    """成員選取：include 只保留、exclude 排除列出的值（Null 也可以列出）；all 沒有條件。"""
+    if mode == "all":
         return ""
-    non_null = [v for v in flt.values if v is not None]
-    has_null = len(non_null) != len(flt.values)
+    non_null = [v for v in values if v is not None]
+    has_null = len(non_null) != len(values)
     items = ", ".join(_lit(v, datatype) for v in non_null)
     member = f"{value} IN ({items})" if non_null else "FALSE"
-    if flt.mode == "include":
+    if mode == "include":
         return f"({member} OR {value} IS NULL)" if has_null else f"({member})"
     if has_null:
         return f"({value} IS NOT NULL AND NOT ({member}))"

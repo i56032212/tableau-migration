@@ -67,6 +67,11 @@ class QueryState(BaseModel):
         default_factory=dict,
         description="篩選動作的選取：動作 id → 選取的標記（欄位鍵 → 值）；沒有列出或為空表示沒有選取",
     )
+    today: str | None = Field(
+        default=None,
+        description="相對日期篩選的基準日（yyyy-mm-dd）；未指定時為查詢時的今天",
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+    )
 
 
 def use_key(use: FieldUse) -> str:
@@ -112,6 +117,8 @@ class EffectiveState:
     """實際套用的篩選欄位鍵。"""
     skipped: list[str]
     """不適用這張工作表的篩選欄位鍵（欄位不在工作表的資料源中）。"""
+    today: str | None = None
+    """相對日期篩選的基準日；None 表示查詢時的今天。"""
 
 
 def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveState:
@@ -145,7 +152,9 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
             filters[index] = _replace(filters[index], value)
             continue
         filters.append(_new_filter(f"state_{n}", use, value))
-    return EffectiveState(filters=filters, parameters=params, applied=applied, skipped=skipped)
+    return EffectiveState(
+        filters=filters, parameters=params, applied=applied, skipped=skipped, today=state.today
+    )
 
 
 def _with_selection(flt: Filter, state: QueryState) -> Filter:

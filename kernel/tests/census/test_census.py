@@ -161,9 +161,8 @@ def test_problems_details(problems: CensusReport) -> None:
 
 def test_problems_features(problems: CensusReport) -> None:
     features = detail(problems, "v0_features")
+    assert "相對日期篩選" not in features and "條件篩選" not in features  # K4 已支援
     for expected in [
-        "相對日期篩選（Blended）",
-        "條件篩選（Blended）",
         "參考線或趨勢線（Blended）",
         "地圖（Map）",
         "Story（Story 1）",

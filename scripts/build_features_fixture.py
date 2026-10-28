@@ -16,6 +16,8 @@
 - K1 群組與數值分組：Region (group)（East、West 合為 Coasts，其餘維持原值）、Ship Speed
   （First Class、Same Day 合為 Fast，其餘歸入 Other）、Quantity (bin)（每 3 一格，顯示缺少的值），
   在「群組與分組」dashboard 上
+- K4 篩選條件：相對日期（最近 3 個月）、彙總條件（總銷售額大於 5000 的客戶）、萬用字元
+  （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別），在「篩選條件」dashboard 上
 """
 
 from __future__ import annotations
@@ -264,6 +266,10 @@ def worksheets() -> str:
             sales_by_region_group(),
             sales_by_ship_speed(),
             sales_by_quantity_bin(),
+            recent_sales(),
+            big_customers(),
+            son_customers(),
+            top_sub_categories(),
         ]
     )
 
@@ -626,6 +632,122 @@ def sales_by_quantity_bin() -> str:
     )
 
 
+def recent_sales() -> str:
+    """相對日期：Order Date 最近 3 個月（基準日見 cases.yaml 的 today）。"""
+    flt = f"""          <filter class='relative-date' column={attr(ref("none:Order Date:qk"))} first-period='-2' include-future='true' include-null='false' last-period='0' period-type-v2='month' />
+{slices("none:Order Date:qk")}"""
+    return worksheet(
+        "Recent Sales by Category",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000000F",
+        dependency(
+            [
+                ("[Category]", "string", "dimension", "nominal"),
+                ("[Order Date]", "date", "dimension", "ordinal"),
+                REGION_SALES_COLUMNS[1],
+            ],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance("[Order Date]", "None", "[none:Order Date:qk]", "quantitative"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        flt,
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Category:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def customer_filter(expression: str, extra: str = "") -> str:
+    return f"""          <filter class='categorical' column={attr(ref("none:Customer Name:nk"))}>
+            <groupfilter expression={attr(expression)} function='filter' user:ui-enumeration='inclusive'{extra}>
+              <groupfilter function='level-members' level='[none:Customer Name:nk]' user:ui-enumeration='all' user:ui-marker='enumerate' />
+            </groupfilter>
+          </filter>
+{slices("none:Customer Name:nk")}"""
+
+
+def big_customers() -> str:
+    """彙總條件：總銷售額大於 5000 的客戶（以其他維度篩選前的資料計算），依客群計數。"""
+    return worksheet(
+        "Big Customers by Segment",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000014",
+        dependency(
+            [
+                ("[Customer Name]", "string", "dimension", "nominal"),
+                ("[Segment]", "string", "dimension", "nominal"),
+                REGION_SALES_COLUMNS[1],
+            ],
+            [
+                instance("[Customer Name]", "CountD", "[ctd:Customer Name:qk]", "quantitative"),
+                instance("[Customer Name]", "None", "[none:Customer Name:nk]", "nominal"),
+                instance("[Segment]", "None", "[none:Segment:nk]", "nominal"),
+            ],
+            [],
+        ),
+        customer_filter("SUM([Sales]) > 5000"),
+        pane("Bar", f"              <text column={attr(ref('ctd:Customer Name:qk'))} />"),
+        ref("none:Segment:nk"),
+        ref("ctd:Customer Name:qk"),
+    )
+
+
+def son_customers() -> str:
+    """萬用字元：客戶名稱包含 son（不分大小寫）。"""
+    return worksheet(
+        "Son Customers by Region",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000015",
+        dependency(
+            [("[Customer Name]", "string", "dimension", "nominal"), *REGION_SALES_COLUMNS],
+            [
+                instance("[Customer Name]", "None", "[none:Customer Name:nk]", "nominal"),
+                instance("[Region]", "None", "[none:Region:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        customer_filter(
+            "CONTAINS(LOWER([Customer Name]), LOWER('son'))",
+            " user:ui-pattern_text='son' user:ui-pattern_type='contains'",
+        ),
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Region:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def top_sub_categories() -> str:
+    """Top N 搭配一般選取：排除 Phones 後，銷售額前 3 名的子類別。"""
+    flt = f"""          <filter class='categorical' column={attr(ref("none:Sub-Category:nk"))}>
+            <groupfilter count='3' end='top' function='end' units='records' user:ui-marker='end' user:ui-top-by-field='true'>
+              <groupfilter direction='DESC' expression='SUM([Sales])' function='order' user:ui-marker='order'>
+                <groupfilter function='except' user:ui-domain='database' user:ui-enumeration='exclusive' user:ui-marker='enumerate'>
+                  <groupfilter function='level-members' level='[none:Sub-Category:nk]' />
+                  {member("[none:Sub-Category:nk]", "Phones")}
+                </groupfilter>
+              </groupfilter>
+            </groupfilter>
+          </filter>
+{slices("none:Sub-Category:nk")}"""
+    return worksheet(
+        "Top Sub-Categories",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000016",
+        dependency(
+            [("[Sub-Category]", "string", "dimension", "nominal"), REGION_SALES_COLUMNS[1]],
+            [
+                instance("[Sub-Category]", "None", "[none:Sub-Category:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        flt,
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Sub-Category:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
 ACTIONS_DASHBOARD = "篩選動作"
 
 
@@ -707,6 +829,37 @@ def groups_dashboard() -> str:
         </zone>
       </zones>
       <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000013}}' />
+    </dashboard>"""
+
+
+def conditions_dashboard() -> str:
+    """篩選條件（固定尺寸）：四張工作表與相對日期、萬用字元的篩選控制項。"""
+    return f"""    <dashboard name='篩選條件'>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='horz' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 772, 684)} id='5' param='vert' type-v2='layout-flow'>
+              <zone {zone_box(8, 8, 772, 40)} id='6' type-v2='title' />
+              <zone {zone_box(8, 56, 772, 312)} id='7' param='horz' type-v2='layout-flow'>
+                <zone {zone_box(8, 56, 382, 312)} id='8' name='Recent Sales by Category' />
+                <zone {zone_box(398, 56, 382, 312)} id='9' name='Big Customers by Segment' />
+              </zone>
+              <zone {zone_box(8, 376, 772, 316)} id='10' param='horz' type-v2='layout-flow'>
+                <zone {zone_box(8, 376, 382, 316)} id='11' name='Son Customers by Region' />
+                <zone {zone_box(398, 376, 382, 316)} id='12' name='Top Sub-Categories' />
+              </zone>
+            </zone>
+            <zone {zone_box(788, 56, 204, 636)} fixed-size='204' id='13' is-fixed='true' param='vert' type-v2='layout-flow'>
+              <zone {zone_box(788, 56, 204, 80)} id='14' mode='relevant' name='Recent Sales by Category' param={attr(ref("none:Order Date:qk"))} type-v2='filter' />
+              <zone {zone_box(788, 144, 204, 80)} id='15' mode='pattern' name='Son Customers by Region' param={attr(ref("none:Customer Name:nk"))} type-v2='filter' />
+              <zone {zone_box(788, 232, 204, 460)} id='16' type-v2='empty' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000017}}' />
     </dashboard>"""
 
 
@@ -802,6 +955,7 @@ def twb(rows: int) -> str:
 {charts_dashboard()}
 {actions_dashboard()}
 {groups_dashboard()}
+{conditions_dashboard()}
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='功能總覽'>

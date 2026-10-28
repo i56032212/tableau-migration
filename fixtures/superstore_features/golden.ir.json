@@ -1720,6 +1720,277 @@
       "sorts": [],
       "table_calcs": [],
       "source_ref": "/workbook/worksheets/worksheet[14]"
+    },
+    {
+      "id": "ws_recent_sales_by_category",
+      "name": "Recent Sales by Category",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "relative_date",
+          "id": "flt_order_date_2",
+          "field": {
+            "field": "f_order_date",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "period": "month",
+          "first": -2,
+          "last": 0,
+          "include_future": true,
+          "include_null": false,
+          "anchor": null,
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[15]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[15]"
+    },
+    {
+      "id": "ws_big_customers_by_segment",
+      "name": "Big Customers by Segment",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_segment",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_customer_name",
+          "agg": "countd",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_customer_name",
+            "agg": "countd",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "condition",
+          "id": "flt_customer_name",
+          "field": {
+            "field": "f_customer_name",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "condition": "SUM([Sales]) > 5000",
+          "mode": "all",
+          "values": [],
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[16]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[16]"
+    },
+    {
+      "id": "ws_son_customers_by_region",
+      "name": "Son Customers by Region",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "condition",
+          "id": "flt_customer_name_2",
+          "field": {
+            "field": "f_customer_name",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "condition": "CONTAINS(LOWER([Customer Name]), LOWER('son'))",
+          "mode": "all",
+          "values": [],
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[17]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[17]"
+    },
+    {
+      "id": "ws_top_sub_categories",
+      "name": "Top Sub-Categories",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_sub_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "filters": [
+        {
+          "kind": "top_n",
+          "id": "flt_sub_category",
+          "field": {
+            "field": "f_sub_category",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "top_n",
+          "direction": "top",
+          "count": 3,
+          "by": "SUM([Sales])",
+          "mode": "exclude",
+          "values": [
+            "Phones"
+          ],
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[18]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "source_ref": "/workbook/worksheets/worksheet[18]"
     }
   ],
   "dashboards": [
@@ -2610,6 +2881,332 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[4]"
+    },
+    {
+      "id": "db_eef81f0f",
+      "name": "篩選條件",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 8,
+                  "w": 772,
+                  "h": 684,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z6",
+                      "kind": "title",
+                      "x": 8,
+                      "y": 8,
+                      "w": 772,
+                      "h": 40,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": "篩選條件",
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[1]"
+                    },
+                    {
+                      "id": "z7",
+                      "kind": "container",
+                      "x": 8,
+                      "y": 56,
+                      "w": 772,
+                      "h": 312,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [
+                        {
+                          "id": "z8",
+                          "kind": "worksheet",
+                          "x": 8,
+                          "y": 56,
+                          "w": 382,
+                          "h": 312,
+                          "worksheet": "ws_recent_sales_by_category",
+                          "field": null,
+                          "parameter": null,
+                          "control": null,
+                          "legend": null,
+                          "text": null,
+                          "image": null,
+                          "children": [],
+                          "layout": null,
+                          "fixed": null,
+                          "hidden": false,
+                          "show_title": true,
+                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[2]/zone[1]"
+                        },
+                        {
+                          "id": "z9",
+                          "kind": "worksheet",
+                          "x": 398,
+                          "y": 56,
+                          "w": 382,
+                          "h": 312,
+                          "worksheet": "ws_big_customers_by_segment",
+                          "field": null,
+                          "parameter": null,
+                          "control": null,
+                          "legend": null,
+                          "text": null,
+                          "image": null,
+                          "children": [],
+                          "layout": null,
+                          "fixed": null,
+                          "hidden": false,
+                          "show_title": true,
+                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[2]/zone[2]"
+                        }
+                      ],
+                      "layout": "horizontal",
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[2]"
+                    },
+                    {
+                      "id": "z10",
+                      "kind": "container",
+                      "x": 8,
+                      "y": 376,
+                      "w": 772,
+                      "h": 316,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [
+                        {
+                          "id": "z11",
+                          "kind": "worksheet",
+                          "x": 8,
+                          "y": 376,
+                          "w": 382,
+                          "h": 316,
+                          "worksheet": "ws_son_customers_by_region",
+                          "field": null,
+                          "parameter": null,
+                          "control": null,
+                          "legend": null,
+                          "text": null,
+                          "image": null,
+                          "children": [],
+                          "layout": null,
+                          "fixed": null,
+                          "hidden": false,
+                          "show_title": true,
+                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[3]/zone[1]"
+                        },
+                        {
+                          "id": "z12",
+                          "kind": "worksheet",
+                          "x": 398,
+                          "y": 376,
+                          "w": 382,
+                          "h": 316,
+                          "worksheet": "ws_top_sub_categories",
+                          "field": null,
+                          "parameter": null,
+                          "control": null,
+                          "legend": null,
+                          "text": null,
+                          "image": null,
+                          "children": [],
+                          "layout": null,
+                          "fixed": null,
+                          "hidden": false,
+                          "show_title": true,
+                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[3]/zone[2]"
+                        }
+                      ],
+                      "layout": "horizontal",
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[3]"
+                    }
+                  ],
+                  "layout": "vertical",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z13",
+                  "kind": "container",
+                  "x": 788,
+                  "y": 56,
+                  "w": 204,
+                  "h": 636,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "children": [
+                    {
+                      "id": "z14",
+                      "kind": "filter",
+                      "x": 788,
+                      "y": 56,
+                      "w": 204,
+                      "h": 80,
+                      "worksheet": "ws_recent_sales_by_category",
+                      "field": {
+                        "field": "f_order_date",
+                        "agg": null,
+                        "date": null,
+                        "continuous": true,
+                        "table_calc": null
+                      },
+                      "parameter": null,
+                      "control": "relative_date",
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z15",
+                      "kind": "filter",
+                      "x": 788,
+                      "y": 144,
+                      "w": 204,
+                      "h": 80,
+                      "worksheet": "ws_son_customers_by_region",
+                      "field": {
+                        "field": "f_customer_name",
+                        "agg": null,
+                        "date": null,
+                        "continuous": false,
+                        "table_calc": null
+                      },
+                      "parameter": null,
+                      "control": "condition",
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[2]"
+                    },
+                    {
+                      "id": "z16",
+                      "kind": "blank",
+                      "x": 788,
+                      "y": 232,
+                      "w": 204,
+                      "h": 460,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[3]"
+                    }
+                  ],
+                  "layout": "vertical",
+                  "fixed": 204,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]"
+                }
+              ],
+              "layout": "horizontal",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[5]"
     }
   ],
   "actions": [

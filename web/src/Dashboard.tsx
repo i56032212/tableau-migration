@@ -42,7 +42,13 @@ export function caseState(ir: IR, info: CaseInfo | undefined): ViewState {
   // 網址參數的語意：套用到每一張用到該欄位的工作表
   const sheetFilters: Record<string, Record<string, FilterValue>> = {};
   for (const sheet of ir.worksheets) sheetFilters[sheet.id] = { ...info.state.filters };
-  return { sheetFilters, parameters: { ...info.state.parameters }, actions: {}, selections: {} };
+  return {
+    sheetFilters,
+    parameters: { ...info.state.parameters },
+    actions: {},
+    selections: {},
+    today: info.state.today ?? null,
+  };
 }
 
 interface Props {
