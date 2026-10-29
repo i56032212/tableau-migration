@@ -16,6 +16,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -76,7 +77,8 @@ def postgres_cluster() -> Iterator[str]:
     initdb, pg_ctl = tools
     prefix: list[str] = []
     owner: tuple[int, int] | None = None
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
+    # 以平台判斷（而不是 hasattr），pyright 在 Windows 上才不會檢查只有 POSIX 才有的函式
+    if sys.platform != "win32" and os.geteuid() == 0:
         import pwd
 
         try:
@@ -91,7 +93,7 @@ def postgres_cluster() -> Iterator[str]:
         owner = (entry.pw_uid, entry.pw_gid)
     root = Path(tempfile.mkdtemp(prefix="tmig-pg-"))
     data = root / "data"
-    if owner is not None:
+    if sys.platform != "win32" and owner is not None:
         os.chown(root, *owner)
     port = _free_port()
 

@@ -88,7 +88,7 @@ def test_config_errors(tmp_path: Path) -> None:
 def test_config_path_from_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = write_config(
         tmp_path / "elsewhere.toml",
-        f'[connections.local]\ndriver = "duckdb"\npath = "{tmp_path}"\n',
+        f'[connections.local]\ndriver = "duckdb"\npath = "{tmp_path.as_posix()}"\n',
     )
     monkeypatch.setenv("TMIG_CONNECTIONS", str(config))
     assert list(load_connections()) == ["local"]
