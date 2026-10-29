@@ -30,6 +30,7 @@ from tmig.ir.models import (
     TupleFilter,
     Worksheet,
 )
+from tmig.planner.identity import protected_fields
 
 DATE_PARTS = ("year", "quarter", "month", "week", "weekday", "day", "hour", "minute", "second")
 TRUNC_UNITS = ("year", "quarter", "month", "week", "day", "hour", "minute", "second")
@@ -122,9 +123,14 @@ class EffectiveState:
 
 
 def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveState:
-    """把狀態套到工作表：同一欄位的既有篩選改值，沒有的就新增維度篩選（與 Tableau 網址參數相同）。"""
+    """把狀態套到工作表：同一欄位的既有篩選改值，沒有的就新增維度篩選（與 Tableau 網址參數相同）。
+
+    列層級權限的欄位（用到使用者函式、報表沒有為它放篩選控制項）不接受狀態，列在 skipped
+    （見 tmig.planner.identity）。
+    """
     datasource = next(ds for ds in ir.datasources if ds.id == worksheet.datasource)
     field_ids = {f.id for f in datasource.fields}
+    protected = protected_fields(ir, datasource)
     params = {p.id: p.value for p in ir.parameters}
     for param_id, value in state.parameters.items():
         if param_id not in params:
@@ -136,7 +142,7 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
     skipped: list[str] = []
     for n, (key, value) in enumerate(state.filters.items(), start=1):
         use = parse_key(key)
-        if use.field not in field_ids:
+        if use.field not in field_ids or use.field in protected:
             skipped.append(key)
             continue
         applied.append(key)
@@ -158,7 +164,9 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
 
 
 def _with_selection(flt: Filter, state: QueryState) -> Filter:
-    """篩選動作：有選取時，以選取的標記中目標工作表也有的欄位篩選；沒有選取時維持預設（清除時的狀態）。"""
+    """篩選動作：有選取時，以選取的標記中目標工作表也有的欄位篩選；沒有選取時維持預設（清除時的狀態）。
+
+    選取與其他篩選（含列層級權限）以 AND 套用，只會縮小範圍。"""
     if not isinstance(flt, TupleFilter) or flt.action is None:
         return flt
     marks = state.actions.get(flt.action) or []

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from pathlib import Path, PurePath
 from typing import Literal
@@ -113,6 +114,10 @@ SUPPORTED_ACTIONS = frozenset({"filter", "highlight", "url", "navigate", "parame
 """擴充階段已支援（L1、L2）或不影響數字的動作種類。"""
 MAP_MARKS = frozenset({"Map", "Multipolygon"})
 DATA_FILE_CLASSES = frozenset({"hyper", "dataengine"})
+
+
+PARAMETER_REF = re.compile(r"\[Parameters\]\.(\[[^\]]+\])")
+"""公式中的參數參照，例如 [Parameters].[Parameter 1]。"""
 
 
 def run_census(path: str | Path, *, extracts_omitted: bool = False) -> CensusReport:
@@ -254,11 +259,20 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
 
     ds_filters = children(ds, "filter")
     filter_users: set[str] = set()
+    filter_params: set[str] = set()
     for flt in ds_filters:
         for group in descendants(flt, "groupfilter"):
             expression = group.get("expression")
             if expression:
-                filter_users.update(scan_formula(expression).user_functions)
+                found = scan_formula(expression).user_functions
+                filter_users.update(found)
+                if found:
+                    filter_params.update(PARAMETER_REF.findall(expression))
+    user_filters = [
+        g.get("caption") or g.get("name", "").strip("[]")
+        for g in children(ds, "group")
+        if attr(g, "ui-builder") == "identity-set"
+    ]
 
     info = DatasourceInfo(
         name=name,
@@ -275,10 +289,16 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         field_count=len(columns),
         calc_count=sum(classes_used.values()),
         # 篩選動作、排除選取、工具提示產生的隱藏群組（user:auto-column）已在擴充階段支援
-        groups_or_sets=sum(1 for g in children(ds, "group") if attr(g, "auto-column") is None),
+        groups_or_sets=sum(
+            1
+            for g in children(ds, "group")
+            if attr(g, "auto-column") is None and attr(g, "ui-builder") != "identity-set"
+        ),
+        user_filters=user_filters,
         datasource_filters=len(ds_filters),
         extract_filters=len(list(descendants(extract, "filter"))),
         filter_user_functions=sorted(filter_users),
+        filter_parameters=sorted(filter_params),
     )
     return info, formulas, classes_used
 
@@ -573,24 +593,7 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
         )
     )
 
-    users: dict[str, set[str]] = {}
-    for formula in r.formulas:
-        for fn in formula.user_functions:
-            users.setdefault(fn, set()).add(formula.field)
-    for ds in dss:
-        for fn in ds.filter_user_functions:
-            users.setdefault(fn, set()).add(f"{ds.caption} 的資料源篩選")
-    if users:
-        detail = "；".join(
-            f"{fn}（{'、'.join(sorted(where))}）" for fn, where in sorted(users.items())
-        )
-        checks.append(
-            Check(key="no_rls", title="無列層級權限（RLS）", status="fail", detail=detail)
-        )
-    else:
-        checks.append(
-            Check(key="no_rls", title="無列層級權限（RLS）", status="pass", detail="沒有使用者函式")
-        )
+    checks.append(_rls_check(r, dss))
 
     blended = [w.name for w in r.worksheets if w.blending]
     checks.append(
@@ -649,6 +652,37 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
         )
     )
     return checks
+
+
+def _rls_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:
+    """列層級權限（P1 已支援）：列出用到使用者函式的地方，提醒驗證與上線需要的設定。"""
+    users: dict[str, set[str]] = {}
+    params: dict[str, set[str]] = {}
+    for formula in r.formulas:
+        for fn in formula.user_functions:
+            users.setdefault(fn, set()).add(formula.field)
+        if formula.user_functions:
+            for param in PARAMETER_REF.findall(formula.formula):
+                params.setdefault(formula.field, set()).add(param)
+    for ds in dss:
+        where = f"{ds.caption} 的資料源篩選"
+        for fn in ds.filter_user_functions:
+            users.setdefault(fn, set()).add(where)
+        for param in ds.filter_parameters:
+            params.setdefault(where, set()).add(param)
+    parts = [f"{fn}（{'、'.join(sorted(where))}）" for fn, where in sorted(users.items())]
+    parts += [f"使用者篩選「{name}」" for ds in dss for name in ds.user_filters]
+    if not parts:
+        return Check(
+            key="no_rls", title="列層級權限（RLS）", status="pass", detail="沒有使用者函式"
+        )
+    parts += [
+        f"「{where}」用到參數 {'、'.join(sorted(names))}：使用者改參數就能改變可見範圍"
+        "（與 Tableau 相同），請確認是否刻意如此"
+        for where, names in sorted(params.items())
+    ]
+    parts.append("驗證時在 cases.yaml 設定 user（抓取預期結果的帳號）")
+    return Check(key="no_rls", title="列層級權限（RLS）", status="warn", detail="；".join(parts))
 
 
 def features_outside_v0(r: CensusReport) -> list[str]:

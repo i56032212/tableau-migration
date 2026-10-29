@@ -52,3 +52,57 @@ def test_query_missing_database(tmp_path: Path, capsys: pytest.CaptureFixture[st
         == 1
     )
     assert "import-hyper" in capsys.readouterr().err
+
+
+def _rls_ir(tmp_path: Path) -> Path:
+    """資料源篩選以 USERNAME() 與 ISMEMBEROF 限制可見的列（P1）。"""
+    from tmig.ir import dumps_ir
+    from tmig.parser.workbook import parse_workbook
+
+    from .parser import builder as b
+
+    owner = b.calc(
+        "Mine", "Mine", '[Region] = USERNAME() OR ISMEMBEROF("All")', "boolean", "dimension"
+    )
+    flt = (
+        "<filter class='categorical' column='[Mine]'>"
+        "<groupfilter function='member' level='[Mine]' member='true' /></filter>"
+    )
+    sheet = b.worksheet(
+        "S",
+        [b.instance("[Region]", "None", "[none:Region:nk]")],
+        rows=b.ref("none:Region:nk"),
+    )
+    xml = b.workbook(b.extract_datasource(columns=owner, extra=flt), worksheets=sheet)
+    ir = parse_workbook(b.write_twb(tmp_path, xml))
+    path = tmp_path / "ir.json"
+    path.write_text(dumps_ir(ir), encoding="utf-8")
+    return path
+
+
+def test_sql_user_from_cases_and_options(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ir = _rls_ir(tmp_path)
+    assert main(["sql", str(ir), "S"]) == 1
+    assert "需要登入者的身分" in capsys.readouterr().err
+
+    (tmp_path / "cases.yaml").write_text(
+        "workbook: w\nuser:\n  username: East\n  groups: [Sales]\nsheets: []\ncases: []\n",
+        encoding="utf-8",
+    )
+    assert main(["sql", str(ir), "S"]) == 0
+    out = capsys.readouterr().out
+    assert "'East'" in out and "OR FALSE" in out
+
+    assert main(["sql", str(ir), "S", "--user", "West", "--group", "all"]) == 0
+    out = capsys.readouterr().out
+    assert "'West'" in out and "OR TRUE" in out
+
+    assert main(["sql", str(ir), "S", "--group", "all"]) == 0  # 沿用 cases.yaml 的使用者
+    out = capsys.readouterr().out
+    assert "'East'" in out and "OR TRUE" in out
+
+    (tmp_path / "cases.yaml").unlink()
+    assert main(["sql", str(ir), "S", "--group", "all"]) == 1
+    assert "--group 需要搭配 --user" in capsys.readouterr().err

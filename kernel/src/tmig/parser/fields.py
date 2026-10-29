@@ -301,6 +301,17 @@ class FilterParser:
         filter_id: str,
     ) -> Filter | None:
         groups = children(element, "groupfilter")
+        if not groups and use.field in self.ds.identity_sets:
+            # 使用者篩選（集合）放在篩選架上：只顯示集合中的成員，也就是布林欄位為 TRUE 的列
+            return CategoricalFilter(
+                kind="categorical",
+                id=filter_id,
+                field=FieldUse(field=use.field),
+                stage=self._stage_for_dimension(element, context),
+                mode="include",
+                values=[True],
+                source_ref=_xpath(element),
+            )
         if len(groups) != 1:
             self.ctx.flag(element, "沒有選取任何值或結構不明的類別篩選 v0 不支援")
             return None

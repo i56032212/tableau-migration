@@ -37,7 +37,13 @@ from tmig.ir.scope import DatasourceScope
 from tmig.parser.connections import DIALECTS, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
-from tmig.parser.groups import GroupError, bin_formula, group_formula
+from tmig.parser.groups import (
+    GroupError,
+    bin_formula,
+    group_formula,
+    identity_set_formula,
+    identity_set_level,
+)
 from tmig.parser.ids import strip_brackets
 from tmig.parser.model import (
     extract_tables,
@@ -478,7 +484,36 @@ class DatasourceParser:
                 kind = "vit" if attr(group, "ui-vit-column") == "true" else auto
                 state.auto_groups[group.get("name", "")] = kind
                 continue
+            if attr(group, "ui-builder") == "identity-set":
+                self._add_identity_set(state, group)
+                continue
             ctx.ignore(group, "集合或合併欄位（工作表若有使用會另列為不支援）")
+
+    def _add_identity_set(self, state: DsState, group: etree._Element) -> None:
+        """Tableau 的使用者篩選（集合）→ 布林計算欄位：登入者看得到的成員為 TRUE（P1 列層級權限）。"""
+        name = group.get("name", "")
+        caption = group.get("caption") or strip_brackets(name)
+        try:
+            level = identity_set_level(group)
+            datatype = _source_datatype(state, level)
+            if datatype is None:
+                raise GroupError(f"找不到層級欄位 {level}")
+            formula = identity_set_formula(group, datatype)
+        except (GroupError, LiteralError) as exc:
+            self.ctx.flag(group, f"使用者篩選「{caption}」：{exc}")
+            return
+        data_field = DataField(
+            id=self.ctx.ids.make("f", caption, name),
+            name=name,
+            caption=caption,
+            role="dimension",
+            datatype="boolean",
+            column=None,
+            calc=Calc(formula=formula),
+            source_ref=xpath(group),
+        )
+        state.add_field(data_field)
+        state.identity_sets.add(data_field.id)
 
     def _add_raw(
         self,

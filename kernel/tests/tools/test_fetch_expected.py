@@ -73,13 +73,45 @@ def test_plan_requires_views_url(tmp_path: Path) -> None:
         fetch_expected.plan(tmp_path)
 
 
+def test_user_check(tmp_path: Path) -> None:
+    (tmp_path / "cases.yaml").write_text(
+        "workbook: wb\nuser:\n  username: Amy\n  groups: [Sales]\nsheets: []\ncases: []\n",
+        encoding="utf-8",
+    )
+    assert fetch_expected.cases_user(tmp_path) == "Amy"
+    assert fetch_expected.check_user("Amy", "amy") is None
+    assert fetch_expected.check_user(None, "bob") is None
+    assert "請自行確認" in fetch_expected.check_user("Amy", None)
+    with pytest.raises(fetch_expected.FetchError, match="瀏覽器登入的帳號是 bob"):
+        fetch_expected.check_user("Amy", "bob")
+    assert (
+        fetch_expected.server_of("https://tab.example.com/#/site/fin/views/Sales")
+        == "https://tab.example.com"
+    )
+
+
 class FakeTableau(http.server.BaseHTTPRequestHandler):
     requests: ClassVar[list[str]] = []
+    user: ClassVar[str] = "amy"
 
     def do_GET(self) -> None:
         parts = urlsplit(self.path)
         FakeTableau.requests.append(unquote(self.path))
-        if parts.path.endswith(".csv"):
+        if parts.path == "/api/2.4/serverinfo":
+            body = json.dumps({"serverInfo": {"restApiVersion": "3.15"}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Set-Cookie", "workgroup_session_id=sess-1; Path=/")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif parts.path == "/api/3.15/sessions/current":
+            if self.headers.get("X-Tableau-Auth") != "sess-1":
+                self._send(401, "application/json", b"{}")
+                return
+            body = json.dumps({"session": {"user": {"id": "u", "name": FakeTableau.user}}})
+            self._send(200, "application/json", body.encode())
+        elif parts.path.endswith(".csv"):
             body = f"Region,Sales\nEast,{len(parts.query)}\n".encode()
             self._send(200, "text/csv; charset=utf-8", body)
         elif parts.path.endswith(".png"):
@@ -130,3 +162,28 @@ def test_fetch_against_fake_server(tmp_path: Path, server: str) -> None:
     log = json.loads((fixture / "expected" / "fetch-log.json").read_text(encoding="utf-8"))
     assert [entry["status"] for entry in log] == [200, 200, 200, 200]
     assert "fetched_at: 20" in (fixture / "cases.yaml").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(not chromium_available(), reason="需要 Playwright 的 Chromium")
+def test_fetch_checks_rls_user(
+    tmp_path: Path, server: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixture = tmp_path / "report"
+    fixture.mkdir()
+    (fixture / "cases.yaml").write_text(
+        f"workbook: wb\ntableau_views_url: {server}/t/fin/views/Sales\nfetched_at: null\n"
+        "user:\n  username: Amy\n  groups: []\n"
+        "sheets:\n  - worksheet: ws_a\n    view: SheetA\n"
+        "cases:\n  - name: default\n    url_params: {}\n",
+        encoding="utf-8",
+    )
+    FakeTableau.user = "bob"
+    try:
+        assert fetch_expected.main([str(fixture), "--profile", str(tmp_path / "profile")]) == 1
+        assert "瀏覽器登入的帳號是 bob" in capsys.readouterr().err
+        assert not (fixture / "expected" / "ws_a" / "default.csv").exists()
+        FakeTableau.user = "amy"
+        assert fetch_expected.main([str(fixture), "--profile", str(tmp_path / "profile")]) == 0
+        assert (fixture / "expected" / "ws_a" / "default.csv").is_file()
+    finally:
+        FakeTableau.user = "amy"

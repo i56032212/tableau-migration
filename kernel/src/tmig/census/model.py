@@ -45,10 +45,16 @@ class DatasourceInfo(BaseModel):
     custom_sql: bool
     field_count: int
     calc_count: int
-    groups_or_sets: int = Field(description="群組與集合的數量")
+    groups_or_sets: int = Field(description="群組與集合的數量（不含使用者篩選）")
+    user_filters: list[str] = Field(
+        default_factory=list, description="Tableau 的使用者篩選（伺服器 → 建立使用者篩選）"
+    )
     datasource_filters: int
     extract_filters: int
     filter_user_functions: list[str] = Field(description="資料源篩選中出現的使用者函式")
+    filter_parameters: list[str] = Field(
+        default_factory=list, description="用到使用者函式的資料源篩選中出現的參數"
+    )
 
 
 class ParameterInfo(BaseModel):

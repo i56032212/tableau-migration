@@ -16,11 +16,15 @@
 
 注意：一律用工作表網址抓 CSV（dashboard 網址的 .csv 只會給字母序第一張工作表）；
 同一份報表的 .twbx 與預期檔必須在同一次萃取更新之間取得。
+
+報表有列層級權限時（cases.yaml 有 user），抓取前先確認瀏覽器登入的帳號與 user 相同，
+不同就停止（別的帳號看到的資料不一樣，預期結果會對不上）。
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import re
@@ -77,6 +81,65 @@ def update_fetched_at(cases_path: Path, timestamp: str) -> None:
     cases_path.write_text(updated, encoding="utf-8", newline="\n")
 
 
+def cases_user(fixture: Path) -> str | None:
+    """cases.yaml 的 user（列層級權限的報表才有）。"""
+    cases = yaml.safe_load((fixture / "cases.yaml").read_text(encoding="utf-8")) or {}
+    user = cases.get("user") or {}
+    return str(user["username"]) if user.get("username") else None
+
+
+def server_of(url: str) -> str:
+    match = re.match(r"^(https?://[^/#?]+)", normalize_views_url(url))
+    if match is None:
+        raise FetchError(f"無法辨識的網址 {url}")
+    return match.group(1)
+
+
+def browser_user(context: Any, server: str) -> str | None:
+    """瀏覽器登入的 Tableau 帳號（以登入的工作階段呼叫 REST API）；查不到時為 None。"""
+    version = "3.10"
+    info = context.request.get(
+        f"{server}/api/2.4/serverinfo", headers={"Accept": "application/json"}
+    )
+    if info.ok:
+        with contextlib.suppress(ValueError, KeyError, TypeError):
+            version = str(info.json()["serverInfo"]["restApiVersion"])
+    token = next(
+        (
+            c.get("value")
+            for c in context.cookies(server)
+            if c.get("name") == "workgroup_session_id"
+        ),
+        None,
+    )
+    if not token:
+        return None
+    response = context.request.get(
+        f"{server}/api/{version}/sessions/current",
+        headers={"Accept": "application/json", "X-Tableau-Auth": str(token)},
+    )
+    if not response.ok:
+        return None
+    try:
+        return str(response.json()["session"]["user"]["name"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def check_user(expected: str | None, actual: str | None) -> str | None:
+    """帳號不同時丟出 FetchError；無法確認時回傳提醒。"""
+    if expected is None:
+        return None
+    if actual is None:
+        return f"查不到瀏覽器登入的帳號，請自行確認是 cases.yaml 的 user（{expected}）"
+    if actual.casefold() != expected.casefold():
+        raise FetchError(
+            f"瀏覽器登入的帳號是 {actual}，cases.yaml 的 user 是 {expected}："
+            "報表有列層級權限，預期結果必須以同一個帳號抓取（加 --login 改用正確的帳號登入）"
+        )
+    return None
+
+
 def plan(fixture: Path) -> list[tuple[str, str, str, Path]]:
     """要抓的檔案：(網址, 工作表 id, 篩選組合, 存放路徑)。"""
     cases = yaml.safe_load((fixture / "cases.yaml").read_text(encoding="utf-8"))
@@ -118,6 +181,11 @@ def fetch(fixture: Path, profile: Path, login: bool) -> int:
                 page = context.new_page()
                 page.goto(jobs[0][0].rsplit("/", 1)[0])
                 input("請在開啟的瀏覽器登入 Tableau Server，完成後回到這裡按 Enter：")
+            expected = cases_user(fixture)
+            if expected is not None and jobs:
+                note = check_user(expected, browser_user(context, server_of(jobs[0][0])))
+                if note:
+                    print(f"注意：{note}", file=sys.stderr)
             for url, worksheet, case, target in jobs:
                 response = context.request.get(url, timeout=TIMEOUT_MS)
                 content_type = response.headers.get("content-type", "")

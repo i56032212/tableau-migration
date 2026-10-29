@@ -31,6 +31,7 @@ PostgreSQL 與 Spark（Databricks 的引擎）、資料源改成 Live 連線後�
 Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
 Relationship 模型（見「Relationship 模型」）；公開報表盤點中符合起步條件的從 75 份增加到 90 份。
 萃取型的報表可以由萃取層從來源資料庫更新（完整或增量、原子替換），並與 Tableau 的萃取比對（見「萃取層」）。
+以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
@@ -158,6 +159,26 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
 從 Tableau 抓取。不能更新的萃取：來源是檔案（Excel、CSV 等）、只取前 N 筆或抽樣、Relationship 模型中跨資料表的
 萃取篩選；Tableau 的「彙總可見維度的資料」等設定無法從 .twb 得知，以資料比對檢查。
 
+## 列層級權限
+
+報表以使用者函式限制可見的資料時（`[Owner] = USERNAME()`、`ISMEMBEROF("Sales")` 的資料源篩選，或 Tableau 的
+「建立使用者篩選」），新平台以登入者的身分產生 SQL（`kernel/src/tmig/planner/identity.py`）：
+
+- 使用者函式（USERNAME、FULLNAME、USERDOMAIN、ISMEMBEROF、ISUSERNAME、ISFULLNAME、USERATTRIBUTE、
+  USERATTRIBUTEINCLUDES）在 SQL 中代入登入者的常值；身分只從登入（查詢服務的身分驗證，P2）或 cases.yaml 的 `user` 取得，
+  沒有身分時查詢失敗，不會當成看得到全部。ISMEMBEROF 與 Tableau 相同：名稱不分大小寫、`All Users` 一律成立、
+  引數以網址編碼解讀（`USERS%2B` 代表 `USERS+`）；Active Directory 群組寫成 `網域\名稱`
+- Tableau 的使用者篩選（`user:ui-builder='identity-set'` 的集合）轉成布林計算欄位：登入者看得到的成員為 TRUE
+- 用到使用者函式的欄位（含間接參照）上的工作表篩選，不接受網址參數與篩選控制項的變更（Tableau 的網址參數可以改，
+  是常見的漏洞）；報表本身為這個欄位放了篩選控制項（例如「只看我的客戶」開關）時才可以調整。
+  篩選動作的選取與其他篩選一律以 AND 套用，只會縮小範圍；資料源篩選本來就不受影響
+- 權限計算用到參數時與 Tableau 相同，使用者改參數就能改變可見範圍；`tmig census` 會在「列層級權限」列出提醒
+- 篩選控制項的可選值也套用資料源篩選（看不到的成員不會出現在清單中）
+
+驗證：預期結果是以抓取的帳號從 Tableau 匯出的，cases.yaml 的 `user` 要寫同一個帳號（使用者名稱、全名、網域、群組）。
+`tools/tableau_server` 的 `fetch` 遇到這類報表時，自動以登入帳號的資料填好 `user`；`fetch_expected` 抓取前會確認瀏覽器登入的
+帳號與 `user` 相同。`tmig sql`／`tmig query` 預設用 cases.yaml 的 `user`，也可以加 `--user 帳號 --group 群組` 試別的身分。
+
 ## 指令
 
 | 指令 | 用途 |
@@ -166,8 +187,8 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
 | `tmig inventory <資料夾>... [--out-dir 目錄]` | 批次盤點：總表、功能使用統計與起步候選（S2） |
 | `tmig parse <twbx> [--out IR 檔] [--lenient]` | 解析成 IR，列出不支援的元素（A2–A6） |
 | `tmig import-hyper <twbx> [--out-dir 目錄]` | 萃取匯入 DuckDB 並自檢（C1） |
-| `tmig sql <IR> <工作表> [--case 名稱]` | 產生的 SQL（D1–D4） |
-| `tmig query <IR> <工作表> [--case 名稱] [--out CSV]` | 執行查詢，欄名為欄位鍵；缺 DuckDB 檔時自動匯入（C2） |
+| `tmig sql <IR> <工作表> [--case 名稱] [--user 帳號 --group 群組]` | 產生的 SQL（D1–D4；身分見「列層級權限」） |
+| `tmig query <IR> <工作表> [--case 名稱] [--user 帳號] [--out CSV]` | 執行查詢，欄名為欄位鍵；缺 DuckDB 檔時自動匯入（C2） |
 | `tmig cases suggest <fixture 目錄> [--write]` | 依資料建議 3 組篩選組合（E1） |
 | `tmig mapping suggest <fixture 目錄>` | 預期 CSV 欄名對照建議（E2） |
 | `tmig verify <fixture 目錄>` | 計算比對，寫出固定格式的差異報告（E3） |
@@ -255,10 +276,13 @@ tableau-migration/
   維度表中沒有量值的成員何時列出、只用到其他資料表欄位的篩選對沒有關聯的列以 Null 判斷，這兩點待真實報表確認。
   維度是一對多資料表欄位的運算式（日期部分、計算欄位）時，Tableau 在原值還是運算式的值上去重不明，列為不支援
   （查詢附帶的檢查）；關聯的效能選項（基數、參照完整性）不影響結果，一律以「多對多、部分相符」的語意查詢
+- **使用者篩選與使用者函式**：Tableau「建立使用者篩選」產生的集合 XML 依公開資料推定（交集 level-members 與
+  各使用者條件的成員聯集），工作表上以空的類別篩選表示「在集合中」；比對名稱不分大小寫、USERDOMAIN 對本機帳號的值
+  （推定為 `local`）待真實報表確認；USERATTRIBUTE 系列只在 Tableau Cloud 與嵌入時有值，新平台取自 SSO 的宣告
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
-集合與集合動作、成員別名、趨勢線、地圖、小計與總計、巢狀 LOD、百分位數與百分比等其他快速 Table Calculation、
-使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
+集合（使用者篩選除外）與集合動作、成員別名、趨勢線、地圖、小計與總計、巢狀 LOD、百分位數與百分比等其他快速
+Table Calculation、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線。
 
 ## 開發規則

@@ -17,7 +17,7 @@ from tmig.formula.catalog import is_table_calc_function
 from tmig.formula.functions import implemented_names
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
-from tmig.sqlgen.expr import ExprCompiler
+from tmig.sqlgen.expr import USER_FUNCTIONS, ExprCompiler
 from tmig.sqlgen.sql import ident
 
 from ..formula.helpers import BASE, analyzer, slug
@@ -373,9 +373,9 @@ def test_every_row_and_aggregate_function_is_tested() -> None:
     tested = {n for f, _, _ in ROW_CASES for n in _calls(f)} | {
         n for f, _ in AGG_CASES for n in _calls(f)
     }
-    # Table Calculation 在 test_query 以整張工作表實跑
+    # Table Calculation 在 test_query 以整張工作表實跑；使用者函式在 test_rls 以不同的登入者實跑
     table_calcs = {name for name in implemented_names() if is_table_calc_function(name)}
-    missing = implemented_names() - tested - table_calcs - {"TODAY", "NOW"}
+    missing = implemented_names() - tested - table_calcs - USER_FUNCTIONS - {"TODAY", "NOW"}
     assert missing == set()
 
 

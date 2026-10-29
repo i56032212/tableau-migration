@@ -1,4 +1,5 @@
-"""群組（categorical-bin）與數值分組（bin）：轉成等價的 Tableau 公式，之後與一般計算欄位相同處理。
+"""群組（categorical-bin）、數值分組（bin）與使用者篩選（identity-set）：轉成等價的 Tableau 公式，
+之後與一般計算欄位相同處理。
 
 群組：列出的成員對應到群組名稱；其餘成員在有「其他」（default）時歸入其他，否則維持原值。
 Null 也可以是成員（%null%）。
@@ -16,6 +17,7 @@ Null 也可以是成員（%null%）。
 from __future__ import annotations
 
 import math
+import re
 
 from lxml import etree
 
@@ -114,3 +116,92 @@ def bin_formula(calc: etree._Element) -> str:
         return f"FLOOR(({expression}) / {size}) * {size}"
     anchor = formula_literal(int(peg) if peg.is_integer() else peg)
     return f"FLOOR((({expression}) - {anchor}) / {size}) * {size} + {anchor}"
+
+
+_STRINGS = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|//[^\n]*')
+
+
+def identity_set_level(group: etree._Element) -> str:
+    """使用者篩選的層級欄位（例如 [Region]）。"""
+    roots = children(group, "groupfilter")
+    if len(roots) != 1:
+        raise GroupError("結構不明")
+    levels = {g.get("level") for g in roots[0].iter("groupfilter") if g.get("level")}
+    if len(levels) != 1:
+        raise GroupError("必須剛好以一個欄位為層級")
+    level = levels.pop()
+    assert level is not None
+    return level
+
+
+def identity_set_formula(group: etree._Element, source_datatype: str | None) -> str:
+    """Tableau 的使用者篩選（伺服器 → 建立使用者篩選，user:ui-builder='identity-set'）→ 布林公式。
+
+    結構為成員的聯集，每個分支以使用者條件（ISMEMBEROF、ISUSERNAME 等）篩選一組成員：
+
+        intersection(level-members, union(filter(false, …), filter(ISMEMBEROF('A'), member(East)), …))
+
+    轉成 ``ISMEMBEROF("All Users") AND (((ISMEMBEROF('A')) AND (NOT ISNULL([Region]) AND
+    [Region] = "East")) OR …)``。成員的比較不含 Null（只會是 TRUE 或 FALSE），Null 是成員時寫成 ISNULL。
+    開頭的 ISMEMBEROF("All Users") 對每個登入者都成立：讓公式一定用到使用者函式，即使沒有對應任何使用者，
+    這個欄位也屬於列層級權限（網址參數改不了），而且沒有登入者時查詢失敗。source_datatype 為層級欄位的型別。
+    """
+    level = identity_set_level(group)
+    condition = _set_condition(children(group, "groupfilter")[0], level, source_datatype)
+    return f'ISMEMBEROF("All Users") AND ({condition})'
+
+
+def _set_condition(node: etree._Element, level: str, datatype: str | None) -> str:
+    function = node.get("function")
+    parts = children(node, "groupfilter")
+    if function == "level-members":
+        return "TRUE"
+    if function == "empty-level":
+        return "FALSE"
+    if function == "member":
+        return _members_condition([parse_literal(node.get("member"), datatype)], level, datatype)
+    if function in ("union", "intersection"):
+        union = function == "union"
+        members = [p for p in parts if p.get("function") == "member"]
+        conditions = [_set_condition(p, level, datatype) for p in parts if p not in members]
+        if members:
+            values = [parse_literal(m.get("member"), datatype) for m in members]
+            if union:
+                conditions.insert(0, _members_condition(values, level, datatype))
+            else:
+                conditions[:0] = [_members_condition([v], level, datatype) for v in values]
+        if not conditions:
+            return "FALSE" if union else "TRUE"
+        return (
+            conditions[0]
+            if len(conditions) == 1
+            else "(" + (" OR " if union else " AND ").join(conditions) + ")"
+        )
+    if function == "except":
+        if not parts:
+            raise GroupError("except 沒有內容")
+        kept = _set_condition(parts[0], level, datatype)
+        removed = [_set_condition(p, level, datatype) for p in parts[1:]]
+        return f"({kept}{''.join(f' AND NOT {r}' for r in removed)})"
+    if function == "filter":
+        expression = node.get("expression")
+        if not expression or "[" in _STRINGS.sub("", expression):
+            raise GroupError("條件參照欄位的集合（條件集合）v0 不支援")
+        if len(parts) != 1:
+            raise GroupError("條件的成員結構不明")
+        # 使用者條件在查詢時代入成 TRUE／FALSE（不包成 IFNULL：Oracle 的條件中不能有布林值）
+        return f"(({expression}) AND {_set_condition(parts[0], level, datatype)})"
+    raise GroupError(f"集合的成員定義（function={function}）不支援")
+
+
+def _members_condition(values: list[Scalar], level: str, datatype: str | None) -> str:
+    """成員清單 → 不含 Null 的條件（只會是 TRUE 或 FALSE）。"""
+    present = [v for v in values if v is not None]
+    conditions: list[str] = []
+    if len(present) != len(values):
+        conditions.append(f"ISNULL({level})")
+    if present:
+        listed = ", ".join(formula_literal(v, datatype) for v in present)
+        test = f"{level} = {listed}" if len(present) == 1 else f"{level} IN ({listed})"
+        conditions.append(f"(NOT ISNULL({level}) AND {test})")
+    return conditions[0] if len(conditions) == 1 else "(" + " OR ".join(conditions) + ")"

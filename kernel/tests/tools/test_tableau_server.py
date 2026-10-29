@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import yaml
 
-from tmig.verify.cases import load_cases
+from tmig.verify.cases import CasesFile, load_cases
 
 from .loader import ROOT, load_tool
 
@@ -103,6 +103,14 @@ DATASOURCES: list[dict[str, Any]] = [
 PUBLISHED: dict[bool, bytes] = {}
 """Published Data Source 的 .tdsx：含萃取（True）與不含萃取（False）。"""
 PUBLISHED_WORKBOOK: list[bytes] = [b""]
+RLS_WORKBOOK: list[bytes] = [b""]
+"""用到使用者函式（列層級權限）的報表。"""
+CURRENT_USER = {"id": "u-0", "name": "amy", "fullName": "Amy Lin", "domain": {"name": "local"}}
+CURRENT_GROUPS = [
+    {"id": "g-1", "name": "All Users", "domain": {"name": "local"}},
+    {"id": "g-2", "name": "Sales", "domain": {"name": "corp.example.com"}},
+    {"id": "g-3", "name": "Managers", "domain": {"name": "local"}},
+]
 
 
 class FakeServer(http.server.BaseHTTPRequestHandler):
@@ -178,6 +186,18 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
             self._json(404, {"error": {"code": "404000"}})
             return
         rest = path.removeprefix(site)
+        if rest == "users/u-0":
+            self._json(200, {"user": CURRENT_USER})
+            return
+        if rest == "users/u-0/groups":
+            self._json(
+                200,
+                {
+                    "pagination": {"pageNumber": "1", "pageSize": "100", "totalAvailable": "3"},
+                    "groups": {"group": CURRENT_GROUPS},
+                },
+            )
+            return
         if rest == "workbooks":
             size = int(query["pageSize"][0])
             page = int(query["pageNumber"][0])
@@ -226,7 +246,13 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
             self._file(PUBLISHED[include], "application/octet-stream", "OrdersPDS.tdsx")
         elif rest.endswith("/connections"):
             wb_id = rest.split("/")[1]
-            kinds = {"wb-1": "hyper", "wb-2": "sqlproxy", "wb-3": "oracle", "wb-4": "sqlproxy"}
+            kinds = {
+                "wb-1": "hyper",
+                "wb-2": "sqlproxy",
+                "wb-3": "oracle",
+                "wb-4": "sqlproxy",
+                "wb-5": "hyper",
+            }
             self._json(200, {"connections": {"connection": [{"id": "c", "type": kinds[wb_id]}]}})
         elif rest.endswith("/views"):
             wb_id = rest.split("/")[1]
@@ -241,6 +267,8 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
                 self._file(PILOT.read_bytes(), "application/xml", "Ops.v2.twb")
             elif wb_id == "wb-4":
                 self._file(PUBLISHED_WORKBOOK[0], "application/xml", "Orders PDS.twb")
+            elif wb_id == "wb-5":
+                self._file(RLS_WORKBOOK[0], "application/xml", "Secure.twb")
             else:
                 self._json(
                     403,
@@ -457,3 +485,61 @@ def test_inventory_merges_published_definitions(
     FakeServer.calls = []
     assert tableau_server.main(["inventory", *auth(server), "--out", str(out), "--refresh"]) == 0
     assert not [c for c in FakeServer.calls if "/datasources/ds-1/content" in c]
+
+
+# ---------------------------------------------------------------- 列層級權限（P1）
+
+
+@pytest.fixture
+def secure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """伺服器上多一份資料源篩選用到 USERNAME() 的報表。"""
+    from ..parser import builder as b
+
+    mine = b.calc("Mine", "Mine", "[Region] = USERNAME()", "boolean", "dimension")
+    flt = (
+        "<filter class='categorical' column='[Mine]'>"
+        "<groupfilter function='member' level='[Mine]' member='true' /></filter>"
+    )
+    sheet = b.worksheet(
+        "S", [b.instance("[Region]", "None", "[none:Region:nk]")], rows=b.ref("none:Region:nk")
+    )
+    xml = b.workbook(b.extract_datasource(columns=mine, extra=flt), worksheets=sheet)
+    RLS_WORKBOOK[0] = xml.encode("utf-8")
+    workbook = {
+        "id": "wb-5",
+        "name": "Secure",
+        "contentUrl": "Secure",
+        "updatedAt": "2026-10-03T00:00:00Z",
+        "project": {"id": "p-1", "name": "Sales"},
+        "owner": {"id": "u-1", "name": "amy"},
+    }
+    monkeypatch.setattr(sys.modules[__name__], "WORKBOOKS", [*WORKBOOKS, workbook])
+
+
+def test_fetch_writes_user_for_rls(
+    server: str, tmp_path: Path, secure: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixture = tmp_path / "fixtures" / "secure"
+    args = ["fetch", *auth(server), "--workbook", "Secure", "--fixture", str(fixture)]
+    assert tableau_server.main(args) == 0
+    out = capsys.readouterr().out
+    assert "cases.yaml 的 user 為 amy（3 個群組）" in out
+    cases = load_cases(fixture / "cases.yaml")
+    assert cases.user is not None
+    assert cases.user.username == "amy"
+    assert cases.user.full_name == "Amy Lin"
+    assert cases.user.domain == "local"
+    assert cases.user.groups == ("All Users", "Managers", "corp.example.com\\Sales")
+    assert cases.user.member_of("corp.example.com\\sales")
+
+
+def test_starter_cases_user_template() -> None:
+    text = tableau_server.starter_cases("wb", "u", [], [], [], [], rls=True, user=None)
+    assert "# user:" in text and "#   username: 帳號" in text
+    assert load_cases_text(text).user is None
+    plain = tableau_server.starter_cases("wb", "u", [], [], [], [])
+    assert "user" not in yaml.safe_load(plain)
+
+
+def load_cases_text(text: str) -> CasesFile:
+    return CasesFile.model_validate(yaml.safe_load(text))

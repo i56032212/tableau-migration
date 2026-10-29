@@ -20,6 +20,7 @@ from typing import Any
 
 from tmig.data.executor import execute
 from tmig.ir.models import IR, CategoricalFilter, DataField, FieldUse, Parameter, RangeFilter, Zone
+from tmig.planner.identity import Identity
 from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, domain_sql
 from tmig.verify.cases import CasesError, CaseSpec, case_state, load_cases
@@ -101,14 +102,16 @@ def url_value(value: Any) -> str:
     return str(value).replace(",", "\\,")
 
 
-def _frequency(ir: IR, db: Path, candidate: Candidate) -> list[tuple[Any, int]]:
-    sql = domain_sql(ir, candidate.datasource, candidate.use, "frequency")
+def _frequency(
+    ir: IR, db: Path, candidate: Candidate, user: Identity | None
+) -> list[tuple[Any, int]]:
+    sql = domain_sql(ir, candidate.datasource, candidate.use, "frequency", user)
     return [(row[0], int(row[1])) for row in execute(db, sql).rows if row[0] is not None]
 
 
-def _last_year(ir: IR, db: Path, candidate: Candidate) -> int | None:
+def _last_year(ir: IR, db: Path, candidate: Candidate, user: Identity | None) -> int | None:
     use = FieldUse(field=candidate.field.id)
-    rows = execute(db, domain_sql(ir, candidate.datasource, use, "range")).rows
+    rows = execute(db, domain_sql(ir, candidate.datasource, use, "range", user)).rows
     high = rows[0][1] if rows else None
     if isinstance(high, dt.date):
         return high.year
@@ -132,6 +135,9 @@ def suggest_cases(fixture: Path) -> tuple[list[CaseSpec], list[str]]:
     """回傳（建議的篩選組合, 說明）。"""
     ir = load_fixture_ir(fixture)
     notes = ensure_data(fixture, ir)
+    cases_path = fixture / "cases.yaml"
+    # 列層級權限：可選值以 cases.yaml 的帳號查詢（與預期結果相同的可見範圍）
+    user = load_cases(cases_path).user if cases_path.is_file() else None
 
     def database(ds_id: str) -> Path:
         return fixture / "data" / f"{ds_id}.duckdb"
@@ -149,7 +155,7 @@ def suggest_cases(fixture: Path) -> tuple[list[CaseSpec], list[str]]:
         if index not in frequencies:
             candidate = categorical[index]
             try:
-                frequencies[index] = _frequency(ir, database(candidate.datasource), candidate)
+                frequencies[index] = _frequency(ir, database(candidate.datasource), candidate, user)
             except QueryError:
                 frequencies[index] = []
         return frequencies[index]
@@ -167,7 +173,7 @@ def suggest_cases(fixture: Path) -> tuple[list[CaseSpec], list[str]]:
         )
     for candidate in dates:
         try:
-            year = _last_year(ir, database(candidate.datasource), candidate)
+            year = _last_year(ir, database(candidate.datasource), candidate, user)
         except QueryError:
             continue
         if year is not None:

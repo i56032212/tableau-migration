@@ -34,6 +34,8 @@ uv run python tools/tableau_server/tableau_server.py fetch --server https://tabl
 - 連到 Published Data Source 的報表：`fetch` 一併下載資料源的 .tdsx（含萃取，需要資料源的下載權限）併入報表，
   原本的報表放在 `original/`、資料源在 `published/`；`inventory` 預設下載資料源的定義（不含萃取，放在 `datasources/`，
   沒有更新時沿用）併入後再盤點，`--no-published` 可關閉
+- 用到使用者函式或使用者篩選（列層級權限）的報表：`fetch` 以登入帳號的使用者名稱、全名、網域與群組
+  （Active Directory 群組寫成 `網域\名稱`）填好 cases.yaml 的 `user`；預期結果必須用同一個帳號抓取
 - `inventory` 的其他選項：`--project`（可重複）、`--limit N` 試跑、`--no-download` 只列清單、`--refresh` 全部重新下載
   （預設只重新下載有更新的報表）
 - 輸出在 `inventory/`（不進版控）：`inventory.md`、`inventory.csv`（Excel 可直接開）、`features.csv`
@@ -48,6 +50,8 @@ uv run python tools/tableau_server/tableau_server.py fetch --server https://tabl
 uv run python tools/fetch_expected/fetch_expected.py fixtures/<報表> --login
 uv run python tools/fetch_expected/fetch_expected.py fixtures/<報表> --dry-run   # 只列出網址
 ```
+
+cases.yaml 有 `user`（列層級權限）時，抓取前確認瀏覽器登入的帳號與 `user` 相同，不同就停止（換帳號加 `--login` 重新登入）。
 
 寫入 `expected/<工作表 id>/<篩選組合>.csv`、`.png`、`expected/fetch-log.json`，並更新 `fetched_at`。一律用工作表網址（dashboard 網址的 .csv 只給字母序第一張工作表）；`.twbx` 與預期檔必須在同一次萃取更新之間取得。抓完提交到 git，之後的工作都不需要再連 Tableau。
 

@@ -40,8 +40,21 @@
           </bin>
         </calculation>
       </column>
+      <column caption='Visible' datatype='boolean' name='[Calculation_13]' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='[REGION] = [Parameters].[Parameter 2] OR ISMEMBEROF(&quot;admins&quot;)' />
+      </column>
       <group caption='Top Customers' name='[Set 1]' name-style='unqualified' user:ui-builder='filter-group'>
         <groupfilter function='member' level='[REGION]' member='&quot;North&quot;' />
+      </group>
+      <group caption='User Filter 1' name='[User Filter 1]' name-style='unqualified' user:ui-builder='identity-set'>
+        <groupfilter function='intersection'>
+          <groupfilter function='level-members' level='[REGION]' />
+          <groupfilter function='union'>
+            <groupfilter expression='ISMEMBEROF(&apos;north team&apos;)' function='filter'>
+              <groupfilter function='member' level='[REGION]' member='&quot;North&quot;' />
+            </groupfilter>
+          </groupfilter>
+        </groupfilter>
       </group>
       <filter class='categorical' column='[REGION]'>
         <groupfilter expression='ISMEMBEROF(&quot;sales&quot;)' function='filter' user:ui-domain='database' user:ui-enumeration='all' user:ui-marker='filter-by' />

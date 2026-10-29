@@ -4,8 +4,8 @@ tmig census <.twb／.twbx>... [--out-dir 目錄]   功能盤點與起步條件�
 tmig inventory <資料夾>... [--out-dir 目錄]     批次盤點：總表、功能使用統計與起步候選
 tmig parse <.twbx> [--out IR 檔]                解析成 IR，列出不支援的元素
 tmig import-hyper <.twbx> [--out-dir 目錄]      萃取匯入 DuckDB 並自檢
-tmig sql <IR 檔> <工作表> [--case 名稱]          產生的 SQL（除錯用）
-tmig query <IR 檔> <工作表> [--case 名稱]        執行查詢，輸出 CSV
+tmig sql <IR 檔> <工作表> [--case 名稱] [--user 帳號]    產生的 SQL（除錯用）
+tmig query <IR 檔> <工作表> [--case 名稱] [--user 帳號]  執行查詢，輸出 CSV
 tmig cases suggest <fixture 目錄> [--write]      依資料建議 3 組篩選組合
 tmig mapping suggest <fixture 目錄>              產生 CSV 欄名對照建議
 tmig verify <fixture 目錄> [--out 報告]          計算比對，寫出差異報告
@@ -167,20 +167,31 @@ def _cmd_import_hyper(args: argparse.Namespace) -> int:
 
 
 def _query_inputs(args: argparse.Namespace):
-    """讀 IR，並把 --case 轉成篩選狀態。"""
+    """讀 IR，並把 --case 轉成篩選狀態；登入者的身分取自 cases.yaml 的 user，或 --user、--group。"""
+    from tmig.planner.identity import Identity
     from tmig.planner.state import QueryState
     from tmig.verify.cases import case_state, load_cases
 
     ir = load_ir(args.ir)
     state = QueryState()
+    user: Identity | None = None
     cases_path = args.cases or args.ir.parent / "cases.yaml"
     if args.case:
         spec = load_cases(cases_path)
         state = case_state(ir, spec.case(args.case), spec.as_of())
+        user = spec.user
     elif cases_path.is_file():
         # 沒有指定篩選組合時，相對日期篩選仍以 cases.yaml 的基準日計算
-        state = QueryState(today=load_cases(cases_path).as_of())
-    return ir, state
+        spec = load_cases(cases_path)
+        state = QueryState(today=spec.as_of())
+        user = spec.user
+    if args.user:
+        user = Identity(username=args.user, groups=tuple(args.group or ()))
+    elif args.group:
+        if user is None:
+            raise ValueError("--group 需要搭配 --user（或 cases.yaml 的 user）")
+        user = user.model_copy(update={"groups": tuple(args.group)})
+    return ir, state, user
 
 
 def _cmd_sql(args: argparse.Namespace) -> int:
@@ -189,9 +200,16 @@ def _cmd_sql(args: argparse.Namespace) -> int:
     from tmig.verify.cases import CasesError
 
     try:
-        ir, state = _query_inputs(args)
-        query = worksheet_sql(ir, args.worksheet, state)
-    except (FileNotFoundError, ValidationError, CasesError, QueryError, StateError) as exc:
+        ir, state, user = _query_inputs(args)
+        query = worksheet_sql(ir, args.worksheet, state, user)
+    except (
+        FileNotFoundError,
+        ValueError,
+        ValidationError,
+        CasesError,
+        QueryError,
+        StateError,
+    ) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
     sys.stdout.write(query.sql)
@@ -210,8 +228,8 @@ def _cmd_query(args: argparse.Namespace) -> int:
     from tmig.verify.run import ensure_data
 
     try:
-        ir, state = _query_inputs(args)
-        query = worksheet_sql(ir, args.worksheet, state)
+        ir, state, user = _query_inputs(args)
+        query = worksheet_sql(ir, args.worksheet, state, user)
         ws = next(w for w in ir.worksheets if w.id == query.worksheet)
         datasource = next(d for d in ir.datasources if d.id == ws.datasource)
 
@@ -228,6 +246,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
             result = runtime.run(query, datasource, database)
     except (
         FileNotFoundError,
+        ValueError,
         ValidationError,
         CasesError,
         QueryError,
@@ -264,7 +283,7 @@ def _cmd_mapping_suggest(args: argparse.Namespace) -> int:
         mapping = MappingFile()
         notes: dict[str, list[str]] = {}
         for sheet in cases.sheets:
-            query = worksheet_sql(ir, sheet.worksheet)
+            query = worksheet_sql(ir, sheet.worksheet, user=cases.user)
             files = sorted((root / "expected" / sheet.worksheet).glob("*.csv"))
             headers = csv_headers(files[0]) if files else None
             sheet_mapping, unmatched = suggest_sheet(ir, sheet.worksheet, query.columns, headers)
@@ -668,6 +687,16 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("worksheet", metavar="工作表", help="工作表 id 或名稱")
         sub.add_argument("--case", help="cases.yaml 中的篩選組合名稱；省略時用工作表的預設篩選")
         sub.add_argument("--cases", type=Path, help="cases.yaml 路徑；預設為 IR 檔所在目錄")
+        sub.add_argument(
+            "--user",
+            help="以這個 Tableau 使用者名稱查詢（列層級權限）；預設為 cases.yaml 的 user",
+        )
+        sub.add_argument(
+            "--group",
+            action="append",
+            metavar="群組",
+            help="登入者所屬的群組（ISMEMBEROF），可重複；指定時取代 cases.yaml 的群組",
+        )
         if name == "query":
             sub.add_argument(
                 "--db",

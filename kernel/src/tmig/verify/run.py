@@ -216,7 +216,7 @@ def _check(
         base.diff = f"mapping.yaml 沒有工作表 {worksheet}"
         return base
     try:
-        query = worksheet_sql(ir, worksheet, case_state(ir, case, cases.as_of()))
+        query = worksheet_sql(ir, worksheet, case_state(ir, case, cases.as_of()), cases.user)
         ws = next(w for w in ir.worksheets if w.id == worksheet)
         datasource = next(d for d in ir.datasources if d.id == ws.datasource)
         result = runtime.run(query, datasource, root / "data" / f"{ws.datasource}.duckdb")

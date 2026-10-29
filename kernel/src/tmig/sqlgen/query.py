@@ -62,6 +62,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.ir.scope import DatasourceScope
+from tmig.planner.identity import Identity
 from tmig.planner.state import EffectiveState, QueryState, apply_state, use_key
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
 from tmig.sqlgen.model import Branch, ModelError, ModelPlan, ModelPlanner, RowFilter, Usage
@@ -229,6 +230,7 @@ class _RowEnv:
         self.query = query
         self.alias = alias
         self.week_start = query.week_start
+        self.user = query.user
 
     def _qualify(self, name: str) -> str:
         return f"{ident(self.alias)}.{ident(name)}" if self.alias else ident(name)
@@ -273,6 +275,7 @@ class _PostEnv:
         self.window = window
         self.totals = totals or {}
         self.week_start = query.week_start
+        self.user = query.user
 
     def column(self, target: Target) -> str:
         raise QueryError(f"列層級欄位 {target.id} 必須彙總")
@@ -298,8 +301,16 @@ class _PostEnv:
 class WorksheetQuery:
     """一張工作表在某個篩選狀態下的查詢。"""
 
-    def __init__(self, ir: IR, worksheet: str, state: QueryState | None = None) -> None:
+    def __init__(
+        self,
+        ir: IR,
+        worksheet: str,
+        state: QueryState | None = None,
+        user: Identity | None = None,
+    ) -> None:
+        """user：登入者的身分，使用者函式依此代入（不從篩選狀態取得，見 tmig.planner.identity）。"""
         self.ir = ir
+        self.user = user
         self.worksheet = _find_worksheet(ir, worksheet)
         self.datasource = next(ds for ds in ir.datasources if ds.id == self.worksheet.datasource)
         self.state = apply_state(ir, self.worksheet, state or QueryState())
@@ -1700,7 +1711,11 @@ DOMAIN_LIMIT = 2000
 
 
 def domain_sql(
-    ir: IR, datasource_id: str, use: FieldUse, kind: Literal["values", "range", "frequency"]
+    ir: IR,
+    datasource_id: str,
+    use: FieldUse,
+    kind: Literal["values", "range", "frequency"],
+    user: Identity | None = None,
 ) -> str:
     """篩選控制項的可選值：資料源篩選後的不重複值、最小值與最大值，或各值的筆數（多到少）。"""
     datasource = next((ds for ds in ir.datasources if ds.id == datasource_id), None)
@@ -1715,7 +1730,7 @@ def domain_sql(
         marks=Marks(type="automatic"),
         source_ref="domain",
     )
-    query = WorksheetQuery(ir.model_copy(update={"worksheets": [holder]}), "domain")
+    query = WorksheetQuery(ir.model_copy(update={"worksheets": [holder]}), "domain", user=user)
     if query.is_measure(use):
         raise QueryError("量值沒有可選值")
     query.register_lods(query.field_node(use.field))
@@ -1775,12 +1790,18 @@ def _find_worksheet(ir: IR, key: str) -> Worksheet:
     raise QueryError(f"找不到工作表「{key}」；可用的工作表：{names}")
 
 
-def worksheet_sql(ir: IR, worksheet: str, state: QueryState | None = None) -> WorksheetSql:
-    return WorksheetQuery(ir, worksheet, state).build()
+def worksheet_sql(
+    ir: IR, worksheet: str, state: QueryState | None = None, user: Identity | None = None
+) -> WorksheetSql:
+    return WorksheetQuery(ir, worksheet, state, user).build()
 
 
 def pane_sql(
-    ir: IR, worksheet: str, main: WorksheetSql, state: QueryState | None = None
+    ir: IR,
+    worksheet: str,
+    main: WorksheetSql,
+    state: QueryState | None = None,
+    user: Identity | None = None,
 ) -> dict[int, WorksheetSql]:
     """各量值的標記卡詳細程度不同時（J3，例如甜甜圈圖中間的合計），較粗的標記卡各自查詢。
 
@@ -1816,7 +1837,7 @@ def pane_sql(
         sub = ir.model_copy(
             update={"worksheets": [virtual if w.id == ws.id else w for w in ir.worksheets]}
         )
-        result[i] = worksheet_sql(sub, ws.id, state)
+        result[i] = worksheet_sql(sub, ws.id, state, user)
     return result
 
 

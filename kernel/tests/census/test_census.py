@@ -137,10 +137,10 @@ def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
         "single_datasource": "fail",
         "data_access": "fail",
         "single_table": "pass",
-        "no_rls": "fail",
+        "no_rls": "warn",  # 列層級權限已支援（P1），提醒驗證時設定 user
         "no_blending": "fail",
         "fixed_dashboards": "warn",
-        "v0_functions": "warn",
+        "v0_functions": "pass",
         "v0_features": "warn",
     }
     assert problems.grade == "C"
@@ -156,11 +156,17 @@ def test_problems_details(problems: CensusReport) -> None:
         detail(problems, "single_table")
         == "「Sales (Oracle)」：Relationship 模型（2 張邏輯資料表，Live）"
     )
-    assert (
-        detail(problems, "no_rls") == "ISMEMBEROF（Sales (Oracle) 的資料源篩選）；USERNAME（Mine）"
-    )
+    assert detail(problems, "no_rls").split("；") == [
+        "ISMEMBEROF（Sales (Oracle) 的資料源篩選、Visible）",
+        "USERNAME（Mine）",
+        "使用者篩選「User Filter 1」",
+        "「Visible」用到參數 [Parameter 2]：使用者改參數就能改變可見範圍（與 Tableau 相同），"
+        "請確認是否刻意如此",
+        "驗證時在 cases.yaml 設定 user（抓取預期結果的帳號）",
+    ]
     assert "「Auto」為 automatic" in detail(problems, "fixed_dashboards")
-    assert problems.functions_outside_v0 == ["USERNAME"]
+    assert problems.functions_outside_v0 == []  # 使用者函式已支援（P1）
+    assert problems.datasources[0].user_filters == ["User Filter 1"]
     assert problems.lod == {"INCLUDE": 1, "TABLE": 1}
 
 
@@ -213,7 +219,7 @@ def test_markdown_report(pilot: CensusReport, problems: CensusReport) -> None:
     assert "| 函式 | 用到的計算欄位數 | v0 函式集 |" in text
     assert "| Overview | fixed 1200×800 |" in text
     bad = render_markdown(problems)
-    assert "- 起步條件：不符合 4 項" in bad
+    assert "- 起步條件：不符合 3 項" in bad  # 列層級權限已支援（P1）
     assert 'IF [REGION] IN ("North", "South") THEN ATTR([REGION]) ELSE "[Other]" END' in bad
 
 

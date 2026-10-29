@@ -73,6 +73,21 @@ class SqlEnv(Protocol):
         ...
 
 
+USER_FUNCTIONS = frozenset(
+    {
+        "USERNAME",
+        "FULLNAME",
+        "USERDOMAIN",
+        "ISMEMBEROF",
+        "ISUSERNAME",
+        "ISFULLNAME",
+        "USERATTRIBUTE",
+        "USERATTRIBUTEINCLUDES",
+    }
+)
+"""以登入者身分代入的函式；環境（SqlEnv）的 user 屬性為 tmig.planner.identity.Identity。"""
+
+
 def week_offset(start: str) -> int:
     return WEEK_STARTS.index(start)
 
@@ -246,6 +261,50 @@ class ExprCompiler:
 
     def _part(self, node: Call, index: int, allowed: tuple[str, ...]) -> str:
         return string_literal(node.args[index], node.name, allowed, node.pos)
+
+    def _user_function(self, node: Call, a: list[str]) -> str:
+        """使用者函式：以登入者的身分代入常值（tmig.planner.identity）。
+
+        ISMEMBEROF、ISUSERNAME、ISFULLNAME 與使用者屬性的名稱在 Tableau 必須是字串常值，
+        比對結果直接算成 TRUE／FALSE；名稱的比對不分大小寫。
+        """
+        user = getattr(self.env, "user", None)
+        if user is None:
+            raise FormulaSemanticError(
+                f"{node.name}() 需要登入者的身分（查詢服務的登入者，或 cases.yaml 的 user）",
+                node.pos,
+            )
+        name = node.name
+        if name in ("USERNAME", "FULLNAME", "USERDOMAIN"):
+            value = {
+                "USERNAME": user.username,
+                "FULLNAME": user.full_name,
+                "USERDOMAIN": user.domain,
+            }
+            text = value[name]
+            return literal(text, "string") if text is not None else "CAST(NULL AS VARCHAR)"
+        arg = node.args[0]
+        if not (isinstance(arg, LiteralNode) and arg.kind == "string"):
+            raise FormulaSemanticError(f"{name}() 的第一個引數必須是字串常值", node.pos)
+        given = str(arg.value)
+        if name == "ISMEMBEROF":
+            return literal(user.member_of(given), "boolean")
+        if name == "ISUSERNAME":
+            return literal(user.is_username(given), "boolean")
+        if name == "ISFULLNAME":
+            return literal(user.is_full_name(given), "boolean")
+        values = user.attribute(given)
+        if name == "USERATTRIBUTE":
+            # 有多個值時取第一個（與 Tableau 相同）；沒有這個屬性時為 NULL
+            return literal(values[0], "string") if values else "CAST(NULL AS VARCHAR)"
+        # USERATTRIBUTEINCLUDES：屬性的任一個值等於第二個引數時為 TRUE，其他情況（含 NULL）為 FALSE
+        expected = node.args[1]
+        if isinstance(expected, LiteralNode) and expected.kind == "string":
+            return literal(str(expected.value) in values, "boolean")
+        if not values:
+            return "FALSE"
+        options = ", ".join(literal(v, "string") for v in values)
+        return f"COALESCE(({a[1]}) IN ({options}), FALSE)"
 
     def _row_function(self, node: Call, a: list[str]) -> str:
         name = node.name
@@ -428,6 +487,8 @@ class ExprCompiler:
             return "current_date"
         if name == "NOW":
             return "CAST(now() AS TIMESTAMP)"
+        if name in USER_FUNCTIONS:
+            return self._user_function(node, a)
         if name == "INT":
             t = self.datatype(node.args[0])
             if t == "string":

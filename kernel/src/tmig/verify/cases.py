@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tmig.ir.models import IR, DataField, Scalar
 from tmig.parser.values import LiteralError, parse_literal
+from tmig.planner.identity import Identity
 from tmig.planner.state import DATE_PARTS, FilterValue, QueryState
 
 _PART = re.compile(r"^(?P<fn>[A-Za-z]+)\((?P<name>.+)\)$")
@@ -52,6 +53,10 @@ class CasesFile(BaseModel):
         default=None,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
         description="相對日期篩選的基準日；沒有時取 fetched_at 的日期（Tableau 匯出預期結果的那一天）",
+    )
+    user: Identity | None = Field(
+        default=None,
+        description="抓取預期結果的 Tableau 帳號；報表用到使用者函式（列層級權限）時，以這個身分查詢",
     )
     sheets: list[SheetSpec]
     cases: list[CaseSpec]

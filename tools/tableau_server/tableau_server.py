@@ -240,6 +240,29 @@ class TableauClient:
                 return
             page += 1
 
+    def current_identity(self) -> dict[str, Any]:
+        """登入帳號的身分（cases.yaml 的 user，P1）：使用者名稱、全名、網域與所屬群組。
+
+        群組寫成 ISMEMBEROF 比對的名稱：本機群組為名稱，Active Directory 群組為「網域\\名稱」。
+        """
+        assert self.session is not None
+        user_id = self.session.user_id
+        if not user_id:
+            raise TableauError("登入資訊沒有使用者 id")
+        user = self.get_json(f"users/{user_id}").get("user") or {}
+        groups: set[str] = set()
+        for group in self.paged(f"users/{user_id}/groups", "groups", "group"):
+            name = str(group.get("name") or "")
+            domain = str((group.get("domain") or {}).get("name") or "local")
+            if name:
+                groups.add(name if domain.lower() == "local" else f"{domain}\\{name}")
+        return {
+            "username": str(user.get("name") or ""),
+            "full_name": user.get("fullName") or None,
+            "domain": (user.get("domain") or {}).get("name") or None,
+            "groups": sorted(groups),
+        }
+
     def workbooks(self) -> list[dict[str, Any]]:
         attempts: list[dict[str, Any]] = [
             {"fields": "_default_,project.name,owner.name,hasExtracts"},
@@ -652,7 +675,11 @@ def starter_cases(
     unpublished: list[tuple[str, str]],
     filters: list[str],
     parameters: list[str],
+    *,
+    rls: bool = False,
+    user: dict[str, Any] | None = None,
 ) -> str:
+    """rls：報表用到使用者函式；user：登入帳號的身分（查不到時寫成待填的註解）。"""
     lines = [
         "# 由 tools/tableau_server 產生的起始檔：預設篩選已列好，請再補 3 組",
         "# （常用值、日期邊界、參數或組合；見 fixtures/superstore_demo/cases.yaml）",
@@ -666,8 +693,10 @@ def starter_cases(
         f"workbook: {workbook_id}",
         f"tableau_views_url: {json.dumps(url, ensure_ascii=False)}",
         "fetched_at: null",
-        "sheets:" if pairs else "sheets: []",
     ]
+    if rls:
+        lines += _user_lines(user)
+    lines.append("sheets:" if pairs else "sheets: []")
     for worksheet, view in pairs:
         lines += [
             f"  - worksheet: {worksheet}",
@@ -689,6 +718,25 @@ def starter_cases(
         "  #   note: 常用值",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _user_lines(user: dict[str, Any] | None) -> list[str]:
+    """cases.yaml 的 user：報表用到使用者函式（列層級權限）時，以抓取預期結果的帳號查詢。"""
+    note = "# 報表用到使用者函式（列層級權限）：以抓取預期結果的帳號查詢，須與 fetch_expected 登入的帳號相同"
+    if user is None or not user.get("username"):
+        return [
+            note,
+            "# 查不到登入帳號的資料，請填寫：",
+            "# user:",
+            "#   username: 帳號",
+            "#   groups: [群組]",
+        ]
+    lines = [note, "user:", f"  username: {json.dumps(user['username'], ensure_ascii=False)}"]
+    for key in ("full_name", "domain"):
+        if user.get(key):
+            lines.append(f"  {key}: {json.dumps(user[key], ensure_ascii=False)}")
+    lines.append(f"  groups: {json.dumps(list(user.get('groups') or []), ensure_ascii=False)}")
+    return lines
 
 
 def run_fetch(client: TableauClient, args: argparse.Namespace) -> int:
@@ -753,11 +801,32 @@ def run_fetch(client: TableauClient, args: argparse.Namespace) -> int:
                         filters.add(fields.get(zone.field.field, zone.field.field))
             parameters = [p.caption for p in ir.parameters]
             url = views_url(client.server, session.site_url, str(wb.get("contentUrl", "")))
+            rls = any(c.key == "no_rls" and c.status != "pass" for c in report.checks)
+            user: dict[str, Any] | None = None
+            if rls:
+                try:
+                    user = client.current_identity()
+                except (TableauError, httpx.HTTPError) as exc:
+                    print(f"注意：查不到登入帳號的群組（{exc}），請在 cases.yaml 填寫 user")
             cases_path.write_text(
-                starter_cases(ir.workbook.id, url, pairs, unpublished, sorted(filters), parameters),
+                starter_cases(
+                    ir.workbook.id,
+                    url,
+                    pairs,
+                    unpublished,
+                    sorted(filters),
+                    parameters,
+                    rls=rls,
+                    user=user,
+                ),
                 encoding="utf-8",
                 newline="\n",
             )
+            if user is not None:
+                print(
+                    f"報表用到使用者函式：cases.yaml 的 user 為 {user['username']}"
+                    f"（{len(user['groups'])} 個群組），fetch_expected 須以同一個帳號登入"
+                )
             print(f"已產生 {cases_path}（{len(pairs)} 張工作表，請補 3 組篩選）")
             if ir.unsupported:
                 print(
