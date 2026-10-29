@@ -52,6 +52,10 @@ class Identity(BaseModel):
         default_factory=dict,
         description="使用者屬性（USERATTRIBUTE、USERATTRIBUTEINCLUDES；來自 SSO 的宣告）",
     )
+    site_role: str | None = Field(
+        default=None,
+        description="Tableau 的站台角色（權限判斷用，例如 Viewer、SiteAdministratorCreator）",
+    )
 
     def member_of(self, group: str) -> bool:
         """ISMEMBEROF：不分大小寫；引數依 Tableau 的規則先做網址解碼（例如 USERS%2B 代表 USERS+）。"""

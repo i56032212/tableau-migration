@@ -510,8 +510,10 @@ def test_session_codec() -> None:
 def test_example_config_loads(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """service/auth.example.toml 是合法的設定（環境變數齊全時）。"""
     example = (ROOT / "service" / "auth.example.toml").read_text(encoding="utf-8")
+    (config_dir / "permissions.json").write_text('{"workbooks": []}', encoding="utf-8")
     monkeypatch.setenv("TMIG_SESSION_SECRET", "s" * 48)
     monkeypatch.setenv("TMIG_OIDC_CLIENT_SECRET", "secret")
     settings = load_auth(write(config_dir, example))
     assert settings.mode == "oidc" and settings.strip_domain
     assert settings.oidc is not None and settings.oidc.username_claim == "preferred_username"
+    assert settings.permissions is not None

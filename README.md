@@ -201,6 +201,21 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
   避免列舉其他欄位的值）。`GET /api/me` 回傳目前的登入者與模式
 - `tools/compare_screens` 遇到有列層級權限的報表時，以開發模式、cases.yaml 的 `user` 身分截圖
 
+## 權限
+
+`uv run python tools/tableau_server/tableau_server.py permissions --out permissions.json` 從 Tableau Server 匯出 Project、
+workbook、view 的權限（需要站台管理員），設定檔的 `[auth]` 加上 `permissions = "permissions.json"` 後，查詢服務依
+Tableau 的權限評估規則開放（`kernel/src/tmig/access/permissions.py`、`service/src/tmig_service/access.py`）：
+
+- 管理員看得到全部、未授權（Unlicensed）的帳號看不到；擁有者、所在 Project 與上層 Project 的擁有者與 Project Leader
+  看得到；其餘依規則：本人的允許或拒絕優先，其次任一群組拒絕就拒絕、任一群組允許就允許，都沒有設定時拒絕
+- Project 鎖定權限時用 Project 的 workbook 預設權限（上層鎖定也套用到巢狀的 Project）；workbook 不以分頁顯示工作表時，
+  各 view 另有權限，dashboard 的權限涵蓋其中的工作表
+- 沒有檢視權限的報表不出現在清單中，報表的 API 一律回應 404；報表定義（IR）只給有「下載 workbook」權限的人完整版本，
+  其他人拿到的版本不含連線、公式、資料源篩選與原始 XML
+- 報表依 cases.yaml 的 `tableau_views_url`（Tableau 上的網址名稱）或報表名稱對應到 Tableau 的 workbook；
+  權限檔中找不到的報表只有管理員看得到
+
 ## 指令
 
 | 指令 | 用途 |

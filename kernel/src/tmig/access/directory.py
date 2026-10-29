@@ -46,6 +46,7 @@ class DirectoryUser(BaseModel):
             full_name=self.full_name,
             domain=self.domain,
             groups=tuple(self.groups),
+            site_role=self.site_role,
         )
 
 

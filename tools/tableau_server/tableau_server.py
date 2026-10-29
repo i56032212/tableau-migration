@@ -15,6 +15,10 @@
     uv run python tools/tableau_server/tableau_server.py directory \\
         --server https://tableau.example.com --site sales --pat-name <PAT 名稱> --out directory.json
 
+    # 4. 權限：Project、workbook、view 的權限（查詢服務依此授權，需要站台管理員）
+    uv run python tools/tableau_server/tableau_server.py permissions \\
+        --server https://tableau.example.com --site sales --pat-name <PAT 名稱> --out permissions.json
+
 登入方式（擇一）：
 
 - ``--pat-name``：個人存取權杖（建議）；密鑰從環境變數 TABLEAU_PAT_SECRET 讀取，沒有就提示輸入
@@ -295,6 +299,14 @@ class TableauClient:
     def group_users(self, group_id: str) -> list[dict[str, Any]]:
         return list(self.paged(f"groups/{group_id}/users", "users", "user"))
 
+    def projects(self) -> list[dict[str, Any]]:
+        return list(self.paged("projects", "projects", "project"))
+
+    def permissions(self, path: str) -> list[dict[str, Any]]:
+        """權限規則（granteeCapabilities），path 例如 workbooks/<id>/permissions。"""
+        data = self.get_json(path).get("permissions") or {}
+        return _list(data.get("granteeCapabilities"))
+
     def views(self) -> list[dict[str, Any]]:
         return list(self.paged("views", "views", "view", {"includeUsageStatistics": "true"}))
 
@@ -552,6 +564,130 @@ def export_directory(client: TableauClient, source: str) -> dict[str, Any]:
         "exported_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "users": users,
     }
+
+
+def _rules(
+    grants: list[dict[str, Any]], users: dict[str, dict[str, Any]], groups: dict[str, str]
+) -> list[dict[str, Any]]:
+    """REST 的 granteeCapabilities → 權限檔的規則（以名稱表示對象；找不到的對象略過）。"""
+    rules = []
+    for grant in grants:
+        grantee: dict[str, Any] | None = None
+        if "user" in grant:
+            user = users.get(str((grant.get("user") or {}).get("id")))
+            if user is not None:
+                grantee = {"kind": "user", "name": user["name"], "domain": user.get("domain")}
+        elif "group" in grant:
+            name = groups.get(str((grant.get("group") or {}).get("id")))
+            if name:
+                grantee = {"kind": "group", "name": name}
+        if grantee is None:
+            continue
+        capabilities = {
+            str(c.get("name")): str(c.get("mode"))
+            for c in _list((grant.get("capabilities") or {}).get("capability"))
+            if c.get("name") and c.get("mode") in ("Allow", "Deny")
+        }
+        if capabilities:
+            rules.append({"grantee": grantee, "capabilities": capabilities})
+    return rules
+
+
+def export_permissions(client: TableauClient, source: str) -> dict[str, Any]:
+    """權限檔（tmig.access.permissions 的格式）：Project 的權限與 workbook 預設權限、各 workbook 與 view 的權限。"""
+    users = {
+        str(u.get("id")): {
+            "name": str(u.get("name")),
+            "domain": (u.get("domain") or {}).get("name") or None,
+        }
+        for u in client.users()
+        if u.get("name")
+    }
+    groups = {str(g.get("id")): group_name(g) for g in client.groups()}
+
+    def owner(item: dict[str, Any]) -> str | None:
+        data = item.get("owner") or {}
+        user = users.get(str(data.get("id")))
+        return user["name"] if user else data.get("name")
+
+    projects = []
+    for project in client.projects():
+        pid = str(project["id"])
+        projects.append(
+            {
+                "id": pid,
+                "name": str(project.get("name") or ""),
+                "parent": project.get("parentProjectId") or None,
+                "owner": owner(project),
+                "content_permissions": project.get("contentPermissions") or "ManagedByOwner",
+                "rules": _rules(client.permissions(f"projects/{pid}/permissions"), users, groups),
+                "workbook_defaults": _rules(
+                    client.permissions(f"projects/{pid}/default-permissions/workbooks"),
+                    users,
+                    groups,
+                ),
+            }
+        )
+    workbooks = []
+    for wb in client.workbooks():
+        wid = str(wb["id"])
+        show_tabs = _bool(wb.get("showTabs"))
+        views = []
+        if show_tabs is False:
+            for view in client.workbook_views(wid):
+                vid = str(view["id"])
+                views.append(
+                    {
+                        "id": vid,
+                        "name": str(view.get("name") or ""),
+                        "view_url_name": view.get("viewUrlName") or None,
+                        "rules": _rules(
+                            client.permissions(f"views/{vid}/permissions"), users, groups
+                        ),
+                    }
+                )
+        workbooks.append(
+            {
+                "id": wid,
+                "name": str(wb.get("name") or ""),
+                "content_url": wb.get("contentUrl") or None,
+                "project": (wb.get("project") or {}).get("id"),
+                "owner": owner(wb),
+                "show_tabs": show_tabs is not False,
+                "rules": _rules(client.permissions(f"workbooks/{wid}/permissions"), users, groups),
+                "views": views,
+            }
+        )
+    return {
+        "source": source,
+        "exported_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "projects": projects,
+        "workbooks": workbooks,
+    }
+
+
+def run_permissions(client: TableauClient, args: argparse.Namespace) -> int:
+    session = client.session
+    assert session is not None
+    source = f"{client.server}（site：{session.site_url or '預設'}）"
+    try:
+        data = export_permissions(client, source)
+    except TableauError as exc:
+        if exc.status == 403:
+            print("失敗：匯出權限需要站台管理員的權限", file=sys.stderr)
+            return 1
+        raise
+    out: Path = args.out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    rules = sum(len(w["rules"]) for w in data["workbooks"])
+    print(
+        f"已匯出 {len(data['projects'])} 個 Project、{len(data['workbooks'])} 份報表"
+        f"（{rules} 筆報表權限）→ {out}"
+    )
+    return 0
 
 
 def run_directory(client: TableauClient, args: argparse.Namespace) -> int:
@@ -975,6 +1111,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=Path("directory.json"), help="輸出檔（預設 directory.json）"
     )
     directory.set_defaults(handler=run_directory)
+
+    permissions = commands.add_parser(
+        "permissions",
+        help="匯出 Project、workbook、view 的權限（查詢服務依此授權；需要站台管理員）",
+    )
+    common(permissions)
+    permissions.add_argument(
+        "--out", type=Path, default=Path("permissions.json"), help="輸出檔（預設 permissions.json）"
+    )
+    permissions.set_defaults(handler=run_permissions)
     return parser
 
 

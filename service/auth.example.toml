@@ -7,6 +7,9 @@ mode = "oidc"
 # Tableau Server 的使用者與群組（tools/tableau_server/tableau_server.py directory 匯出；相對於這個檔案）。
 # 登入的帳號依名稱或 email 對應，USERNAME() 與 ISMEMBEROF() 以目錄為準
 directory = "directory.json"
+# Project、workbook、view 的權限（tools/tableau_server/tableau_server.py permissions 匯出）；
+# 沒有設定時，登入的人都看得到所有報表
+permissions = "permissions.json"
 # 不在目錄中的帳號拒絕登入（false 時改用標頭或 ID Token 中的群組）
 require_directory = true
 # alice@corp.example.com、CORP\alice → alice（Tableau 的使用者名稱不含網域時）

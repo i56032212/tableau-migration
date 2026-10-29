@@ -15,7 +15,8 @@ API：
 其餘路徑提供檢視器（web/dist）。
 
 身分驗證（P2，見 tmig_service.auth）：設定之後報表的 API 都需要登入者，查詢以登入者的身分套用列層級權限；
-篩選器的可選值只提供報表上有篩選控制項的欄位。
+篩選器的可選值只提供報表上有篩選控制項的欄位。權限（P3，見 tmig_service.access）：設定權限檔之後，
+報表、view 與報表定義依 Tableau Server 匯出的權限開放。
 
 萃取的資料源查詢報表目錄下的 DuckDB 檔；Live 連線依連線設定檔（環境變數 TMIG_CONNECTIONS，
 預設為目前目錄的 connections.toml）連到來源資料庫，以兩段式執行（第三階段 N3、N4）。
@@ -54,6 +55,7 @@ from tmig.sqlgen.query import (
 )
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
+from tmig_service.access import Authorizer, Grant, viewer_ir
 from tmig_service.auth import Authenticator, AuthSettings, auth_router, load_auth
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -146,6 +148,15 @@ def create_app(
     dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
     data = runtime or DataRuntime()
     authenticator = auth if isinstance(auth, Authenticator) else Authenticator(auth or load_auth())
+    authorizer = Authorizer(authenticator.settings.permissions)
+
+    def granted(wb: str, user: Identity | None) -> tuple[Loaded, Grant]:
+        """報表與登入者的存取；沒有權限時與報表不存在相同，回應 404。"""
+        loaded = workspace.get(wb)
+        grant = authorizer.grant(user, loaded.directory, loaded.ir)
+        if not grant.allowed:
+            raise HTTPException(404, f"找不到報表「{wb}」")
+        return loaded, grant
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -164,14 +175,26 @@ def create_app(
     def workbooks(user: User) -> list[dict[str, Any]]:
         result = []
         for name in workspace.names():
-            ir = workspace.get(name).ir
+            loaded = workspace.get(name)
+            ir = loaded.ir
+            grant = authorizer.grant(user, loaded.directory, ir)
+            if not grant.allowed:
+                continue
             result.append(
                 {
                     "id": name,
                     "workbook": ir.workbook.id,
                     "name": ir.workbook.name,
-                    "dashboards": [{"id": d.id, "name": d.name} for d in ir.dashboards],
-                    "worksheets": [{"id": w.id, "name": w.name} for w in ir.worksheets],
+                    "dashboards": [
+                        {"id": d.id, "name": d.name}
+                        for d in ir.dashboards
+                        if grant.dashboard_allowed(d.name)
+                    ],
+                    "worksheets": [
+                        {"id": w.id, "name": w.name}
+                        for w in ir.worksheets
+                        if grant.worksheet_allowed(ir, w.id)
+                    ],
                     "unsupported": len(ir.unsupported),
                 }
             )
@@ -179,11 +202,12 @@ def create_app(
 
     @app.get("/api/workbooks/{wb}/ir")
     def workbook_ir(wb: str, user: User) -> dict[str, Any]:
-        return workspace.get(wb).ir.model_dump(mode="json")
+        loaded, grant = granted(wb, user)
+        return viewer_ir(loaded.ir, grant)
 
     @app.get("/api/workbooks/{wb}/cases")
     def cases(wb: str, user: User) -> list[dict[str, Any]]:
-        loaded = workspace.get(wb)
+        loaded, _ = granted(wb, user)
         path = loaded.directory / "cases.yaml"
         if not path.is_file():
             return []
@@ -214,7 +238,7 @@ def create_app(
     @app.get("/api/workbooks/{wb}/files/{path:path}")
     def package_file(wb: str, path: str, user: User) -> Response:
         """.twbx 內的圖片；只提供圖片，路徑須與封裝內的檔名完全相同（反斜線視為斜線）。"""
-        loaded = workspace.get(wb)
+        loaded, _ = granted(wb, user)
         if Path(path).suffix.lower() not in IMAGE_TYPES:
             raise HTTPException(404, "只提供圖片檔")
         for package in sorted(loaded.directory.glob("*.twbx")):
@@ -232,8 +256,10 @@ def create_app(
 
     @app.post("/api/workbooks/{wb}/worksheets/{ws}/render")
     def render(wb: str, ws: str, user: User, state: QueryState | None = None) -> dict[str, Any]:
-        loaded = workspace.get(wb)
+        loaded, grant = granted(wb, user)
         ir = loaded.ir
+        if not grant.worksheet_allowed(ir, ws):
+            raise HTTPException(404, f"找不到工作表「{ws}」")
         state = state or QueryState()
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
@@ -331,7 +357,7 @@ def create_app(
         user: User,
         request: Annotated[DomainRequest | None, Body()] = None,
     ) -> dict[str, Any]:
-        loaded = workspace.get(wb)
+        loaded, _ = granted(wb, user)
         ir = loaded.ir
         try:
             use = parse_key(field)

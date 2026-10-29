@@ -75,7 +75,9 @@ function Home({ me }: { me: Me }) {
         <UserBar me={me} />
       </div>
       {error && <p className="error">無法連到查詢服務：{error}</p>}
-      {workbooks?.length === 0 && <p>fixtures 中沒有報表。</p>}
+      {workbooks?.length === 0 && (
+        <p>{me.mode === "none" ? "fixtures 中沒有報表。" : "沒有可以檢視的報表；請向報表的擁有者申請權限。"}</p>
+      )}
       <ul className="workbooks">
         {workbooks?.map((wb) => (
           <li key={wb.id}>

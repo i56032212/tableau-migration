@@ -5,6 +5,7 @@
     [auth]
     mode = "oidc"                         # none、dev、proxy、oidc
     directory = "directory.json"          # Tableau Server 的使用者與群組（相對於設定檔；見 tmig.access）
+    permissions = "permissions.json"      # Project、workbook、view 的權限（P3；見 tmig_service.access）
     strip_domain = true                   # alice@corp.example.com、CORP\\alice → alice
     session_secret = "${TMIG_SESSION_SECRET}"
 
@@ -55,6 +56,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from tmig.access.directory import Directory, DirectoryError, load_directory, login_name
+from tmig.access.permissions import Permissions, PermissionsError, load_permissions
 from tmig.data.sources import ENV_REF
 from tmig.planner.identity import Identity
 
@@ -118,6 +120,8 @@ class AuthSettings:
     proxy: ProxySettings | None = None
     oidc: OidcSettings | None = None
     dev_users: list[str] = field(default_factory=list)
+    permissions: Permissions | None = None
+    """Tableau Server 匯出的權限（P3）；沒有時只要求登入，不限制看哪些報表。"""
 
 
 def _secret(section: dict[str, Any], key: str, where: str) -> str | None:
@@ -173,6 +177,14 @@ def load_auth(path: str | Path | None = None) -> AuthSettings:
         try:
             settings.directory = load_directory(file.parent / str(directory))
         except DirectoryError as exc:
+            raise AuthError(str(exc)) from exc
+    permissions = section.get("permissions")
+    if permissions is not None:
+        if mode == "none":
+            raise AuthError("[auth] 設定了 permissions，但 mode 為 none：權限需要登入者的身分")
+        try:
+            settings.permissions = load_permissions(file.parent / str(permissions))
+        except PermissionsError as exc:
             raise AuthError(str(exc)) from exc
     settings.require_directory = bool(section.get("require_directory", True))
     settings.strip_domain = bool(section.get("strip_domain", False))

@@ -64,6 +64,7 @@ WORKBOOKS: list[dict[str, Any]] = [
         "name": "Ops.v2",
         "contentUrl": "Opsv2",
         "updatedAt": "2026-08-01T00:00:00Z",
+        "showTabs": "false",
         "project": {"id": "p-3", "name": "Ops"},
         "owner": {"id": "u-3", "name": "cat"},
     },
@@ -88,7 +89,13 @@ VIEWS: list[dict[str, Any]] = [
         "workbook": {"id": "wb-1"},
         "count": 30,
     },
-    {"name": "Overview", "viewUrlName": "Overview", "workbook": {"id": "wb-3"}, "count": 5},
+    {
+        "id": "v-4",
+        "name": "Overview",
+        "viewUrlName": "Overview",
+        "workbook": {"id": "wb-3"},
+        "count": 5,
+    },
 ]
 
 
@@ -118,6 +125,40 @@ SITE_USERS = [
     {"id": "u-2", "name": "Cat", "siteRole": "Unlicensed"},
 ]
 GROUP_MEMBERS = {"g-1": ["u-0", "u-1", "u-2"], "g-2": ["u-1"], "g-3": ["u-0"]}
+PROJECTS = [
+    {"id": "p-1", "name": "Sales", "contentPermissions": "LockedToProject", "owner": {"id": "u-0"}},
+    {
+        "id": "p-2",
+        "name": "Finance",
+        "contentPermissions": "ManagedByOwner",
+        "owner": {"id": "u-0"},
+    },
+    {"id": "p-3", "name": "Ops", "parentProjectId": "p-2", "owner": {"id": "u-0"}},
+]
+
+
+def caps(**modes: str) -> dict[str, Any]:
+    return {"capability": [{"name": k, "mode": v} for k, v in modes.items()]}
+
+
+PERMISSIONS: dict[str, list[dict[str, Any]]] = {
+    "projects/p-1/permissions": [
+        {"group": {"id": "g-3"}, "capabilities": caps(ProjectLeader="Allow")}
+    ],
+    "projects/p-1/default-permissions/workbooks": [
+        {"group": {"id": "g-1"}, "capabilities": caps(Read="Allow", ExportXml="Deny")}
+    ],
+    "workbooks/wb-1/permissions": [
+        {"group": {"id": "g-1"}, "capabilities": caps(Read="Allow", ExportXml="Deny")}
+    ],
+    "workbooks/wb-2/permissions": [
+        {"group": {"id": "g-2"}, "capabilities": caps(Read="Allow")},
+        {"user": {"id": "u-1"}, "capabilities": caps(Read="Deny")},
+        {"user": {"id": "u-gone"}, "capabilities": caps(Read="Allow")},
+    ],
+    "workbooks/wb-3/permissions": [{"group": {"id": "g-1"}, "capabilities": caps(Read="Allow")}],
+    "views/v-4/permissions": [{"user": {"id": "u-2"}, "capabilities": caps(Read="Allow")}],
+}
 CURRENT_GROUPS = [
     {"id": "g-1", "name": "All Users", "domain": {"name": "local"}},
     {"id": "g-2", "name": "Sales", "domain": {"name": "corp.example.com"}},
@@ -220,6 +261,18 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
                     "users": {"user": users},
                 },
             )
+            return
+        if rest == "projects":
+            self._json(
+                200,
+                {
+                    "pagination": {"pageNumber": "1", "pageSize": "100", "totalAvailable": "3"},
+                    "projects": {"project": PROJECTS},
+                },
+            )
+            return
+        if rest.endswith("/permissions") or "/default-permissions/" in rest:
+            self._json(200, {"permissions": {"granteeCapabilities": PERMISSIONS.get(rest, [])}})
             return
         if rest == "groups":
             self._json(
@@ -617,3 +670,47 @@ def test_directory_export(server: str, tmp_path: Path, capsys: pytest.CaptureFix
     assert bob is not None and bob.domain == "CORP"
     assert bob.groups == ["All Users", "corp.example.com\\Sales"]
     assert directory.find("amy@example.com") is amy
+
+
+def test_permissions_export(
+    server: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tmig.access.permissions import load_permissions
+    from tmig.planner.identity import Identity
+
+    out = tmp_path / "permissions.json"
+    assert tableau_server.main(["permissions", *auth(server), "--out", str(out)]) == 0
+    assert "已匯出 3 個 Project、3 份報表" in capsys.readouterr().out
+    permissions = load_permissions(out)
+    sales = permissions.project("p-1")
+    assert sales is not None and sales.owner == "amy"
+    assert sales.content_permissions == "LockedToProject"
+    assert sales.rules[0].grantee.name == "Managers"
+    ops = permissions.project("p-3")
+    assert ops is not None and ops.parent == "p-2" and ops.content_permissions == "ManagedByOwner"
+    finance = permissions.workbook("Finance")
+    assert finance is not None
+    # 找不到的使用者（已刪除的帳號）略過；使用者帶網域
+    assert [(r.grantee.kind, r.grantee.name, r.grantee.domain) for r in finance.rules] == [
+        ("group", "corp.example.com\\Sales", None),
+        ("user", "bob", "CORP"),
+    ]
+    opsv2 = permissions.workbook("Opsv2")
+    assert opsv2 is not None and opsv2.show_tabs is False
+    assert [(v.name, v.rules[0].grantee.name) for v in opsv2.views] == [("Overview", "Cat")]
+    overview = permissions.workbook("SalesOverview")
+    assert overview is not None and overview.show_tabs is True and overview.views == []
+
+    cat = Identity(username="Cat", groups=("All Users",), site_role="Viewer")
+    bob = Identity(
+        username="bob",
+        domain="CORP",
+        groups=("All Users", "corp.example.com\\Sales"),
+        site_role="Explorer",
+    )
+    assert permissions.access(cat, opsv2).views is None  # 擁有者看得到全部
+    zed = Identity(username="zed", groups=("All Users",), site_role="Viewer")
+    denied = permissions.access(zed, opsv2)  # 可以看報表，但沒有任何 view 的權限
+    assert not denied.allowed and denied.views == frozenset()
+    assert not permissions.access(bob, finance).allowed  # 本人的拒絕優先於群組的允許
+    assert permissions.access(bob, overview).allowed

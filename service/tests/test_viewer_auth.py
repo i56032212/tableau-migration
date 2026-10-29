@@ -82,3 +82,55 @@ def test_dev_mode_user_switching(server: str, fixtures: Path) -> None:
             page.click(".userbar button")
         page.wait_for_selector("text=開發模式")
         browser.close()
+
+
+def test_viewer_with_permissions(fixtures: Path) -> None:
+    """沒有下載權限時報表定義不含公式與連線，檢視器照常顯示；沒有權限的人看不到報表。"""
+    from playwright.sync_api import sync_playwright
+
+    from tmig.access.directory import Directory, DirectoryUser
+    from tmig.access.permissions import Permissions
+
+    directory = Directory(
+        users=[
+            DirectoryUser(name="alice", groups=["All Users"], site_role="Viewer"),
+            DirectoryUser(name="carol", groups=["All Users"], site_role="Viewer"),
+        ]
+    )
+    granted = Permissions.model_validate(
+        {
+            "workbooks": [
+                {
+                    "id": "w1",
+                    "name": "superstore_demo",
+                    "rules": [
+                        {
+                            "grantee": {"kind": "user", "name": "alice"},
+                            "capabilities": {"Read": "Allow"},
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    settings = AuthSettings(mode="dev", directory=directory, permissions=granted)
+    board = load_ir(fixtures / "secure" / "golden.ir.json").dashboards[0]
+    with running_server(fixtures, DIST, auth=settings) as url, sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.goto(f"{url}/")
+        with page.expect_navigation():
+            page.select_option("select[aria-label='切換使用者']", "alice")
+        page.wait_for_selector(".workbooks li")
+        page.goto(f"{url}/w/secure/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        assert page.locator(".placeholder.error").count() == 0
+        with page.expect_navigation():
+            page.select_option(".userbar select", "carol")
+        page.goto(f"{url}/")
+        page.wait_for_selector("text=沒有可以檢視的報表")
+        page.goto(f"{url}/w/secure/d/{board.id}")
+        page.wait_for_selector("text=載入失敗")
+        browser.close()
