@@ -8,7 +8,7 @@ F3、F4：React＋TypeScript 檢視器（Vite、vega-embed）。只負責排版�
 cd web
 pnpm install
 pnpm build        # 型別檢查＋建置到 dist/
-pnpm dev          # 開發模式：http://127.0.0.1:5173，/api 轉給 tmig serve（8000 埠）
+pnpm dev          # 開發模式：http://127.0.0.1:5173，/api 與 /auth 轉給 tmig serve（8000 埠）
 ```
 
 路由：

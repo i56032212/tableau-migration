@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { caseState, DashboardView } from "./Dashboard";
+import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
-import type { CaseInfo, IR, WorkbookSummary } from "./types";
+import type { CaseInfo, IR, Me, WorkbookSummary } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>；?case=<篩選組合>
@@ -52,11 +53,16 @@ export function App() {
   const route = parseRoute(location.path);
   const caseName = new URLSearchParams(location.search).get("case");
 
-  if (route.page === "home") return <Home />;
-  return <WorkbookPage route={route} caseName={caseName} />;
+  return (
+    <SessionGate>
+      {(me) =>
+        route.page === "home" ? <Home me={me} /> : <WorkbookPage route={route} caseName={caseName} me={me} />
+      }
+    </SessionGate>
+  );
 }
 
-function Home() {
+function Home({ me }: { me: Me }) {
   const [workbooks, setWorkbooks] = useState<WorkbookSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -64,7 +70,10 @@ function Home() {
   }, []);
   return (
     <main className="home">
-      <h1>Tableau 移轉檢視器</h1>
+      <div className="home-header">
+        <h1>Tableau 移轉檢視器</h1>
+        <UserBar me={me} />
+      </div>
       {error && <p className="error">無法連到查詢服務：{error}</p>}
       {workbooks?.length === 0 && <p>fixtures 中沒有報表。</p>}
       <ul className="workbooks">
@@ -91,7 +100,15 @@ function Home() {
   );
 }
 
-function WorkbookPage({ route, caseName }: { route: Exclude<Route, { page: "home" }>; caseName: string | null }) {
+function WorkbookPage({
+  route,
+  caseName,
+  me,
+}: {
+  route: Exclude<Route, { page: "home" }>;
+  caseName: string | null;
+  me: Me;
+}) {
   const workbook = route.workbook;
   const [ir, setIr] = useState<IR | null>(null);
   const [cases, setCases] = useState<CaseInfo[]>([]);
@@ -167,6 +184,7 @@ function WorkbookPage({ route, caseName }: { route: Exclude<Route, { page: "home
           ))}
         </div>
         {ir.unsupported.length > 0 && <span className="error">不支援 {ir.unsupported.length} 筆</span>}
+        <UserBar me={me} />
       </header>
       {dashboard && (
         <DashboardView

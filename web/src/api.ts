@@ -1,10 +1,14 @@
-import type { CaseInfo, Domain, IR, QueryState, RenderResponse, WorkbookSummary } from "./types";
+import type { CaseInfo, Domain, IR, Me, QueryState, RenderResponse, WorkbookSummary } from "./types";
+
+/** 查詢服務回應 401（沒有登入或登入逾時）時發出，SessionGate 收到後重新確認登入者。 */
+export const UNAUTHORIZED_EVENT = "tmig:unauthorized";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
+  if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   if (!response.ok) {
     let detail = response.statusText;
     try {
@@ -25,6 +29,10 @@ export const fileUrl = (id: string, path: string) =>
   `${wb(id)}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 
 export const api = {
+  me: () => request<Me>("/api/me"),
+  devLogin: (username: string) =>
+    request<{ user: Me["user"] }>("/auth/dev", { method: "POST", body: JSON.stringify({ username }) }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   workbooks: () => request<WorkbookSummary[]>("/api/workbooks"),
   ir: (id: string) => request<IR>(`${wb(id)}/ir`),
   cases: (id: string) => request<CaseInfo[]>(`${wb(id)}/cases`),

@@ -36,6 +36,7 @@ uv run python tools/tableau_server/tableau_server.py fetch --server https://tabl
   沒有更新時沿用）併入後再盤點，`--no-published` 可關閉
 - 用到使用者函式或使用者篩選（列層級權限）的報表：`fetch` 以登入帳號的使用者名稱、全名、網域與群組
   （Active Directory 群組寫成 `網域\名稱`）填好 cases.yaml 的 `user`；預期結果必須用同一個帳號抓取
+- `directory --out directory.json`：匯出使用者與群組（查詢服務身分驗證的使用者目錄；需要站台管理員）
 - `inventory` 的其他選項：`--project`（可重複）、`--limit N` 試跑、`--no-download` 只列清單、`--refresh` 全部重新下載
   （預設只重新下載有更新的報表）
 - 輸出在 `inventory/`（不進版控）：`inventory.md`、`inventory.csv`（Excel 可直接開）、`features.csv`

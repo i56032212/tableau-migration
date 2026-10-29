@@ -21,6 +21,11 @@ button { font: inherit; }
 
 .home { max-width: 960px; margin: 32px auto; padding: 0 16px; }
 .home h1 { font-size: 22px; font-weight: 600; }
+.home-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.userbar { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; font-size: 14px; }
+.userbar .user { font-weight: 600; }
+.user-switcher { display: inline-flex; align-items: center; gap: 6px; }
+.user-switcher select { font: inherit; padding: 3px 6px; }
 .workbooks { list-style: none; padding: 0; display: grid; gap: 12px; }
 .workbooks li { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
 .wb-name { font-weight: 600; margin-bottom: 6px; }

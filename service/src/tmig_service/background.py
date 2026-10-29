@@ -12,6 +12,7 @@ from pathlib import Path
 import uvicorn
 
 from tmig_service.app import create_app
+from tmig_service.auth import AuthSettings
 
 
 def free_port() -> int:
@@ -22,12 +23,19 @@ def free_port() -> int:
 
 @contextmanager
 def running_server(
-    fixtures: Path, web_dist: Path | None = None, port: int | None = None
+    fixtures: Path,
+    web_dist: Path | None = None,
+    port: int | None = None,
+    auth: AuthSettings | None = None,
 ) -> Iterator[str]:
-    """啟動服務並回傳網址；離開時關閉。"""
+    """啟動服務並回傳網址；離開時關閉。auth 省略時不驗證身分（不讀環境變數 TMIG_AUTH）。"""
     chosen = port or free_port()
     config = uvicorn.Config(
-        create_app(fixtures, web_dist), host="127.0.0.1", port=chosen, log_level="warning"
+        create_app(fixtures, web_dist, auth=auth or AuthSettings()),
+        host="127.0.0.1",
+        port=chosen,
+        log_level="warning",
+        proxy_headers=False,
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)

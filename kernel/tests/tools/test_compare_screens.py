@@ -50,3 +50,12 @@ def test_compare_pages(tmp_path: Path) -> None:
     default = (out / "default.html").read_text(encoding="utf-8")
     assert "../expected/ws_monthly_profit/default.png" in default
     assert "尚未抓取 Tableau 截圖" in default
+
+
+def test_dev_auth_from_cases_user() -> None:
+    assert compare_screens.dev_auth({"cases": []}) is None
+    settings = compare_screens.dev_auth(
+        {"user": {"username": "amy", "groups": ["Sales"], "full_name": "Amy Lin"}}
+    )
+    assert settings.mode == "dev"
+    assert settings.directory.find("AMY").identity().groups == ("Sales",)

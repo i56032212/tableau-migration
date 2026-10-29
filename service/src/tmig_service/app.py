@@ -10,8 +10,12 @@ API：
 - ``POST /api/workbooks/{wb}/fields/{field}/domain``：篩選器的可選值，或最小值與最大值
 - ``GET  /api/workbooks/{wb}/cases``：cases.yaml 的篩選組合（已轉成篩選狀態），供檢視器切換
 - ``GET  /api/workbooks/{wb}/files/{path}``：.twbx 內的圖片（圖片區塊與圖片按鈕）
+- ``GET  /api/me``：目前的登入者與身分驗證模式；``/auth/*``：登入、登出與開發模式的切換使用者
 
 其餘路徑提供檢視器（web/dist）。
+
+身分驗證（P2，見 tmig_service.auth）：設定之後報表的 API 都需要登入者，查詢以登入者的身分套用列層級權限；
+篩選器的可選值只提供報表上有篩選控制項的欄位。
 
 萃取的資料源查詢報表目錄下的 DuckDB 檔；Live 連線依連線設定檔（環境變數 TMIG_CONNECTIONS，
 預設為目前目錄的 connections.toml）連到來源資料庫，以兩段式執行（第三階段 N3、N4）。
@@ -28,14 +32,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR
+from tmig.ir import IR, iter_zones
+from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.format import display_format
 from tmig.render.format import format_value as display_value
@@ -49,6 +54,7 @@ from tmig.sqlgen.query import (
 )
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
+from tmig_service.auth import Authenticator, AuthSettings, auth_router, load_auth
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -110,14 +116,36 @@ class Workspace:
         return loaded.directory / "data" / f"{datasource}.duckdb"
 
 
+def current_user(request: Request) -> Identity | None:
+    """目前請求的登入者（依 app.state.authenticator）；none 模式為 None，其他模式沒有登入時回應 401。"""
+    authenticator: Authenticator = request.app.state.authenticator
+    return authenticator.identity(request)
+
+
+User = Annotated[Identity | None, Depends(current_user)]
+
+
+def controlled_fields(ir: IR) -> set[str]:
+    """報表上有篩選控制項的欄位 id。"""
+    return {
+        zone.field.field
+        for dashboard in ir.dashboards
+        for zone in iter_zones(dashboard.zones)
+        if zone.kind == "filter" and zone.field is not None
+    }
+
+
 def create_app(
     fixtures: Path | None = None,
     web_dist: Path | None = None,
     runtime: DataRuntime | None = None,
+    auth: AuthSettings | Authenticator | None = None,
 ) -> FastAPI:
+    """auth：身分驗證的設定；省略時依環境變數 TMIG_AUTH 讀取（沒有設定時不驗證）。"""
     workspace = Workspace(fixtures or REPO_ROOT / "fixtures")
     dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
     data = runtime or DataRuntime()
+    authenticator = auth if isinstance(auth, Authenticator) else Authenticator(auth or load_auth())
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -125,13 +153,15 @@ def create_app(
         data.close()
 
     app = FastAPI(title="Tableau 移轉查詢服務", version="0.1.0", lifespan=lifespan)
+    app.state.authenticator = authenticator
+    app.include_router(auth_router(authenticator))
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/api/workbooks")
-    def workbooks() -> list[dict[str, Any]]:
+    def workbooks(user: User) -> list[dict[str, Any]]:
         result = []
         for name in workspace.names():
             ir = workspace.get(name).ir
@@ -148,11 +178,11 @@ def create_app(
         return result
 
     @app.get("/api/workbooks/{wb}/ir")
-    def workbook_ir(wb: str) -> dict[str, Any]:
+    def workbook_ir(wb: str, user: User) -> dict[str, Any]:
         return workspace.get(wb).ir.model_dump(mode="json")
 
     @app.get("/api/workbooks/{wb}/cases")
-    def cases(wb: str) -> list[dict[str, Any]]:
+    def cases(wb: str, user: User) -> list[dict[str, Any]]:
         loaded = workspace.get(wb)
         path = loaded.directory / "cases.yaml"
         if not path.is_file():
@@ -182,7 +212,7 @@ def create_app(
             return None
 
     @app.get("/api/workbooks/{wb}/files/{path:path}")
-    def package_file(wb: str, path: str) -> Response:
+    def package_file(wb: str, path: str, user: User) -> Response:
         """.twbx 內的圖片；只提供圖片，路徑須與封裝內的檔名完全相同（反斜線視為斜線）。"""
         loaded = workspace.get(wb)
         if Path(path).suffix.lower() not in IMAGE_TYPES:
@@ -201,14 +231,14 @@ def create_app(
         raise HTTPException(404, f"找不到檔案「{path}」")
 
     @app.post("/api/workbooks/{wb}/worksheets/{ws}/render")
-    def render(wb: str, ws: str, state: QueryState | None = None) -> dict[str, Any]:
+    def render(wb: str, ws: str, user: User, state: QueryState | None = None) -> dict[str, Any]:
         loaded = workspace.get(wb)
         ir = loaded.ir
         state = state or QueryState()
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
         try:
-            query = worksheet_sql(ir, ws, state)
+            query = worksheet_sql(ir, ws, state, user)
         except StateError as exc:
             raise HTTPException(422, str(exc)) from exc
         except QueryError as exc:
@@ -230,7 +260,7 @@ def create_app(
         # 詳細程度較粗的標記卡（例如甜甜圈中間的合計）各自查詢，只用於圖表；查不了時以工作表的資料呈現
         notes: list[str] = []
         try:
-            pane_queries = pane_sql(ir, sheet.id, query, state)
+            pane_queries = pane_sql(ir, sheet.id, query, state, user)
         except QueryError as exc:
             pane_queries = {}
             notes.append(f"各標記卡無法另外查詢，以工作表的詳細程度呈現：{exc}")
@@ -296,7 +326,10 @@ def create_app(
 
     @app.post("/api/workbooks/{wb}/fields/{field}/domain")
     def domain(
-        wb: str, field: str, request: Annotated[DomainRequest | None, Body()] = None
+        wb: str,
+        field: str,
+        user: User,
+        request: Annotated[DomainRequest | None, Body()] = None,
     ) -> dict[str, Any]:
         loaded = workspace.get(wb)
         ir = loaded.ir
@@ -307,6 +340,9 @@ def create_app(
         ds = next((d for d in ir.datasources if any(f.id == use.field for f in d.fields)), None)
         if ds is None:
             raise HTTPException(404, f"找不到欄位「{use.field}」")
+        if use.field not in controlled_fields(ir):
+            # 與 Tableau 相同，只有放了篩選控制項的欄位會列出可選值（避免列舉其他欄位的值）
+            raise HTTPException(403, f"欄位「{use.field}」在報表上沒有篩選控制項")
         data_field = next(f for f in ds.fields if f.id == use.field)
         kind: Literal["values", "range"]
         if request is not None and request.kind is not None:
@@ -320,7 +356,7 @@ def create_app(
         else:
             kind = "values"
         try:
-            sql = domain_sql(ir, ds.id, use, kind)
+            sql = domain_sql(ir, ds.id, use, kind, user)
             result = data.run_sql(
                 sql, ds, lambda: workspace.database(wb, ds.id), custom_sql_parameters(ir)
             )
@@ -360,8 +396,26 @@ def _json(value: Any) -> Any:
 
 
 def serve(
-    fixtures: Path, host: str = "127.0.0.1", port: int = 8000, web_dist: Path | None = None
+    fixtures: Path,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    web_dist: Path | None = None,
+    auth: Path | None = None,
 ) -> None:
+    """auth：身分驗證設定檔；省略時讀環境變數 TMIG_AUTH。"""
+    import sys
+
     import uvicorn
 
-    uvicorn.run(create_app(fixtures, web_dist), host=host, port=port)
+    settings = load_auth(auth)
+    if settings.mode == "none":
+        print(
+            "注意：未設定身分驗證（TMIG_AUTH），只適合本機檢視；用到使用者函式的報表無法查詢",
+            file=sys.stderr,
+        )
+    elif settings.mode == "dev":
+        print("注意：開發模式，任何人都可以切換成任何使用者，不可用於正式環境", file=sys.stderr)
+    # 不依 X-Forwarded-For 改寫來源位址：反向代理模式以實際連線的位址判斷是否信任
+    uvicorn.run(
+        create_app(fixtures, web_dist, auth=settings), host=host, port=port, proxy_headers=False
+    )

@@ -31,7 +31,8 @@ PostgreSQL 與 Spark（Databricks 的引擎）、資料源改成 Live 連線後�
 Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
 Relationship 模型（見「Relationship 模型」）；公開報表盤點中符合起步條件的從 75 份增加到 90 份。
 萃取型的報表可以由萃取層從來源資料庫更新（完整或增量、原子替換），並與 Tableau 的萃取比對（見「萃取層」）。
-以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）。
+以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）；
+查詢服務與檢視器可以要求登入（反向代理標頭或 OIDC，開發模式可切換使用者；見「身分驗證」）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
@@ -179,6 +180,27 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
 `tools/tableau_server` 的 `fetch` 遇到這類報表時，自動以登入帳號的資料填好 `user`；`fetch_expected` 抓取前會確認瀏覽器登入的
 帳號與 `user` 相同。`tmig sql`／`tmig query` 預設用 cases.yaml 的 `user`，也可以加 `--user 帳號 --group 群組` 試別的身分。
 
+## 身分驗證
+
+查詢服務以登入者的身分查詢（列層級權限），設定檔見 `service/auth.example.toml`
+（`TMIG_AUTH=auth.toml` 或 `uv run tmig serve --auth auth.toml`；`service/src/tmig_service/auth.py`）：
+
+| 模式 | 用途 |
+| --- | --- |
+| `none` | 不驗證（預設；本機檢視與示範）；用到使用者函式的報表無法查詢 |
+| `dev` | 開發模式：檢視器先選使用者、頁首可切換；不可用於正式環境 |
+| `proxy` | 公司的 SSO 閘道（反向代理）驗證後以標頭傳入帳號；只信任 `trusted_proxies` 的連線 |
+| `oidc` | 查詢服務自己以 OpenID Connect 登入（授權碼＋PKCE），以簽章的 cookie 維持工作階段 |
+
+- 使用者目錄：`uv run python tools/tableau_server/tableau_server.py directory --out directory.json` 從 Tableau Server
+  匯出使用者與群組（需要站台管理員）。登入的帳號依名稱或 email 對應，`USERNAME()` 與 `ISMEMBEROF()` 以目錄為準
+  （與 Tableau 相同的大小寫與群組）；不在目錄中的帳號拒絕登入。沒有目錄時用標頭或 ID Token 中的群組
+- 密鑰（`session_secret`、`client_secret`）只能寫成 `${環境變數}`；ID Token 只接受非對稱金鑰的簽章，
+  驗證 issuer、audience、有效期限與 nonce；登入後只回到本站的相對路徑
+- 設定之後報表的 API 都需要登入者；篩選器的可選值只提供報表上有篩選控制項的欄位（與 Tableau 相同，
+  避免列舉其他欄位的值）。`GET /api/me` 回傳目前的登入者與模式
+- `tools/compare_screens` 遇到有列層級權限的報表時，以開發模式、cases.yaml 的 `user` 身分截圖
+
 ## 指令
 
 | 指令 | 用途 |
@@ -197,7 +219,7 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
 | `tmig extract refresh <報表> [--incremental] [--out-dir 目錄]` | 從來源資料庫更新萃取的 DuckDB 檔：完整或增量、原子替換（N7） |
 | `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
 | `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
-| `tmig serve [--fixtures 目錄] [--port 8000]` | 查詢服務與檢視器（F2–F4） |
+| `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]` | 查詢服務與檢視器（F2–F4；身分驗證見「身分驗證」） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
 ## 專案結構
@@ -209,7 +231,8 @@ tableau-migration/
 │   ├── parser/             .twbx 解析器
 │   ├── census/             功能盤點與起步條件檢查
 │   ├── formula/            公式解析、語法樹、型別與層級判定
-│   ├── planner/            篩選與參數狀態
+│   ├── planner/            篩選與參數狀態、登入者的身分與列層級權限
+│   ├── access/             使用者目錄（Tableau Server 的使用者與群組）
 │   ├── sqlgen/             公式與工作表 → DuckDB SQL（依運算順序分段）、方言轉譯
 │   ├── data/               Hyper 匯入、DuckDB 唯讀執行器、Live 連線（兩段式執行、連線設定）
 │   ├── render/             Vega-Lite 規格與數字格式

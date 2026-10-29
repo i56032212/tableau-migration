@@ -5,6 +5,8 @@
 - 沒給 --url 時，自動在背景啟動查詢服務（需要已建置的檢視器 web/dist）
 - Tableau 的截圖來自 fetch-expected（expected/<工作表>/<篩選組合>.png）；沒有時顯示「尚未抓取」
 - 有 report/calc.json（tmig verify 的結果）時，一併標示每項計算比對是否通過
+- 報表有列層級權限時（cases.yaml 有 user），以開發模式啟動查詢服務並以 user 的身分截圖，
+  與 Tableau 的截圖（同一個帳號抓取）可見的資料相同
 
 輸出 fixtures/<報表>/compare/index.html，以及每組篩選一頁；用瀏覽器直接開啟即可。
 """
@@ -58,6 +60,23 @@ def load_report(fixture: Path) -> dict[str, dict[str, Any]]:
     return {c["check_id"]: c for c in report.get("checks", [])}
 
 
+def dev_auth(cases: dict[str, Any]) -> Any:
+    """cases.yaml 的 user → 開發模式的身分驗證設定（只有這一個使用者）；沒有 user 時為 None。"""
+    user = cases.get("user")
+    if not user:
+        return None
+    from tmig.access.directory import Directory, DirectoryUser
+    from tmig_service.auth import AuthSettings
+
+    entry = DirectoryUser(
+        name=str(user["username"]),
+        full_name=user.get("full_name"),
+        domain=user.get("domain"),
+        groups=[str(g) for g in user.get("groups") or []],
+    )
+    return AuthSettings(mode="dev", directory=Directory(source="cases.yaml", users=[entry]))
+
+
 def capture(
     base_url: str, workbook: str, fixture: Path, cases: dict[str, Any], dashboards: list[str]
 ) -> None:
@@ -69,6 +88,12 @@ def capture(
         context = browser.new_context(
             viewport={"width": 1400, "height": 1000}, device_scale_factor=1
         )
+        user = (cases.get("user") or {}).get("username")
+        if user:
+            # 開發模式：以 cases.yaml 的 user 登入（cookie 由同一個瀏覽器內容共用）
+            me = context.request.get(f"{base_url}/api/me").json()
+            if me.get("mode") == "dev":
+                context.request.post(f"{base_url}/auth/dev", data={"username": user})
         page_ = context.new_page()
         for case in cases["cases"]:
             name = case["name"]
@@ -187,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.url is None:
         from tmig_service.background import running_server
 
-        server = running_server(fixture.parent, args.web)
+        server = running_server(fixture.parent, args.web, auth=dev_auth(cases))
     else:
         server = nullcontext(args.url.rstrip("/"))
     with server as base_url:

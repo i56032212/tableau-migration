@@ -106,6 +106,18 @@ PUBLISHED_WORKBOOK: list[bytes] = [b""]
 RLS_WORKBOOK: list[bytes] = [b""]
 """用到使用者函式（列層級權限）的報表。"""
 CURRENT_USER = {"id": "u-0", "name": "amy", "fullName": "Amy Lin", "domain": {"name": "local"}}
+SITE_USERS = [
+    {**CURRENT_USER, "email": "amy@example.com", "siteRole": "Viewer"},
+    {
+        "id": "u-1",
+        "name": "bob",
+        "fullName": "Bob Chen",
+        "siteRole": "Explorer",
+        "domain": {"name": "CORP"},
+    },
+    {"id": "u-2", "name": "Cat", "siteRole": "Unlicensed"},
+]
+GROUP_MEMBERS = {"g-1": ["u-0", "u-1", "u-2"], "g-2": ["u-1"], "g-3": ["u-0"]}
 CURRENT_GROUPS = [
     {"id": "g-1", "name": "All Users", "domain": {"name": "local"}},
     {"id": "g-2", "name": "Sales", "domain": {"name": "corp.example.com"}},
@@ -188,6 +200,49 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
         rest = path.removeprefix(site)
         if rest == "users/u-0":
             self._json(200, {"user": CURRENT_USER})
+            return
+        if rest == "users":
+            if query.get("fields") == ["_all_"]:
+                users = SITE_USERS
+            else:
+                users = [
+                    {k: v for k, v in u.items() if k in ("id", "name", "siteRole")}
+                    for u in SITE_USERS
+                ]
+            self._json(
+                200,
+                {
+                    "pagination": {
+                        "pageNumber": "1",
+                        "pageSize": "100",
+                        "totalAvailable": str(len(users)),
+                    },
+                    "users": {"user": users},
+                },
+            )
+            return
+        if rest == "groups":
+            self._json(
+                200,
+                {
+                    "pagination": {"pageNumber": "1", "pageSize": "100", "totalAvailable": "3"},
+                    "groups": {"group": CURRENT_GROUPS},
+                },
+            )
+            return
+        if rest.startswith("groups/") and rest.endswith("/users"):
+            members = GROUP_MEMBERS[rest.split("/")[1]]
+            self._json(
+                200,
+                {
+                    "pagination": {
+                        "pageNumber": "1",
+                        "pageSize": "100",
+                        "totalAvailable": str(len(members)),
+                    },
+                    "users": {"user": [{"id": m} for m in members]} if members else {},
+                },
+            )
             return
         if rest == "users/u-0/groups":
             self._json(
@@ -543,3 +598,22 @@ def test_starter_cases_user_template() -> None:
 
 def load_cases_text(text: str) -> CasesFile:
     return CasesFile.model_validate(yaml.safe_load(text))
+
+
+def test_directory_export(server: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from tmig.access.directory import load_directory
+
+    out = tmp_path / "directory.json"
+    assert tableau_server.main(["directory", *auth(server), "--out", str(out)]) == 0
+    assert "已匯出 3 個使用者、3 個群組" in capsys.readouterr().out
+    directory = load_directory(out)
+    assert directory.source is not None and "site：sales" in directory.source
+    assert [u.name for u in directory.users] == ["amy", "bob", "Cat"]
+    amy = directory.find("AMY")
+    assert amy is not None
+    assert amy.identity().groups == ("All Users", "Managers")
+    assert amy.email == "amy@example.com" and amy.site_role == "Viewer"
+    bob = directory.find("CORP\\bob")
+    assert bob is not None and bob.domain == "CORP"
+    assert bob.groups == ["All Users", "corp.example.com\\Sales"]
+    assert directory.find("amy@example.com") is amy

@@ -1,0 +1,38 @@
+# 查詢服務的身分驗證設定（P2）：複製成 auth.toml，以 TMIG_AUTH=auth.toml 或 tmig serve --auth auth.toml 啟用。
+# 密鑰一律寫成 ${環境變數}，不寫進這個檔案。
+
+[auth]
+# none：不驗證（本機檢視）；dev：開發模式，可切換使用者；proxy：公司 SSO 閘道的標頭；oidc：OpenID Connect
+mode = "oidc"
+# Tableau Server 的使用者與群組（tools/tableau_server/tableau_server.py directory 匯出；相對於這個檔案）。
+# 登入的帳號依名稱或 email 對應，USERNAME() 與 ISMEMBEROF() 以目錄為準
+directory = "directory.json"
+# 不在目錄中的帳號拒絕登入（false 時改用標頭或 ID Token 中的群組）
+require_directory = true
+# alice@corp.example.com、CORP\alice → alice（Tableau 的使用者名稱不含網域時）
+strip_domain = true
+# 工作階段 cookie 的簽章金鑰（至少 32 個字元），例如 python -c "import secrets; print(secrets.token_urlsafe(48))"
+session_secret = "${TMIG_SESSION_SECRET}"
+session_hours = 8
+
+[auth.oidc]
+issuer = "https://login.example.com/realms/corp"
+client_id = "tmig"
+client_secret = "${TMIG_OIDC_CLIENT_SECRET}"
+# 在身分提供者登記的回呼網址
+redirect_uri = "https://bi.example.com/auth/callback"
+scopes = ["openid", "profile", "email"]
+# ID Token 中的帳號、群組與名稱（Azure AD／Entra ID 的帳號可用 preferred_username 或 upn）
+username_claim = "preferred_username"
+groups_claim = "groups"
+name_claim = "name"
+
+# 反向代理模式（mode = "proxy"）：公司的 SSO 閘道驗證後以標頭傳入帳號
+# [auth.proxy]
+# user_header = "X-Forwarded-User"
+# groups_header = "X-Forwarded-Groups"   # 選填，逗號分隔（有目錄時以目錄為準）
+# trusted_proxies = ["127.0.0.1", "10.0.0.0/8"]   # 只信任來自這些位址的連線
+
+# 開發模式（mode = "dev"）：可以切換的使用者；沒有時用目錄中的所有使用者
+# [auth.dev]
+# users = ["alice", "bob"]

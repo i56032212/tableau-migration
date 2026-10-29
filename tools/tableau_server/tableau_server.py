@@ -1,6 +1,6 @@
 """從 Tableau Server 盤點報表、挑起步候選、下載選定的報表（S2；SDD「盤點與使用率」）。
 
-只用 REST API，不需要管理員權限：看得到哪些報表，就盤點哪些。
+只用 REST API；盤點與下載不需要管理員權限（看得到哪些報表，就盤點哪些），匯出使用者目錄需要站台管理員。
 
     # 1. 盤點：列出看得到的報表（含檢視次數），下載結構（不含萃取，很快）並逐份盤點
     uv run python tools/tableau_server/tableau_server.py inventory \\
@@ -10,6 +10,10 @@
     uv run python tools/tableau_server/tableau_server.py fetch \\
         --server https://tableau.example.com --site sales --pat-name <PAT 名稱> \\
         --workbook "銷售總覽"
+
+    # 3. 使用者目錄：使用者與群組（查詢服務的身分驗證依此對應，需要站台管理員）
+    uv run python tools/tableau_server/tableau_server.py directory \\
+        --server https://tableau.example.com --site sales --pat-name <PAT 名稱> --out directory.json
 
 登入方式（擇一）：
 
@@ -250,12 +254,8 @@ class TableauClient:
         if not user_id:
             raise TableauError("登入資訊沒有使用者 id")
         user = self.get_json(f"users/{user_id}").get("user") or {}
-        groups: set[str] = set()
-        for group in self.paged(f"users/{user_id}/groups", "groups", "group"):
-            name = str(group.get("name") or "")
-            domain = str((group.get("domain") or {}).get("name") or "local")
-            if name:
-                groups.add(name if domain.lower() == "local" else f"{domain}\\{name}")
+        groups = {group_name(g) for g in self.paged(f"users/{user_id}/groups", "groups", "group")}
+        groups.discard("")
         return {
             "username": str(user.get("name") or ""),
             "full_name": user.get("fullName") or None,
@@ -279,6 +279,21 @@ class TableauClient:
                 last = exc  # 舊版不支援某些欄位：退回較少的欄位
         assert last is not None
         raise last
+
+    def users(self) -> list[dict[str, Any]]:
+        """站台上的使用者（需要站台管理員）；舊版不支援 fields 時退回預設欄位。"""
+        try:
+            return list(self.paged("users", "users", "user", {"fields": "_all_"}))
+        except TableauError as exc:
+            if exc.status != 400:
+                raise
+            return list(self.paged("users", "users", "user"))
+
+    def groups(self) -> list[dict[str, Any]]:
+        return list(self.paged("groups", "groups", "group"))
+
+    def group_users(self, group_id: str) -> list[dict[str, Any]]:
+        return list(self.paged(f"groups/{group_id}/users", "users", "user"))
 
     def views(self) -> list[dict[str, Any]]:
         return list(self.paged("views", "views", "view", {"includeUsageStatistics": "true"}))
@@ -499,6 +514,65 @@ def _load_previous(path: Path) -> dict[str, dict[str, Any]]:
     except ValueError:
         return {}
     return {wb["id"]: wb for wb in data.get("workbooks", []) if isinstance(wb, dict) and "id" in wb}
+
+
+def group_name(group: dict[str, Any]) -> str:
+    """ISMEMBEROF 比對的群組名稱：本機群組為名稱，Active Directory 群組為「網域\\名稱」。"""
+    name = str(group.get("name") or "")
+    domain = str((group.get("domain") or {}).get("name") or "local")
+    return name if domain.lower() == "local" else f"{domain}\\{name}"
+
+
+def export_directory(client: TableauClient, source: str) -> dict[str, Any]:
+    """使用者目錄（tmig.access.directory 的格式）：每個使用者的名稱、全名、網域、email、站台角色與群組。"""
+    members: dict[str, set[str]] = {}
+    for group in client.groups():
+        name = group_name(group)
+        if not name:
+            continue
+        for user in client.group_users(str(group["id"])):
+            members.setdefault(str(user.get("id")), set()).add(name)
+    users = []
+    for user in client.users():
+        if not user.get("name"):
+            continue
+        users.append(
+            {
+                "name": str(user["name"]),
+                "full_name": user.get("fullName") or None,
+                "domain": (user.get("domain") or {}).get("name") or None,
+                "email": user.get("email") or None,
+                "site_role": user.get("siteRole") or None,
+                "groups": sorted(members.get(str(user.get("id")), set())),
+            }
+        )
+    users.sort(key=lambda u: (u["name"].casefold(), u["domain"] or ""))
+    return {
+        "source": source,
+        "exported_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "users": users,
+    }
+
+
+def run_directory(client: TableauClient, args: argparse.Namespace) -> int:
+    session = client.session
+    assert session is not None
+    source = f"{client.server}（site：{session.site_url or '預設'}）"
+    try:
+        data = export_directory(client, source)
+    except TableauError as exc:
+        if exc.status == 403:
+            print("失敗：匯出使用者與群組需要站台管理員的權限", file=sys.stderr)
+            return 1
+        raise
+    out: Path = args.out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    groups = {g for u in data["users"] for g in u["groups"]}
+    print(f"已匯出 {len(data['users'])} 個使用者、{len(groups)} 個群組 → {out}")
+    return 0
 
 
 def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
@@ -892,6 +966,15 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--project", help="同名報表在不同 Project 時用來區分")
     fetch.add_argument("--fixture", type=Path, help="fixture 目錄；預設 fixtures/<報表網址名稱>")
     fetch.set_defaults(handler=run_fetch)
+
+    directory = commands.add_parser(
+        "directory", help="匯出使用者與群組（查詢服務的使用者目錄；需要站台管理員）"
+    )
+    common(directory)
+    directory.add_argument(
+        "--out", type=Path, default=Path("directory.json"), help="輸出檔（預設 directory.json）"
+    )
+    directory.set_defaults(handler=run_directory)
     return parser
 
 

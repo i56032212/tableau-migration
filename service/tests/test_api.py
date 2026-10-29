@@ -122,22 +122,28 @@ def test_domain(client: TestClient) -> None:
         "kind": "values",
         "values": ["Consumer", "Corporate", "Home Office"],
     }
-    assert client.post(f"{WB}/fields/year(f_order_date)/domain").json()["values"] == [
+    features = "/api/workbooks/superstore_features"
+    assert client.post(f"{features}/fields/year(f_order_date)/domain").json()["values"] == [
         2021,
         2022,
         2023,
         2024,
     ]
-    assert client.post(f"{WB}/fields/f_order_date/domain").json() == {
+    assert client.post(f"{features}/fields/f_order_date/domain").json() == {
         "kind": "range",
         "min": "2021-01-03",
         "max": "2024-12-30",
     }
     assert (
-        client.post(f"{WB}/fields/f_sales/domain", json={"kind": "range"}).json()["kind"] == "range"
+        client.post(f"{WB}/fields/f_segment/domain", json={"kind": "values"}).json()["kind"]
+        == "values"
     )
     assert client.post(f"{WB}/fields/f_nope/domain").status_code == 404
     assert client.post(f"{WB}/fields/f_category/domain", json={"sql": "x"}).status_code == 422
+    # 報表上沒有篩選控制項的欄位不列出可選值（與 Tableau 相同，避免列舉其他欄位的值）
+    response = client.post(f"{WB}/fields/f_sales/domain", json={"kind": "range"})
+    assert response.status_code == 403
+    assert "沒有篩選控制項" in response.json()["detail"]
 
 
 def test_cases(client: TestClient) -> None:

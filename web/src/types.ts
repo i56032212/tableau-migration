@@ -272,3 +272,22 @@ export interface RenderResponse {
 export type Domain =
   | { kind: "values"; values: Scalar[] }
   | { kind: "range"; min: Scalar; max: Scalar };
+
+// ---------------------------------------------------------------- 身分驗證
+
+export interface UserInfo {
+  username: string;
+  full_name: string | null;
+  domain: string | null;
+  groups: string[];
+}
+
+/** /api/me：身分驗證的模式與目前的登入者 */
+export interface Me {
+  mode: "none" | "dev" | "proxy" | "oidc";
+  user: UserInfo | null;
+  /** oidc：登入的網址 */
+  login?: string;
+  /** dev：可以切換的使用者 */
+  users?: string[];
+}

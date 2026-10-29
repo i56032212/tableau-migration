@@ -14,7 +14,7 @@ tmig connections check <報表或資料夾>...         檢查 Live 連線的設�
 tmig extract refresh <報表> [--incremental]       從來源資料庫更新萃取的 DuckDB 檔（完整或增量）
 tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取比對（列數、總和、最小值、最大值）
 tmig published merge <報表> [--published 目錄]     把 Published Data Source 的 .tdsx 併入報表
-tmig serve [--fixtures 目錄] [--port 8000]       啟動查詢服務與檢視器
+tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]  啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -587,11 +587,16 @@ def _cmd_published_merge(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from tmig_service import serve
+        from tmig_service.auth import AuthError
     except ImportError:
         print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
         return 1
     print(f"查詢服務：http://{args.host}:{args.port}（讀取 {args.fixtures}）")
-    serve(args.fixtures, args.host, args.port, args.web)
+    try:
+        serve(args.fixtures, args.host, args.port, args.web, args.auth)
+    except AuthError as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -807,6 +812,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--web", type=Path, help="檢視器的建置目錄；預設為 web/dist")
+    serve.add_argument(
+        "--auth", type=Path, help="身分驗證設定檔（TOML）；預設讀環境變數 TMIG_AUTH，沒有時不驗證"
+    )
     serve.set_defaults(handler=_cmd_serve)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
