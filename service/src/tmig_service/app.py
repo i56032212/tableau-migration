@@ -12,6 +12,9 @@ API：
 - ``GET  /api/workbooks/{wb}/files/{path}``：.twbx 內的圖片（圖片區塊與圖片按鈕）
 
 其餘路徑提供檢視器（web/dist）。
+
+萃取的資料源查詢報表目錄下的 DuckDB 檔；Live 連線依連線設定檔（環境變數 TMIG_CONNECTIONS，
+預設為目前目錄的 connections.toml）連到來源資料庫，以兩段式執行（第三階段 N3、N4）。
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from __future__ import annotations
 import mimetypes
 import threading
 import zipfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -27,7 +32,9 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
-from tmig.data.executor import ExecutionError, execute, format_value
+from tmig.data.executor import ExecutionError, format_value
+from tmig.data.runtime import DataRuntime
+from tmig.data.sources import SourceConnectionError
 from tmig.ir import IR
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.format import display_format
@@ -97,10 +104,21 @@ class Workspace:
         return loaded.directory / "data" / f"{datasource}.duckdb"
 
 
-def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> FastAPI:
+def create_app(
+    fixtures: Path | None = None,
+    web_dist: Path | None = None,
+    runtime: DataRuntime | None = None,
+) -> FastAPI:
     workspace = Workspace(fixtures or REPO_ROOT / "fixtures")
     dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
-    app = FastAPI(title="Tableau 移轉查詢服務", version="0.1.0")
+    data = runtime or DataRuntime()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        data.close()
+
+    app = FastAPI(title="Tableau 移轉查詢服務", version="0.1.0", lifespan=lifespan)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -198,7 +216,11 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
                 }
             raise HTTPException(422, str(exc)) from exc
         sheet = next(w for w in ir.worksheets if w.id == query.worksheet)
-        database = workspace.database(wb, sheet.datasource)
+        datasource = next(d for d in ir.datasources if d.id == sheet.datasource)
+
+        def database() -> Path:
+            return workspace.database(wb, sheet.datasource)
+
         # 詳細程度較粗的標記卡（例如甜甜圈中間的合計）各自查詢，只用於圖表；查不了時以工作表的資料呈現
         notes: list[str] = []
         try:
@@ -207,8 +229,23 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
             pane_queries = {}
             notes.append(f"各標記卡無法另外查詢，以工作表的詳細程度呈現：{exc}")
         try:
-            result = execute(database, query.sql)
-            panes = {i: (q.columns, execute(database, q.sql)) for i, q in pane_queries.items()}
+            result = data.run(query, datasource, database)
+            panes = {
+                i: (q.columns, data.run(q, datasource, database)) for i, q in pane_queries.items()
+            }
+        except QueryError as exc:
+            # Live 連線：下推的 SQL 轉不成來源資料庫的方言
+            if not exc.unsupported:
+                raise HTTPException(422, str(exc)) from exc
+            return {
+                "worksheet": sheet.id,
+                "rows": 0,
+                "spec": None,
+                "unsupported": str(exc),
+                "notes": notes,
+            }
+        except SourceConnectionError as exc:
+            raise HTTPException(503, str(exc)) from exc
         except ExecutionError as exc:
             raise HTTPException(500, str(exc)) from exc
         rendered = build_spec(
@@ -278,9 +315,11 @@ def create_app(fixtures: Path | None = None, web_dist: Path | None = None) -> Fa
             kind = "values"
         try:
             sql = domain_sql(ir, ds.id, use, kind)
-            result = execute(workspace.database(wb, ds.id), sql)
+            result = data.run_sql(sql, ds, lambda: workspace.database(wb, ds.id))
         except QueryError as exc:
             raise HTTPException(422, str(exc)) from exc
+        except SourceConnectionError as exc:
+            raise HTTPException(503, str(exc)) from exc
         except ExecutionError as exc:
             raise HTTPException(500, str(exc)) from exc
         if kind == "range":

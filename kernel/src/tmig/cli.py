@@ -9,6 +9,8 @@ tmig query <IR 檔> <工作表> [--case 名稱]        執行查詢，輸出 CSV
 tmig cases suggest <fixture 目錄> [--write]      依資料建議 3 組篩選組合
 tmig mapping suggest <fixture 目錄>              產生 CSV 欄名對照建議
 tmig verify <fixture 目錄> [--out 報告]          計算比對，寫出差異報告
+tmig connections template <報表或資料夾>...      產生 Live 連線的設定檔範本（憑證寫成環境變數）
+tmig connections check <報表或資料夾>...         檢查 Live 連線的設定並測試連線
 tmig serve [--fixtures 目錄] [--port 8000]       啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
@@ -195,7 +197,9 @@ def _cmd_sql(args: argparse.Namespace) -> int:
 
 
 def _cmd_query(args: argparse.Namespace) -> int:
-    from tmig.data.executor import ExecutionError, execute
+    from tmig.data.executor import ExecutionError
+    from tmig.data.runtime import DataRuntime
+    from tmig.data.sources import SourceConnectionError
     from tmig.planner.state import StateError
     from tmig.sqlgen.query import QueryError, worksheet_sql
     from tmig.verify.cases import CasesError
@@ -205,13 +209,19 @@ def _cmd_query(args: argparse.Namespace) -> int:
         ir, state = _query_inputs(args)
         query = worksheet_sql(ir, args.worksheet, state)
         ws = next(w for w in ir.worksheets if w.id == query.worksheet)
-        db = args.db
-        if db is None:
+        datasource = next(d for d in ir.datasources if d.id == ws.datasource)
+
+        def database() -> Path:
+            if args.db is not None:
+                return args.db
             # 與 tmig verify 相同：缺 DuckDB 檔時由同目錄的 .twbx 匯入
             for note in ensure_data(args.ir.parent, ir):
                 print(note, file=sys.stderr)
-            db = args.ir.parent / "data" / f"{ws.datasource}.duckdb"
-        result = execute(db, query.sql)
+            return args.ir.parent / "data" / f"{ws.datasource}.duckdb"
+
+        # Live 連線依連線設定檔（TMIG_CONNECTIONS）連到來源資料庫
+        with DataRuntime() as runtime:
+            result = runtime.run(query, datasource, database)
     except (
         FileNotFoundError,
         ValidationError,
@@ -219,6 +229,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
         QueryError,
         StateError,
         ExecutionError,
+        SourceConnectionError,
     ) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
@@ -336,6 +347,64 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     )
     print(report.owner_summary(names))
     return 0 if report.ok else 1
+
+
+def _connections_found(args: argparse.Namespace):
+    from tmig.data.connection_check import collect, load_workbook, workbook_paths
+
+    irs = []
+    for path in workbook_paths(args.paths):
+        try:
+            irs.append(load_workbook(path))
+        except (WorkbookFormatError, WorkbookParseError, ValidationError, OSError) as exc:
+            print(f"略過  {path}：{exc}", file=sys.stderr)
+    return collect(irs)
+
+
+def _cmd_connections_template(args: argparse.Namespace) -> int:
+    from tmig.data.connection_check import template
+
+    found = _connections_found(args)
+    if not found:
+        print("沒有找到 Live 連線", file=sys.stderr)
+        return 1
+    text = template(found)
+    if args.out is None:
+        sys.stdout.write(text)
+    else:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"{len(found)} 個連線 → {args.out}", file=sys.stderr)
+    return 0
+
+
+def _cmd_connections_check(args: argparse.Namespace) -> int:
+    from tmig.data.connection_check import check
+    from tmig.data.sources import SourceConnectionError, config_path, load_connections
+
+    found = _connections_found(args)
+    if not found:
+        print("沒有找到 Live 連線", file=sys.stderr)
+        return 1
+    try:
+        configs = load_connections(args.config)
+    except SourceConnectionError as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    path = config_path(args.config)
+    print(f"連線設定檔：{path}" + ("" if path.is_file() else "（不存在）"))
+    statuses = check(found, configs, connect=not args.no_connect)
+    for status in statuses:
+        connection = status.found.connection
+        mark = "通過" if status.ok else "失敗"
+        where = "／".join(p for p in (connection.server, connection.database) if p)
+        print(
+            f"{mark}  {connection.connection_id}（{connection.dbclass}，{where or '未標示主機'}）：{status.message}"
+        )
+        print(f"      報表：{'、'.join(status.found.workbooks)}")
+    bad = sum(1 for s in statuses if not s.ok)
+    print(f"共 {len(statuses)} 個連線：通過 {len(statuses) - bad}、失敗 {bad}")
+    return 1 if bad else 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -474,6 +543,32 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("fixture", type=Path, metavar="fixture 目錄")
     verify.add_argument("--out", type=Path, help="差異報告路徑；預設為 <fixture>/report/calc.json")
     verify.set_defaults(handler=_cmd_verify)
+
+    connections_parser = commands.add_parser("connections", help="Live 連線的設定與測試")
+    connections_commands = connections_parser.add_subparsers(
+        dest="connections_command", required=True, metavar="子指令"
+    )
+    conn_template = connections_commands.add_parser(
+        "template", help="產生連線設定檔範本（帳號、密碼、權杖寫成 ${環境變數}）"
+    )
+    conn_template.add_argument(
+        "paths", nargs="+", type=Path, metavar="報表或資料夾", help=".twb／.twbx、IR 檔或資料夾"
+    )
+    conn_template.add_argument("--out", type=Path, help="寫入檔案；省略時印到標準輸出")
+    conn_template.set_defaults(handler=_cmd_connections_template)
+    conn_check = connections_commands.add_parser(
+        "check", help="檢查連線設定與環境變數，並以唯讀查詢測試連線"
+    )
+    conn_check.add_argument(
+        "paths", nargs="+", type=Path, metavar="報表或資料夾", help=".twb／.twbx、IR 檔或資料夾"
+    )
+    conn_check.add_argument(
+        "--config",
+        type=Path,
+        help="連線設定檔；預設為環境變數 TMIG_CONNECTIONS 或 connections.toml",
+    )
+    conn_check.add_argument("--no-connect", action="store_true", help="只檢查設定，不實際連線")
+    conn_check.set_defaults(handler=_cmd_connections_check)
 
     serve = commands.add_parser("serve", help="啟動查詢服務與檢視器")
     serve.add_argument(

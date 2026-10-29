@@ -21,7 +21,6 @@ WITH
 "meas" AS (
   SELECT *, "__a0" AS "__m0" FROM agg
 ),
--- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 -- 第 7 段：Table Calculation 與合計
 "sort_agg" AS (
   SELECT "Region" AS "__k0", sum("Sales") AS "__a0" FROM dimf GROUP BY 1
@@ -32,6 +31,7 @@ WITH
 "sorted" AS (
   SELECT m.*, s0."__v" AS "__sort0" FROM meas m LEFT JOIN sort s0 ON s0."__key" IS NOT DISTINCT FROM m."__k0"
 ),
+-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 "tc" AS (
   SELECT m.*, sum("__a0") OVER (PARTITION BY "__k1" ORDER BY "__sort0" DESC NULLS LAST, "__k0" ASC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "__m1" FROM sorted m
 )

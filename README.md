@@ -25,6 +25,11 @@
 檢視器的篩選群組、自動尺寸、各種動作、群組與篩選條件都有端到端測試。以 156 份公開的 .twb／.twbx 盤點，符合起步條件的 75 份中，
 解析後沒有不支援元素、可以直接開始的從擴充前的 1 份增加到 19 份。
 
+第三階段（來源資料庫、權限、排程）進行中。Live 連線已能查詢：工作表的 SQL 中不含 Table Calculation 的部分
+轉成來源資料庫的方言下推執行，結果取回 DuckDB 再算 Table Calculation（兩段式執行）。兩份報表的萃取資料載入
+PostgreSQL 與 Spark（Databricks 的引擎）、資料源改成 Live 連線後，116 項計算比對全部通過，每個公式函式也都實跑比對；
+Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。
+
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
 
@@ -81,6 +86,27 @@ uv run tmig query fixtures/<報表>/golden.ir.json "工作表名稱" --case <篩
 
 SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與下推界線。
 
+## Live 連線
+
+資料源是 Live 連線的報表（Oracle、Databricks、PostgreSQL），查詢時連到來源資料庫：
+
+1. `uv run tmig connections template <報表或資料夾> --out connections.toml` 產生連線設定檔範本
+2. 帳號、密碼、權杖在設定檔中一律寫成 `${環境變數}`（直接寫值會被拒絕），由部署環境或密碼管理服務提供；
+   請使用唯讀的服務帳號。設定檔的位置由環境變數 `TMIG_CONNECTIONS` 指定，預設為目前目錄的 `connections.toml`
+3. `uv run tmig connections check <報表或資料夾>` 檢查設定、環境變數，並以唯讀查詢測試連線
+4. 之後 `tmig verify`、`tmig query`、`tmig serve` 遇到 Live 連線都會依設定檔連線
+
+連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra databricks`、`--extra postgres`。
+IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
+
+方言轉譯（`kernel/src/tmig/sqlgen/dialect.py`）只送出確定語意相同的 SQL：轉譯後的每個節點都要在該方言的允許清單中，
+轉不了的函式列為不支援，不會送出可能算錯的 SQL。驗證方式：
+
+- PostgreSQL（16 以上）、Spark（3.4 以上，Databricks 的引擎）：每個公式函式與兩份報表的每張工作表 × 每組篩選實跑比對
+  （`kernel/tests/sqlgen/test_engines.py`；本機有 PostgreSQL 時自動執行，Spark 需要 `uv sync --group spark` 與 Java 17 以上）
+- Oracle（12.2 以上）：尚無實機。轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、Oracle 特有的函式依官方文件的語意模擬後執行比對，
+  並保留轉譯快照（`fixtures/*/sql/oracle/`）供審核；正式使用前須在公司的 Oracle 實測
+
 ## 指令
 
 | 指令 | 用途 |
@@ -94,6 +120,8 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 | `tmig cases suggest <fixture 目錄> [--write]` | 依資料建議 3 組篩選組合（E1） |
 | `tmig mapping suggest <fixture 目錄>` | 預期 CSV 欄名對照建議（E2） |
 | `tmig verify <fixture 目錄>` | 計算比對，寫出固定格式的差異報告（E3） |
+| `tmig connections template <報表或資料夾>... [--out 檔案]` | Live 連線的設定檔範本，憑證寫成環境變數（N4） |
+| `tmig connections check <報表或資料夾>... [--config 檔案] [--no-connect]` | 檢查 Live 連線的設定並測試連線（N4） |
 | `tmig serve [--fixtures 目錄] [--port 8000]` | 查詢服務與檢視器（F2–F4） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
@@ -107,8 +135,8 @@ tableau-migration/
 │   ├── census/             功能盤點與起步條件檢查
 │   ├── formula/            公式解析、語法樹、型別與層級判定
 │   ├── planner/            篩選與參數狀態
-│   ├── sqlgen/             公式與工作表 → DuckDB SQL（依運算順序分段）
-│   ├── data/               Hyper 匯入、DuckDB 唯讀執行器
+│   ├── sqlgen/             公式與工作表 → DuckDB SQL（依運算順序分段）、方言轉譯
+│   ├── data/               Hyper 匯入、DuckDB 唯讀執行器、Live 連線（兩段式執行、連線設定）
 │   ├── render/             Vega-Lite 規格與數字格式
 │   ├── verify/             cases.yaml、欄位對照、正規化、比對、差異報告
 │   └── cli.py              tmig 命令列
@@ -163,12 +191,17 @@ tableau-migration/
   平均 ± 標準差的倍數）；窗格為欄列架上的離散維度，但各架最內層若是離散維度則不算（它切出的是儲存格）。
   合計（Total）只在量值為 SUM、COUNT、MIN、MAX 時畫出；參考區間只畫兩端的線、不畫底色，
   分布的百分比、分位數、信賴區間與盒鬚圖不畫；同一條參考線有多個範圍時不顯示標籤
+- **Live 連線**：與 Tableau 直接連來源資料庫時相同，字串的排序與比較依資料庫的定序、TODAY() 與 NOW() 依資料庫的時區
+  （Databricks 的工作階段時區設為 UTC）、STR() 轉換小數的格式依資料庫；Oracle 的空字串即 Null、ADD_MONTHS 在月底的行為照 Oracle。
+  Oracle 沒有布林型別，結果是布林值的計算（布林維度、ISNULL、CONTAINS 的結果等）與 FINDNTH 在 Oracle 尚不支援；
+  PostgreSQL 的 DATEPARSE 遇到符合格式但不存在的日期（例如 13 月）會報錯而不是 Null
 - **函式**：REGEXP_EXTRACT 沒有符合時為 Null；正規表示式以 RE2 執行，用到前後查看、反向參照的樣式列為不支援；
   DATENAME 的月份與星期為英文名稱（Tableau 依工作簿的地區設定，中文環境可能不同）；ISDATE 只認得 ISO 格式的日期
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
 集合與集合動作、成員別名、趨勢線、地圖、小計與總計、巢狀 LOD、百分位數與百分比等其他快速 Table Calculation、
-使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、Live 連線與 Published Data Source。
+使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、Published Data Source、Relationship 模型、
+SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線。
 
 ## 開發規則
 

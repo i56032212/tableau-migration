@@ -10,7 +10,6 @@ WITH
 "meas" AS (
   SELECT *, "__a0" AS "__m0" FROM agg
 ),
--- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 -- 第 7 段：Table Calculation 與合計
 "marks_rows" AS (
   SELECT r.* FROM src r WHERE EXISTS (SELECT 1 FROM meas k WHERE k."__k0" IS NOT DISTINCT FROM "r"."Category")
@@ -24,6 +23,7 @@ WITH
 "totals" AS (
   SELECT m.*, t0."__v" AS "__total0" FROM meas m LEFT JOIN total t0 ON TRUE
 ),
+-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 "tc" AS (
   SELECT m.*, (CAST("__a0" AS DOUBLE) / NULLIF(CAST("__total0" AS DOUBLE), 0)) AS "__m1" FROM totals m
 )

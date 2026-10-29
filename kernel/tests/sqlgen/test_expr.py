@@ -303,6 +303,10 @@ ROW_CASES: list[tuple[str, str, Any]] = [
     ("ISOWEEKDAY([Order Date])", "A1", 4),
     ("ISOQUARTER(#2021-01-01#)", "A1", 4),
     ("ISOQUARTER([Order Date])", "A1", 1),
+    # DuckDB 的 least／greatest 略過 Null：Null 的結果仍要是 Null
+    ("ISOQUARTER([Ship Time])", "A3", None),
+    ("SPACE(INT([Profit]))", "A3", None),
+    ("FLOAT([Quantity])", "A1", 3.0),
 ]
 
 

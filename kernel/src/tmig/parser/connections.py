@@ -48,6 +48,9 @@ DIALECTS: dict[str, Dialect] = {
 }
 """Tableau 的連線類型 → SQLGlot 方言（類型名稱依公開資料整理，待真實報表確認）。"""
 
+EXECUTABLE: frozenset[str] = frozenset({"oracle", "databricks", "spark", "postgres"})
+"""已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
+
 FILE_CLASSES = frozenset({"excel-direct", "textscan", "excel", "csv", "hyper", "dataengine"})
 JOIN_KINDS = {"inner": "inner", "left": "left", "right": "right", "full": "full"}
 COMPARISONS = frozenset({"=", "!=", "<", "<=", ">", ">="})
@@ -78,6 +81,8 @@ def live_connection(
     dialect = DIALECTS.get(dbclass)
     if dialect is None:
         ctx.flag(named, f"資料源「{caption}」的連線類型 {dbclass or '（未標示）'} 尚不支援")
+    elif dialect not in EXECUTABLE:
+        ctx.flag(named, f"資料源「{caption}」的連線類型 {dbclass} 尚無 SQL 轉譯與執行器")
     server = named.get("server") or None
     database = named.get("service") or named.get("v-catalog") or named.get("dbname") or None
     port_text = named.get("port") or ""

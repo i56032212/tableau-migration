@@ -21,7 +21,7 @@ LOD 的彙總語意：彙總的參數若只含 LOD（不含列層級欄位），
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from tmig.formula.analyze import Analyzer, Target
@@ -164,12 +164,30 @@ class StageNote:
 
 
 @dataclass
+class CteDef:
+    """一段 CTE：名稱、內容、所屬的運算階段（1–8），與能否下推到來源資料庫。"""
+
+    name: str
+    body: str
+    stage: int
+    pushdown: bool
+    """不含 Table Calculation：第 1–6 段，以及依來源資料計算的排序值與 TOTAL。"""
+
+
+@dataclass
 class WorksheetSql:
     worksheet: str
     sql: str
     columns: list[OutputColumn]
     plan: list[StageNote]
     state: EffectiveState
+    ctes: list[CteDef] = field(default_factory=list)
+    """sql 的各段 CTE，供兩段式執行拆分（可下推的 CTE 在來源資料庫執行）。"""
+    main: str = ""
+    """最後的 SELECT（第 8 段的輸出），一律在 DuckDB 執行。"""
+    live: bool = False
+    custom_sql: list[str] = field(default_factory=list)
+    """Live 連線的自訂 SQL 原文（SQL 中以佔位資料表表示）。"""
 
 
 @dataclass
@@ -281,6 +299,7 @@ class WorksheetQuery:
         except SourceError as exc:
             raise QueryError(str(exc), unsupported=True) from exc
         self.ctes: list[tuple[str, str]] = []
+        self.pushdown: dict[str, bool] = {}
         self.plan: dict[int, StageNote] = {n: StageNote(n, [], []) for n in STAGES}
         self.lods: dict[Lod, LodSpec] = {}
         self.cond_nodes: dict[str, Node] = {}
@@ -306,8 +325,10 @@ class WorksheetQuery:
         self._names[prefix] = n + 1
         return f"{prefix}_{n}" if n or prefix.startswith("_") else prefix
 
-    def cte(self, stage: int, name: str, body: str) -> str:
+    def cte(self, stage: int, name: str, body: str, pushdown: bool | None = None) -> str:
+        """新增一段 CTE。pushdown 預設依階段：第 1–6 段可下推；Table Calculation 一律在 DuckDB。"""
         self.ctes.append((name, body))
+        self.pushdown[name] = stage <= PUSHDOWN_BOUNDARY if pushdown is None else pushdown
         self.plan[stage].ctes.append(name)
         return name
 
@@ -626,12 +647,19 @@ class WorksheetQuery:
             order.append(self._natural_order(d, sorts.get(d.use.field)))
         order_sql = f"\nORDER BY {', '.join(order)}" if order else ""
         main = f"SELECT {', '.join(outputs)}\nFROM {final}{_where(conds)}{order_sql}"
+        stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
         return WorksheetSql(
             worksheet=ws.id,
             sql=self._render(main),
             columns=columns,
             plan=[self.plan[n] for n in STAGES if self.plan[n].ctes or self.plan[n].detail],
             state=self.state,
+            ctes=[
+                CteDef(name, body, stage_of[name], self.pushdown[name]) for name, body in self.ctes
+            ],
+            main=main,
+            live=self.source.live,
+            custom_sql=list(self.source.custom_sql),
         )
 
     # ------------------------------------------------------------ 檢視欄位
@@ -950,6 +978,7 @@ class WorksheetQuery:
         source: str,
         stage: int,
         view_dims: list[Dim] | None,
+        pushdown: bool | None = None,
     ) -> tuple[str, dict[Call, str], list[str]]:
         """在指定層級彙總。回傳 CTE 名稱、彙總節點 → 欄名、層級鍵欄名。"""
         keys = [f"__k{i}" for i in range(len(level))]
@@ -965,7 +994,10 @@ class WorksheetQuery:
             selects.append(f"count(*) AS {ident('__n')}")
         group = f" GROUP BY {', '.join(str(i + 1) for i in range(len(level)))}" if level else ""
         base = self.cte(
-            stage, self.name(prefix), f"SELECT {', '.join(selects)} FROM {source}{group}"
+            stage,
+            self.name(prefix),
+            f"SELECT {', '.join(selects)} FROM {source}{group}",
+            pushdown,
         )
         if not combo_nodes:
             return base, cols, keys
@@ -995,7 +1027,10 @@ class WorksheetQuery:
             combo_cols = [f"{sql} AS {ident(k)}" for sql, k in zip(g_sql, g_keys, strict=True)]
             combo_cols += [ident(c) for c in lod_cols]
             combos = self.cte(
-                stage, self.name("combos"), f"SELECT DISTINCT {', '.join(combo_cols)} FROM {source}"
+                stage,
+                self.name("combos"),
+                f"SELECT DISTINCT {', '.join(combo_cols)} FROM {source}",
+                pushdown,
             )
             combo_selects = [
                 f"{ident(g)} AS {ident(k)}" for g, k in zip(g_keys, keys, strict=False)
@@ -1014,6 +1049,7 @@ class WorksheetQuery:
                 stage,
                 self.name("combo_agg"),
                 f"SELECT {', '.join(combo_selects)} FROM {combos}{combo_group}",
+                pushdown,
             )
             alias = f"c{len(joins)}"
             on = (
@@ -1025,6 +1061,7 @@ class WorksheetQuery:
             stage,
             self.name(prefix),
             f"SELECT b.*, {', '.join(picks)} FROM {base} b {' '.join(joins)}",
+            pushdown,
         )
         return joined, cols, keys
 
@@ -1049,8 +1086,9 @@ class WorksheetQuery:
                 continue
             node = self.measure_node(sort.by)
             nodes = self.aggregates_in(node)
+            # 排序值依來源資料計算，不含 Table Calculation：可下推
             agg_name, agg_cols, keys = self.aggregate(
-                "sort_agg", nodes, [self.dim_sql(d.use)], rows_cte, 7, None
+                "sort_agg", nodes, [self.dim_sql(d.use)], rows_cte, 7, None, pushdown=True
             )
             value = self._compile(
                 lambda node=node, agg_cols=agg_cols: self.compiler(_PostEnv(self, agg_cols)).post(
@@ -1062,6 +1100,7 @@ class WorksheetQuery:
                 7,
                 name,
                 f"SELECT {ident(keys[0])} AS {ident('__key')}, {value} AS {ident(VALUE_COL)} FROM {agg_name}",
+                pushdown=True,
             )
             col = f"__sort{len(result)}"
             direction = "DESC" if sort.order == "desc" else "ASC"
@@ -1122,7 +1161,10 @@ class WorksheetQuery:
                 )
                 selects.append(f"s{i}.{ident(VALUE_COL)} AS {ident(col)}")
             base = self.cte(
-                7, "sorted", f"SELECT {', '.join(selects)} FROM {marks} m {' '.join(joins)}"
+                7,
+                "sorted",
+                f"SELECT {', '.join(selects)} FROM {marks} m {' '.join(joins)}",
+                pushdown=True,
             )
         if not tc_measures:
             return base
@@ -1158,7 +1200,10 @@ class WorksheetQuery:
         if joins:
             # 視窗函式不能直接引用同一層 SELECT 剛併入的欄位，先併入合計再計算
             base = self.cte(
-                7, "totals", f"SELECT {', '.join(selects)} FROM {base} m {' '.join(joins)}"
+                7,
+                "totals",
+                f"SELECT {', '.join(selects)} FROM {base} m {' '.join(joins)}",
+                pushdown=True,
             )
         return self.cte(7, "tc", f"SELECT m.*, {', '.join(expressions)} FROM {base} m")
 
@@ -1175,18 +1220,22 @@ class WorksheetQuery:
             7,
             "marks_rows",
             f"SELECT r.* FROM {rows_cte} r WHERE EXISTS (SELECT 1 FROM {marks} k WHERE {on})",
+            pushdown=True,
         )
 
     def _total(self, node: Call, partition: list[Dim], rows: str, index: int) -> tuple[str, str]:
         expr = node.args[0]
         nodes = self.aggregates_in(expr)
         level = [self.dim_sql(d.use) for d in partition]
-        agg_name, agg_cols, keys = self.aggregate("total_agg", nodes, level, rows, 7, None)
+        # TOTAL 依來源資料計算（不是加總各標記），不含視窗函式：可下推
+        agg_name, agg_cols, keys = self.aggregate(
+            "total_agg", nodes, level, rows, 7, None, pushdown=True
+        )
         value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(expr))
         key_cols = [f"{ident(k)}" for k in keys]
         name = self.name("total")
         key_cols.append(f"{value} AS {ident(VALUE_COL)}")
-        self.cte(7, name, f"SELECT {', '.join(key_cols)} FROM {agg_name}")
+        self.cte(7, name, f"SELECT {', '.join(key_cols)} FROM {agg_name}", pushdown=True)
         alias = f"t{index}"
         on = (
             " AND ".join(
@@ -1294,23 +1343,24 @@ class WorksheetQuery:
     # ------------------------------------------------------------ 輸出
 
     def _render(self, main: str) -> str:
+        boundary = "-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行\n"
         lines = ["WITH"]
         stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
         current = 0
+        pushed = True
         parts: list[str] = []
         for name, body in self.ctes:
             stage = stage_of[name]
             header = ""
+            if pushed and not self.pushdown[name]:
+                header += boundary
+                pushed = False
             if stage != current:
-                if current <= PUSHDOWN_BOUNDARY < stage:
-                    header += "-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行\n"
                 header += f"-- 第 {stage} 段：{STAGES[stage]}\n"
                 current = stage
             parts.append(f"{header}{ident(name)} AS (\n  {body}\n)")
         lines.append(",\n".join(parts))
-        tail = ""
-        if current <= PUSHDOWN_BOUNDARY:
-            tail = "-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行\n"
+        tail = boundary if pushed else ""
         return "\n".join(lines) + f"\n{tail}-- 第 8 段：{STAGES[8]}與輸出\n{main}\n"
 
 
@@ -1479,6 +1529,7 @@ def pane_sql(
 __all__ = [
     "PUSHDOWN_BOUNDARY",
     "STAGES",
+    "CteDef",
     "OutputColumn",
     "QueryError",
     "StageNote",

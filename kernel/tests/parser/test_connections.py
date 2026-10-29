@@ -160,6 +160,13 @@ def test_unsupported_connections(tmp_path: Path) -> None:
     ir = parse(tmp_path, live_datasource(unknown, table), lenient=True)
     assert any("連線類型 exasol 尚不支援" in r for r in reasons(ir))
 
+    # 認得的連線類型，但還沒有方言轉譯與執行器
+    mssql = "<connection class='sqlserver' server='crm.example.com' dbname='crm' />"
+    ir = parse(tmp_path, live_datasource(mssql, table), lenient=True)
+    assert any("連線類型 sqlserver 尚無 SQL 轉譯與執行器" in r for r in reasons(ir))
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection) and conn.dialect == "tsql"
+
     union = "<relation type='union'><relation name='A' table='[A]' type='table' /></relation>"
     ir = parse(tmp_path, live_datasource(ORACLE, union), lenient=True)
     assert any("資料表關聯方式 union 尚不支援" in r for r in reasons(ir))
@@ -184,6 +191,13 @@ def test_unsupported_connections(tmp_path: Path) -> None:
     )
     ir = parse(tmp_path, two, lenient=True)
     assert any("跨資料庫的關聯" in r for r in reasons(ir))
+
+
+def test_executable_dialects_match_translation() -> None:
+    from tmig.parser.connections import EXECUTABLE
+    from tmig.sqlgen.dialect import SUPPORTED
+
+    assert SUPPORTED - {"duckdb"} == EXECUTABLE
 
 
 def test_connection_id() -> None:

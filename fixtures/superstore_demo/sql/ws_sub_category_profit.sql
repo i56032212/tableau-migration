@@ -26,7 +26,6 @@ WITH
 "meas" AS (
   SELECT *, "__a0" AS "__m0", ("__a1") AS "__m2" FROM agg_1
 ),
--- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 -- 第 7 段：Table Calculation 與合計
 "sort_agg" AS (
   SELECT "Sub-Category" AS "__k0", sum("Profit") AS "__a0" FROM dimf_ext GROUP BY 1
@@ -37,6 +36,7 @@ WITH
 "sorted" AS (
   SELECT m.*, s0."__v" AS "__sort0" FROM meas m LEFT JOIN sort s0 ON s0."__key" IS NOT DISTINCT FROM m."__k0"
 ),
+-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 "tc" AS (
   SELECT m.*, ((CASE WHEN ("__a0") IS NULL THEN NULL ELSE CAST(rank() OVER (PARTITION BY (("__a0") IS NULL) ORDER BY "__a0" DESC) AS BIGINT) END)) AS "__m1" FROM sorted m
 )

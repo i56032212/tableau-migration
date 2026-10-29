@@ -332,7 +332,8 @@ class ExprCompiler:
                 f"ELSE {position} END) AS BIGINT)"
             )
         if name == "SPACE":
-            return f"repeat(' ', CAST(greatest({a[0]}, 0) AS BIGINT))"
+            # DuckDB 的 greatest 略過 Null；SPACE(Null) 應為 Null
+            return f"(CASE WHEN {a[0]} IS NULL THEN NULL ELSE repeat(' ', CAST(greatest({a[0]}, 0) AS BIGINT)) END)"
         if name == "REGEXP_MATCH":
             return f"regexp_matches({a[0]}, {a[1]})"
         if name in ("REGEXP_EXTRACT", "REGEXP_EXTRACT_NTH"):
@@ -421,7 +422,8 @@ class ExprCompiler:
             return f"CAST(isodow({a[0]}) AS BIGINT)"
         if name == "ISOQUARTER":
             # ISO 週 1–13 為第 1 季、14–26 第 2 季、27–39 第 3 季、40 以後第 4 季
-            return f"CAST(least((week({a[0]}) - 1) // 13 + 1, 4) AS BIGINT)"
+            week = f"week({a[0]})"
+            return f"CAST((CASE WHEN {week} > 52 THEN 4 ELSE ({week} - 1) // 13 + 1 END) AS BIGINT)"
         if name == "TODAY":
             return "current_date"
         if name == "NOW":
@@ -431,7 +433,8 @@ class ExprCompiler:
             if t == "string":
                 return f"CAST(trunc(TRY_CAST({a[0]} AS DOUBLE)) AS BIGINT)"
             if t == "boolean":
-                return f"CAST({a[0]} AS BIGINT)"
+                # 布林值先轉成 INTEGER（PostgreSQL 不能直接轉成 BIGINT）
+                return f"CAST(CAST({a[0]} AS INTEGER) AS BIGINT)"
             if t in ("date", "datetime"):
                 raise FormulaSemanticError("尚不支援把日期轉成整數", node.pos, unsupported=True)
             return f"CAST(trunc({a[0]}) AS BIGINT)"
@@ -441,13 +444,17 @@ class ExprCompiler:
                 return f"CAST(CAST({a[0]} AS INTEGER) AS DOUBLE)"
             if t in ("date", "datetime"):
                 raise FormulaSemanticError("尚不支援把日期轉成小數", node.pos, unsupported=True)
+            if t in ("integer", "real"):
+                return f"CAST({a[0]} AS DOUBLE)"
             return f"TRY_CAST({a[0]} AS DOUBLE)"
         if name == "STR":
             return f"CAST({a[0]} AS VARCHAR)"
-        if name == "DATE":
-            return f"TRY_CAST({a[0]} AS DATE)"
-        if name == "DATETIME":
-            return f"TRY_CAST({a[0]} AS TIMESTAMP)"
+        if name in ("DATE", "DATETIME"):
+            # 日期之間的轉換不會失敗；只有字串等其他型別需要 TRY_CAST（無法轉換時為 Null）
+            target = "DATE" if name == "DATE" else "TIMESTAMP"
+            if self.datatype(node.args[0]) in ("date", "datetime"):
+                return f"CAST({a[0]} AS {target})"
+            return f"TRY_CAST({a[0]} AS {target})"
         raise FormulaSemanticError(f"尚不支援函式 {name}", node.pos, unsupported=True)
 
     # ------------------------------------------------------------ 日期工具（規劃器也會用）

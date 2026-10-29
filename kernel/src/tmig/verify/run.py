@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from tmig.data.executor import ExecutionError, execute
-from tmig.ir import IR, load_ir
+from tmig.data.executor import ExecutionError
+from tmig.data.runtime import DataRuntime
+from tmig.data.sources import SourceConnectionError
+from tmig.ir import IR, ExtractConnection, load_ir
 from tmig.parser.workbook import parse_workbook
 from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, worksheet_sql
@@ -120,9 +122,13 @@ def load_fixture_ir(directory: Path) -> IR:
 
 
 def ensure_data(directory: Path, ir: IR) -> list[str]:
-    """缺少 DuckDB 檔時由 .twbx 匯入；回傳說明訊息。"""
+    """萃取的資料源缺少 DuckDB 檔時由 .twbx 匯入；回傳說明訊息（Live 連線不需要）。"""
     data = directory / "data"
-    missing = [ds.id for ds in ir.datasources if not (data / f"{ds.id}.duckdb").is_file()]
+    missing = [
+        ds.id
+        for ds in ir.datasources
+        if isinstance(ds.connection, ExtractConnection) and not (data / f"{ds.id}.duckdb").is_file()
+    ]
     if not missing:
         return []
     from tmig.data.hyper_import import import_workbook
@@ -137,7 +143,10 @@ def ensure_data(directory: Path, ir: IR) -> list[str]:
     return [f"已由 {twbx.name} 匯入 {'、'.join(missing)}"]
 
 
-def verify_fixture(directory: str | Path) -> tuple[IR, VerifyReport]:
+def verify_fixture(
+    directory: str | Path, runtime: DataRuntime | None = None
+) -> tuple[IR, VerifyReport]:
+    """runtime：Live 連線的執行環境；省略時依連線設定檔（TMIG_CONNECTIONS）建立，比對完關閉。"""
     root = Path(directory)
     ir = load_fixture_ir(root)
     cases = load_cases(root / "cases.yaml")
@@ -147,11 +156,17 @@ def verify_fixture(directory: str | Path) -> tuple[IR, VerifyReport]:
         notes.append("mapping.yaml 尚未人工確認（confirmed: false）")
     if cases.fetched_at is None:
         notes.append("cases.yaml 沒有 fetched_at：預期結果不是由 fetch-expected 從 Tableau 抓取")
-    checks = [
-        _check(root, ir, cases, mapping, sheet.worksheet, sheet.view, case.name)
-        for sheet in cases.sheets
-        for case in cases.cases
-    ]
+    owned = runtime is None
+    active = runtime or DataRuntime()
+    try:
+        checks = [
+            _check(root, ir, cases, mapping, sheet.worksheet, sheet.view, case.name, active)
+            for sheet in cases.sheets
+            for case in cases.cases
+        ]
+    finally:
+        if owned:
+            active.close()
     return ir, VerifyReport(
         workbook=ir.workbook.id, ir_version=ir.ir_version, checks=checks, notes=notes
     )
@@ -165,6 +180,7 @@ def _check(
     worksheet: str,
     view: str,
     case_name: str,
+    runtime: DataRuntime,
 ) -> Check:
     case = cases.case(case_name)
     base = Check(
@@ -189,7 +205,8 @@ def _check(
     try:
         query = worksheet_sql(ir, worksheet, case_state(ir, case, cases.as_of()))
         ws = next(w for w in ir.worksheets if w.id == worksheet)
-        result = execute(root / "data" / f"{ws.datasource}.duckdb", query.sql)
+        datasource = next(d for d in ir.datasources if d.id == ws.datasource)
+        result = runtime.run(query, datasource, root / "data" / f"{ws.datasource}.duckdb")
     except QueryError as exc:
         base.status = "unsupported" if exc.unsupported else "fail"
         base.diff = str(exc)
@@ -197,7 +214,7 @@ def _check(
     except (StateError, CasesError) as exc:
         base.diff = str(exc)
         return base
-    except ExecutionError as exc:
+    except (ExecutionError, SourceConnectionError) as exc:
         base.diff = str(exc)
         return base
     comparison = compare(

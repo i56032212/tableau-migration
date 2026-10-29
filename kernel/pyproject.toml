@@ -7,10 +7,17 @@ dependencies = [
     "pydantic>=2.7,<3",
     "lxml>=5.2",
     "duckdb>=1.1",
-    "sqlglot>=25",
+    "sqlglot>=30,<31",
     "pyyaml>=6",
     "tableauhyperapi>=0.0.20",
+    "pyarrow>=15",
 ]
+
+[project.optional-dependencies]
+# 來源資料庫的連線驅動（Live 連線與萃取層）：依公司實際使用的資料庫安裝，例如 uv sync --extra oracle
+postgres = ["psycopg[binary]>=3.2"]
+oracle = ["oracledb>=2.0"]
+databricks = ["databricks-sql-connector>=3.0"]
 
 [project.scripts]
 tmig = "tmig.cli:entry"
