@@ -95,10 +95,29 @@ def postgres_cluster() -> Iterator[str]:
         os.chown(root, *owner)
     port = _free_port()
 
-    def run(*args: str) -> None:
-        result = subprocess.run([*prefix, *args], capture_output=True, text=True, check=False)
+    log = root / "pg.log"
+
+    def run(*args: str, daemon: bool = False) -> None:
+        """daemon：pg_ctl start 啟動的伺服器會繼承輸出的管道（Windows 尤其如此），
+        擷取輸出會一直等不到結束；改為不擷取，失敗時看伺服器的紀錄檔。"""
+        try:
+            result = subprocess.run(
+                [*prefix, *args],
+                capture_output=not daemon,
+                stdout=subprocess.DEVNULL if daemon else None,
+                stderr=subprocess.DEVNULL if daemon else None,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                check=False,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"{Path(args[0]).name} 逾時") from exc
         if result.returncode != 0:
-            raise RuntimeError(f"{args[0]} 失敗：{result.stderr or result.stdout}")
+            detail = result.stderr or result.stdout
+            if daemon and log.is_file():
+                detail = log.read_text(encoding="utf-8", errors="replace")[-2000:]
+            raise RuntimeError(f"{Path(args[0]).name} 失敗：{detail}")
 
     try:
         run(
@@ -114,7 +133,20 @@ def postgres_cluster() -> Iterator[str]:
             "--no-locale",
         )
         options = f"-p {port} -c listen_addresses=127.0.0.1 -c unix_socket_directories="
-        run(pg_ctl, "-D", str(data), "-o", options, "-l", str(root / "pg.log"), "-w", "start")
+        run(
+            pg_ctl,
+            "-D",
+            str(data),
+            "-o",
+            options,
+            "-l",
+            str(log),
+            "-w",
+            "-t",
+            "60",
+            "start",
+            daemon=True,
+        )
     except RuntimeError as exc:
         shutil.rmtree(root, ignore_errors=True)
         unavailable(f"無法啟動臨時的 PostgreSQL：{exc}")
@@ -123,7 +155,7 @@ def postgres_cluster() -> Iterator[str]:
         yield f"host=127.0.0.1 port={port} user=tmig dbname=postgres"
     finally:
         with contextlib.suppress(RuntimeError):
-            run(pg_ctl, "-D", str(data), "-m", "immediate", "stop")
+            run(pg_ctl, "-D", str(data), "-m", "immediate", "-w", "stop", daemon=True)
         shutil.rmtree(root, ignore_errors=True)
 
 
@@ -175,7 +207,7 @@ def postgres_executor(con: Any) -> PostgresExecutor:
 @contextlib.contextmanager
 def spark_session() -> Iterator[Any]:
     try:
-        from pyspark.sql import SparkSession
+        from pyspark.sql import SparkSession  # pyright: ignore[reportMissingImports]
     except ImportError:
         unavailable("未安裝 pyspark（uv sync --group spark）")
         return
