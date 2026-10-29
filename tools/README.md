@@ -38,6 +38,8 @@ uv run python tools/tableau_server/tableau_server.py fetch --server https://tabl
   （Active Directory 群組寫成 `網域\名稱`）填好 cases.yaml 的 `user`；預期結果必須用同一個帳號抓取
 - `directory --out directory.json`：匯出使用者與群組（查詢服務身分驗證的使用者目錄；需要站台管理員）
 - `permissions --out permissions.json`：匯出 Project、workbook、view 的權限（查詢服務依此授權；需要站台管理員）
+- `schedules --timezone Asia/Taipei --out schedules.json`：匯出排程、萃取更新工作與訂閱（對象、view、頻率；需要站台管理員）。
+  排程的時間是 Tableau Server 的時區，以 `--timezone` 指定；無法辨識的排程列出原因
 - `inventory` 的其他選項：`--project`（可重複）、`--limit N` 試跑、`--no-download` 只列清單、`--refresh` 全部重新下載
   （預設只重新下載有更新的報表）
 - 輸出在 `inventory/`（不進版控）：`inventory.md`、`inventory.csv`（Excel 可直接開）、`features.csv`

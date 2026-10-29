@@ -216,6 +216,17 @@ Tableau 的權限評估規則開放（`kernel/src/tmig/access/permissions.py`、
 - 報表依 cases.yaml 的 `tableau_views_url`（Tableau 上的網址名稱）或報表名稱對應到 Tableau 的 workbook；
   權限檔中找不到的報表只有管理員看得到
 
+## 排程與訂閱
+
+`uv run python tools/tableau_server/tableau_server.py schedules --timezone Asia/Taipei --out schedules.json` 匯出排程、
+萃取更新工作與訂閱（`kernel/src/tmig/schedule/`；需要站台管理員）：
+
+- 排程：Tableau Server 的伺服器排程（每小時、每天、每週、每月；含間隔、星期、月底、每月第幾個星期幾），
+  Tableau Cloud 寫在工作裡的排程也一併轉成排程；時間以 `--timezone`（Tableau Server 的時區）解讀，
+  日光節約時間以當地時間為準。無法辨識的排程記下原因
+- 萃取更新工作：目標是報表（嵌入的萃取）或 Published Data Source、完整或增量更新、連續失敗次數
+- 訂閱：訂閱者、view 或整份報表、主旨、附圖片或 PDF、紙張方向與大小、暫停、view 沒有資料時是否寄送
+
 ## 指令
 
 | 指令 | 用途 |

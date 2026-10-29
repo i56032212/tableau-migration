@@ -19,6 +19,11 @@
     uv run python tools/tableau_server/tableau_server.py permissions \\
         --server https://tableau.example.com --site sales --pat-name <PAT 名稱> --out permissions.json
 
+    # 5. 排程與訂閱：萃取更新排程、訂閱（對象、view、頻率；需要站台管理員）
+    uv run python tools/tableau_server/tableau_server.py schedules \\
+        --server https://tableau.example.com --site sales --pat-name <PAT 名稱> \\
+        --timezone Asia/Taipei --out schedules.json
+
 登入方式（擇一）：
 
 - ``--pat-name``：個人存取權杖（建議）；密鑰從環境變數 TABLEAU_PAT_SECRET 讀取，沒有就提示輸入
@@ -226,20 +231,31 @@ class TableauClient:
         assert self.session is not None
         return f"/api/{self.session.version}/sites/{self.session.site_id}/{path}"
 
-    def get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self.http.get(self._site(path), params=params, headers=self._auth())
+    def get_json(
+        self, path: str, params: dict[str, Any] | None = None, *, site: bool = True
+    ) -> dict[str, Any]:
+        """site=False 時為伺服器層級的路徑（例如 schedules）。"""
+        assert self.session is not None
+        url = self._site(path) if site else f"/api/{self.session.version}/{path}"
+        response = self.http.get(url, params=params, headers=self._auth())
         if response.status_code != 200:
             raise _error(response, f"查詢失敗：{path}")
         return response.json()
 
     def paged(
-        self, path: str, group: str, item: str, params: dict[str, Any] | None = None
+        self,
+        path: str,
+        group: str,
+        item: str,
+        params: dict[str, Any] | None = None,
+        *,
+        site: bool = True,
     ) -> Iterator[dict[str, Any]]:
         page = 1
         seen = 0
         while True:
             query = {**(params or {}), "pageSize": self.page_size, "pageNumber": page}
-            data = self.get_json(path, query)
+            data = self.get_json(path, query, site=site)
             items = _list((data.get(group) or {}).get(item))
             yield from items
             seen += len(items)
@@ -306,6 +322,26 @@ class TableauClient:
         """權限規則（granteeCapabilities），path 例如 workbooks/<id>/permissions。"""
         data = self.get_json(path).get("permissions") or {}
         return _list(data.get("granteeCapabilities"))
+
+    def schedules(self) -> list[dict[str, Any]]:
+        """伺服器的排程（Tableau Server）；Tableau Cloud 沒有伺服器排程時回傳空清單。"""
+        try:
+            return list(self.paged("schedules", "schedules", "schedule", site=False))
+        except TableauError as exc:
+            if exc.status in (400, 404):
+                return []
+            raise
+
+    def schedule(self, schedule_id: str) -> dict[str, Any]:
+        """一個排程的完整設定（含 frequencyDetails；REST API 3.8 起）。"""
+        return self.get_json(f"schedules/{schedule_id}", site=False).get("schedule") or {}
+
+    def extract_tasks(self) -> list[dict[str, Any]]:
+        data = self.get_json("tasks/extractRefreshes")
+        return [t.get("extractRefresh") or {} for t in _list((data.get("tasks") or {}).get("task"))]
+
+    def subscriptions(self) -> list[dict[str, Any]]:
+        return list(self.paged("subscriptions", "subscriptions", "subscription"))
 
     def views(self) -> list[dict[str, Any]]:
         return list(self.paged("views", "views", "view", {"includeUsageStatistics": "true"}))
@@ -687,6 +723,162 @@ def run_permissions(client: TableauClient, args: argparse.Namespace) -> int:
         f"已匯出 {len(data['projects'])} 個 Project、{len(data['workbooks'])} 份報表"
         f"（{rules} 筆報表權限）→ {out}"
     )
+    return 0
+
+
+def _schedule_entry(item: dict[str, Any], schedule_id: str | None = None) -> dict[str, Any]:
+    """REST 的排程 → 排程檔的排程（頻率無法辨識時記下原因）。"""
+    from tmig.schedule.model import ScheduleError, frequency_from_rest
+
+    entry: dict[str, Any] = {
+        "id": schedule_id or str(item.get("id")),
+        "name": str(item.get("name") or schedule_id or item.get("id") or ""),
+        "kind": item.get("type") or None,
+        "state": str(item.get("state") or "Active"),
+        "priority": _int(item.get("priority")),
+        "frequency": None,
+        "problem": None,
+    }
+    try:
+        frequency = frequency_from_rest(item.get("frequency"), item.get("frequencyDetails"))
+        entry["frequency"] = frequency.model_dump(mode="json")
+    except ScheduleError as exc:
+        entry["problem"] = str(exc)
+    return entry
+
+
+def export_schedules(client: TableauClient, source: str, timezone: str | None) -> dict[str, Any]:
+    """排程檔（tmig.schedule 的格式）：伺服器排程、萃取更新工作與訂閱。"""
+    schedules: dict[str, dict[str, Any]] = {}
+    for item in client.schedules():
+        sid = str(item.get("id"))
+        if not item.get("frequencyDetails"):
+            with contextlib.suppress(TableauError):
+                item = {**item, **client.schedule(sid)}
+        schedules[sid] = _schedule_entry(item)
+
+    def schedule_of(owner: str, item: dict[str, Any]) -> str:
+        """工作或訂閱的排程 id；Tableau Cloud 的排程寫在工作裡，另外建一個排程。"""
+        data = item.get("schedule") or {}
+        sid = data.get("id")
+        if sid and str(sid) in schedules:
+            return str(sid)
+        sid = str(sid or f"{owner}")
+        schedules[sid] = _schedule_entry({"name": data.get("name"), **data}, sid)
+        return sid
+
+    workbooks = {str(w.get("id")): w for w in client.workbooks()}
+    datasources = {str(d.get("id")): d for d in client.datasources()}
+    views = {str(v.get("id")): v for v in client.views()}
+    users = {str(u.get("id")): u for u in client.users()}
+
+    tasks = []
+    for task in client.extract_tasks():
+        tid = str(task.get("id"))
+        target: dict[str, Any]
+        if task.get("workbook"):
+            kind = "workbook"
+            ref = task["workbook"]
+            target = workbooks.get(str(ref.get("id"))) or ref
+        elif task.get("datasource"):
+            kind = "datasource"
+            ref = task["datasource"]
+            target = datasources.get(str(ref.get("id"))) or ref
+        else:
+            continue
+        tasks.append(
+            {
+                "id": tid,
+                "schedule": schedule_of(f"task:{tid}", task),
+                "refresh": "incremental"
+                if "increment" in str(task.get("type", "")).lower()
+                else "full",
+                "target_kind": kind,
+                "target_id": target.get("id"),
+                "target_name": target.get("name"),
+                "content_url": target.get("contentUrl") or None,
+                "priority": _int(task.get("priority")),
+                "consecutive_failures": _int(task.get("consecutiveFailedCount")) or 0,
+            }
+        )
+
+    subscriptions = []
+    for item in client.subscriptions():
+        sid = str(item.get("id"))
+        content = item.get("content") or {}
+        user = users.get(str((item.get("user") or {}).get("id")), item.get("user") or {})
+        kind = "workbook" if str(content.get("type", "")).lower() == "workbook" else "view"
+        view = views.get(str(content.get("id"))) if kind == "view" else None
+        workbook_id = (
+            str(content.get("id"))
+            if kind == "workbook"
+            else str((view or {}).get("workbook", {}).get("id"))
+        )
+        workbook = workbooks.get(workbook_id) or {}
+        subscriptions.append(
+            {
+                "id": sid,
+                "subject": str(item.get("subject") or ""),
+                "message": item.get("message") or None,
+                "user": str(user.get("name") or ""),
+                "user_domain": (user.get("domain") or {}).get("name") or None,
+                "schedule": schedule_of(f"subscription:{sid}", item),
+                "content_kind": kind,
+                "workbook": workbook.get("contentUrl") or None,
+                "workbook_name": workbook.get("name") or None,
+                "view": (view or {}).get("name") or None,
+                "view_url_name": (view or {}).get("viewUrlName") or None,
+                "attach_image": _bool(item.get("attachImage")) is not False,
+                "attach_pdf": _bool(item.get("attachPdf")) is True,
+                "page_orientation": item.get("pageOrientation") or None,
+                "page_size": item.get("pageSizeOption") or None,
+                "suspended": _bool(item.get("suspended")) is True,
+                "send_if_view_empty": _bool(content.get("sendIfViewEmpty")) is not False,
+            }
+        )
+    return {
+        "source": source,
+        "exported_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "timezone": timezone,
+        "schedules": list(schedules.values()),
+        "extract_refreshes": tasks,
+        "subscriptions": subscriptions,
+    }
+
+
+def run_schedules(client: TableauClient, args: argparse.Namespace) -> int:
+    from tmig.schedule.model import ScheduleError, zone_info
+
+    if args.timezone:
+        try:
+            zone_info(args.timezone)
+        except ScheduleError as exc:
+            print(f"失敗：{exc}", file=sys.stderr)
+            return 1
+    session = client.session
+    assert session is not None
+    source = f"{client.server}（site：{session.site_url or '預設'}）"
+    try:
+        data = export_schedules(client, source, args.timezone)
+    except TableauError as exc:
+        if exc.status == 403:
+            print("失敗：匯出排程與訂閱需要站台管理員的權限", file=sys.stderr)
+            return 1
+        raise
+    out: Path = args.out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    print(
+        f"已匯出 {len(data['schedules'])} 個排程、{len(data['extract_refreshes'])} 個萃取更新工作、"
+        f"{len(data['subscriptions'])} 個訂閱 → {out}"
+    )
+    for item in data["schedules"]:
+        if item["problem"]:
+            print(f"注意：排程「{item['name']}」{item['problem']}")
+    if not args.timezone:
+        print("注意：排程的時間是 Tableau Server 的時區，請以 --timezone 指定（例如 Asia/Taipei）")
     return 0
 
 
@@ -1121,6 +1313,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=Path("permissions.json"), help="輸出檔（預設 permissions.json）"
     )
     permissions.set_defaults(handler=run_permissions)
+
+    schedules = commands.add_parser(
+        "schedules", help="匯出排程、萃取更新工作與訂閱（需要站台管理員）"
+    )
+    common(schedules)
+    schedules.add_argument(
+        "--out", type=Path, default=Path("schedules.json"), help="輸出檔（預設 schedules.json）"
+    )
+    schedules.add_argument(
+        "--timezone",
+        help="Tableau Server 的時區（IANA 名稱，例如 Asia/Taipei）；排程的時間以此解讀",
+    )
+    schedules.set_defaults(handler=run_schedules)
     return parser
 
 

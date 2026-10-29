@@ -72,6 +72,7 @@ WORKBOOKS: list[dict[str, Any]] = [
 
 VIEWS: list[dict[str, Any]] = [
     {
+        "id": "v-1",
         "name": "Sales by Region",
         "viewUrlName": "SalesbyRegion",
         "workbook": {"id": "wb-1"},
@@ -140,6 +141,91 @@ PROJECTS = [
 def caps(**modes: str) -> dict[str, Any]:
     return {"capability": [{"name": k, "mode": v} for k, v in modes.items()]}
 
+
+SCHEDULES = [
+    {
+        "id": "s-1",
+        "name": "每天 6 點",
+        "state": "Active",
+        "priority": "50",
+        "type": "Extract",
+        "frequency": "Daily",
+    },
+    {
+        "id": "s-2",
+        "name": "週一報表",
+        "state": "Active",
+        "type": "Subscription",
+        "frequency": "Weekly",
+    },
+    {"id": "s-3", "name": "壞掉的", "state": "Suspended", "type": "Extract", "frequency": "Yearly"},
+]
+SCHEDULE_DETAILS = {
+    "s-1": {"frequencyDetails": {"start": "06:00:00"}},
+    "s-2": {
+        "frequencyDetails": {
+            "start": "08:00:00",
+            "intervals": {"interval": [{"weekDay": "Monday"}]},
+        }
+    },
+    "s-3": {"frequencyDetails": {"start": "01:00:00"}},
+}
+TASKS = [
+    {
+        "extractRefresh": {
+            "id": "t-1",
+            "priority": "50",
+            "consecutiveFailedCount": "2",
+            "type": "RefreshExtractTask",
+            "schedule": {"id": "s-1"},
+            "datasource": {"id": "ds-1"},
+        }
+    },
+    {
+        "extractRefresh": {
+            "id": "t-2",
+            "type": "IncrementExtractTask",
+            "schedule": {"id": "s-1"},
+            "workbook": {"id": "wb-1"},
+        }
+    },
+    {
+        # Tableau Cloud：排程寫在工作裡
+        "extractRefresh": {
+            "id": "t-3",
+            "schedule": {
+                "frequency": "Hourly",
+                "frequencyDetails": {
+                    "start": "00:00:00",
+                    "end": "00:00:00",
+                    "intervals": {"interval": [{"hours": "4"}]},
+                },
+            },
+            "workbook": {"id": "wb-1"},
+        }
+    },
+]
+SUBSCRIPTIONS = [
+    {
+        "id": "sub-1",
+        "subject": "週報",
+        "attachImage": "true",
+        "attachPdf": "true",
+        "pageOrientation": "Landscape",
+        "pageSizeOption": "A4",
+        "suspended": "false",
+        "content": {"id": "v-1", "type": "View", "sendIfViewEmpty": "false"},
+        "schedule": {"id": "s-2", "name": "週一報表"},
+        "user": {"id": "u-0", "name": "amy"},
+    },
+    {
+        "id": "sub-2",
+        "subject": "整份報表",
+        "content": {"id": "wb-1", "type": "Workbook"},
+        "schedule": {"id": "s-2"},
+        "user": {"id": "u-1"},
+    },
+]
 
 PERMISSIONS: dict[str, list[dict[str, Any]]] = {
     "projects/p-1/permissions": [
@@ -234,6 +320,20 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
             return
         if not self._authorized():
             return
+        if path == f"/api/{API}/schedules":
+            self._json(
+                200,
+                {
+                    "pagination": {"pageNumber": "1", "pageSize": "100", "totalAvailable": "3"},
+                    "schedules": {"schedule": SCHEDULES},
+                },
+            )
+            return
+        if path.startswith(f"/api/{API}/schedules/"):
+            sid = path.rsplit("/", 1)[1]
+            base = next(x for x in SCHEDULES if x["id"] == sid)
+            self._json(200, {"schedule": {**base, **SCHEDULE_DETAILS[sid]}})
+            return
         site = f"/api/{API}/sites/{SITE_ID}/"
         if not path.startswith(site):
             self._json(404, {"error": {"code": "404000"}})
@@ -259,6 +359,18 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
                         "totalAvailable": str(len(users)),
                     },
                     "users": {"user": users},
+                },
+            )
+            return
+        if rest == "tasks/extractRefreshes":
+            self._json(200, {"tasks": {"task": TASKS}})
+            return
+        if rest == "subscriptions":
+            self._json(
+                200,
+                {
+                    "pagination": {"pageNumber": "1", "pageSize": "100", "totalAvailable": "2"},
+                    "subscriptions": {"subscription": SUBSCRIPTIONS},
                 },
             )
             return
@@ -714,3 +826,73 @@ def test_permissions_export(
     assert not denied.allowed and denied.views == frozenset()
     assert not permissions.access(bob, finance).allowed  # 本人的拒絕優先於群組的允許
     assert permissions.access(bob, overview).allowed
+
+
+def test_schedules_export(server: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import datetime as dt
+
+    from tmig.schedule.model import load_schedules
+
+    out = tmp_path / "schedules.json"
+    args = ["schedules", *auth(server), "--out", str(out), "--timezone", "Asia/Taipei"]
+    assert tableau_server.main(args) == 0
+    printed = capsys.readouterr().out
+    assert "已匯出 4 個排程、3 個萃取更新工作、2 個訂閱" in printed
+    assert "排程「壞掉的」不支援的排程頻率 'Yearly'" in printed
+    data = load_schedules(out)
+    assert data.timezone == "Asia/Taipei"
+    daily = data.schedule("s-1")
+    assert daily is not None and daily.frequency is not None
+    assert daily.frequency.describe() == "每天 06:00"
+    monday = data.schedule("s-2")
+    assert monday is not None and monday.frequency is not None
+    assert (
+        monday.frequency.next_run(
+            dt.datetime(2026, 11, 3, tzinfo=dt.UTC), data.timezone
+        ).isoformat()
+        == "2026-11-09T08:00:00+08:00"
+    )
+    broken = data.schedule("s-3")
+    assert broken is not None and broken.frequency is None and broken.state == "Suspended"
+
+    full, incremental, cloud = data.extract_refreshes
+    assert (full.target_kind, full.content_url, full.refresh) == ("datasource", "OrdersPDS", "full")
+    assert full.consecutive_failures == 2 and full.priority == 50
+    assert (incremental.target_kind, incremental.content_url, incremental.refresh) == (
+        "workbook",
+        "SalesOverview",
+        "incremental",
+    )
+    cloud_schedule = data.schedule(cloud.schedule)
+    assert cloud_schedule is not None and cloud_schedule.frequency is not None
+    assert cloud_schedule.frequency.describe() == "每天 00:00–24:00 每 4 小時"
+
+    view_sub, workbook_sub = data.subscriptions
+    assert view_sub.user == "amy" and view_sub.content_kind == "view"
+    assert (view_sub.workbook, view_sub.view, view_sub.view_url_name) == (
+        "SalesOverview",
+        "Sales by Region",
+        "SalesbyRegion",
+    )
+    assert view_sub.attach_pdf and view_sub.attach_image and not view_sub.send_if_view_empty
+    assert (view_sub.page_orientation, view_sub.page_size) == ("Landscape", "A4")
+    assert workbook_sub.user == "bob" and workbook_sub.user_domain == "CORP"
+    assert workbook_sub.content_kind == "workbook" and workbook_sub.workbook == "SalesOverview"
+    assert workbook_sub.view is None and workbook_sub.attach_image and not workbook_sub.attach_pdf
+
+
+def test_schedules_requires_known_timezone(
+    server: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = [
+        "schedules",
+        *auth(server),
+        "--out",
+        str(tmp_path / "s.json"),
+        "--timezone",
+        "Mars/Base",
+    ]
+    assert tableau_server.main(args) == 1
+    assert "不認得的時區" in capsys.readouterr().err
+    assert tableau_server.main(["schedules", *auth(server), "--out", str(tmp_path / "s.json")]) == 0
+    assert "請以 --timezone 指定" in capsys.readouterr().out

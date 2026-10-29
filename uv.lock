@@ -1175,6 +1175,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sqlglot" },
     { name = "tableauhyperapi" },
+    { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
@@ -1200,6 +1201,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "sqlglot", specifier = ">=30,<31" },
     { name = "tableauhyperapi", specifier = ">=0.0.20" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 provides-extras = ["postgres", "oracle", "databricks"]
 
