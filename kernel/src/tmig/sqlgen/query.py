@@ -63,6 +63,7 @@ from tmig.ir.models import (
 from tmig.ir.scope import DatasourceScope
 from tmig.planner.state import EffectiveState, QueryState, apply_state, use_key
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
+from tmig.sqlgen.source import SourceError, datasource_source
 from tmig.sqlgen.sql import ident, literal
 
 AGG_FUNCTIONS = {
@@ -204,7 +205,7 @@ class _RowEnv:
         data_field = self.query.fields[target.id]
         if data_field.column is None:
             raise QueryError(f"欄位 {data_field.caption} 沒有實體欄位")
-        return self._qualify(data_field.column)
+        return self._qualify(self.query.source.column(data_field))
 
     def param(self, target: Target) -> str:
         return self.query.param_sql(target.id)
@@ -275,6 +276,10 @@ class WorksheetQuery:
         self.fields: dict[str, DataField] = {f.id: f for f in self.datasource.fields}
         self.params = {p.id: p for p in ir.parameters}
         self.week_start = self.datasource.settings.week_start
+        try:
+            self.source = datasource_source(self.datasource)
+        except SourceError as exc:
+            raise QueryError(str(exc), unsupported=True) from exc
         self.ctes: list[tuple[str, str]] = []
         self.plan: dict[int, StageNote] = {n: StageNote(n, [], []) for n in STAGES}
         self.lods: dict[Lod, LodSpec] = {}
@@ -516,9 +521,13 @@ class WorksheetQuery:
         # 1. 資料源篩選
         for flt in stage["extract"]:
             self.note(1, f"萃取篩選 {flt.id} 已在建立萃取時套用，不重複")
-        table = ".".join(ident(p) for p in self.datasource.connection.table.split("."))
         conds = [self._row_condition(f) for f in stage["datasource"]]
-        self.cte(1, "src", f"SELECT * FROM {table}{_where(conds)}")
+        if self.source.live:
+            # Live 連線：先以欄位 id 為別名選出實體欄位（各資料表的同名欄位不衝突），再套用資料源篩選
+            self.cte(1, "base", self.source.from_sql)
+            self.cte(1, "src", f"SELECT * FROM base{_where(conds)}")
+        else:
+            self.cte(1, "src", f"SELECT * FROM {self.source.from_sql}{_where(conds)}")
         for flt in stage["datasource"]:
             self.note(1, f"資料源篩選 {flt.id}")
 
@@ -1399,7 +1408,8 @@ def domain_sql(
         raise QueryError("含 LOD 的欄位尚不支援列出可選值", unsupported=True)
     value = query.dim_sql(use)
     conds = [query._row_condition(f) for f in datasource.filters if f.stage == "datasource"]
-    table = ".".join(ident(p) for p in datasource.connection.table.split("."))
+    source = query.source
+    table = f"({source.from_sql}) AS base" if source.live else source.from_sql
     if kind == "range":
         return f"SELECT min({value}) AS {ident('min')}, max({value}) AS {ident('max')} FROM {table}{_where(conds)}"
     if kind == "frequency":

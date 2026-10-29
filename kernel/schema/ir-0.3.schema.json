@@ -866,6 +866,19 @@
           "description": "萃取資料表中的實體欄位；計算欄位為 None",
           "title": "Column"
         },
+        "table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None",
+          "title": "Table"
+        },
         "calc": {
           "anyOf": [
             {
@@ -916,7 +929,22 @@
           "type": "string"
         },
         "connection": {
-          "$ref": "#/$defs/ExtractConnection"
+          "discriminator": {
+            "mapping": {
+              "extract": "#/$defs/ExtractConnection",
+              "live": "#/$defs/LiveConnection"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ExtractConnection"
+            },
+            {
+              "$ref": "#/$defs/LiveConnection"
+            }
+          ],
+          "title": "Connection"
         },
         "settings": {
           "$ref": "#/$defs/DatasourceSettings"
@@ -1066,6 +1094,18 @@
           "minLength": 1,
           "title": "Table",
           "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LiveConnection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "萃取的來源資料庫（萃取層定時更新時使用）"
         }
       },
       "required": [
@@ -1151,6 +1191,336 @@
         "field"
       ],
       "title": "FieldUse",
+      "type": "object"
+    },
+    "JoinCondition": {
+      "additionalProperties": false,
+      "description": "join 條件：左右兩邊以 op 比較。",
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/JoinTerm"
+        },
+        "op": {
+          "default": "=",
+          "enum": [
+            "=",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">="
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "right": {
+          "$ref": "#/$defs/JoinTerm"
+        }
+      },
+      "required": [
+        "left",
+        "right"
+      ],
+      "title": "JoinCondition",
+      "type": "object"
+    },
+    "JoinRelation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "join",
+          "title": "Kind",
+          "type": "string"
+        },
+        "join": {
+          "enum": [
+            "inner",
+            "left",
+            "right",
+            "full"
+          ],
+          "title": "Join",
+          "type": "string"
+        },
+        "left": {
+          "discriminator": {
+            "mapping": {
+              "join": "#/$defs/JoinRelation",
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            },
+            {
+              "$ref": "#/$defs/JoinRelation"
+            }
+          ],
+          "title": "Left"
+        },
+        "right": {
+          "discriminator": {
+            "mapping": {
+              "join": "#/$defs/JoinRelation",
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            },
+            {
+              "$ref": "#/$defs/JoinRelation"
+            }
+          ],
+          "title": "Right"
+        },
+        "on": {
+          "description": "以 AND 連接",
+          "items": {
+            "$ref": "#/$defs/JoinCondition"
+          },
+          "minItems": 1,
+          "title": "On",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "join",
+        "left",
+        "right",
+        "on"
+      ],
+      "title": "JoinRelation",
+      "type": "object"
+    },
+    "JoinTerm": {
+      "additionalProperties": false,
+      "description": "join 條件的一邊：資料表的實體欄位，或常值（例如 1 = [T].[dummy] 這種全部配對的寫法）。",
+      "properties": {
+        "table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "資料表名稱；常值時為 None",
+          "title": "Table"
+        },
+        "column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column"
+        },
+        "literal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Literal"
+        }
+      },
+      "title": "JoinTerm",
+      "type": "object"
+    },
+    "LiveConnection": {
+      "additionalProperties": false,
+      "description": "資料在來源資料庫（Live 連線，或萃取的來源）。只記連線資訊，不含帳號、密碼或權杖：\n憑證由部署環境依 connection_id 提供。",
+      "properties": {
+        "kind": {
+          "const": "live",
+          "title": "Kind",
+          "type": "string"
+        },
+        "connection_id": {
+          "description": "連線代號：部署環境以它找對應的憑證",
+          "pattern": "^[a-z0-9_]+$",
+          "title": "Connection Id",
+          "type": "string"
+        },
+        "dbclass": {
+          "description": "Tableau 的連線類型，例如 oracle、databricks",
+          "minLength": 1,
+          "title": "Dbclass",
+          "type": "string"
+        },
+        "dialect": {
+          "anyOf": [
+            {
+              "enum": [
+                "oracle",
+                "databricks",
+                "spark",
+                "postgres",
+                "redshift",
+                "tsql",
+                "mysql",
+                "snowflake",
+                "bigquery",
+                "teradata",
+                "duckdb"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "None＝尚不支援的連線類型",
+          "title": "Dialect"
+        },
+        "server": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Server"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        },
+        "database": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "資料庫；Oracle 為服務名稱，Databricks 為 catalog",
+          "title": "Database"
+        },
+        "schema_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預設的結構描述",
+          "title": "Schema Name"
+        },
+        "http_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Databricks 的 SQL warehouse 路徑",
+          "title": "Http Path"
+        },
+        "authentication": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tableau 記錄的驗證方式",
+          "title": "Authentication"
+        },
+        "relation": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "join": "#/$defs/JoinRelation",
+                  "sql": "#/$defs/SqlRelation",
+                  "table": "#/$defs/TableRelation"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TableRelation"
+                },
+                {
+                  "$ref": "#/$defs/SqlRelation"
+                },
+                {
+                  "$ref": "#/$defs/JoinRelation"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "資料表、自訂 SQL 或 join 樹",
+          "title": "Relation"
+        }
+      },
+      "required": [
+        "kind",
+        "connection_id",
+        "dbclass"
+      ],
+      "title": "LiveConnection",
       "type": "object"
     },
     "Marks": {
@@ -1922,6 +2292,34 @@
       "title": "Sort",
       "type": "object"
     },
+    "SqlRelation": {
+      "additionalProperties": false,
+      "description": "自訂 SQL：以來源資料庫的方言寫成，原文照送。",
+      "properties": {
+        "kind": {
+          "const": "sql",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "sql": {
+          "minLength": 1,
+          "title": "Sql",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "sql"
+      ],
+      "title": "SqlRelation",
+      "type": "object"
+    },
     "TableCalc": {
       "additionalProperties": false,
       "description": "Table Calculation。type 為 formula 表示計算欄位內含 Table Calculation 函式。",
@@ -2016,6 +2414,38 @@
         "source_ref"
       ],
       "title": "TableCalc",
+      "type": "object"
+    },
+    "TableRelation": {
+      "additionalProperties": false,
+      "description": "來源資料庫中的一張資料表；name 是它在關聯樹中的名稱（欄位以它區分所屬的資料表）。",
+      "properties": {
+        "kind": {
+          "const": "table",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "table": {
+          "description": "限定名稱的各段，例如 [HR, EMPLOYEES]",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Table",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "table"
+      ],
+      "title": "TableRelation",
       "type": "object"
     },
     "TopNFilter": {

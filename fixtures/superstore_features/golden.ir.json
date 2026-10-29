@@ -14,7 +14,8 @@
       "connection": {
         "kind": "extract",
         "hyper_file": "Data/Extracts/federated_0s2xs1a1g5wq1h17oo8mq0b6k5ry.hyper",
-        "table": "Extract.Extract"
+        "table": "Extract.Extract",
+        "source": null
       },
       "settings": {
         "week_start": "sunday"
@@ -30,6 +31,7 @@
           "format": null,
           "hidden": true,
           "column": "Row ID",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
@@ -43,6 +45,7 @@
           "format": null,
           "hidden": false,
           "column": "Order ID",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
@@ -56,6 +59,7 @@
           "format": null,
           "hidden": false,
           "column": "Order Date",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
@@ -69,6 +73,7 @@
           "format": null,
           "hidden": false,
           "column": "Ship Date",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
@@ -82,6 +87,7 @@
           "format": null,
           "hidden": false,
           "column": "Ship Mode",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
@@ -95,6 +101,7 @@
           "format": null,
           "hidden": false,
           "column": "Customer ID",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
@@ -108,6 +115,7 @@
           "format": null,
           "hidden": false,
           "column": "Customer Name",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
@@ -121,6 +129,7 @@
           "format": null,
           "hidden": false,
           "column": "Segment",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
@@ -134,6 +143,7 @@
           "format": null,
           "hidden": false,
           "column": "Country/Region",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
@@ -147,6 +157,7 @@
           "format": null,
           "hidden": false,
           "column": "City",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
@@ -160,6 +171,7 @@
           "format": null,
           "hidden": false,
           "column": "State/Province",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
@@ -173,6 +185,7 @@
           "format": null,
           "hidden": false,
           "column": "Postal Code",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
@@ -186,6 +199,7 @@
           "format": null,
           "hidden": false,
           "column": "Region",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
@@ -199,6 +213,7 @@
           "format": null,
           "hidden": false,
           "column": "Product ID",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
@@ -212,6 +227,7 @@
           "format": null,
           "hidden": false,
           "column": "Category",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
@@ -225,6 +241,7 @@
           "format": null,
           "hidden": false,
           "column": "Sub-Category",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
@@ -238,6 +255,7 @@
           "format": null,
           "hidden": false,
           "column": "Product Name",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
@@ -251,6 +269,7 @@
           "format": null,
           "hidden": false,
           "column": "Sales",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
@@ -264,6 +283,7 @@
           "format": null,
           "hidden": false,
           "column": "Quantity",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
@@ -277,6 +297,7 @@
           "format": null,
           "hidden": false,
           "column": "Discount",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
@@ -290,6 +311,7 @@
           "format": null,
           "hidden": false,
           "column": "Profit",
+          "table": null,
           "calc": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
@@ -303,6 +325,7 @@
           "format": "p0.0%",
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "SUM([Profit])/SUM([Sales])",
             "ast": {
@@ -353,6 +376,7 @@
           "format": "c\"$\"#,##0",
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "{FIXED [Region] : SUM([Sales])}",
             "ast": {
@@ -399,6 +423,7 @@
           "format": "p0.0%",
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "// 該年度銷售占區域全部銷售的比例\r\nSUM([Sales]) / SUM([Calculation_2049003526124437504])",
             "ast": {
@@ -449,6 +474,7 @@
           "format": null,
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "RANK(SUM([Profit]))",
             "ast": {
@@ -486,6 +512,7 @@
           "format": "c\"$\"#,##0.00",
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "AVG({INCLUDE [Order ID] : SUM([Profit])})",
             "ast": {
@@ -538,6 +565,7 @@
           "format": null,
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "IF [Region] IN (\"East\", \"West\") THEN \"Coasts\"\nELSE [Region]\nEND",
             "ast": {
@@ -599,6 +627,7 @@
           "format": null,
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "IF [Ship Mode] IN (\"First Class\", \"Same Day\") THEN \"Fast\"\nELSE \"Other\"\nEND",
             "ast": {
@@ -656,6 +685,7 @@
           "format": null,
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "FLOOR(([Quantity]) / 3) * 3",
             "ast": {
@@ -705,6 +735,7 @@
           "format": null,
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "IF [Region] = [Parameters].[Parameter 1] THEN [Sales] ELSE 0 END",
             "ast": {
@@ -765,6 +796,7 @@
           "format": null,
           "hidden": false,
           "column": null,
+          "table": null,
           "calc": {
             "formula": "MIN(0)",
             "ast": {

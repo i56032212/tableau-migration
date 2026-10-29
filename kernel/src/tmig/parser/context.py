@@ -10,8 +10,8 @@ from lxml import etree
 from tmig.formula.analyze import Analyzer
 from tmig.ir.models import (
     CalcLevel,
+    Connection,
     DataField,
-    ExtractConnection,
     FieldUse,
     Filter,
     Parameter,
@@ -44,7 +44,7 @@ class DsState:
     """Tableau 內部名稱，例如 federated.0abc。"""
     id: str
     caption: str
-    connection: ExtractConnection
+    connection: Connection
     week_start: WeekDay
     fields: list[DataField] = field(default_factory=list)
     by_name: dict[str, DataField] = field(default_factory=dict)

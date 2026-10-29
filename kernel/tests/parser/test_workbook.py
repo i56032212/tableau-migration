@@ -4,11 +4,25 @@ from pathlib import Path
 
 import pytest
 
-from tmig.ir import IR, CategoricalFilter, RangeFilter, TopNFilter, iter_zones
+from tmig.ir import (
+    IR,
+    CategoricalFilter,
+    Datasource,
+    ExtractConnection,
+    LiveConnection,
+    RangeFilter,
+    TopNFilter,
+    iter_zones,
+)
 from tmig.parser.workbook import WorkbookParseError, parse_workbook
 
 from . import builder as b
 from .builder import DS, calc, instance, ref, worksheet
+
+
+def hyper(ds: Datasource) -> str:
+    assert isinstance(ds.connection, ExtractConnection)
+    return ds.connection.hyper_file
 
 
 def parse(tmp_path: Path, xml: str, **kwargs: bool) -> IR:
@@ -42,6 +56,7 @@ def test_extract_datasource_fields(tmp_path: Path) -> None:
     ds = ir.datasources[0]
     assert ds.id == "ds_orders"
     assert ds.name == DS
+    assert isinstance(ds.connection, ExtractConnection)
     assert ds.connection.hyper_file == "Data/Extracts/test.hyper"
     assert ds.connection.table == "Extract.Extract"
     assert ds.settings.week_start == "sunday"
@@ -123,7 +138,7 @@ def test_direct_hyper_datasource(tmp_path: Path) -> None:
       </connection>
     </datasource>"""
     ir = parse(tmp_path, b.workbook(ds))
-    assert ir.datasources[0].connection.hyper_file == "Data/Extracts/simple.hyper"
+    assert hyper(ir.datasources[0]) == "Data/Extracts/simple.hyper"
     assert field(ir, "[Region]").column == "region_col"
 
 
@@ -141,15 +156,20 @@ LIVE = f"""
     </datasource>"""
 
 
-def test_live_connection_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(WorkbookParseError, match="Live 連線"):
-        parse(tmp_path, b.workbook(LIVE))
+def test_live_connection(tmp_path: Path) -> None:
+    """第三階段 N1：Live 連線解析成 LiveConnection（細節見 test_connections.py）。"""
+    ir = parse(tmp_path, b.workbook(LIVE))
+    assert reasons(ir) == []
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection)
+    assert (conn.dialect, conn.connection_id) == ("oracle", "oracle_db")
 
 
-def test_lenient_mode_parses_live_connection(tmp_path: Path) -> None:
-    ir = parse(tmp_path, b.workbook(LIVE), lenient=True)
-    assert ir.datasources[0].connection.hyper_file == "(無)"
-    assert any("Live 連線" in r for r in reasons(ir))
+def test_unsupported_live_connection_class(tmp_path: Path) -> None:
+    ir = parse(tmp_path, b.workbook(LIVE.replace("class='oracle'", "class='exasol'")))
+    assert reasons(ir) == ["資料源「Live」的連線類型 exasol 尚不支援"]
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection) and conn.dialect is None
 
 
 def test_published_and_tde_are_rejected(tmp_path: Path) -> None:
@@ -176,12 +196,12 @@ def test_multi_table_extract_is_rejected(tmp_path: Path) -> None:
 def test_twbx_hyper_must_be_packaged(tmp_path: Path) -> None:
     xml = b.workbook()
     ok = parse_workbook(b.write_twbx(tmp_path, xml, {"Data/Extracts/test.hyper": b"x"}))
-    assert ok.datasources[0].connection.hyper_file == "Data/Extracts/test.hyper"
+    assert hyper(ok.datasources[0]) == "Data/Extracts/test.hyper"
     renamed = xml.replace("Data/Extracts/test.hyper", "C:/Temp/test.hyper")
     by_name = parse_workbook(
         b.write_twbx(tmp_path, renamed, {"Data/Extracts/test.hyper": b"x"}, "b.twbx")
     )
-    assert by_name.datasources[0].connection.hyper_file == "Data/Extracts/test.hyper"
+    assert hyper(by_name.datasources[0]) == "Data/Extracts/test.hyper"
     with pytest.raises(WorkbookParseError, match=r"不在 \.twbx 內"):
         parse_workbook(b.write_twbx(tmp_path, xml, {}, "c.twbx"))
 

@@ -136,6 +136,10 @@ class DataField(IRModel):
     format: str | None = Field(default=None, description="Tableau 數字或日期格式字串原文")
     hidden: bool = False
     column: str | None = Field(default=None, description="萃取資料表中的實體欄位；計算欄位為 None")
+    table: str | None = Field(
+        default=None,
+        description="Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None",
+    )
     calc: Calc | None = None
     source_ref: SourceRef
 
@@ -146,12 +150,107 @@ class DataField(IRModel):
         return self
 
 
+Dialect = Literal[
+    "oracle",
+    "databricks",
+    "spark",
+    "postgres",
+    "redshift",
+    "tsql",
+    "mysql",
+    "snowflake",
+    "bigquery",
+    "teradata",
+    "duckdb",
+]
+"""SQL 方言（SQLGlot 的方言名稱）。"""
+
+
+class TableRelation(IRModel):
+    """來源資料庫中的一張資料表；name 是它在關聯樹中的名稱（欄位以它區分所屬的資料表）。"""
+
+    kind: Literal["table"]
+    name: str = Field(min_length=1)
+    table: list[str] = Field(min_length=1, description="限定名稱的各段，例如 [HR, EMPLOYEES]")
+
+
+class SqlRelation(IRModel):
+    """自訂 SQL：以來源資料庫的方言寫成，原文照送。"""
+
+    kind: Literal["sql"]
+    name: str = Field(min_length=1)
+    sql: str = Field(min_length=1)
+
+
+class JoinTerm(IRModel):
+    """join 條件的一邊：資料表的實體欄位，或常值（例如 1 = [T].[dummy] 這種全部配對的寫法）。"""
+
+    table: str | None = Field(default=None, description="資料表名稱；常值時為 None")
+    column: str | None = None
+    literal: Scalar = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if (self.table is None) != (self.column is None):
+            raise ValueError("欄位必須同時有 table 與 column")
+        if self.table is not None and self.literal is not None:
+            raise ValueError("欄位與常值只能擇一")
+        return self
+
+
+class JoinCondition(IRModel):
+    """join 條件：左右兩邊以 op 比較。"""
+
+    left: JoinTerm
+    op: Literal["=", "!=", "<", "<=", ">", ">="] = "="
+    right: JoinTerm
+
+
+class JoinRelation(IRModel):
+    kind: Literal["join"]
+    join: Literal["inner", "left", "right", "full"]
+    left: Relation
+    right: Relation
+    on: list[JoinCondition] = Field(min_length=1, description="以 AND 連接")
+
+
+Relation = Annotated[TableRelation | SqlRelation | JoinRelation, Field(discriminator="kind")]
+JoinRelation.model_rebuild()
+
+
+class LiveConnection(IRModel):
+    """資料在來源資料庫（Live 連線，或萃取的來源）。只記連線資訊，不含帳號、密碼或權杖：
+    憑證由部署環境依 connection_id 提供。"""
+
+    kind: Literal["live"]
+    connection_id: str = Field(
+        pattern=r"^[a-z0-9_]+$", description="連線代號：部署環境以它找對應的憑證"
+    )
+    dbclass: str = Field(min_length=1, description="Tableau 的連線類型，例如 oracle、databricks")
+    dialect: Dialect | None = Field(default=None, description="None＝尚不支援的連線類型")
+    server: str | None = None
+    port: int | None = None
+    database: str | None = Field(
+        default=None, description="資料庫；Oracle 為服務名稱，Databricks 為 catalog"
+    )
+    schema_name: str | None = Field(default=None, description="預設的結構描述")
+    http_path: str | None = Field(default=None, description="Databricks 的 SQL warehouse 路徑")
+    authentication: str | None = Field(default=None, description="Tableau 記錄的驗證方式")
+    relation: Relation | None = Field(default=None, description="資料表、自訂 SQL 或 join 樹")
+
+
 class ExtractConnection(IRModel):
     """資料位於 .twbx 內的 .hyper 檔（嵌入式 Extract）。"""
 
     kind: Literal["extract"]
     hyper_file: str = Field(min_length=1, description=".twbx 內的路徑，一律用 /")
     table: str = Field(min_length=1, description="資料表，例如 Extract.Extract")
+    source: LiveConnection | None = Field(
+        default=None, description="萃取的來源資料庫（萃取層定時更新時使用）"
+    )
+
+
+Connection = Annotated[ExtractConnection | LiveConnection, Field(discriminator="kind")]
 
 
 class DatasourceSettings(IRModel):
@@ -338,7 +437,7 @@ class Datasource(IRModel):
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱")
     caption: str = Field(min_length=1)
-    connection: ExtractConnection
+    connection: Connection
     settings: DatasourceSettings
     fields: list[DataField] = Field(min_length=1)
     filters: list[Filter] = Field(default_factory=list, description="萃取篩選與資料源篩選")

@@ -24,7 +24,7 @@ from typing import Any
 
 import duckdb
 
-from tmig.ir.models import IR
+from tmig.ir.models import IR, ExtractConnection
 from tmig.parser.workbook import parse_workbook
 
 NUMERIC_TAGS = frozenset({"BIG_INT", "INT", "SMALL_INT", "NUMERIC", "DOUBLE", "FLOAT"})
@@ -274,6 +274,8 @@ def import_workbook(
     with zipfile.ZipFile(twbx_path) as archive, tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         for ds in workbook_ir.datasources:
+            if not isinstance(ds.connection, ExtractConnection):
+                continue  # Live 連線的資料在來源資料庫，不在 .twbx 內
             member = ds.connection.hyper_file
             try:
                 data = archive.read(member)

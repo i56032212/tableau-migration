@@ -18,14 +18,17 @@ from tmig.ir.models import (
     AllowedRange,
     Calc,
     CalcLevel,
+    Connection,
     DataField,
     ExtractConnection,
     FieldUse,
+    LiveConnection,
     Parameter,
     Unsupported,
     WeekDay,
 )
 from tmig.ir.scope import DatasourceScope
+from tmig.parser.connections import DIALECTS, live_connection
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
 from tmig.parser.groups import GroupError, bin_formula, group_formula
@@ -183,11 +186,12 @@ class DatasourceParser:
             if not ctx.lenient:
                 return None
         located = None if published else self._data_connection(conn)
-        connection: ExtractConnection | None
+        connection: Connection | None
         if located is None:
-            if not ctx.lenient:
+            live = None if published else self._live(conn)
+            if live is None and not ctx.lenient:
                 return None
-            data_conn, via_extract, connection = conn, False, placeholder
+            data_conn, via_extract, connection = conn, False, live or placeholder
         else:
             data_conn, via_extract = located
             connection = self._connection(data_conn, conn, via_extract)
@@ -245,11 +249,37 @@ class DatasourceParser:
             return conn, False
         if len(named) == 1 and named[0].get("class") in ("hyper", "dataengine"):
             return named[0], False
-        reason = "萃取已停用（使用 Live 連線）" if extract is not None else "是 Live 連線"
-        self.ctx.flag(
-            self.el, f"資料源「{self.caption}」{reason}，資料不在 .twbx 內；v0 只支援嵌入式萃取"
-        )
         return None
+
+    def _live(self, conn: etree._Element) -> LiveConnection | None:
+        """Live 連線（N1）：資料在來源資料庫，查詢時下推；只支援單一具名連線（不跨資料庫）。"""
+        named = children(child(conn, "named-connections"), "named-connection")
+        data = [c for nc in named for c in children(nc, "connection")]
+        if not data and conn.get("class") not in (None, "federated"):
+            data = [conn]  # 舊版檔案：連線直接寫在 <connection> 上
+        if len(data) != 1:
+            self.ctx.flag(
+                conn,
+                f"資料源「{self.caption}」有 {len(data)} 個具名連線（跨資料庫的關聯）尚不支援",
+            )
+            return None
+        relations = children(conn, "relation")
+        relation = relations[0] if len(relations) == 1 else None
+        if len(relations) > 1:
+            self.ctx.flag(conn, f"資料源「{self.caption}」有多個資料表關聯樹，尚不支援")
+            return None
+        return live_connection(self.ctx, data[0], relation, self.caption)
+
+    def _extract_source(self, conn: etree._Element) -> LiveConnection | None:
+        """萃取的來源資料庫（萃取層更新時使用）；解析不了時不影響萃取本身。"""
+        named = [
+            c for nc in descendants(conn, "named-connection") for c in children(nc, "connection")
+        ]
+        relations = children(conn, "relation")
+        if len(named) != 1 or len(relations) != 1 or named[0].get("class") not in DIALECTS:
+            return None
+        probe = ParseContext(self.ctx.package, lenient=True)
+        return live_connection(probe, named[0], relations[0], self.caption)
 
     def _connection(
         self, data_conn: etree._Element, conn: etree._Element, via_extract: bool
@@ -280,7 +310,8 @@ class DatasourceParser:
             )
             return None
         table = ".".join(qualified_parts(tables[0]))
-        return ExtractConnection(kind="extract", hyper_file=hyper_file, table=table)
+        source = self._extract_source(conn) if via_extract else None
+        return ExtractConnection(kind="extract", hyper_file=hyper_file, table=table, source=source)
 
     def _packaged(self, dbname: str) -> str | None:
         path = dbname.replace("\\", "/")
@@ -429,10 +460,18 @@ class DatasourceParser:
                 format=column.get("default-format") if column is not None else None,
                 hidden=column is not None and column.get("hidden") == "true",
                 column=physical.get(name, strip_brackets(name)),
+                table=self._field_table(state, record),
                 calc=None,
                 source_ref=xpath(anchor),
             )
         )
+
+    def _field_table(self, state: DsState, record: MetaColumn | None) -> str | None:
+        """Live 連線時欄位所屬的資料表（metadata-record 的 parent-name）。"""
+        if state.connection.kind != "live" or record is None:
+            return None
+        parent = text_of(child(record.element, "parent-name"))
+        return strip_brackets(parent) or None
 
     def _add_table_count(
         self, state: DsState, name: str, caption: str | None, anchor: etree._Element
