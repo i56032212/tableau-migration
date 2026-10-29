@@ -104,14 +104,14 @@ def test_extracts_omitted(tmp_path: Path) -> None:
     path = demo_without_extract(tmp_path / "demo.twbx")
     strict, _, _ = inventory_workbook(path)
     assert strict.readiness == "not_eligible"
-    assert "資料在 .twbx 的萃取檔內" in strict.failed_checks
+    assert "資料可以取得（萃取或 Live 連線）" in strict.failed_checks
 
     relaxed, report, unsupported = inventory_workbook(path, extracts_omitted=True)
     assert relaxed.readiness == "ready"
     assert relaxed.candidate == "B"
     assert unsupported == []
     assert report is not None
-    check = next(c for c in report.checks if c.key == "embedded_extract")
+    check = next(c for c in report.checks if c.key == "data_access")
     assert "下載時未含萃取檔" in check.detail
 
 

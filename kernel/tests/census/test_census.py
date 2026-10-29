@@ -108,25 +108,25 @@ def test_pilot_dashboard_and_parameters(pilot: CensusReport) -> None:
 
 def test_twb_input_is_marked_unpackaged(pilot: CensusReport) -> None:
     assert not pilot.packaged
-    assert "正式盤點請用 .twbx" in detail(pilot, "embedded_extract")
+    assert "正式盤點請用 .twbx" in detail(pilot, "data_access")
 
 
 def test_twbx_with_extract(tmp_path: Path) -> None:
     report = run_census(make_twbx(tmp_path, HYPER))
     assert report.packaged
-    assert statuses(report)["embedded_extract"] == "pass"
+    assert statuses(report)["data_access"] == "pass"
     assert [f.name for f in report.files] == [HYPER]
 
 
 def test_twbx_missing_extract_file(tmp_path: Path) -> None:
     report = run_census(make_twbx(tmp_path, None))
-    assert statuses(report)["embedded_extract"] == "fail"
-    assert "萃取檔不在 .twbx 內" in detail(report, "embedded_extract")
+    assert statuses(report)["data_access"] == "fail"
+    assert "萃取檔不在 .twbx 內" in detail(report, "data_access")
 
 
 def test_twbx_extract_matched_by_file_name(tmp_path: Path) -> None:
     report = run_census(make_twbx(tmp_path, "Data/Extracts/FEDERATED_0abc123.hyper"))
-    assert statuses(report)["embedded_extract"] == "pass"
+    assert statuses(report)["data_access"] == "pass"
 
 
 # ---------------------------------------------------------------- 不符合條件的報表
@@ -135,7 +135,7 @@ def test_twbx_extract_matched_by_file_name(tmp_path: Path) -> None:
 def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
     assert statuses(problems) == {
         "single_datasource": "fail",
-        "embedded_extract": "fail",
+        "data_access": "fail",
         "single_table": "fail",
         "no_rls": "fail",
         "no_blending": "fail",
@@ -148,8 +148,9 @@ def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
 
 
 def test_problems_details(problems: CensusReport) -> None:
-    assert "「Targets」是 Published Data Source" in detail(problems, "embedded_extract")
-    assert "「Sales (Oracle)」是 Live 連線" in detail(problems, "embedded_extract")
+    assert "「Targets」是 Published Data Source" in detail(problems, "data_access")
+    # 連到資料庫的 Live 連線可以下推查詢（第三階段），不再列為問題
+    assert "Sales (Oracle)" not in detail(problems, "data_access")
     assert "Relationship 模型有 2 張邏輯資料表" in detail(problems, "single_table")
     assert (
         detail(problems, "no_rls") == "ISMEMBEROF（Sales (Oracle) 的資料源篩選）；USERNAME（Mine）"

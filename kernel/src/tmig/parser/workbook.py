@@ -24,6 +24,7 @@ from tmig.ir.models import (
     ParameterAction,
     Scalar,
     TupleFilter,
+    Unsupported,
     UrlAction,
     UrlField,
     Workbook,
@@ -127,6 +128,14 @@ class WorkbookParseError(ValueError):
     """解析結果無法組成合法的 IR（通常是解析器本身的缺陷）。"""
 
 
+class NoDatasourceError(WorkbookParseError):
+    """沒有可移轉的資料源（例如都是尚不支援的連線）；unsupported 為原因，盤點時列為需先補功能。"""
+
+    def __init__(self, message: str, unsupported: list[Unsupported]) -> None:
+        super().__init__(message)
+        self.unsupported = unsupported
+
+
 def parse_workbook(
     path: str | Path, *, lenient: bool = False, extracts_omitted: bool = False
 ) -> IR:
@@ -211,7 +220,7 @@ class WorkbookParser:
 
         if not ctx.datasources:
             reasons = "；".join(u.reason for u in ctx.unsupported) or "workbook 沒有資料源"
-            raise WorkbookParseError(f"沒有可移轉的資料源：{reasons}")
+            raise NoDatasourceError(f"沒有可移轉的資料源：{reasons}", list(ctx.unsupported))
 
         datasources = [
             Datasource(

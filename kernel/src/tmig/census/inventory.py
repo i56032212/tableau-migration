@@ -29,7 +29,7 @@ from tmig.census.collect import features_outside_v0, run_census
 from tmig.census.model import CensusReport
 from tmig.census.report import render_markdown
 from tmig.ir.models import Unsupported
-from tmig.parser.workbook import parse_workbook
+from tmig.parser.workbook import NoDatasourceError, parse_workbook
 
 WORKBOOK_SUFFIXES = frozenset({".twb", ".twbx"})
 SIMPLE_MARKS = frozenset({"Automatic", "Bar", "Line", "Text", "Area", "Circle", "Square", "Shape"})
@@ -201,6 +201,11 @@ def inventory_workbook(
         unsupported = parse_workbook(
             path, lenient=True, extracts_omitted=extracts_omitted
         ).unsupported
+    except NoDatasourceError as exc:
+        # 沒有可移轉的資料源（例如都是尚無執行器的連線）：原因列為不支援，需先補功能
+        unsupported = exc.unsupported
+        if not unsupported:
+            parse_error = _error(exc)
     except Exception as exc:  # 解析器還沒處理的結構：記錄後繼續
         parse_error = _error(exc)
 
@@ -508,7 +513,8 @@ def render_inventory(result: InventoryResult) -> str:
     )
     lines.append("")
     lines.append(
-        "起步條件：單一資料源、資料在 .twbx 的單表萃取內、沒有列層級權限與 Data Blending"
+        "起步條件：單一資料源、資料在 .twbx 的單表萃取內或為可連線的資料庫（Live）、"
+        "沒有列層級權限與 Data Blending"
         "（dashboard 不是固定尺寸時列為需注意）。候選依「不支援數少 → 注意事項少 → 檢視次數多」排序。"
     )
 

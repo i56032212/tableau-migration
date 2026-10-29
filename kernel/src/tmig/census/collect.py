@@ -25,6 +25,7 @@ from tmig.census.model import (
     TableCalcInfo,
     WorksheetInfo,
 )
+from tmig.parser.connections import FILE_CLASSES
 from tmig.parser.refs import parse_instance, qualified_parts, shelf_operators
 from tmig.parser.twbx import (
     attr,
@@ -459,6 +460,9 @@ def _action(act: etree._Element) -> ActionInfo:
 # ---------------------------------------------------------------- 起步條件與分級
 
 
+RELATION_TEXT = {"table": "資料表", "text": "自訂 SQL", "join": "join"}
+
+
 def _quote(names: list[str]) -> str:
     return "、".join(f"「{name}」" for name in names)
 
@@ -492,6 +496,7 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
     packaged_paths = {_norm(f.name) for f in r.files}
     packaged_names = {PurePath(_norm(f.name)).name for f in r.files}
     problems: list[str] = []
+    sources: list[str] = []
     for ds in dss:
         missing = [
             f
@@ -501,20 +506,32 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
         if ds.published:
             problems.append(f"「{ds.caption}」是 Published Data Source")
         elif not ds.data_in_hyper:
-            problems.append(f"「{ds.caption}」是 Live 連線，資料不在 .twbx 內")
+            # Live 連線（第三階段）：連到資料庫的可以下推查詢；連到檔案的尚不支援。
+            # 連線類型與關聯方式是否支援由解析器判斷（列入 unsupported）
+            classes = [c for c in ds.connection_classes if c]
+            files = [c for c in classes if c in FILE_CLASSES]
+            if files:
+                problems.append(f"「{ds.caption}」是連到檔案（{'、'.join(files)}）的 Live 連線")
+            else:
+                sources.append(
+                    f"「{ds.caption}」：Live（{'、'.join(classes) or '未知'}），部署時需提供連線設定"
+                )
         elif any(f.lower().endswith(".tde") for f in ds.extract_files):
             problems.append(f"「{ds.caption}」的萃取是舊版 .tde，需先在 Tableau 升級為 .hyper")
         elif packaged and missing and not extracts_omitted:
             problems.append(f"「{ds.caption}」的萃取檔不在 .twbx 內：{'、'.join(missing)}")
-    ok_detail = "；".join(f"「{d.caption}」：{'、'.join(d.extract_files) or '萃取'}" for d in dss)
-    if dss and packaged and extracts_omitted:
+        else:
+            sources.append(f"「{ds.caption}」：{'、'.join(ds.extract_files) or '萃取'}")
+    ok_detail = "；".join(sources)
+    extracts = [d for d in dss if d.data_in_hyper]
+    if extracts and packaged and extracts_omitted:
         ok_detail += "（下載時未含萃取檔，萃取檔是否齊全待下載正式檔確認）"
-    if dss and not packaged:
+    if extracts and not packaged:
         ok_detail += "（.twb 不含資料，正式盤點請用 .twbx）"
     checks.append(
         Check(
-            key="embedded_extract",
-            title="資料在 .twbx 的萃取檔內",
+            key="data_access",
+            title="資料可以取得（萃取或 Live 連線）",
             status="fail" if problems or not dss else "pass",
             detail="；".join(problems) or ok_detail,
         )
@@ -527,6 +544,10 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
             problems.append(
                 f"「{ds.caption}」的 Relationship 模型有 {ds.logical_tables} 張邏輯資料表"
             )
+        elif not ds.data_in_hyper and not ds.published:
+            # Live：資料表、自訂 SQL 與 join 都下推到來源資料庫（其他關聯方式由解析器列為不支援）
+            kinds = "、".join(RELATION_TEXT.get(k, k) for k in ds.source_relation_types)
+            notes.append(f"「{ds.caption}」：Live 的{kinds or '資料表'}")
         elif len(ds.extract_tables) != 1:
             count = len(ds.extract_tables)
             problems.append(
@@ -542,7 +563,7 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
     checks.append(
         Check(
             key="single_table",
-            title="單表萃取",
+            title="單表萃取，或 Live 的資料表、自訂 SQL、join",
             status="fail" if problems or not dss else "pass",
             detail="；".join(problems) or "；".join(notes),
         )
