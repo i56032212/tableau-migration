@@ -11,7 +11,7 @@ import datetime as dt
 
 import duckdb
 
-from tmig.data.executor import ExecutionError, QueryResult
+from tmig.data.executor import ExecutionError, QueryResult, check_guard
 from tmig.data.sources import Executor
 from tmig.sqlgen.dialect import ParameterValues, split, to_dialect
 from tmig.sqlgen.query import OutputColumn, WorksheetSql
@@ -20,8 +20,17 @@ from tmig.sqlgen.query import OutputColumn, WorksheetSql
 def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
     """兩段式執行一張工作表的查詢。轉譯不了的 SQL 以 DialectError（QueryError）回報。
 
+    查詢附帶的檢查（Relationship 模型的一對多）先在來源資料庫執行，不通過時以 QueryError 回報。
+
     日期型別的輸出欄轉成日期：Oracle 的 DATE 含時間，取回的是午夜的日期時間。
     """
+    for guard in query.guards:
+        sql = to_dialect(guard.sql, executor.dialect, query.custom_sql, query.parameters)
+        try:
+            table = executor.fetch(sql)
+        except Exception as exc:
+            raise ExecutionError(f"來源資料庫執行失敗（檢查）：{exc}") from exc
+        check_guard(guard, [tuple(row.values()) for row in table.to_pylist()])
     plan = split(query)
     remote = [
         (fetch.name, to_dialect(fetch.sql, executor.dialect, query.custom_sql, query.parameters))

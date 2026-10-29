@@ -15,6 +15,8 @@ from typing import Any
 
 import duckdb
 
+from tmig.sqlgen.query import Guard, QueryError, WorksheetSql
+
 
 class ExecutionError(RuntimeError):
     pass
@@ -65,3 +67,17 @@ def execute(db_path: str | Path, sql: str) -> QueryResult:
     except duckdb.Error as exc:
         raise ExecutionError(f"SQL 執行失敗：{exc}") from exc
     return QueryResult(columns=columns, rows=[tuple(r) for r in rows])
+
+
+def execute_query(db_path: str | Path, query: WorksheetSql) -> QueryResult:
+    """執行一張工作表的查詢（萃取的 DuckDB 檔）：先做查詢附帶的檢查，再執行查詢。"""
+    for guard in query.guards:
+        check_guard(guard, execute(db_path, guard.sql).rows)
+    return execute(db_path, query.sql)
+
+
+def check_guard(guard: Guard, rows: list[tuple[Any, ...]] | list[list[Any]]) -> None:
+    """檢查的結果大於 0：這個查詢給不出與 Tableau 相同的數字，列為不支援。"""
+    value = rows[0][0] if rows and rows[0] else 0
+    if value is not None and int(value) > 0:
+        raise QueryError(guard.message, unsupported=True)

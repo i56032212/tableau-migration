@@ -273,3 +273,82 @@ def test_unsupported_entries_are_kept(doc: Doc) -> None:
         }
     )
     assert validate(doc).unsupported[0].reason == "雙軸"
+
+
+# ---------------------------------------------------------------- Relationship 模型（N6）
+
+
+def with_model(doc: Doc) -> Doc:
+    """範例資料源改成兩張邏輯資料表：Orders（地區、日期、銷售額、利潤）與 Products（類別）。"""
+    ds = doc["datasources"][0]
+    for field in ds["fields"]:
+        if field["column"] is not None:
+            field["table"] = "products" if field["id"] == "f_category" else "orders"
+
+    def table(table_id: str, caption: str) -> Doc:
+        relation = {"kind": "table", "name": table_id, "table": ["Extract", table_id]}
+        return {"id": table_id, "caption": caption, "relation": relation}
+
+    ds["connection"]["model"] = {
+        "kind": "model",
+        "name": "model",
+        "tables": [table("orders", "Orders"), table("products", "Products")],
+        "relationships": [
+            {
+                "left": "orders",
+                "right": "products",
+                "on": [{"left": "f_region", "op": "=", "right": "f_category"}],
+            }
+        ],
+    }
+    return doc
+
+
+def test_model_is_valid(doc: Doc) -> None:
+    ir = validate(with_model(doc))
+    connection = ir.datasources[0].connection
+    assert connection.kind == "extract" and connection.model is not None
+    assert [t.id for t in connection.model.tables] == ["orders", "products"]
+
+
+def _model(doc: Doc) -> Doc:
+    return doc["datasources"][0]["connection"]["model"]
+
+
+def _third_table(doc: Doc) -> None:
+    relation = {"kind": "table", "name": "people", "table": ["Extract", "people"]}
+    _model(doc)["tables"].append({"id": "people", "caption": "People", "relation": relation})
+
+
+def _cycle(doc: Doc) -> None:
+    _third_table(doc)
+    doc["datasources"][0]["fields"][2]["table"] = "people"  # f_order_date
+    condition = [{"left": "f_order_date", "op": "=", "right": "f_region"}]
+    _model(doc)["relationships"] += [
+        {"left": "people", "right": "orders", "on": condition},
+        {
+            "left": "people",
+            "right": "products",
+            "on": [{"left": "f_order_date", "op": "=", "right": "f_category"}],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda d: _model(d)["relationships"][0].update(right="nowhere"), "不存在"),
+        (
+            lambda d: _model(d)["relationships"][0]["on"][0].update(right="f_sales"),
+            "不屬於資料表「products」",
+        ),
+        (_third_table, "沒有連到其他資料表"),
+        (_cycle, "關聯成環"),
+        (lambda d: d["datasources"][0]["fields"][0].update(table="elsewhere"), "不在模型中"),
+        (lambda d: _model(d)["tables"].append(copy.deepcopy(_model(d)["tables"][0])), "id 重複"),
+    ],
+)
+def test_model_integrity(doc: Doc, mutate: Mutation, message: str) -> None:
+    doc = with_model(doc)
+    mutate(doc)
+    assert message in errors_of(doc)

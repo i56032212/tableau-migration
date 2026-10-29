@@ -1,5 +1,8 @@
 """Hyper 匯入（C1）：把 .twbx 內的 .hyper 原封不動搬進 DuckDB。
 
+一個資料源一個 DuckDB 檔：單表萃取是一張資料表；Relationship 模型（N6）的萃取每張邏輯資料表
+一張資料表，全部匯入同一個檔，各自做匯入自檢。
+
 計算比對時兩邊必須用同一份資料，所以：
 
 - 型別一一對應；遇到沒有定義對應的型別直接報錯，不轉成文字
@@ -24,7 +27,7 @@ from typing import Any
 
 import duckdb
 
-from tmig.ir.models import IR, ExtractConnection
+from tmig.ir.models import IR, DataField, ExtractConnection, TableRelation
 from tmig.parser.workbook import parse_workbook
 
 NUMERIC_TAGS = frozenset({"BIG_INT", "INT", "SMALL_INT", "NUMERIC", "DOUBLE", "FLOAT"})
@@ -77,15 +80,26 @@ class DatasourceImport:
     table: TableImport
     other_tables: list[str]
     missing_columns: list[str]
+    extra_tables: list[TableImport] = field(default_factory=list)
+    """Relationship 模型的其他邏輯資料表（table 是第一張）。"""
+
+    @property
+    def tables(self) -> list[TableImport]:
+        return [self.table, *self.extra_tables]
 
     @property
     def ok(self) -> bool:
-        return self.table.ok and not self.missing_columns
+        return all(t.ok for t in self.tables) and not self.missing_columns
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
         data["ok"] = self.ok
         data["table"]["ok"] = self.table.ok
+        if self.extra_tables:
+            for item, table in zip(data["extra_tables"], self.extra_tables, strict=True):
+                item["ok"] = table.ok
+        else:
+            del data["extra_tables"]
         return data
 
 
@@ -173,6 +187,20 @@ def import_datasource_hyper(
     hyper_path: Path, table_ref: str, out_path: Path, log_dir: Path
 ) -> tuple[TableImport, list[str]]:
     """把一個 .hyper 中指定的資料表匯入 out_path（DuckDB 檔），並做匯入自檢。"""
+    parts = table_ref.split(".")
+    if len(parts) != 2:
+        raise HyperImportError(f"資料表名稱「{table_ref}」應為 schema.table")
+    (table,), others = import_hyper_tables(hyper_path, [(parts[0], parts[1])], out_path, log_dir)
+    return table, others
+
+
+def import_hyper_tables(
+    hyper_path: Path, refs: list[tuple[str, str]], out_path: Path, log_dir: Path
+) -> tuple[list[TableImport], list[str]]:
+    """把 .hyper 中的多張資料表（schema、table）匯入同一個 DuckDB 檔，各自做匯入自檢。
+
+    回傳各資料表的匯入結果，與 .hyper 中沒有匯入的其他資料表。
+    """
     from tableauhyperapi import (
         Connection,
         CreateMode,
@@ -182,84 +210,129 @@ def import_datasource_hyper(
         escape_string_literal,
     )
 
-    parts = table_ref.split(".")
-    if len(parts) != 2:
-        raise HyperImportError(f"資料表名稱「{table_ref}」應為 schema.table")
-    schema, table = parts
-    parquet = log_dir / "table.parquet"
+    exported: list[tuple[str, str, list[ColumnInfo], dict[str, str], str, Any, Path]] = []
     with (
         HyperProcess(
             Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, parameters={"log_dir": str(log_dir)}
         ) as hyper,
         Connection(hyper.endpoint, str(hyper_path), CreateMode.NONE) as conn,
     ):
-        others = [
-            f"{s.name.unescaped}.{t.name.unescaped}"
+        names = [
+            (s.name.unescaped, t.name.unescaped)
             for s in conn.catalog.get_schema_names()
             for t in conn.catalog.get_table_names(s)
         ]
-        name = TableName(schema, table)
-        if not conn.catalog.has_table(name):
-            raise HyperImportError(f".hyper 內找不到資料表 {table_ref}（有：{'、'.join(others)}）")
-        definition = conn.catalog.get_table_definition(name)
-        columns: list[ColumnInfo] = []
-        tags: dict[str, str] = {}
-        for col in definition.columns:
-            col_name = col.name.unescaped
-            columns.append(
-                ColumnInfo(
-                    name=col_name,
-                    hyper_type=str(col.type),
-                    duckdb_type=duckdb_type(col.type),
-                    collation=col.collation or None,
+        listed = "、".join(f"{a}.{b}" for a, b in names)
+        for i, (schema, table) in enumerate(refs):
+            name = TableName(schema, table)
+            if not conn.catalog.has_table(name):
+                raise HyperImportError(f".hyper 內找不到資料表 {schema}.{table}（有：{listed}）")
+            definition = conn.catalog.get_table_definition(name)
+            columns: list[ColumnInfo] = []
+            tags: dict[str, str] = {}
+            for col in definition.columns:
+                col_name = col.name.unescaped
+                columns.append(
+                    ColumnInfo(
+                        name=col_name,
+                        hyper_type=str(col.type),
+                        duckdb_type=duckdb_type(col.type),
+                        collation=col.collation or None,
+                    )
                 )
+                tags[col_name] = col.type.tag.name
+            hyper_table = f"{_quote(schema)}.{_quote(table)}"
+            sql, labels = _stat_sql(columns, tags, hyper_table)
+            hyper_stats = conn.execute_list_query(sql)[0]
+            parquet = log_dir / f"table{i}.parquet"
+            conn.execute_command(
+                f"COPY {hyper_table} TO {escape_string_literal(str(parquet))} WITH (FORMAT PARQUET)"
             )
-            tags[col_name] = col.type.tag.name
-        hyper_table = f"{_quote(schema)}.{_quote(table)}"
-        sql, labels = _stat_sql(columns, tags, hyper_table)
-        hyper_stats = conn.execute_list_query(sql)[0]
-        conn.execute_command(
-            f"COPY {hyper_table} TO {escape_string_literal(str(parquet))} WITH (FORMAT PARQUET)"
-        )
+            exported.append((schema, table, columns, tags, sql, (labels, hyper_stats), parquet))
 
     tmp_out = out_path.with_name(out_path.name + ".tmp")
     tmp_out.unlink(missing_ok=True)
-    select = ", ".join(
-        f"CAST({_quote(c.name)} AS {c.duckdb_type}) AS {_quote(c.name)}" for c in columns
-    )
+    results: list[TableImport] = []
     with duckdb.connect(str(tmp_out)) as con:
-        con.execute(f"CREATE SCHEMA {_quote(schema)}")
-        con.execute(
-            f"CREATE TABLE {hyper_table} AS SELECT {select} FROM read_parquet(?)", [str(parquet)]
-        )
-        duck_stats = con.execute(sql).fetchone()
-    assert duck_stats is not None
+        for schema in dict.fromkeys(item[0] for item in exported):
+            con.execute(f"CREATE SCHEMA {_quote(schema)}")
+        for schema, table, columns, tags, sql, (labels, hyper_stats), parquet in exported:
+            hyper_table = f"{_quote(schema)}.{_quote(table)}"
+            select = ", ".join(
+                f"CAST({_quote(c.name)} AS {c.duckdb_type}) AS {_quote(c.name)}" for c in columns
+            )
+            con.execute(
+                f"CREATE TABLE {hyper_table} AS SELECT {select} FROM read_parquet(?)",
+                [str(parquet)],
+            )
+            duck_stats = con.execute(sql).fetchone()
+            assert duck_stats is not None
+            checks = [
+                StatCheck(
+                    column=column,
+                    stat=stat,
+                    hyper=_text(h),
+                    duckdb=_text(d),
+                    ok=_same(stat, tags.get(column or "", ""), h, d),
+                )
+                for (column, stat), h, d in zip(labels, hyper_stats, duck_stats, strict=True)
+            ]
+            warnings = [
+                f"欄位「{c.name}」使用定序 {c.collation}，文字比較與排序可能與 DuckDB 不同"
+                for c in columns
+                if c.collation not in (None, "", "binary")
+            ]
+            results.append(
+                TableImport(
+                    schema=schema,
+                    table=table,
+                    rows=int(str(hyper_stats[0])),
+                    columns=columns,
+                    checks=checks,
+                    warnings=warnings,
+                )
+            )
     os.replace(tmp_out, out_path)
+    imported = set(refs)
+    return results, [f"{a}.{b}" for a, b in names if (a, b) not in imported]
 
-    checks = [
-        StatCheck(
-            column=column,
-            stat=stat,
-            hyper=_text(h),
-            duckdb=_text(d),
-            ok=_same(stat, tags.get(column or "", ""), h, d),
+
+def _table_refs(connection: ExtractConnection) -> list[tuple[str, str]]:
+    """萃取要匯入的資料表：單表萃取一張；Relationship 模型每張邏輯資料表一張。"""
+    if connection.model is None:
+        parts = connection.table.split(".")
+        if len(parts) != 2:
+            raise HyperImportError(f"資料表名稱「{connection.table}」應為 schema.table")
+        return [(parts[0], parts[1])]
+    refs: list[tuple[str, str]] = []
+    for logical in connection.model.tables:
+        relation = logical.relation
+        if not isinstance(relation, TableRelation) or len(relation.table) != 2:
+            raise HyperImportError(f"邏輯資料表「{logical.caption}」的萃取資料表應為 schema.table")
+        refs.append((relation.table[0], relation.table[1]))
+    return refs
+
+
+def _missing_columns(
+    connection: ExtractConnection, fields: list[DataField], tables: list[TableImport]
+) -> list[str]:
+    """IR 的實體欄位不在萃取資料表中（Relationship 模型依欄位所屬的邏輯資料表檢查）。"""
+    if connection.model is None:
+        names = {c.name for c in tables[0].columns}
+        return sorted(
+            f"{f.id}（{f.column}）"
+            for f in fields
+            if f.column is not None and f.column not in names
         )
-        for (column, stat), h, d in zip(labels, hyper_stats, duck_stats, strict=True)
-    ]
-    warnings = [
-        f"欄位「{c.name}」使用定序 {c.collation}，文字比較與排序可能與 DuckDB 不同"
-        for c in columns
-        if c.collation not in (None, "", "binary")
-    ]
-    result = TableImport(
-        schema=schema,
-        table=table,
-        rows=int(str(hyper_stats[0])),
-        columns=columns,
-        checks=checks,
-        warnings=warnings,
+    by_table = {
+        logical.id: {c.name for c in table.columns}
+        for logical, table in zip(connection.model.tables, tables, strict=True)
+    }
+    return sorted(
+        f"{f.id}（{f.column}）"
+        for f in fields
+        if f.column is not None and f.column not in by_table.get(f.table or "", set())
     )
-    return result, [t for t in others if t != table_ref]
 
 
 def import_workbook(
@@ -286,23 +359,17 @@ def import_workbook(
             log_dir = work / ds.id
             log_dir.mkdir()
             out_path = target / f"{ds.id}.duckdb"
-            table, others = import_datasource_hyper(
-                hyper_path, ds.connection.table, out_path, log_dir
-            )
-            names = {c.name for c in table.columns}
-            missing = sorted(
-                f"{f.id}（{f.column}）"
-                for f in ds.fields
-                if f.column is not None and f.column not in names
-            )
+            refs = _table_refs(ds.connection)
+            tables, others = import_hyper_tables(hyper_path, refs, out_path, log_dir)
             result = DatasourceImport(
                 datasource=ds.id,
                 hyper_file=member,
                 hyper_sha256=hashlib.sha256(data).hexdigest(),
                 duckdb=out_path.name,
-                table=table,
+                table=tables[0],
                 other_tables=others,
-                missing_columns=missing,
+                missing_columns=_missing_columns(ds.connection, ds.fields, tables),
+                extra_tables=tables[1:],
             )
             report = target / f"{ds.id}.import.json"
             report.write_text(

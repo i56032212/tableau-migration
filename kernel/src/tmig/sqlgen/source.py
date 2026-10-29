@@ -1,8 +1,9 @@
-"""資料源的來源：萃取的單一資料表，或 Live 連線的資料表、自訂 SQL 與 join 樹（N1、N5）。
+"""資料源的來源：萃取的單一資料表，或 Live 連線的資料表、自訂 SQL 與 join 樹（N1、N5），
+以及 Relationship 模型（N6，見 tmig.sqlgen.model）。
 
-工作表 SQL 一律以 DuckDB 方言產生。Live 連線時，第一段（base）把每個實體欄位以欄位 id 為別名選出，
-之後的運算只以別名參照，各資料表的同名欄位因此不會衝突；自訂 SQL 以佔位資料表表示，
-轉成來源資料庫的方言後才換回原文（見 tmig.sqlgen.dialect），原文不經過轉譯。
+工作表 SQL 一律以 DuckDB 方言產生。Live 連線與 Relationship 模型時，第一段（base）把每個實體欄位
+以欄位 id 為別名選出（projected），之後的運算只以別名參照，各資料表的同名欄位因此不會衝突；
+自訂 SQL 以佔位資料表表示，轉成來源資料庫的方言後才換回原文（見 tmig.sqlgen.dialect），原文不經過轉譯。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from tmig.ir.models import (
     ExtractConnection,
     JoinRelation,
     JoinTerm,
+    ModelRelation,
     Relation,
     SqlRelation,
     TableRelation,
@@ -34,24 +36,32 @@ class Source:
     """資料源的 FROM 子句與欄位參照方式。"""
 
     from_sql: str
-    """萃取：資料表；Live：base CTE 的完整 SELECT（以欄位 id 為別名）。"""
-    live: bool
+    """萃取：資料表；Live：base CTE 的完整 SELECT（以欄位 id 為別名）；
+    Relationship 模型：空字串（依檢視用到的資料表另外產生）。"""
+    projected: bool
+    """base CTE 以欄位 id 為別名選出實體欄位（Live 連線與 Relationship 模型）。"""
     custom_sql: list[str]
     """自訂 SQL 原文，依佔位資料表的編號。"""
+    model: ModelRelation | None = None
 
     def column(self, data_field: DataField) -> str:
         """之後各段參照這個實體欄位時用的欄名。"""
         assert data_field.column is not None
-        return data_field.id if self.live else data_field.column
+        return data_field.id if self.projected else data_field.column
 
 
 def datasource_source(ds: Datasource) -> Source:
     connection = ds.connection
     if isinstance(connection, ExtractConnection):
+        if connection.model is not None:
+            return Source("", projected=True, custom_sql=[], model=connection.model)
         table = ".".join(ident(p) for p in connection.table.split("."))
-        return Source(from_sql=table, live=False, custom_sql=[])
+        return Source(from_sql=table, projected=False, custom_sql=[])
     if connection.relation is None:
         raise SourceError(f"資料源「{ds.caption}」沒有資料表")
+    if isinstance(connection.relation, ModelRelation):
+        model = connection.relation
+        return Source("", projected=True, custom_sql=model_custom_sql(model), model=model)
     custom: list[str] = []
     from_sql = _relation_sql(connection.relation, custom)
     names = _relation_names(connection.relation)
@@ -70,9 +80,14 @@ def datasource_source(ds: Datasource) -> Source:
         raise SourceError(f"資料源「{ds.caption}」沒有實體欄位")
     return Source(
         from_sql=f"SELECT {', '.join(projections)} FROM {from_sql}",
-        live=True,
+        projected=True,
         custom_sql=custom,
     )
+
+
+def model_custom_sql(model: ModelRelation) -> list[str]:
+    """Relationship 模型中各邏輯資料表的自訂 SQL，依資料表的順序（佔位資料表的編號）。"""
+    return [t.relation.sql for t in model.tables if isinstance(t.relation, SqlRelation)]
 
 
 def _relation_sql(relation: Relation, custom: list[str]) -> str:

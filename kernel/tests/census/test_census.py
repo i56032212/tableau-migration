@@ -136,7 +136,7 @@ def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
     assert statuses(problems) == {
         "single_datasource": "fail",
         "data_access": "fail",
-        "single_table": "fail",
+        "single_table": "pass",
         "no_rls": "fail",
         "no_blending": "fail",
         "fixed_dashboards": "warn",
@@ -151,7 +151,11 @@ def test_problems_details(problems: CensusReport) -> None:
     assert "「Targets」是 Published Data Source" in detail(problems, "data_access")
     # 連到資料庫的 Live 連線可以下推查詢（第三階段），不再列為問題
     assert "Sales (Oracle)" not in detail(problems, "data_access")
-    assert "Relationship 模型有 2 張邏輯資料表" in detail(problems, "single_table")
+    # Relationship 模型（N6）不再列為問題；Published Data Source 的結構待下載後才知道
+    assert (
+        detail(problems, "single_table")
+        == "「Sales (Oracle)」：Relationship 模型（2 張邏輯資料表，Live）"
+    )
     assert (
         detail(problems, "no_rls") == "ISMEMBEROF（Sales (Oracle) 的資料源篩選）；USERNAME（Mine）"
     )
@@ -209,7 +213,7 @@ def test_markdown_report(pilot: CensusReport, problems: CensusReport) -> None:
     assert "| 函式 | 用到的計算欄位數 | v0 函式集 |" in text
     assert "| Overview | fixed 1200×800 |" in text
     bad = render_markdown(problems)
-    assert "- 起步條件：不符合 5 項" in bad
+    assert "- 起步條件：不符合 4 項" in bad
     assert 'IF [REGION] IN ("North", "South") THEN ATTR([REGION]) ELSE "[Other]" END' in bad
 
 

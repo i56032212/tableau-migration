@@ -1095,6 +1095,18 @@
           "title": "Table",
           "type": "string"
         },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRelation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relationship 模型的萃取：每張邏輯資料表一張資料表（table 為第一張）"
+        },
         "source": {
           "anyOf": [
             {
@@ -1489,6 +1501,7 @@
               "discriminator": {
                 "mapping": {
                   "join": "#/$defs/JoinRelation",
+                  "model": "#/$defs/ModelRelation",
                   "sql": "#/$defs/SqlRelation",
                   "table": "#/$defs/TableRelation"
                 },
@@ -1503,6 +1516,9 @@
                 },
                 {
                   "$ref": "#/$defs/JoinRelation"
+                },
+                {
+                  "$ref": "#/$defs/ModelRelation"
                 }
               ]
             },
@@ -1511,7 +1527,7 @@
             }
           ],
           "default": null,
-          "description": "資料表、自訂 SQL 或 join 樹",
+          "description": "資料表、自訂 SQL、join 樹或 Relationship 模型",
           "title": "Relation"
         }
       },
@@ -1521,6 +1537,53 @@
         "dbclass"
       ],
       "title": "LiveConnection",
+      "type": "object"
+    },
+    "LogicalTable": {
+      "additionalProperties": false,
+      "description": "Relationship 模型的邏輯資料表（object-graph 的 object）。",
+      "properties": {
+        "id": {
+          "description": "Tableau 的 object id，欄位的 table 以它表示所屬的邏輯資料表",
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "caption": {
+          "minLength": 1,
+          "title": "Caption",
+          "type": "string"
+        },
+        "relation": {
+          "description": "實體的資料表、自訂 SQL 或 join 樹",
+          "discriminator": {
+            "mapping": {
+              "join": "#/$defs/JoinRelation",
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            },
+            {
+              "$ref": "#/$defs/JoinRelation"
+            }
+          ],
+          "title": "Relation"
+        }
+      },
+      "required": [
+        "id",
+        "caption",
+        "relation"
+      ],
+      "title": "LogicalTable",
       "type": "object"
     },
     "Marks": {
@@ -1627,6 +1690,46 @@
         "type"
       ],
       "title": "Marks",
+      "type": "object"
+    },
+    "ModelRelation": {
+      "additionalProperties": false,
+      "description": "Relationship 模型（Tableau 2020.2 以後的資料模型）：多張邏輯資料表以關聯連成一棵樹。\n\n查詢時只取檢視用到的資料表；量值在自己的資料表彙總，不因其他資料表的一對多而重複計算。",
+      "properties": {
+        "kind": {
+          "const": "model",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "default": "model",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "tables": {
+          "items": {
+            "$ref": "#/$defs/LogicalTable"
+          },
+          "minItems": 2,
+          "title": "Tables",
+          "type": "array"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/Relationship"
+          },
+          "minItems": 1,
+          "title": "Relationships",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "tables",
+        "relationships"
+      ],
+      "title": "ModelRelation",
       "type": "object"
     },
     "Pane": {
@@ -2090,6 +2193,76 @@
         "source_ref"
       ],
       "title": "ReferenceLine",
+      "type": "object"
+    },
+    "Relationship": {
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "description": "邏輯資料表 id",
+          "minLength": 1,
+          "title": "Left",
+          "type": "string"
+        },
+        "right": {
+          "description": "邏輯資料表 id",
+          "minLength": 1,
+          "title": "Right",
+          "type": "string"
+        },
+        "on": {
+          "description": "以 AND 連接",
+          "items": {
+            "$ref": "#/$defs/RelationshipCondition"
+          },
+          "minItems": 1,
+          "title": "On",
+          "type": "array"
+        }
+      },
+      "required": [
+        "left",
+        "right",
+        "on"
+      ],
+      "title": "Relationship",
+      "type": "object"
+    },
+    "RelationshipCondition": {
+      "additionalProperties": false,
+      "description": "關聯條件：兩張邏輯資料表的欄位（欄位 id）以 op 比較。",
+      "properties": {
+        "left": {
+          "description": "left 資料表的欄位 id",
+          "minLength": 1,
+          "title": "Left",
+          "type": "string"
+        },
+        "op": {
+          "default": "=",
+          "enum": [
+            "=",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">="
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "right": {
+          "description": "right 資料表的欄位 id",
+          "minLength": 1,
+          "title": "Right",
+          "type": "string"
+        }
+      },
+      "required": [
+        "left",
+        "right"
+      ],
+      "title": "RelationshipCondition",
       "type": "object"
     },
     "RelativeDateFilter": {

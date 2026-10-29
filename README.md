@@ -28,7 +28,8 @@
 第三階段（來源資料庫、權限、排程）進行中。Live 連線已能查詢：工作表的 SQL 中不含 Table Calculation 的部分
 轉成來源資料庫的方言下推執行，結果取回 DuckDB 再算 Table Calculation（兩段式執行）。兩份報表的萃取資料載入
 PostgreSQL 與 Spark（Databricks 的引擎）、資料源改成 Live 連線後，116 項計算比對全部通過，每個公式函式也都實跑比對；
-Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。
+Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
+Relationship 模型（見「Relationship 模型」）；公開報表盤點中符合起步條件的從 75 份增加到 90 份。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
@@ -106,6 +107,25 @@ IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
   （`kernel/tests/sqlgen/test_engines.py`；本機有 PostgreSQL 時自動執行，Spark 需要 `uv sync --group spark` 與 Java 17 以上）
 - Oracle（12.2 以上）：尚無實機。轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、Oracle 特有的函式依官方文件的語意模擬後執行比對，
   並保留轉譯快照（`fixtures/*/sql/oracle/`）供審核；正式使用前須在公司的 Oracle 實測
+
+## Relationship 模型
+
+Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表以關聯連成一棵樹），Live 連線與萃取都支援
+（萃取每張邏輯資料表一張 .hyper 資料表，匯入同一個 DuckDB 檔、各自自檢）。查詢依 Tableau 文件的語意
+（`kernel/src/tmig/sqlgen/model.py`）：
+
+- 只查檢視用到的資料表；量值在自己的資料表彙總，其他資料表依「關聯欄位＋用到的欄位」去重後連接，
+  一對多時每一組維度值只算一次、不重複計算；沒有對應的量值列以 Null 呈現
+- 檢視的維度都來自量值表以外的同一張（或同一個分支的）資料表時，維度表中沒有量值的成員也列出（量值為 Null）
+- 只有維度時取內部連接（只列出存在的組合）
+- 篩選只用到其他資料表的欄位時，量值表保留「有關聯、且關聯到的列中有符合者」，沒有關聯時以 Null 判斷；
+  篩選仍在自己的運算階段套用（例如維度篩選在 FIXED LOD 之後）
+- 在比檢視粗的層級彙總（FIXED／EXCLUDE LOD、Top N、依欄位排序、TOTAL）而其他資料表是一對多時，
+  量值會重複計算：查詢附帶檢查，執行前確認關聯值都只對應一組欄位值（星狀模型的維度表都是如此），
+  否則列為不支援，不給出與 Tableau 不同的數字
+
+尚不支援（查詢時列為不支援）：同一張工作表的量值來自多張資料表、同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
+Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（解析時列入 unsupported）。
 
 ## 指令
 
@@ -197,11 +217,15 @@ tableau-migration/
   PostgreSQL 的 DATEPARSE 遇到符合格式但不存在的日期（例如 13 月）會報錯而不是 Null
 - **函式**：REGEXP_EXTRACT 沒有符合時為 Null；正規表示式以 RE2 執行，用到前後查看、反向參照的樣式列為不支援；
   DATENAME 的月份與星期為英文名稱（Tableau 依工作簿的地區設定，中文環境可能不同）；ISDATE 只認得 ISO 格式的日期
+- **Relationship 模型**：語意依 Tableau 文件（「How Analysis Works for Multi-table Data Sources」）與公開文章推定；
+  維度表中沒有量值的成員何時列出、只用到其他資料表欄位的篩選對沒有關聯的列以 Null 判斷，這兩點待真實報表確認。
+  維度是一對多資料表欄位的運算式（日期部分、計算欄位）時，Tableau 在原值還是運算式的值上去重不明，列為不支援
+  （查詢附帶的檢查）；關聯的效能選項（基數、參照完整性）不影響結果，一律以「多對多、部分相符」的語意查詢
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
 集合與集合動作、成員別名、趨勢線、地圖、小計與總計、巢狀 LOD、百分位數與百分比等其他快速 Table Calculation、
-使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、Published Data Source、Relationship 模型、
-SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線。
+使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、Published Data Source、
+Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線。
 
 ## 開發規則
 

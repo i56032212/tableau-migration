@@ -218,6 +218,47 @@ Relation = Annotated[TableRelation | SqlRelation | JoinRelation, Field(discrimin
 JoinRelation.model_rebuild()
 
 
+class LogicalTable(IRModel):
+    """Relationship 模型的邏輯資料表（object-graph 的 object）。"""
+
+    id: str = Field(
+        min_length=1, description="Tableau 的 object id，欄位的 table 以它表示所屬的邏輯資料表"
+    )
+    caption: str = Field(min_length=1)
+    relation: Relation = Field(description="實體的資料表、自訂 SQL 或 join 樹")
+
+
+class RelationshipCondition(IRModel):
+    """關聯條件：兩張邏輯資料表的欄位（欄位 id）以 op 比較。"""
+
+    left: str = Field(min_length=1, description="left 資料表的欄位 id")
+    op: Literal["=", "!=", "<", "<=", ">", ">="] = "="
+    right: str = Field(min_length=1, description="right 資料表的欄位 id")
+
+
+class Relationship(IRModel):
+    left: str = Field(min_length=1, description="邏輯資料表 id")
+    right: str = Field(min_length=1, description="邏輯資料表 id")
+    on: list[RelationshipCondition] = Field(min_length=1, description="以 AND 連接")
+
+
+class ModelRelation(IRModel):
+    """Relationship 模型（Tableau 2020.2 以後的資料模型）：多張邏輯資料表以關聯連成一棵樹。
+
+    查詢時只取檢視用到的資料表；量值在自己的資料表彙總，不因其他資料表的一對多而重複計算。
+    """
+
+    kind: Literal["model"]
+    name: str = Field(default="model", min_length=1)
+    tables: list[LogicalTable] = Field(min_length=2)
+    relationships: list[Relationship] = Field(min_length=1)
+
+
+TopRelation = Annotated[
+    TableRelation | SqlRelation | JoinRelation | ModelRelation, Field(discriminator="kind")
+]
+
+
 class LiveConnection(IRModel):
     """資料在來源資料庫（Live 連線，或萃取的來源）。只記連線資訊，不含帳號、密碼或權杖：
     憑證由部署環境依 connection_id 提供。"""
@@ -236,7 +277,9 @@ class LiveConnection(IRModel):
     schema_name: str | None = Field(default=None, description="預設的結構描述")
     http_path: str | None = Field(default=None, description="Databricks 的 SQL warehouse 路徑")
     authentication: str | None = Field(default=None, description="Tableau 記錄的驗證方式")
-    relation: Relation | None = Field(default=None, description="資料表、自訂 SQL 或 join 樹")
+    relation: TopRelation | None = Field(
+        default=None, description="資料表、自訂 SQL、join 樹或 Relationship 模型"
+    )
 
 
 class ExtractConnection(IRModel):
@@ -245,6 +288,10 @@ class ExtractConnection(IRModel):
     kind: Literal["extract"]
     hyper_file: str = Field(min_length=1, description=".twbx 內的路徑，一律用 /")
     table: str = Field(min_length=1, description="資料表，例如 Extract.Extract")
+    model: ModelRelation | None = Field(
+        default=None,
+        description="Relationship 模型的萃取：每張邏輯資料表一張資料表（table 為第一張）",
+    )
     source: LiveConnection | None = Field(
         default=None, description="萃取的來源資料庫（萃取層定時更新時使用）"
     )

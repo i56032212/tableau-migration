@@ -356,6 +356,7 @@ COMMON: frozenset[type[exp.Expr]] = frozenset(
         exp.From,
         exp.Where,
         exp.Group,
+        exp.Having,
         exp.Order,
         exp.Ordered,
         exp.Limit,
@@ -363,6 +364,7 @@ COMMON: frozenset[type[exp.Expr]] = frozenset(
         exp.Table,
         exp.TableAlias,
         exp.Subquery,
+        exp.Union,
         exp.With,
         exp.CTE,
         exp.Alias,
@@ -1317,6 +1319,9 @@ class OracleRewriter(Rewriter):
         for select in list(tree.find_all(exp.Select)):
             _expand_group_ordinals(select)
             _qualify_star(select)
+            if select.args.get("from_") is None and select.args.get("from") is None:
+                # Oracle 23ai 以前的 SELECT 一定要有 FROM
+                select.set("from_", exp.From(this=exp.Table(this=exp.to_identifier("DUAL"))))
         for boolean in list(tree.find_all(exp.Boolean)):
             if boolean.root() is tree:
                 _replace_boolean(boolean)
@@ -1386,11 +1391,11 @@ def _is_predicate(node: exp.Expr) -> bool:
 
 
 def _condition_position(node: exp.Expr) -> bool:
-    """節點是否位在條件的位置（WHERE、ON、CASE WHEN、AND／OR／NOT 的運算元）。"""
+    """節點是否位在條件的位置（WHERE、HAVING、ON、CASE WHEN、AND／OR／NOT 的運算元）。"""
     child, parent = node, node.parent
     while isinstance(parent, exp.Paren):
         child, parent = parent, parent.parent
-    if isinstance(parent, (exp.Where, exp.And, exp.Or, exp.Not)):
+    if isinstance(parent, (exp.Where, exp.Having, exp.And, exp.Or, exp.Not)):
         return True
     if isinstance(parent, exp.Join):
         return child.arg_key == "on"

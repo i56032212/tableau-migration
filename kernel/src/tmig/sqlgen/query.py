@@ -48,6 +48,7 @@ from tmig.ir.models import (
     DataField,
     FieldUse,
     Filter,
+    LiveConnection,
     Marks,
     Pane,
     ParamRef,
@@ -63,6 +64,7 @@ from tmig.ir.models import (
 from tmig.ir.scope import DatasourceScope
 from tmig.planner.state import EffectiveState, QueryState, apply_state, use_key
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
+from tmig.sqlgen.model import Branch, ModelError, ModelPlan, ModelPlanner, RowFilter, Usage
 from tmig.sqlgen.source import SourceError, datasource_source
 from tmig.sqlgen.sql import ident, literal
 
@@ -175,6 +177,14 @@ class CteDef:
 
 
 @dataclass
+class Guard:
+    """執行前的檢查：sql 回傳一個數字，大於 0 時查詢不能給出正確的數字（以 message 列為不支援）。"""
+
+    sql: str
+    message: str
+
+
+@dataclass
 class WorksheetSql:
     worksheet: str
     sql: str
@@ -190,6 +200,8 @@ class WorksheetSql:
     """Live 連線的自訂 SQL 原文（SQL 中以佔位資料表表示）。"""
     parameters: dict[str, tuple[Scalar, str]] = field(default_factory=dict)
     """自訂 SQL 中參數的目前值：內部名稱（不含方括號）與顯示名稱 → （值、資料型別）。"""
+    guards: list[Guard] = field(default_factory=list)
+    """Relationship 模型：在比檢視粗的層級彙總時，確認其他資料表不會讓量值重複計算（見 tmig.sqlgen.model）。"""
 
 
 @dataclass
@@ -311,6 +323,12 @@ class WorksheetQuery:
         self._names: dict[str, int] = {}
         self._canon: dict[Node, Node] = {}
         self._sort_ctes: dict[str, tuple[str, str]] = {}
+        self.model_plan: ModelPlan | None = None
+        """Relationship 模型的連接方式（build 時決定）。"""
+        self._guards: dict[int, list[str]] = {}
+        """需要檢查的分支（ModelPlan.branches 的索引）→ 在哪些層級彙總。"""
+        self._domain_conds: list[str] = []
+        """列層級篩選的條件（直接套用）：補上維度成員時使用。"""
 
     # ------------------------------------------------------------ 工具
 
@@ -511,6 +529,8 @@ class WorksheetQuery:
         for node in [self.field_node(d.use.field) for d in dims] + [m.node for m in measures]:
             self.register_lods(node)
         for flt in stage["datasource"] + stage["context"] + stage["dimension"]:
+            if _noop(flt):
+                continue  # 「全部」：沒有條件，不需要計算其中的 LOD
             for use in flt.fields if isinstance(flt, TupleFilter) else [flt.field]:
                 self.register_lods(self.field_node(use.field))
         top_nodes = {
@@ -541,16 +561,26 @@ class WorksheetQuery:
         fixed = [s for s in self.lods.values() if s.node.kind == "fixed"]
         relative = [s for s in self.lods.values() if s.node.kind != "fixed"]
 
+        # Relationship 模型：依用到的欄位決定要查哪些邏輯資料表、怎麼連接
+        base_sql = self.source.from_sql
+        if self.source.model is not None:
+            self.model_plan = self._plan_model(dims, measures, sorts, stage, top_nodes, member_set)
+            base_sql = self.model_plan.from_sql
+            for text in self.model_plan.notes:
+                self.note(1, text)
+
         # 1. 資料源篩選
         for flt in stage["extract"]:
             self.note(1, f"萃取篩選 {flt.id} 已在建立萃取時套用，不重複")
-        conds = [self._row_condition(f) for f in stage["datasource"]]
-        if self.source.live:
-            # Live 連線：先以欄位 id 為別名選出實體欄位（各資料表的同名欄位不衝突），再套用資料源篩選
-            self.cte(1, "base", self.source.from_sql)
+        conds = [self._filter_condition(f) for f in stage["datasource"]]
+        self._domain_conds = [self._row_condition(f) for f in stage["datasource"]]
+        if self.source.projected:
+            # Live 連線與 Relationship 模型：先以欄位 id 為別名選出實體欄位（各資料表的同名欄位不衝突），
+            # 再套用資料源篩選
+            self.cte(1, "base", base_sql)
             self.cte(1, "src", f"SELECT * FROM base{_where(conds)}")
         else:
-            self.cte(1, "src", f"SELECT * FROM {self.source.from_sql}{_where(conds)}")
+            self.cte(1, "src", f"SELECT * FROM {base_sql}{_where(conds)}")
         for flt in stage["datasource"]:
             self.note(1, f"資料源篩選 {flt.id}")
 
@@ -559,10 +589,11 @@ class WorksheetQuery:
         ctx_top = [f for f in stage["context"] if member_set(f)]
         source = "src"
         if ctx_dims or ctx_top:
-            conds = [self._row_condition(f) for f in ctx_dims]
+            conds = [self._filter_condition(f) for f in ctx_dims]
             source = self.cte(2, "ctx_pre", f"SELECT * FROM src{_where(conds)}")
             top_conds = [self._member_set(f, top_nodes, source, 2) for f in ctx_top]
             source = self.cte(2, "ctx", f"SELECT * FROM {source}{_where(top_conds)}")
+            self._domain_conds += [self._row_condition(f) for f in ctx_dims] + top_conds
             for flt in stage["context"]:
                 self.note(2, f"內容篩選 {flt.id}")
 
@@ -576,7 +607,8 @@ class WorksheetQuery:
 
         # 4. 維度篩選（「全部」的篩選沒有條件，不另建 CTE）
         dimension = [f for f in stage["dimension"] if not member_set(f)]
-        conds = [c for c in [self._row_condition(f) for f in dimension] + top_conds if c]
+        conds = [c for c in [self._filter_condition(f) for f in dimension] + top_conds if c]
+        self._domain_conds += [self._row_condition(f) for f in dimension] + top_conds
         if conds:
             source = self.cte(4, "dimf", f"SELECT * FROM {source}{_where(conds)}")
             for flt in stage["dimension"]:
@@ -587,11 +619,14 @@ class WorksheetQuery:
         rows_cte = source
 
         # 6. 彙總與量值篩選
+        self._guard(self._covered([d.use for d in dims]), "檢視的彙總")
         level = [self.dim_sql(d.use) for d in dims]
         agg_nodes = list(
             {self.canon(a): a for m in measures for a in self.aggregates_in(m.node)}.values()
         )
         agg_name, agg_cols, keys = self.aggregate("agg", agg_nodes, level, rows_cte, 6, dims)
+        if self.model_plan is not None and self.model_plan.domain is not None and dims:
+            agg_name = self._domain_marks(agg_name, agg_cols, keys, dims)
         for d, key in zip(dims, keys, strict=True):
             d.col = key
         post = self.compiler(_PostEnv(self, agg_cols))
@@ -660,12 +695,201 @@ class WorksheetQuery:
                 CteDef(name, body, stage_of[name], self.pushdown[name]) for name, body in self.ctes
             ],
             main=main,
-            live=self.source.live,
+            live=isinstance(self.datasource.connection, LiveConnection),
             custom_sql=list(self.source.custom_sql),
             parameters=custom_sql_parameters(self.ir, self.state.parameters)
             if self.source.custom_sql
             else {},
+            guards=self._guard_list(),
         )
+
+    # ------------------------------------------------------------ Relationship 模型
+
+    def _plan_model(
+        self,
+        dims: list[Dim],
+        measures: list[Measure],
+        sorts: dict[str, Sort],
+        stage: dict[str, list[Filter]],
+        top_nodes: dict[str, Node],
+        member_set: Callable[[Filter], bool],
+    ) -> ModelPlan:
+        """檢視用到的欄位（維度、量值、排序、LOD、Top N）與列層級篩選 → 要查的邏輯資料表與連接方式。"""
+        usage = Usage()
+        for d in dims:
+            self.collect(self.field_node(d.use.field), usage)
+        for m in measures:
+            self.collect(m.node, usage)
+        for sort in sorts.values():
+            if sort.by is not None:
+                self.collect(self.measure_node(sort.by), usage)
+        filters: list[RowFilter] = []
+        others: set[str] = set()
+        for flt in stage["datasource"] + stage["context"] + stage["top_n"] + stage["dimension"]:
+            if _noop(flt):
+                continue
+            nodes: list[Node] = [
+                self.field_node(use.field)
+                for use in (flt.fields if isinstance(flt, TupleFilter) else [flt.field])
+            ]
+            if flt.id in self.cond_nodes:
+                nodes.append(self.cond_nodes[flt.id])
+            if flt.id in top_nodes:
+                nodes.append(top_nodes[flt.id])
+            found = Usage()
+            for node in nodes:
+                self.collect(node, found)
+            others |= set(found.tables)
+            if member_set(flt):
+                # Top N 與彙總條件以彙總選出成員：用到的欄位與檢視的欄位一樣看待
+                usage.merge(found)
+                continue
+            if flt.stage == "top_n":
+                continue
+            has_lod = any(self.lods_in(node) for node in nodes)
+            filters.append(RowFilter(flt.id, set(found.fields), set(found.tables), has_lod))
+        # 檢視的維度用到的資料表（判斷是否要補上沒有量值的維度成員；維度含 LOD 時不補）
+        dim_usage = Usage()
+        dim_nodes = [self.field_node(d.use.field) for d in dims]
+        for node in dim_nodes:
+            self.collect(node, dim_usage)
+        if any(self.lods_in(node) for node in dim_nodes) or any(f.lod for f in filters):
+            return self.plan_model(usage, filters)
+        return self.plan_model(usage, filters, set(dim_usage.tables), others)
+
+    def plan_model(
+        self,
+        usage: Usage,
+        filters: list[RowFilter],
+        dims: set[str] | None = None,
+        others: set[str] | None = None,
+    ) -> ModelPlan:
+        model = self.source.model
+        assert model is not None
+        try:
+            return ModelPlanner(self.datasource, model).plan(usage, filters, dims, others)
+        except ModelError as exc:
+            raise QueryError(str(exc), unsupported=True) from exc
+
+    def _domain_marks(
+        self, agg_name: str, agg_cols: dict[Call, str], keys: list[str], dims: list[Dim]
+    ) -> str:
+        """Relationship 模型：維度表中沒有量值的成員也是標記（量值為 Null），與 Tableau 另以維度查詢
+        補上成員相同。成員套用同樣的列層級篩選（直接套用，欄位都在維度表中）。"""
+        plan = self.model_plan
+        assert plan is not None and plan.domain is not None
+        base = self.cte(6, "dom_base", plan.domain)
+        conds = [c for c in self._domain_conds if c]
+        cols = [f"{self.dim_sql(d.use)} AS {ident(k)}" for d, k in zip(dims, keys, strict=True)]
+        dom = self.cte(6, "dom", f"SELECT DISTINCT {', '.join(cols)} FROM {base}{_where(conds)}")
+        same = " AND ".join(f"a.{ident(k)} IS NOT DISTINCT FROM d.{ident(k)}" for k in keys)
+        picks = [f"d.{ident(k)}" for k in keys] + [f"NULL AS {ident(c)}" for c in agg_cols.values()]
+        return self.cte(
+            6,
+            "agg_dom",
+            f"SELECT * FROM {agg_name} UNION ALL SELECT {', '.join(picks)} FROM {dom} d "
+            f"WHERE NOT EXISTS (SELECT 1 FROM {agg_name} a WHERE {same})",
+        )
+
+    def _filter_condition(self, flt: Filter) -> str:
+        """列層級篩選的條件；Relationship 模型中只用到其他資料表欄位的篩選以半連接套用。"""
+        condition = self._row_condition(flt)
+        semi = self.model_plan.semi.get(flt.id) if self.model_plan is not None else None
+        if semi is None or not condition:
+            return condition
+        return semi.render(condition)
+
+    def _covered(self, uses: list[FieldUse], refs: tuple[FieldRef, ...] = ()) -> set[str]:
+        """彙總層級中直接以原值分組的實體欄位（不含日期衍生與計算欄位）。"""
+        covered = {
+            u.field
+            for u in uses
+            if u.date is None
+            and self.fields[u.field].column is not None
+            and self.fields[u.field].calc is None
+        }
+        for ref in refs:
+            target = self._resolve(ref)
+            raw = target.kind == "field" and target.formula is None
+            if raw and self.fields[target.id].column is not None:
+                covered.add(target.id)
+        return covered
+
+    def _guard(self, covered: set[str], what: str) -> None:
+        """在某個層級彙總：層級沒有涵蓋某個分支用到的欄位時，量值表的列可能因一對多而重複計算，
+        執行前檢查該分支（見 tmig.sqlgen.model）。"""
+        plan = self.model_plan
+        if plan is None:
+            return
+        for i, branch in enumerate(plan.branches):
+            if set(branch.needed) <= covered:
+                continue
+            if not branch.equality:
+                raise QueryError(
+                    f"Relationship 模型中「{self._branch_names(branch)}」的關聯條件不是等號，"
+                    f"{what}的層級不含它的欄位時尚不支援",
+                    unsupported=True,
+                )
+            whats = self._guards.setdefault(i, [])
+            if what not in whats:
+                whats.append(what)
+
+    def _branch_names(self, branch: Branch) -> str:
+        model = self.source.model
+        assert model is not None
+        captions = {t.id: t.caption for t in model.tables}
+        return "、".join(captions[t] for t in branch.tables)
+
+    def _guard_list(self) -> list[Guard]:
+        plan = self.model_plan
+        if plan is None or not self._guards:
+            return []
+        guards: list[Guard] = []
+        model = self.source.model
+        assert model is not None and plan.measure_table is not None
+        measure = next(t.caption for t in model.tables if t.id == plan.measure_table)
+        for i, whats in sorted(self._guards.items()):
+            branch = plan.branches[i]
+            names = "、".join(self.fields[f].caption for f in branch.needed)
+            guards.append(
+                Guard(
+                    sql=branch.guard_sql(),
+                    message=(
+                        f"Relationship 模型中「{self._branch_names(branch)}」對「{measure}」不是多對一"
+                        f"（同一個關聯值對應多組 {names}）：{'、'.join(whats)}的層級不含這些欄位，"
+                        "量值會重複計算，尚不支援"
+                    ),
+                )
+            )
+        return guards
+
+    def collect(self, node: Node, usage: Usage, inside: bool = False) -> None:
+        """公式用到的實體欄位與邏輯資料表；inside 為是否在彙總之中（量值所在的資料表）。"""
+        if isinstance(node, FieldRef):
+            target = self._resolve(node)
+            if target.kind != "field":
+                return
+            data_field = self.fields[target.id]
+            if data_field.column is None and data_field.table is not None:
+                # 邏輯資料表的筆數欄位：SUM 即該資料表的列數
+                usage.add_table(data_field.table, inside)
+            if target.formula is not None:
+                self.collect(self.analyzer.calc_ast(target), usage, inside)
+            elif data_field.column is not None:
+                usage.add_field(data_field, inside)
+            return
+        if isinstance(node, Lod):
+            # LOD 的維度在列層級；運算式自己含彙總
+            for dim in node.dims:
+                self.collect(dim, usage, False)
+            self.collect(node.expr, usage, False)
+            return
+        if isinstance(node, Call):
+            spec = lookup(node.name, len(node.args))
+            if spec is not None and spec.kind == "aggregate":
+                inside = True
+        for item in children(node):
+            self.collect(item, usage, inside)
 
     # ------------------------------------------------------------ 檢視欄位
 
@@ -824,6 +1048,7 @@ class WorksheetQuery:
         if isinstance(flt, TopNFilter):
             return self._top_n(flt, top_nodes[flt.id], source, stage)
         assert isinstance(flt, ConditionFilter)
+        self._guard(self._covered([flt.field]), "彙總條件篩選")
         node = self.cond_nodes[flt.id]
         dim = self.dim_sql(flt.field)
         agg_name, agg_cols, keys = self.aggregate(
@@ -895,6 +1120,7 @@ class WorksheetQuery:
             count = value
         if count < 0:
             raise QueryError(f"Top N 篩選 {flt.id} 的數量不能是負數")
+        self._guard(self._covered([flt.field]), "Top N 篩選")
         dim = self.dim_sql(flt.field)
         selected = _members(dim, flt.mode, flt.values, self.dim_datatype(flt.field))
         if selected:
@@ -938,6 +1164,15 @@ class WorksheetQuery:
         excluded = {self._resolve(d).id for d in lod.dims}
         return [self.dim_sql(d.use, compiler) for d in view_dims if d.use.field not in excluded]
 
+    def _lod_covered(self, spec: LodSpec, view_dims: list[Dim] | None) -> set[str]:
+        lod = spec.node
+        if lod.kind == "fixed" or view_dims is None:
+            return self._covered([], lod.dims)
+        if lod.kind == "include":
+            return self._covered([d.use for d in view_dims], lod.dims)
+        excluded = {self._resolve(d).id for d in lod.dims}
+        return self._covered([d.use for d in view_dims if d.use.field not in excluded])
+
     def _attach(
         self, specs: list[LodSpec], source: str, name: str, stage: int, view_dims: list[Dim] | None
     ) -> str:
@@ -948,6 +1183,8 @@ class WorksheetQuery:
         selects = ["r.*"]
         row_r = self.compiler(_RowEnv(self, "r"))
         for spec in specs:
+            kind = {"fixed": "FIXED", "include": "INCLUDE", "exclude": "EXCLUDE"}[spec.node.kind]
+            self._guard(self._lod_covered(spec, view_dims), f"{kind} LOD")
             dims = self._lod_dims(spec, view_dims, self.row)
             inner = self._compile(lambda spec=spec: self.row.agg(spec.node.expr))
             lod_name = self.name("lod")
@@ -967,7 +1204,6 @@ class WorksheetQuery:
             )
             joins.append(f"LEFT JOIN {lod_name} {alias} ON {on}")
             selects.append(f"{alias}.{ident(VALUE_COL)} AS {ident(spec.col)}")
-            kind = {"fixed": "FIXED", "include": "INCLUDE", "exclude": "EXCLUDE"}[spec.node.kind]
             self.note(stage, f"{kind} LOD → {spec.col}")
         self.cte(stage, name, f"SELECT {', '.join(selects)} FROM {source} r {' '.join(joins)}")
         self.attached.update(s.node for s in specs)
@@ -1091,6 +1327,7 @@ class WorksheetQuery:
                 continue
             node = self.measure_node(sort.by)
             nodes = self.aggregates_in(node)
+            self._guard(self._covered([d.use]), "依欄位排序")
             # 排序值依來源資料計算，不含 Table Calculation：可下推
             agg_name, agg_cols, keys = self.aggregate(
                 "sort_agg", nodes, [self.dim_sql(d.use)], rows_cte, 7, None, pushdown=True
@@ -1231,6 +1468,7 @@ class WorksheetQuery:
     def _total(self, node: Call, partition: list[Dim], rows: str, index: int) -> tuple[str, str]:
         expr = node.args[0]
         nodes = self.aggregates_in(expr)
+        self._guard(self._covered([d.use for d in partition]), "TOTAL")
         level = [self.dim_sql(d.use) for d in partition]
         # TOTAL 依來源資料計算（不是加總各標記），不含視窗函式：可下推
         agg_name, agg_cols, keys = self.aggregate(
@@ -1372,6 +1610,15 @@ class WorksheetQuery:
 # ---------------------------------------------------------------- 條件
 
 
+def _noop(flt: Filter) -> bool:
+    """沒有條件的篩選（「全部」）：不影響結果。"""
+    if isinstance(flt, (CategoricalFilter, TupleFilter)):
+        return flt.mode == "all"
+    if isinstance(flt, RangeFilter):
+        return flt.min is None and flt.max is None and flt.include_null
+    return False
+
+
 def _where(conds: list[str]) -> str:
     conds = [c for c in conds if c]
     return f" WHERE {' AND '.join(conds)}" if conds else ""
@@ -1462,9 +1709,32 @@ def domain_sql(
     if query.lods:
         raise QueryError("含 LOD 的欄位尚不支援列出可選值", unsupported=True)
     value = query.dim_sql(use)
-    conds = [query._row_condition(f) for f in datasource.filters if f.stage == "datasource"]
+    ds_filters = [f for f in datasource.filters if f.stage == "datasource"]
+    for flt in ds_filters:
+        if isinstance(flt, ConditionFilter):
+            node = query._condition_node(flt)
+            if query.analyzer.analyze(node).level == "agg":
+                raise QueryError("彙總條件的資料源篩選尚不支援列出可選值", unsupported=True)
+            query.cond_nodes[flt.id] = node
+    conds = [query._row_condition(f) for f in ds_filters]
     source = query.source
-    table = f"({source.from_sql}) AS base" if source.live else source.from_sql
+    from_sql = source.from_sql
+    if source.model is not None:
+        # Relationship 模型：這個欄位所在的資料表（資料源篩選用到其他資料表時，取存在的組合）
+        usage = Usage()
+        query.collect(query.field_node(use.field), usage)
+        filters: list[RowFilter] = []
+        for flt, cond in zip(ds_filters, conds, strict=True):
+            found = Usage()
+            for item in flt.fields if isinstance(flt, TupleFilter) else [flt.field]:
+                query.collect(query.field_node(item.field), found)
+            if flt.id in query.cond_nodes:
+                query.collect(query.cond_nodes[flt.id], found)
+            if cond:
+                filters.append(RowFilter(flt.id, set(found.fields), set(found.tables)))
+        # 只有維度：連接後的列都含篩選用到的欄位，篩選直接套用
+        from_sql = query.plan_model(usage, filters).from_sql
+    table = f"({from_sql}) AS base" if source.projected else from_sql
     if kind == "range":
         return f"SELECT min({value}) AS {ident('min')}, max({value}) AS {ident('max')} FROM {table}{_where(conds)}"
     if kind == "frequency":
@@ -1547,6 +1817,7 @@ __all__ = [
     "PUSHDOWN_BOUNDARY",
     "STAGES",
     "CteDef",
+    "Guard",
     "OutputColumn",
     "QueryError",
     "StageNote",

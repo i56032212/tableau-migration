@@ -540,11 +540,15 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
     problems = []
     notes: list[str] = []
     for ds in dss:
+        if ds.published:
+            continue  # 結構在 Published Data Source 中（資料可以取得的檢查已列出）
         if ds.logical_tables > 1:
-            problems.append(
-                f"「{ds.caption}」的 Relationship 模型有 {ds.logical_tables} 張邏輯資料表"
+            # Relationship 模型（N6）：不支援的寫法（例如邏輯資料表內含 join）由解析器列為不支援
+            kind = "萃取" if ds.data_in_hyper else "Live"
+            notes.append(
+                f"「{ds.caption}」：Relationship 模型（{ds.logical_tables} 張邏輯資料表，{kind}）"
             )
-        elif not ds.data_in_hyper and not ds.published:
+        elif not ds.data_in_hyper:
             # Live：資料表、自訂 SQL 與 join 都下推到來源資料庫（其他關聯方式由解析器列為不支援）
             kinds = "、".join(RELATION_TEXT.get(k, k) for k in ds.source_relation_types)
             notes.append(f"「{ds.caption}」：Live 的{kinds or '資料表'}")
@@ -563,7 +567,7 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
     checks.append(
         Check(
             key="single_table",
-            title="單表萃取，或 Live 的資料表、自訂 SQL、join",
+            title="單表萃取、Relationship 模型，或 Live 的資料表、自訂 SQL、join",
             status="fail" if problems or not dss else "pass",
             detail="；".join(problems) or "；".join(notes),
         )

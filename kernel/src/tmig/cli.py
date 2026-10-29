@@ -139,25 +139,26 @@ def _cmd_import_hyper(args: argparse.Namespace) -> int:
         return 1
     failed = 0
     for result in results:
-        table = result.table
-        checks = table.checks
-        bad = [c for c in checks if not c.ok]
         status = "通過" if result.ok else "失敗"
-        print(
-            f"{status}  {result.datasource}：{table.schema}.{table.table} {table.rows} 列、"
-            f"{len(table.columns)} 欄，自檢 {len(checks)} 項"
-            + (f"有 {len(bad)} 項不一致" if bad else "全部一致")
-            + f" → {out_dir / result.duckdb}"
-        )
-        for check in bad:
+        for i, table in enumerate(result.tables):
+            checks = table.checks
+            bad = [c for c in checks if not c.ok]
             print(
-                f"      {check.column or '(表)'} 的 {check.stat}：Hyper {check.hyper}，DuckDB {check.duckdb}",
-                file=sys.stderr,
+                (f"{status}  {result.datasource}：" if i == 0 else "      ")
+                + f"{table.schema}.{table.table} {table.rows} 列、"
+                f"{len(table.columns)} 欄，自檢 {len(checks)} 項"
+                + (f"有 {len(bad)} 項不一致" if bad else "全部一致")
+                + (f" → {out_dir / result.duckdb}" if i == len(result.tables) - 1 else "")
             )
+            for check in bad:
+                print(
+                    f"      {check.column or '(表)'} 的 {check.stat}：Hyper {check.hyper}，DuckDB {check.duckdb}",
+                    file=sys.stderr,
+                )
+            for warning in table.warnings:
+                print(f"      注意：{warning}", file=sys.stderr)
         for name in result.missing_columns:
             print(f"      IR 欄位 {name} 不在萃取資料表中", file=sys.stderr)
-        for warning in table.warnings:
-            print(f"      注意：{warning}", file=sys.stderr)
         failed += 0 if result.ok else 1
     return 1 if failed else 0
 

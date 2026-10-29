@@ -7,6 +7,8 @@
   欄列架與標記卡另可使用 Measure Names／Values（measure_names、measure_values）
 - 參照的參數、工作表、Table Calculation 必須存在；按鈕的目標 dashboard、工作表必須存在，
   顯示或隱藏的區塊必須在同一個 dashboard 上
+- Relationship 模型：邏輯資料表 id 不重複；關聯兩端的資料表存在、條件的欄位屬於該資料表；
+  關聯連成一棵樹（不成環、每張資料表都連得到）；實體欄位都屬於模型中的某張資料表
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tmig.ir.models import IR, FieldUse, Filter, Zone
+    from tmig.ir.models import IR, Datasource, FieldUse, Filter, ModelRelation, Zone
 
 
 def iter_zones(zones: list[Zone]) -> Iterator[Zone]:
@@ -23,6 +25,62 @@ def iter_zones(zones: list[Zone]) -> Iterator[Zone]:
     for zone in zones:
         yield zone
         yield from iter_zones(zone.children)
+
+
+def model_of(ds: Datasource) -> ModelRelation | None:
+    """資料源的 Relationship 模型（Live 連線的關聯，或萃取的 model）。"""
+    from tmig.ir.models import ExtractConnection, ModelRelation
+
+    connection = ds.connection
+    if isinstance(connection, ExtractConnection):
+        return connection.model
+    return connection.relation if isinstance(connection.relation, ModelRelation) else None
+
+
+def _check_model(ds: Datasource, errors: list[str]) -> None:
+    model = model_of(ds)
+    if model is None:
+        return
+    where = f"datasources[{ds.id}].model"
+    tables = [t.id for t in model.tables]
+    if len(set(tables)) != len(tables):
+        errors.append(f"{where}：邏輯資料表 id 重複")
+    table_set = set(tables)
+    fields = {f.id: f for f in ds.fields}
+    parent = {t: t for t in tables}
+
+    def find(t: str) -> str:
+        while parent[t] != t:
+            parent[t] = parent[parent[t]]
+            t = parent[t]
+        return t
+
+    for i, rel in enumerate(model.relationships):
+        if rel.left not in table_set or rel.right not in table_set:
+            errors.append(
+                f"{where}.relationships[{i}]：資料表「{rel.left}」或「{rel.right}」不存在"
+            )
+            continue
+        for cond in rel.on:
+            for side, fid in ((rel.left, cond.left), (rel.right, cond.right)):
+                field = fields.get(fid)
+                if field is None:
+                    errors.append(f"{where}.relationships[{i}]：欄位「{fid}」不在資料源中")
+                elif field.table != side:
+                    errors.append(
+                        f"{where}.relationships[{i}]：欄位「{fid}」不屬於資料表「{side}」"
+                    )
+        a, b = find(rel.left), find(rel.right)
+        if a == b:
+            errors.append(f"{where}.relationships[{i}]：關聯成環（Tableau 的關聯必須是一棵樹）")
+        parent[a] = b
+    if len({find(t) for t in tables}) > 1:
+        errors.append(f"{where}：有邏輯資料表沒有連到其他資料表")
+    for field in ds.fields:
+        if field.column is not None and field.table not in table_set:
+            errors.append(
+                f"datasources[{ds.id}].fields[{field.id}]：所屬的資料表「{field.table}」不在模型中"
+            )
 
 
 def check_references(ir: IR) -> list[str]:
@@ -47,6 +105,7 @@ def check_references(ir: IR) -> list[str]:
             fields_by_ds[ds.id].add(fld.id)
         for flt in ds.filters:
             claim(flt.id, f"datasources[{ds.id}].filters[{flt.id}]")
+        _check_model(ds, errors)
     for prm in ir.parameters:
         claim(prm.id, f"parameters[{prm.id}]")
     for ws in ir.worksheets:

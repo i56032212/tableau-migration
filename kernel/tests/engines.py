@@ -342,6 +342,8 @@ class OracleEmulator:
 
     def __init__(self, con: Any) -> None:
         self.con = con
+        # Oracle 23ai 以前 SELECT 一定要有 FROM：轉譯時補上的 FROM "DUAL"
+        con.execute('CREATE OR REPLACE TEMP VIEW "DUAL" AS SELECT \'X\' AS "DUMMY"')
 
     def fetch(self, sql: str) -> pa.Table:
         import sqlglot

@@ -23,7 +23,10 @@ from tmig.ir.models import (
     ExtractConnection,
     FieldUse,
     LiveConnection,
+    LogicalTable,
+    ModelRelation,
     Parameter,
+    TableRelation,
     Unsupported,
     WeekDay,
 )
@@ -33,6 +36,13 @@ from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
 from tmig.parser.groups import GroupError, bin_formula, group_formula
 from tmig.parser.ids import strip_brackets
+from tmig.parser.model import (
+    extract_tables,
+    graph_objects,
+    live_tables,
+    object_id_of,
+    relationships,
+)
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -172,6 +182,9 @@ class DatasourceParser:
         self.el = ds_el
         self.name = ds_el.get("name", "")
         self.caption = ds_el.get("caption") or self.name
+        self.objects = graph_objects(ds_el)
+        self.model_tables: list[LogicalTable] | None = None
+        """Relationship 模型的邏輯資料表（N6）；不是模型時為 None。"""
 
     def parse(self) -> DsState | None:
         ctx, el = self.ctx, self.el
@@ -199,15 +212,6 @@ class DatasourceParser:
                 if not ctx.lenient:
                     return None
                 connection = placeholder
-        graph = child(el, "object-graph")
-        objects = children(child(graph, "objects"), "object")
-        if len(objects) > 1:
-            ctx.flag(
-                graph if graph is not None else el,
-                f"資料源「{self.caption}」是 Relationship 模型（{len(objects)} 張邏輯資料表），v0 不支援",
-            )
-            if not ctx.lenient:
-                return None
         if via_extract and any(rel.get("type") == "text" for rel in descendants(conn, "relation")):
             ctx.ignore(conn, "來源為自訂 SQL；本階段以萃取快照驗證，不影響數字")
 
@@ -222,6 +226,8 @@ class DatasourceParser:
         self._fields(state, conn, data_conn, via_extract)
         if not state.fields:
             ctx.flag(el, f"資料源「{self.caption}」沒有可用的欄位")
+            return None
+        if self.model_tables is not None and not self._attach_model(state):
             return None
         analyze_calcs(ctx, state)
         state.instances = {
@@ -263,6 +269,13 @@ class DatasourceParser:
                 f"資料源「{self.caption}」有 {len(data)} 個具名連線（跨資料庫的關聯）尚不支援",
             )
             return None
+        if len(self.objects) > 1:
+            # Relationship 模型：邏輯資料表在 object-graph，關聯待欄位解析後補上
+            tables = live_tables(self.ctx, self.objects, self.caption)
+            if tables is None:
+                return None
+            self.model_tables = tables
+            return live_connection(self.ctx, data[0], None, self.caption)
         relations = children(conn, "relation")
         relation = relations[0] if len(relations) == 1 else None
         if len(relations) > 1:
@@ -301,6 +314,17 @@ class DatasourceParser:
         if hyper_file is None:
             ctx.flag(data_conn, f"資料源「{self.caption}」的萃取檔「{dbname}」不在 .twbx 內")
             return None
+        if len(self.objects) > 1:
+            # Relationship 模型的萃取：每張邏輯資料表一張 .hyper 資料表
+            model_tables = extract_tables(ctx, self.objects, self.caption)
+            if model_tables is None:
+                return None
+            self.model_tables = model_tables
+            first = model_tables[0].relation
+            assert isinstance(first, TableRelation)
+            return ExtractConnection(
+                kind="extract", hyper_file=hyper_file, table=".".join(first.table)
+            )
         relations = children(data_conn if via_extract else conn, "relation")
         tables = [r.get("table", "") for r in relations if r.get("type") == "table"]
         if len(relations) != 1 or len(tables) != 1:
@@ -467,11 +491,38 @@ class DatasourceParser:
         )
 
     def _field_table(self, state: DsState, record: MetaColumn | None) -> str | None:
-        """Live 連線時欄位所屬的資料表（metadata-record 的 parent-name）。"""
-        if state.connection.kind != "live" or record is None:
+        """欄位所屬的資料表：Live 連線為 metadata-record 的 parent-name；
+        Relationship 模型為邏輯資料表（object id）。"""
+        if record is None:
+            return None
+        if self.model_tables is not None:
+            return object_id_of(record.element)
+        if state.connection.kind != "live":
             return None
         parent = text_of(child(record.element, "parent-name"))
         return strip_brackets(parent) or None
+
+    def _attach_model(self, state: DsState) -> bool:
+        """欄位解析完成後組成 Relationship 模型；不支援時列入 unsupported。"""
+        assert self.model_tables is not None
+        ids = {t.id for t in self.model_tables}
+        rels = relationships(self.ctx, self.el, state, ids, self.caption)
+        if rels is None:
+            return self.ctx.lenient
+        stray = [f.caption for f in state.fields if f.column is not None and f.table not in ids]
+        if stray:
+            self.ctx.flag(
+                self.el,
+                f"資料源「{self.caption}」的欄位 {'、'.join(stray[:5])} 不屬於任何邏輯資料表",
+            )
+            return self.ctx.lenient
+        model = ModelRelation(kind="model", tables=self.model_tables, relationships=rels)
+        connection = state.connection
+        if isinstance(connection, ExtractConnection):
+            state.connection = connection.model_copy(update={"model": model})
+        else:
+            state.connection = connection.model_copy(update={"relation": model})
+        return True
 
     def _add_table_count(
         self, state: DsState, name: str, caption: str | None, anchor: etree._Element
@@ -480,6 +531,10 @@ class DatasourceParser:
         if name in state.by_name:
             return
         label = caption or strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
+        # Relationship 模型中，筆數欄位屬於它的邏輯資料表（COUNT 為該表的列數）
+        table = None
+        if self.model_tables is not None and name.startswith(TABLE_ID_PREFIX):
+            table = strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
         state.add_field(
             DataField(
                 id=self.ctx.ids.make("f", f"{label} count", name),
@@ -491,6 +546,7 @@ class DatasourceParser:
                 format=None,
                 hidden=False,
                 column=None,
+                table=table,
                 calc=Calc(formula="1"),
                 source_ref=xpath(anchor),
             )

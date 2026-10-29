@@ -225,7 +225,8 @@ def for_engine(ir: IR, engine: Engine) -> IR:
     datasources = []
     for ds in ir.datasources:
         connection = ds.connection
-        assert isinstance(connection, LiveConnection) and connection.relation is not None
+        assert isinstance(connection, LiveConnection)
+        assert isinstance(connection.relation, TableRelation | SqlRelation | JoinRelation)
         connection = connection.model_copy(update={"relation": convert(connection.relation)})
         datasources.append(ds.model_copy(update={"connection": connection}))
     return ir.model_copy(update={"datasources": datasources})

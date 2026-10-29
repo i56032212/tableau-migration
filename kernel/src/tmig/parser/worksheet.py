@@ -533,6 +533,12 @@ class SheetParser:
             measure = self._use(axis_ref, element, "標記卡的量值")
             if measure is None:
                 continue
+            if measure.field in SPECIAL_FIELDS:
+                # 例如 Measure Values 與另一個量值疊成雙軸：Measure Values 的軸有自己的標記卡
+                self.ctx.flag(
+                    element, "Measure Values 的軸有個別的標記卡（例如與其他量值疊成雙軸），尚不支援"
+                )
+                continue
             if measure not in (rows if axis == "rows" else cols):
                 self.ctx.flag(element, f"標記卡的量值 {axis_ref} 不在欄列架上")
                 continue

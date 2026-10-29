@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from tmig.data.executor import QueryResult, execute
+from tmig.data.executor import QueryResult, execute, execute_query
 from tmig.data.live import execute_live, execute_remote
 from tmig.data.sources import (
     ConnectionConfig,
@@ -54,7 +54,7 @@ class DataRuntime:
         if isinstance(connection, LiveConnection):
             with self._executor(connection) as executor:
                 return execute_live(query, executor)
-        return execute(_path(database), query.sql)
+        return execute_query(_path(database), query)
 
     def run_sql(
         self,
