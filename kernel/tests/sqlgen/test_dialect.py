@@ -120,10 +120,30 @@ def test_custom_sql_is_restored(dialect: str) -> None:
     assert "__tmig_custom_sql_" not in out
 
 
-def test_custom_sql_with_parameters_is_unsupported() -> None:
+@pytest.mark.parametrize(
+    ("dialect", "region", "since"),
+    [
+        ("postgres", "'O''Hare'", "DATE '2024-01-01'"),
+        ("oracle", "'O''Hare'", "DATE '2024-01-01'"),
+        ("databricks", "'O\\'Hare'", "DATE '2024-01-01'"),
+    ],
+)
+def test_custom_sql_parameters(dialect: str, region: str, since: str) -> None:
+    """自訂 SQL 中的參數代入目前值（與 Tableau 相同），以該方言的常值寫法。"""
     sql = 'SELECT * FROM "__tmig_custom_sql_0" AS "q"'
-    with pytest.raises(DialectError, match="參數"):
-        to_dialect(sql, "postgres", ["SELECT * FROM t WHERE region = <[Parameters].[Region]>"])
+    custom = (
+        "SELECT * FROM t WHERE region = <[Parameters].[Parameter 2]> "
+        "AND d >= <[Parameters].[Start]> AND n <= <[Parameters].[Parameter 1]>"
+    )
+    parameters = {
+        "Parameter 2": ("O'Hare", "string"),
+        "Start": ("2024-01-01", "date"),
+        "Parameter 1": (5, "integer"),
+    }
+    out = to_dialect(sql, dialect, [custom], parameters)
+    assert f"region = {region} AND d >= {since} AND n <= 5" in out
+    with pytest.raises(DialectError, match="找不到目前值"):
+        to_dialect(sql, dialect, [custom])
 
 
 @pytest.mark.parametrize("dialect", DIALECTS)

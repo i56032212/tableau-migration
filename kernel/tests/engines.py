@@ -151,13 +151,16 @@ def pg_type(kind: pa.DataType) -> str:
     return PG_TYPES[str(kind)]
 
 
-def pg_load(con: Any, name: str, table: pa.Table) -> None:
-    """Arrow 資料表 → PostgreSQL 資料表（欄名原樣，以雙引號包住）。"""
+def pg_load(con: Any, name: str, table: pa.Table, schema: str | None = None) -> None:
+    """Arrow 資料表 → PostgreSQL 資料表（名稱與欄名原樣，以雙引號包住）。"""
     columns = ", ".join(f'"{f.name}" {pg_type(f.type)}' for f in table.schema)
-    con.execute(f'DROP TABLE IF EXISTS "{name}"')
-    con.execute(f'CREATE TABLE "{name}" ({columns})')
+    target = f'"{schema}"."{name}"' if schema else f'"{name}"'
+    if schema:
+        con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    con.execute(f"DROP TABLE IF EXISTS {target}")
+    con.execute(f"CREATE TABLE {target} ({columns})")
     names = ", ".join(f'"{n}"' for n in table.column_names)
-    with con.cursor() as cursor, cursor.copy(f'COPY "{name}" ({names}) FROM STDIN') as copy:
+    with con.cursor() as cursor, cursor.copy(f"COPY {target} ({names}) FROM STDIN") as copy:
         for row in table.to_pylist():
             copy.write_row(list(row.values()))
 

@@ -40,7 +40,13 @@ from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.format import display_format
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import build_spec, caption
-from tmig.sqlgen.query import QueryError, domain_sql, pane_sql, worksheet_sql
+from tmig.sqlgen.query import (
+    QueryError,
+    custom_sql_parameters,
+    domain_sql,
+    pane_sql,
+    worksheet_sql,
+)
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
 
@@ -315,7 +321,9 @@ def create_app(
             kind = "values"
         try:
             sql = domain_sql(ir, ds.id, use, kind)
-            result = data.run_sql(sql, ds, lambda: workspace.database(wb, ds.id))
+            result = data.run_sql(
+                sql, ds, lambda: workspace.database(wb, ds.id), custom_sql_parameters(ir)
+            )
         except QueryError as exc:
             raise HTTPException(422, str(exc)) from exc
         except SourceConnectionError as exc:

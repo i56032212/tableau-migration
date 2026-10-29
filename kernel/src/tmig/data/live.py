@@ -13,7 +13,7 @@ import duckdb
 
 from tmig.data.executor import ExecutionError, QueryResult
 from tmig.data.sources import Executor
-from tmig.sqlgen.dialect import split, to_dialect
+from tmig.sqlgen.dialect import ParameterValues, split, to_dialect
 from tmig.sqlgen.query import OutputColumn, WorksheetSql
 
 
@@ -24,7 +24,7 @@ def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
     """
     plan = split(query)
     remote = [
-        (fetch.name, to_dialect(fetch.sql, executor.dialect, query.custom_sql))
+        (fetch.name, to_dialect(fetch.sql, executor.dialect, query.custom_sql, query.parameters))
         for fetch in plan.fetches
     ]
     con = duckdb.connect()
@@ -41,10 +41,13 @@ def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
 
 
 def execute_remote(
-    sql: str, executor: Executor, custom_sql: list[str] | None = None
+    sql: str,
+    executor: Executor,
+    custom_sql: list[str] | None = None,
+    parameters: ParameterValues | None = None,
 ) -> QueryResult:
     """整段查詢在來源資料庫執行（例如篩選控制項的可選值）。"""
-    translated = to_dialect(sql, executor.dialect, custom_sql)
+    translated = to_dialect(sql, executor.dialect, custom_sql, parameters)
     try:
         table = executor.fetch(translated)
     except Exception as exc:

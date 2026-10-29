@@ -25,6 +25,7 @@ from tmig.data.sources import (
     open_executor,
 )
 from tmig.ir.models import Datasource, LiveConnection
+from tmig.sqlgen.dialect import ParameterValues
 from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import datasource_source
 
@@ -55,13 +56,22 @@ class DataRuntime:
                 return execute_live(query, executor)
         return execute(_path(database), query.sql)
 
-    def run_sql(self, sql: str, datasource: Datasource, database: Database) -> QueryResult:
-        """執行資料源上的一段查詢（例如篩選控制項的可選值）；Live 連線時整段在來源資料庫執行。"""
+    def run_sql(
+        self,
+        sql: str,
+        datasource: Datasource,
+        database: Database,
+        parameters: ParameterValues | None = None,
+    ) -> QueryResult:
+        """執行資料源上的一段查詢（例如篩選控制項的可選值）；Live 連線時整段在來源資料庫執行。
+
+        parameters：自訂 SQL 中參數的值（tmig.sqlgen.query.custom_sql_parameters）。
+        """
         connection = datasource.connection
         if isinstance(connection, LiveConnection):
             custom = datasource_source(datasource).custom_sql
             with self._executor(connection) as executor:
-                return execute_remote(sql, executor, custom)
+                return execute_remote(sql, executor, custom, parameters)
         return execute(_path(database), sql)
 
     @contextmanager

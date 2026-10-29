@@ -188,6 +188,8 @@ class WorksheetSql:
     live: bool = False
     custom_sql: list[str] = field(default_factory=list)
     """Live 連線的自訂 SQL 原文（SQL 中以佔位資料表表示）。"""
+    parameters: dict[str, tuple[Scalar, str]] = field(default_factory=dict)
+    """自訂 SQL 中參數的目前值：內部名稱（不含方括號）與顯示名稱 → （值、資料型別）。"""
 
 
 @dataclass
@@ -660,6 +662,9 @@ class WorksheetQuery:
             main=main,
             live=self.source.live,
             custom_sql=list(self.source.custom_sql),
+            parameters=custom_sql_parameters(self.ir, self.state.parameters)
+            if self.source.custom_sql
+            else {},
         )
 
     # ------------------------------------------------------------ 檢視欄位
@@ -1473,6 +1478,18 @@ def domain_sql(
     )
 
 
+def custom_sql_parameters(
+    ir: IR, values: dict[str, Scalar] | None = None
+) -> dict[str, tuple[Scalar, str]]:
+    """自訂 SQL 中參數（<[Parameters].[Parameter 1]>）的值；values 為參數 id → 目前值，省略時用預設值。"""
+    result: dict[str, tuple[Scalar, str]] = {}
+    for param in ir.parameters:
+        value = (values or {}).get(param.id, param.value)
+        result[_strip(param.name)] = (value, param.datatype)
+        result.setdefault(param.caption, (value, param.datatype))
+    return result
+
+
 def _find_worksheet(ir: IR, key: str) -> Worksheet:
     for ws in ir.worksheets:
         if key in (ws.id, ws.name):
@@ -1535,6 +1552,7 @@ __all__ = [
     "StageNote",
     "WorksheetQuery",
     "WorksheetSql",
+    "custom_sql_parameters",
     "domain_sql",
     "pane_sql",
     "worksheet_sql",

@@ -21,6 +21,7 @@ STR() 轉換小數的格式依資料庫；TODAY()、NOW() 依資料庫的時區�
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from tmig.ir.models import Scalar
 from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
 
@@ -43,7 +45,13 @@ SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言（SQL Server、MySQL、Snowflake、BigQuery、Teradata、Redshift）尚不支援。"""
 
 PLACEHOLDER = re.compile(r"[\"`]" + re.escape(CUSTOM_SQL_PREFIX) + r"(\d+)[\"`]")
-CUSTOM_SQL_PARAMETER = re.compile(r"<\s*\[Parameters\]\s*\.", re.IGNORECASE)
+CUSTOM_SQL_PARAMETER = re.compile(
+    r"<\s*\[Parameters\]\s*\.\s*\[((?:[^\]]|\]\])+)\]\s*>", re.IGNORECASE
+)
+"""自訂 SQL 中的參數：<[Parameters].[Parameter 1]>（內部名稱）。"""
+
+ParameterValues = dict[str, tuple[Scalar, str]]
+"""自訂 SQL 的參數：內部名稱（不含方括號）與顯示名稱 → （目前值、資料型別）。"""
 
 
 class DialectError(QueryError):
@@ -130,9 +138,14 @@ def _closure(name: str, deps: dict[str, list[str]]) -> set[str]:
 # ---------------------------------------------------------------- 轉譯
 
 
-def to_dialect(sql: str, dialect: str, custom_sql: list[str] | None = None) -> str:
-    """DuckDB 方言的 SQL → 目標方言；自訂 SQL 的佔位資料表換回原文。"""
-    custom = [_custom(text) for text in (custom_sql or [])]
+def to_dialect(
+    sql: str,
+    dialect: str,
+    custom_sql: list[str] | None = None,
+    parameters: ParameterValues | None = None,
+) -> str:
+    """DuckDB 方言的 SQL → 目標方言；自訂 SQL 的佔位資料表換回原文（參數代入目前值）。"""
+    custom = [_custom(text, dialect, parameters) for text in (custom_sql or [])]
     if dialect == "duckdb":
         return _restore(sql, custom)
     rewriter = REWRITERS.get(dialect)
@@ -149,10 +162,40 @@ def to_dialect(sql: str, dialect: str, custom_sql: list[str] | None = None) -> s
     return _restore(out, custom)
 
 
-def _custom(text: str) -> str:
-    if CUSTOM_SQL_PARAMETER.search(text):
-        raise DialectError("自訂 SQL 中含參數（<[Parameters].[…]>），尚不支援")
-    return text.strip().rstrip(";").strip()
+def _custom(text: str, dialect: str, parameters: ParameterValues | None) -> str:
+    """自訂 SQL 原文：參數換成該方言的常值（與 Tableau 相同，代入目前值）。"""
+
+    def swap(match: re.Match[str]) -> str:
+        name = match.group(1).replace("]]", "]")
+        if parameters is None or name not in parameters:
+            raise DialectError(f"自訂 SQL 中的參數「{name}」找不到目前值")
+        value, datatype = parameters[name]
+        return sql_literal(value, datatype, dialect)
+
+    return CUSTOM_SQL_PARAMETER.sub(swap, text).strip().rstrip(";").strip()
+
+
+def sql_literal(value: Scalar, datatype: str, dialect: str) -> str:
+    """參數值 → 來源資料庫的 SQL 常值（日期與時間用 ANSI 的 DATE、TIMESTAMP 常值）。"""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool) or datatype == "boolean":
+        if dialect == "oracle":
+            return "1" if value else "0"
+        return "TRUE" if value else "FALSE"
+    if datatype in ("integer", "real") and isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return "NULL"
+        return repr(int(value)) if datatype == "integer" else repr(float(value))
+    if datatype == "date":
+        return f"DATE {_single_quote(str(value)[:10])}"
+    if datatype == "datetime":
+        return f"TIMESTAMP {_single_quote(str(value).replace('T', ' '))}"
+    text = str(value)
+    if dialect in ("spark", "databricks"):
+        # Spark 的字串常值以反斜線跳脫
+        return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return _single_quote(text)
 
 
 def _restore(sql: str, custom: list[str]) -> str:
@@ -1439,8 +1482,10 @@ __all__ = [
     "SUPPORTED",
     "DialectError",
     "Fetch",
+    "ParameterValues",
     "Split",
     "java_replacement",
     "split",
+    "sql_literal",
     "to_dialect",
 ]
