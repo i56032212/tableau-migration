@@ -297,7 +297,7 @@ def import_hyper_tables(
     return results, [f"{a}.{b}" for a, b in names if (a, b) not in imported]
 
 
-def _table_refs(connection: ExtractConnection) -> list[tuple[str, str]]:
+def extract_table_refs(connection: ExtractConnection) -> list[tuple[str, str]]:
     """萃取要匯入的資料表：單表萃取一張；Relationship 模型每張邏輯資料表一張。"""
     if connection.model is None:
         parts = connection.table.split(".")
@@ -359,7 +359,7 @@ def import_workbook(
             log_dir = work / ds.id
             log_dir.mkdir()
             out_path = target / f"{ds.id}.duckdb"
-            refs = _table_refs(ds.connection)
+            refs = extract_table_refs(ds.connection)
             tables, others = import_hyper_tables(hyper_path, refs, out_path, log_dir)
             result = DatasourceImport(
                 datasource=ds.id,
@@ -371,6 +371,8 @@ def import_workbook(
                 missing_columns=_missing_columns(ds.connection, ds.fields, tables),
                 extra_tables=tables[1:],
             )
+            # 重新匯入快照：先前從來源更新的紀錄不再適用
+            (target / f"{ds.id}.refresh.json").unlink(missing_ok=True)
             report = target / f"{ds.id}.import.json"
             report.write_text(
                 json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n",

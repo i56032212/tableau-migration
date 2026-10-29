@@ -16,7 +16,8 @@
         "hyper_file": "Data/Extracts/orders.hyper",
         "table": "Extract.Extract",
         "model": null,
-        "source": null
+        "source": null,
+        "refresh": null
       },
       "settings": {
         "week_start": "sunday"

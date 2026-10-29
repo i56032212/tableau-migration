@@ -19,7 +19,7 @@ from tmig.data.sources import (
     open_executor,
     probe_sql,
 )
-from tmig.ir import IR, LiveConnection, load_ir
+from tmig.ir import IR, ExtractConnection, LiveConnection, load_ir
 from tmig.parser.workbook import parse_workbook
 
 DBCLASS_DRIVERS = {
@@ -65,16 +65,19 @@ def load_workbook(path: Path) -> IR:
 
 
 def collect(irs: Iterable[IR]) -> dict[str, FoundConnection]:
-    """各報表的 Live 連線，依 connection_id 合併。"""
+    """各報表的 Live 連線與萃取的來源（萃取層更新用），依 connection_id 合併。"""
     found: dict[str, FoundConnection] = {}
     for ir in irs:
         for ds in ir.datasources:
             connection = ds.connection
-            if not isinstance(connection, LiveConnection):
-                continue
+            label = ir.workbook.name
+            if isinstance(connection, ExtractConnection):
+                if connection.source is None or connection.refresh is None:
+                    continue
+                connection, label = connection.source, f"{label}（萃取更新）"
             entry = found.setdefault(connection.connection_id, FoundConnection(connection))
-            if ir.workbook.name not in entry.workbooks:
-                entry.workbooks.append(ir.workbook.name)
+            if label not in entry.workbooks:
+                entry.workbooks.append(label)
     return dict(sorted(found.items()))
 
 

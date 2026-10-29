@@ -21,17 +21,19 @@ from tmig.ir.models import (
     Connection,
     DataField,
     ExtractConnection,
+    ExtractRefresh,
     FieldUse,
     LiveConnection,
     LogicalTable,
     ModelRelation,
     Parameter,
+    SourceColumn,
     TableRelation,
     Unsupported,
     WeekDay,
 )
 from tmig.ir.scope import DatasourceScope
-from tmig.parser.connections import DIALECTS, live_connection
+from tmig.parser.connections import DIALECTS, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
 from tmig.parser.groups import GroupError, bin_formula, group_formula
@@ -105,6 +107,10 @@ class MetaColumn:
     remote: str
     local_type: str
     aggregation: str
+    family: str = ""
+    """萃取的 metadata-record：來源關聯樹中的資料表。"""
+    alias: str = ""
+    """萃取的 metadata-record：來源的欄名（remote-alias）。"""
 
 
 # ---------------------------------------------------------------- 參數
@@ -229,6 +235,8 @@ class DatasourceParser:
             return None
         if self.model_tables is not None and not self._attach_model(state):
             return None
+        if via_extract:
+            self._attach_refresh(state, conn, data_conn)
         analyze_calcs(ctx, state)
         state.instances = {
             instance_key(inst.get("name", "")): inst for inst in children(el, "column-instance")
@@ -379,6 +387,8 @@ class DatasourceParser:
                     remote=text_of(child(record, "remote-name")) or strip_brackets(local),
                     local_type=text_of(child(record, "local-type")),
                     aggregation=text_of(child(record, "aggregation")),
+                    family=text_of(child(record, "family")),
+                    alias=text_of(child(record, "remote-alias")),
                 )
             )
         return result
@@ -523,6 +533,67 @@ class DatasourceParser:
         else:
             state.connection = connection.model_copy(update={"relation": model})
         return True
+
+    def _attach_refresh(
+        self, state: DsState, conn: etree._Element, data_conn: etree._Element
+    ) -> None:
+        """萃取的來源與各欄在來源的位置（萃取層更新用，N7）；解析不了時不影響萃取本身。"""
+        connection = state.connection
+        if not isinstance(connection, ExtractConnection):
+            return
+        source = connection.source
+        if connection.model is not None:
+            source = self._model_source(conn, connection.model)
+        if source is None or source.dialect is None:
+            return
+        records = {r.local: r for r in self._meta_columns(data_conn)}
+        columns: list[SourceColumn] = []
+        for data_field in state.fields:
+            if data_field.column is None or data_field.calc is not None:
+                continue
+            record = records.get(data_field.name)
+            if record is None:
+                return  # 萃取中找不到這一欄的來源
+            columns.append(
+                SourceColumn(
+                    field=data_field.id,
+                    relation=record.family or None,
+                    column=record.alias or record.remote,
+                )
+            )
+        if not columns:
+            return
+        refresh_el = child(data_conn, "refresh")
+        increment = None
+        if refresh_el is not None and refresh_el.get("incremental-updates") == "true":
+            key = state.by_name.get(refresh_el.get("increment-key", ""))
+            increment = key.id if key is not None and key.column is not None else None
+        extract = child(self.el, "extract")
+        count = extract.get("count", "-1") if extract is not None else "-1"
+        limit = int(count) if count.lstrip("-").isdigit() and int(count) >= 0 else None
+        refresh = ExtractRefresh(columns=columns, increment=increment, row_limit=limit)
+        state.connection = connection.model_copy(update={"source": source, "refresh": refresh})
+
+    def _model_source(self, conn: etree._Element, model: ModelRelation) -> LiveConnection | None:
+        """Relationship 模型萃取的來源：每張邏輯資料表在來源資料庫的資料表（可含實體層的 join）。"""
+        named = [
+            c for nc in descendants(conn, "named-connection") for c in children(nc, "connection")
+        ]
+        if len(named) != 1 or named[0].get("class") not in DIALECTS:
+            return None
+        probe = ParseContext(self.ctx.package, lenient=True)
+        tables: list[LogicalTable] = []
+        for logical, obj in zip(model.tables, self.objects, strict=True):
+            relation = (
+                parse_relation(probe, obj.live, self.caption) if obj.live is not None else None
+            )
+            if relation is None:
+                return None
+            tables.append(logical.model_copy(update={"relation": relation}))
+        source = live_connection(probe, named[0], None, self.caption)
+        if source is None:
+            return None
+        return source.model_copy(update={"relation": model.model_copy(update={"tables": tables})})
 
     def _add_table_count(
         self, state: DsState, name: str, caption: str | None, anchor: etree._Element

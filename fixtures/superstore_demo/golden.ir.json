@@ -16,7 +16,8 @@
         "hyper_file": "Data/Extracts/federated_0s2xs1a1g5wq1h17oo8mq0b6k5ry.hyper",
         "table": "Extract.Extract",
         "model": null,
-        "source": null
+        "source": null,
+        "refresh": null
       },
       "settings": {
         "week_start": "sunday"

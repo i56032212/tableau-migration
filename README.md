@@ -30,6 +30,7 @@
 PostgreSQL 與 Spark（Databricks 的引擎）、資料源改成 Live 連線後，116 項計算比對全部通過，每個公式函式也都實跑比對；
 Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
 Relationship 模型（見「Relationship 模型」）；公開報表盤點中符合起步條件的從 75 份增加到 90 份。
+萃取型的報表可以由萃取層從來源資料庫更新（完整或增量、原子替換），並與 Tableau 的萃取比對（見「萃取層」）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
@@ -127,6 +128,22 @@ Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表
 尚不支援（查詢時列為不支援）：同一張工作表的量值來自多張資料表、同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
 Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（解析時列入 unsupported）。
 
+## 萃取層
+
+萃取型的報表平常讀 DuckDB 檔（由 .twbx 內的 .hyper 匯入）。`tmig extract refresh` 依萃取各欄在來源的位置
+（萃取 metadata-record 的 family 與 remote-alias）從來源資料庫重建（`kernel/src/tmig/data/extract_refresh.py`）：
+
+1. 連線設定與 Live 連線相同；`tmig connections template` 也會列出萃取的來源（標示「萃取更新」）
+2. `uv run tmig extract refresh <報表> [--out-dir data]`：完整更新；`--incremental` 只附加增量欄位
+   （Tableau 的 increment-key）大於現有最大值的列，與 Tableau 的增量更新相同。寫入暫存檔後原子替換，
+   查詢中的讀取不受影響，失敗時舊檔不變；萃取篩選照套，欄位型別沿用現有檔案（.hyper 匯入時的型別）
+3. `uv run tmig extract compare <.twbx> [--data-dir data]`：新萃取與 Tableau 的萃取（.twbx 內的 .hyper）逐表比對
+   列數、每欄的非空值數，數值欄的總和、最小值、最大值，日期與文字欄的最小值、最大值（階段二）
+
+計算比對（`tmig verify`）以 .twbx 內的快照為準；資料是從來源更新的時候，報告會註明，預期結果須在同一時間點
+從 Tableau 抓取。不能更新的萃取：來源是檔案（Excel、CSV 等）、只取前 N 筆或抽樣、Relationship 模型中跨資料表的
+萃取篩選；Tableau 的「彙總可見維度的資料」等設定無法從 .twb 得知，以資料比對檢查。
+
 ## 指令
 
 | 指令 | 用途 |
@@ -142,6 +159,8 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
 | `tmig verify <fixture 目錄>` | 計算比對，寫出固定格式的差異報告（E3） |
 | `tmig connections template <報表或資料夾>... [--out 檔案]` | Live 連線的設定檔範本，憑證寫成環境變數（N4） |
 | `tmig connections check <報表或資料夾>... [--config 檔案] [--no-connect]` | 檢查 Live 連線的設定並測試連線（N4） |
+| `tmig extract refresh <報表> [--incremental] [--out-dir 目錄]` | 從來源資料庫更新萃取的 DuckDB 檔：完整或增量、原子替換（N7） |
+| `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
 | `tmig serve [--fixtures 目錄] [--port 8000]` | 查詢服務與檢視器（F2–F4） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 

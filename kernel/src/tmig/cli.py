@@ -11,6 +11,8 @@ tmig mapping suggest <fixture 目錄>              產生 CSV 欄名對照建議
 tmig verify <fixture 目錄> [--out 報告]          計算比對，寫出差異報告
 tmig connections template <報表或資料夾>...      產生 Live 連線的設定檔範本（憑證寫成環境變數）
 tmig connections check <報表或資料夾>...         檢查 Live 連線的設定並測試連線
+tmig extract refresh <報表> [--incremental]       從來源資料庫更新萃取的 DuckDB 檔（完整或增量）
+tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取比對（列數、總和、最小值、最大值）
 tmig serve [--fixtures 目錄] [--port 8000]       啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
@@ -28,7 +30,7 @@ from pydantic import ValidationError
 
 from tmig import __version__
 from tmig.census import render_markdown, run_census
-from tmig.ir import dumps_ir, ir_json_schema_text, load_ir
+from tmig.ir import IR, dumps_ir, ir_json_schema_text, load_ir
 from tmig.parser.twbx import WorkbookFormatError
 from tmig.parser.workbook import WorkbookParseError, parse_workbook
 
@@ -408,6 +410,134 @@ def _cmd_connections_check(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def _extract_inputs(path: Path) -> tuple[IR, Path]:
+    """萃取更新的輸入：.twb／.twbx、IR 檔或 fixture 目錄 → （IR, 預設的資料目錄）。"""
+    from tmig.verify.run import load_fixture_ir
+
+    if path.is_dir():
+        return load_fixture_ir(path), path / "data"
+    if path.name.endswith(".json"):
+        return load_ir(path), path.parent / "data"
+    return parse_workbook(path), path.parent / "data"
+
+
+def _cmd_extract_refresh(args: argparse.Namespace) -> int:
+    from tmig.data.extract_refresh import RefreshError, refresh_extract, refresh_plan
+    from tmig.data.sources import SourceConnectionError, load_connections, open_executor
+    from tmig.ir import ExtractConnection
+
+    try:
+        ir, default_dir = _extract_inputs(args.path)
+    except (WorkbookFormatError, WorkbookParseError, ValidationError, OSError) as exc:
+        print(f"失敗  {args.path}：{exc}", file=sys.stderr)
+        return 1
+    out_dir = args.out_dir or default_dir
+    targets = [
+        ds
+        for ds in ir.datasources
+        if isinstance(ds.connection, ExtractConnection)
+        and (args.datasource is None or ds.id == args.datasource)
+    ]
+    if not targets:
+        print("沒有萃取型的資料源", file=sys.stderr)
+        return 1
+    try:
+        configs = load_connections(args.config)
+    except SourceConnectionError as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    failed = 0
+    for ds in targets:
+        out_path = out_dir / f"{ds.id}.duckdb"
+        try:
+            plan = refresh_plan(ir, ds.id)
+            executor = open_executor(plan.source, configs)
+            try:
+                result = refresh_extract(
+                    ir, ds.id, executor, out_path, incremental=args.incremental
+                )
+            finally:
+                executor.close()
+        except (RefreshError, SourceConnectionError) as exc:
+            print(f"失敗  {ds.id}：{exc}", file=sys.stderr)
+            failed += 1
+            continue
+        tables = "、".join(
+            f"{t.schema}.{t.table} {t.rows} 列"
+            + (f"（新增 {t.added}）" if result.mode == "incremental" else "")
+            for t in result.tables
+        )
+        mode = "增量更新" if result.mode == "incremental" else "完整更新"
+        print(f"通過  {ds.id}：{mode}，{tables} → {out_path}")
+    return 1 if failed else 0
+
+
+def _cmd_extract_compare(args: argparse.Namespace) -> int:
+    import json
+    import tempfile
+
+    from tmig.data.extract_refresh import RefreshError, compare_extract
+    from tmig.data.hyper_import import HyperImportError, import_workbook
+
+    if args.path.suffix.lower() != ".twbx":
+        print("失敗：資料比對需要 .twbx（內含 Tableau 的萃取 .hyper）", file=sys.stderr)
+        return 1
+    try:
+        ir = parse_workbook(args.path)
+    except (WorkbookFormatError, WorkbookParseError) as exc:
+        print(f"失敗  {args.path}：{exc}", file=sys.stderr)
+        return 1
+    data_dir = args.data_dir or args.path.parent / "data"
+    failed = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            imports = import_workbook(args.path, Path(tmp), ir)
+        except HyperImportError as exc:
+            print(f"失敗  {args.path}：{exc}", file=sys.stderr)
+            return 1
+        for item in imports:
+            if args.datasource is not None and item.datasource != args.datasource:
+                continue
+            refreshed = data_dir / f"{item.datasource}.duckdb"
+            if not refreshed.is_file():
+                print(
+                    f"失敗  {item.datasource}：找不到 {refreshed}（請先 tmig extract refresh）",
+                    file=sys.stderr,
+                )
+                failed += 1
+                continue
+            try:
+                result = compare_extract(ir, item.datasource, refreshed, Path(tmp) / item.duckdb)
+            except RefreshError as exc:
+                print(f"失敗  {item.datasource}：{exc}", file=sys.stderr)
+                failed += 1
+                continue
+            report = data_dir / f"{item.datasource}.compare.json"
+            report.write_text(
+                json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            for table in result.tables:
+                bad = [c for c in table.checks if not c.ok]
+                status = "一致" if not bad else f"有 {len(bad)} 項不一致"
+                print(
+                    f"{'通過' if not bad else '失敗'}  {item.datasource}：{table.schema}.{table.table}"
+                    f" 比對 {len(table.checks)} 項{status}"
+                )
+                for check in bad:
+                    print(
+                        f"      {check.column or '(表)'} 的 {check.stat}：Tableau {check.reference}，"
+                        f"新萃取 {check.refreshed}",
+                        file=sys.stderr,
+                    )
+                if table.missing:
+                    print(f"      注意：新萃取沒有 {'、'.join(table.missing)}（IR 沒有用到）")
+            failed += 0 if result.ok else 1
+            print(f"      報告 → {report}")
+    return 1 if failed else 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from tmig_service import serve
@@ -570,6 +700,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     conn_check.add_argument("--no-connect", action="store_true", help="只檢查設定，不實際連線")
     conn_check.set_defaults(handler=_cmd_connections_check)
+
+    extract_parser = commands.add_parser(
+        "extract", help="萃取層：從來源更新萃取、與 Tableau 萃取比對"
+    )
+    extract_commands = extract_parser.add_subparsers(
+        dest="extract_command", required=True, metavar="子指令"
+    )
+    refresh = extract_commands.add_parser("refresh", help="從來源資料庫更新萃取的 DuckDB 檔")
+    refresh.add_argument(
+        "path", type=Path, metavar="報表", help=".twb／.twbx、IR 檔或 fixture 目錄"
+    )
+    refresh.add_argument("--out-dir", type=Path, help="DuckDB 檔的目錄；預設為報表旁的 data")
+    refresh.add_argument("--datasource", help="只更新這個資料源（id）")
+    refresh.add_argument(
+        "--incremental", action="store_true", help="增量更新：只附加增量欄位大於現有最大值的列"
+    )
+    refresh.add_argument(
+        "--config",
+        type=Path,
+        help="連線設定檔；預設為環境變數 TMIG_CONNECTIONS 或 connections.toml",
+    )
+    refresh.set_defaults(handler=_cmd_extract_refresh)
+    compare = extract_commands.add_parser(
+        "compare", help="新萃取與 Tableau 萃取（.twbx 內的 .hyper）比對列數、總和、最小值、最大值"
+    )
+    compare.add_argument("path", type=Path, metavar=".twbx")
+    compare.add_argument("--data-dir", type=Path, help="新萃取的目錄；預設為報表旁的 data")
+    compare.add_argument("--datasource", help="只比對這個資料源（id）")
+    compare.set_defaults(handler=_cmd_extract_compare)
 
     serve = commands.add_parser("serve", help="啟動查詢服務與檢視器")
     serve.add_argument(

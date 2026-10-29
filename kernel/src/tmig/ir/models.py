@@ -282,6 +282,29 @@ class LiveConnection(IRModel):
     )
 
 
+class SourceColumn(IRModel):
+    """萃取中的一欄在來源的位置（萃取 metadata-record 的 family 與 remote-alias）。"""
+
+    field: Id = Field(description="欄位 id；萃取中的欄名為該欄位的 column")
+    relation: str | None = Field(
+        default=None, description="來源關聯樹中的資料表（relation 的 name）；單一資料表時可省略"
+    )
+    column: str = Field(min_length=1, description="來源的欄名")
+
+
+class ExtractRefresh(IRModel):
+    """萃取層從來源資料庫重建萃取時需要的資訊（N7）；來源連線見 ExtractConnection.source。"""
+
+    columns: list[SourceColumn] = Field(min_length=1)
+    increment: Id | None = Field(
+        default=None,
+        description="增量更新的欄位（Tableau 的 increment-key）；None 表示只能完整更新",
+    )
+    row_limit: int | None = Field(
+        default=None, description="萃取只取前 N 筆或抽樣（extract count）；None 表示全部"
+    )
+
+
 class ExtractConnection(IRModel):
     """資料位於 .twbx 內的 .hyper 檔（嵌入式 Extract）。"""
 
@@ -294,6 +317,9 @@ class ExtractConnection(IRModel):
     )
     source: LiveConnection | None = Field(
         default=None, description="萃取的來源資料庫（萃取層定時更新時使用）"
+    )
+    refresh: ExtractRefresh | None = Field(
+        default=None, description="萃取各欄在來源的位置與更新方式；來源無法解析時為 None"
     )
 
 

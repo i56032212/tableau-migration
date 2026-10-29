@@ -122,15 +122,28 @@ def load_fixture_ir(directory: Path) -> IR:
 
 
 def ensure_data(directory: Path, ir: IR) -> list[str]:
-    """萃取的資料源缺少 DuckDB 檔時由 .twbx 匯入；回傳說明訊息（Live 連線不需要）。"""
+    """萃取的資料源缺少 DuckDB 檔時由 .twbx 匯入；回傳說明訊息（Live 連線不需要）。
+
+    DuckDB 檔若是 tmig extract refresh 從來源更新的（有 <資料源>.refresh.json），不是 .twbx 內的快照，
+    在說明中提醒：預期結果須在同一時間點從 Tableau 抓取。
+    """
     data = directory / "data"
-    missing = [
-        ds.id
-        for ds in ir.datasources
-        if isinstance(ds.connection, ExtractConnection) and not (data / f"{ds.id}.duckdb").is_file()
-    ]
+    extracts = [ds for ds in ir.datasources if isinstance(ds.connection, ExtractConnection)]
+    notes: list[str] = []
+    for ds in extracts:
+        refreshed = data / f"{ds.id}.refresh.json"
+        if (data / f"{ds.id}.duckdb").is_file() and refreshed.is_file():
+            try:
+                when = json.loads(refreshed.read_text(encoding="utf-8")).get("finished", "")
+            except (OSError, ValueError):
+                when = ""
+            notes.append(
+                f"資料源 {ds.id} 的資料是從來源更新的萃取（{when or '時間不明'}），不是 .twbx 內的快照；"
+                "預期結果須在同一時間點從 Tableau 抓取"
+            )
+    missing = [ds.id for ds in extracts if not (data / f"{ds.id}.duckdb").is_file()]
     if not missing:
-        return []
+        return notes
     from tmig.data.hyper_import import import_workbook
 
     twbx = next(directory.glob("*.twbx"), None)
@@ -140,7 +153,7 @@ def ensure_data(directory: Path, ir: IR) -> list[str]:
     bad = [r.datasource for r in results if not r.ok]
     if bad:
         raise ExecutionError(f"萃取匯入自檢失敗：{'、'.join(bad)}；見 data/*.import.json")
-    return [f"已由 {twbx.name} 匯入 {'、'.join(missing)}"]
+    return [*notes, f"已由 {twbx.name} 匯入 {'、'.join(missing)}"]
 
 
 def verify_fixture(

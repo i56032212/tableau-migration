@@ -9,6 +9,7 @@
   顯示或隱藏的區塊必須在同一個 dashboard 上
 - Relationship 模型：邏輯資料表 id 不重複；關聯兩端的資料表存在、條件的欄位屬於該資料表；
   關聯連成一棵樹（不成環、每張資料表都連得到）；實體欄位都屬於模型中的某張資料表
+- 萃取的更新資訊：來源欄位對應的欄位存在且是實體欄位、不重複；增量更新的欄位也是
 """
 
 from __future__ import annotations
@@ -83,6 +84,26 @@ def _check_model(ds: Datasource, errors: list[str]) -> None:
             )
 
 
+def _check_refresh(ds: Datasource, errors: list[str]) -> None:
+    from tmig.ir.models import ExtractConnection
+
+    connection = ds.connection
+    if not isinstance(connection, ExtractConnection) or connection.refresh is None:
+        return
+    where = f"datasources[{ds.id}].connection.refresh"
+    physical = {f.id for f in ds.fields if f.column is not None}
+    seen: set[str] = set()
+    for column in connection.refresh.columns:
+        if column.field not in physical:
+            errors.append(f"{where}：欄位「{column.field}」不存在或不是實體欄位")
+        if column.field in seen:
+            errors.append(f"{where}：欄位「{column.field}」重複")
+        seen.add(column.field)
+    increment = connection.refresh.increment
+    if increment is not None and increment not in physical:
+        errors.append(f"{where}：增量更新的欄位「{increment}」不存在或不是實體欄位")
+
+
 def check_references(ir: IR) -> list[str]:
     from tmig.ir.models import SPECIAL_FIELDS, ParamRef, TopNFilter, TupleFilter
 
@@ -106,6 +127,7 @@ def check_references(ir: IR) -> list[str]:
         for flt in ds.filters:
             claim(flt.id, f"datasources[{ds.id}].filters[{flt.id}]")
         _check_model(ds, errors)
+        _check_refresh(ds, errors)
     for prm in ir.parameters:
         claim(prm.id, f"parameters[{prm.id}]")
     for ws in ir.worksheets:

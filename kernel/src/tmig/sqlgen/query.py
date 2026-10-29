@@ -990,6 +990,19 @@ class WorksheetQuery:
     def _filters(self) -> list[Filter]:
         return [*self.datasource.filters, *self.state.filters]
 
+    def row_conditions(self, filters: list[Filter]) -> list[str]:
+        """不經運算順序、直接逐列套用的篩選條件（篩選控制項的可選值、萃取篩選）。
+        彙總條件與 Top N 需要先算出成員，這裡列為不支援。"""
+        for flt in filters:
+            if isinstance(flt, TopNFilter):
+                raise QueryError(f"Top N 篩選 {flt.id} 不能逐列套用", unsupported=True)
+            if isinstance(flt, ConditionFilter):
+                node = self._condition_node(flt)
+                if self.analyzer.analyze(node).level == "agg":
+                    raise QueryError(f"彙總條件的篩選 {flt.id} 不能逐列套用", unsupported=True)
+                self.cond_nodes[flt.id] = node
+        return [self._row_condition(f) for f in filters]
+
     def _row_condition(self, flt: Filter) -> str:
         """維度上的篩選條件，在列層級計算。"""
         if isinstance(flt, TupleFilter):
@@ -1710,13 +1723,7 @@ def domain_sql(
         raise QueryError("含 LOD 的欄位尚不支援列出可選值", unsupported=True)
     value = query.dim_sql(use)
     ds_filters = [f for f in datasource.filters if f.stage == "datasource"]
-    for flt in ds_filters:
-        if isinstance(flt, ConditionFilter):
-            node = query._condition_node(flt)
-            if query.analyzer.analyze(node).level == "agg":
-                raise QueryError("彙總條件的資料源篩選尚不支援列出可選值", unsupported=True)
-            query.cond_nodes[flt.id] = node
-    conds = [query._row_condition(f) for f in ds_filters]
+    conds = query.row_conditions(ds_filters)
     source = query.source
     from_sql = source.from_sql
     if source.model is not None:
