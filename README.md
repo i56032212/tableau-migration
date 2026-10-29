@@ -67,7 +67,8 @@ uv run python scripts/check.py --fix # 先自動修正 lint 與格式
    看 `inventory/inventory.md` 的 A 級、B 級候選，各挑一份有擁有者願意簽核的。手上已經有 .twbx 的話，
    也可以直接 `uv run tmig inventory <資料夾>`
 2. **下載**：`tableau_server.py fetch`（同上的登入參數）`--workbook "<報表名稱>"`，下載含萃取的 .twbx 到
-   `fixtures/<報表>/`，並產生起始的 `cases.yaml`
+   `fixtures/<報表>/`，並產生起始的 `cases.yaml`。報表連到 Published Data Source 時，一併下載資料源的
+   .tdsx（含萃取）併入報表（見「Published Data Source」）
 3. **解析**：`uv run tmig parse fixtures/<報表>/<報表>.twbx --out fixtures/<報表>/golden.ir.json`
    - 結束碼 3 表示有不支援的元素，清單會印出來；unsupported 必須是空的才往下
    - 人工對照 Tableau Desktop 核對 IR（欄位、篩選、計算方向、區塊位置）後提交，之後測試會要求解析結果與它逐字相同
@@ -128,6 +129,19 @@ Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表
 尚不支援（查詢時列為不支援）：同一張工作表的量值來自多張資料表、同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
 Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（解析時列入 unsupported）。
 
+## Published Data Source
+
+報表連到 Published Data Source 時，.twb 只有指向 Tableau Server 的 sqlproxy 連線：資料源的連線、計算欄位的公式與
+萃取都在伺服器上。下載資料源的 .tdsx 後併入報表，產生自含的 .twbx，之後與嵌入式資料源完全相同
+（`kernel/src/tmig/parser/published.py`）：
+
+- `tableau_server.py fetch` 自動處理：原本的報表在 `original/`、資料源在 `published/`、併入後的 `<報表>.twbx` 在 fixture 根目錄；
+  `inventory` 預設也下載資料源的定義（不含萃取）併入後再盤點（`--no-published` 關閉）
+- 手上已有 .tdsx 時：`uv run tmig published merge <報表> --published <目錄> --out <報表>.twbx`
+- 併入的內容：資料源的連線、欄位與計算欄位（公式）、萃取與物件模型；報表本地的計算欄位、群組，以及欄位的
+  顯示名稱、角色、隱藏與格式等覆寫都保留；報表本地另外萃取了資料源時沿用報表的萃取。IR 的 `Datasource.published`
+  記下資料源在伺服器上的網址名稱（之後的權限與排程依此對應）
+
 ## 萃取層
 
 萃取型的報表平常讀 DuckDB 檔（由 .twbx 內的 .hyper 匯入）。`tmig extract refresh` 依萃取各欄在來源的位置
@@ -161,6 +175,7 @@ Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（�
 | `tmig connections check <報表或資料夾>... [--config 檔案] [--no-connect]` | 檢查 Live 連線的設定並測試連線（N4） |
 | `tmig extract refresh <報表> [--incremental] [--out-dir 目錄]` | 從來源資料庫更新萃取的 DuckDB 檔：完整或增量、原子替換（N7） |
 | `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
+| `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
 | `tmig serve [--fixtures 目錄] [--port 8000]` | 查詢服務與檢視器（F2–F4） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
@@ -243,7 +258,7 @@ tableau-migration/
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
 集合與集合動作、成員別名、趨勢線、地圖、小計與總計、巢狀 LOD、百分位數與百分比等其他快速 Table Calculation、
-使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、Published Data Source、
+使用者函式（USERNAME、ISMEMBEROF 等）與其他尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線。
 
 ## 開發規則

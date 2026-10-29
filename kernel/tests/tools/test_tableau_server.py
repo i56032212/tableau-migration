@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.server
 import io
 import json
+import sys
 import threading
 import zipfile
 from collections.abc import Iterator
@@ -89,6 +90,19 @@ VIEWS: list[dict[str, Any]] = [
     },
     {"name": "Overview", "viewUrlName": "Overview", "workbook": {"id": "wb-3"}, "count": 5},
 ]
+
+
+DATASOURCES: list[dict[str, Any]] = [
+    {
+        "id": "ds-1",
+        "name": "OrdersPDS",
+        "contentUrl": "OrdersPDS",
+        "updatedAt": "2026-10-01T00:00:00Z",
+    }
+]
+PUBLISHED: dict[bool, bytes] = {}
+"""Published Data Source 的 .tdsx：含萃取（True）與不含萃取（False）。"""
+PUBLISHED_WORKBOOK: list[bytes] = [b""]
 
 
 class FakeServer(http.server.BaseHTTPRequestHandler):
@@ -199,9 +213,20 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
                     "views": {"view": views[:2] if query["pageNumber"] == ["1"] else views[2:]},
                 },
             )
+        elif rest == "datasources":
+            self._json(
+                200,
+                {
+                    "pagination": {"pageNumber": "1", "pageSize": "100", "totalAvailable": "1"},
+                    "datasources": {"datasource": DATASOURCES},
+                },
+            )
+        elif rest.startswith("datasources/") and rest.endswith("/content"):
+            include = query.get("includeExtract") == ["True"]
+            self._file(PUBLISHED[include], "application/octet-stream", "OrdersPDS.tdsx")
         elif rest.endswith("/connections"):
             wb_id = rest.split("/")[1]
-            kinds = {"wb-1": "hyper", "wb-2": "sqlproxy", "wb-3": "oracle"}
+            kinds = {"wb-1": "hyper", "wb-2": "sqlproxy", "wb-3": "oracle", "wb-4": "sqlproxy"}
             self._json(200, {"connections": {"connection": [{"id": "c", "type": kinds[wb_id]}]}})
         elif rest.endswith("/views"):
             wb_id = rest.split("/")[1]
@@ -214,6 +239,8 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
                 self._file(demo_bytes(include), "application/octet-stream", "Sales Overview.twbx")
             elif wb_id == "wb-3":
                 self._file(PILOT.read_bytes(), "application/xml", "Ops.v2.twb")
+            elif wb_id == "wb-4":
+                self._file(PUBLISHED_WORKBOOK[0], "application/xml", "Orders PDS.twb")
             else:
                 self._json(
                     403,
@@ -362,3 +389,71 @@ def test_safe_name() -> None:
     assert tableau_server.safe_name("報表. ") == "報表"
     assert tableau_server.safe_name("   ") == "workbook"
     assert len(tableau_server.safe_name("x" * 200)) == 80
+
+
+# ---------------------------------------------------------------- Published Data Source（N8）
+
+
+@pytest.fixture
+def published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """伺服器上多一份連到 Published Data Source 的報表，與資料源 OrdersPDS。"""
+    from ..parser import builder as b
+    from ..parser import test_published as pds
+
+    hyper = tmp_path / "pds.hyper"
+    pds.make_hyper(hyper, tmp_path)
+    PUBLISHED[True] = pds.write_tdsx(tmp_path / "with.tdsx", pds.tds(), hyper).read_bytes()
+    PUBLISHED[False] = pds.write_tdsx(tmp_path / "without.tdsx", pds.tds(), None).read_bytes()
+    xml = b.workbook(datasource=pds.sqlproxy_datasource(), worksheets=pds.sheet())
+    PUBLISHED_WORKBOOK[0] = xml.encode("utf-8")
+    workbook = {
+        "id": "wb-4",
+        "name": "Orders PDS",
+        "contentUrl": "OrdersPDSReport",
+        "updatedAt": "2026-10-02T00:00:00Z",
+        "project": {"id": "p-1", "name": "Sales"},
+        "owner": {"id": "u-1", "name": "amy"},
+    }
+    monkeypatch.setattr(sys.modules[__name__], "WORKBOOKS", [*WORKBOOKS, workbook])
+
+
+def test_fetch_merges_published_datasource(
+    server: str, tmp_path: Path, published: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixture = tmp_path / "fixtures" / "orders_pds"
+    args = ["fetch", *auth(server), "--workbook", "OrdersPDSReport", "--fixture", str(fixture)]
+    assert tableau_server.main(args) == 0
+    out = capsys.readouterr().out
+    assert "已併入 Published Data Source「Orders (Published)」" in out
+    assert "起步條件全部符合" in out
+    assert (fixture / "original" / "orders_pds.twb").is_file()
+    assert (fixture / "published" / "OrdersPDS.tdsx").is_file()
+    with zipfile.ZipFile(fixture / "orders_pds.twbx") as archive:
+        assert "Data/Published/OrdersPDS/federated_1.hyper" in archive.namelist()
+    calls = [c for c in FakeServer.calls if "/datasources/ds-1/content" in c]
+    assert len(calls) == 1 and "includeExtract=True" in calls[0]
+    cases = load_cases(fixture / "cases.yaml")
+    assert [s.worksheet for s in cases.sheets] == []  # 這份報表的工作表沒有發佈成 view
+
+
+def test_inventory_merges_published_definitions(
+    server: str, tmp_path: Path, published: None
+) -> None:
+    out = tmp_path / "inventory"
+    assert tableau_server.main(["inventory", *auth(server), "--out", str(out)]) == 0
+    meta = json.loads((out / "server.json").read_text(encoding="utf-8"))
+    entry = next(w for w in meta["workbooks"] if w["id"] == "wb-4")
+    assert entry["file"] == "workbooks/Sales/Orders PDS.twbx"
+    assert entry["published"] == [
+        "已併入 Published Data Source「Orders (Published)」（下載時不含萃取檔）"
+    ]
+    assert (out / "original" / "Sales" / "Orders PDS.twb").is_file()
+    calls = [c for c in FakeServer.calls if "/datasources/ds-1/content" in c]
+    assert len(calls) == 1 and "includeExtract=False" in calls[0]
+    rows = (out / "inventory.csv").read_text(encoding="utf-8-sig")
+    line = next(r for r in rows.splitlines() if r.startswith("Orders PDS,"))
+    assert "Published Data Source" not in line
+    # 第二次：資料源沒有更新時不重新下載
+    FakeServer.calls = []
+    assert tableau_server.main(["inventory", *auth(server), "--out", str(out), "--refresh"]) == 0
+    assert not [c for c in FakeServer.calls if "/datasources/ds-1/content" in c]

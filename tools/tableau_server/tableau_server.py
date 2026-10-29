@@ -22,7 +22,9 @@
 
 輸出（預設 inventory/，已列入 .gitignore）：
 
-- ``workbooks/<Project>/<報表>.twbx``：不含萃取的報表檔，重跑時只重新下載有更新的報表
+- ``workbooks/<Project>/<報表>.twbx``：不含萃取的報表檔，重跑時只重新下載有更新的報表；
+  連到 Published Data Source 的報表，下載資料源的定義（datasources/，不含萃取）併入後再盤點，
+  原本的報表在 original/
 - ``server.json``：Project、擁有者、檢視次數、連線類型、下載失敗原因
 - ``inventory.md``、``inventory.csv``、``features.csv``、``census/``：見 ``tmig inventory``
 """
@@ -266,19 +268,33 @@ class TableauClient:
         data = self.get_json(f"workbooks/{workbook_id}/connections")
         return _list((data.get("connections") or {}).get("connection"))
 
+    def datasources(self) -> list[dict[str, Any]]:
+        """Published Data Source 清單（網址名稱、更新時間）。"""
+        return list(self.paged("datasources", "datasources", "datasource"))
+
     def download(self, workbook_id: str, target: Path, *, include_extract: bool) -> Path:
-        """下載到 target（副檔名依伺服器回傳的檔案類型決定）；回傳實際路徑。"""
+        """下載報表到 target（副檔名依伺服器回傳的檔案類型決定）；回傳實際路徑。"""
+        return self._download(f"workbooks/{workbook_id}/content", target, include_extract, WORKBOOK)
+
+    def download_datasource(
+        self, datasource_id: str, target: Path, *, include_extract: bool
+    ) -> Path:
+        """下載 Published Data Source（.tdsx 或 .tds）。"""
+        return self._download(
+            f"datasources/{datasource_id}/content", target, include_extract, DATASOURCE
+        )
+
+    def _download(
+        self, endpoint: str, target: Path, include_extract: bool, kinds: tuple[str, str]
+    ) -> Path:
         params = {"includeExtract": "True" if include_extract else "False"}
         with self.http.stream(
-            "GET",
-            self._site(f"workbooks/{workbook_id}/content"),
-            params=params,
-            headers=self._auth(),
+            "GET", self._site(endpoint), params=params, headers=self._auth()
         ) as response:
             if response.status_code != 200:
                 response.read()
                 raise _error(response, "下載失敗")
-            ext = _download_suffix(response)
+            ext = _download_suffix(response, kinds)
             path = target.with_name(target.name + ext)  # 報表名稱可能含「.」，不能用 with_suffix
             path.parent.mkdir(parents=True, exist_ok=True)
             partial = path.with_name(path.name + ".part")
@@ -289,15 +305,20 @@ class TableauClient:
         return path
 
 
-def _download_suffix(response: httpx.Response) -> str:
+WORKBOOK = (".twb", ".twbx")
+DATASOURCE = (".tds", ".tdsx")
+"""（XML 檔、封裝檔）的副檔名。"""
+
+
+def _download_suffix(response: httpx.Response, kinds: tuple[str, str] = WORKBOOK) -> str:
     disposition = response.headers.get("content-disposition", "")
     match = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", disposition, re.IGNORECASE)
     if match:
         suffix = Path(unquote(match.group(1))).suffix.lower()
-        if suffix in (".twb", ".twbx"):
+        if suffix in kinds:
             return suffix
     content_type = response.headers.get("content-type", "")
-    return ".twb" if "xml" in content_type else ".twbx"
+    return kinds[0] if "xml" in content_type else kinds[1]
 
 
 def _error(response: httpx.Response, prefix: str) -> TableauError:
@@ -365,6 +386,73 @@ def browser_token(server: str, profile: Path) -> str:
     raise TableauError("瀏覽器設定檔中沒有 Tableau 的登入狀態；先執行 fetch_expected.py --login")
 
 
+# ---------------------------------------------------------------- Published Data Source（N8）
+
+
+@dataclass
+class PublishedFetch:
+    merged: Path
+    """併入後的報表（沒有 Published Data Source 時為原本的檔案）。"""
+    notes: list[str]
+
+
+def fetch_published(
+    client: TableauClient,
+    path: Path,
+    *,
+    folder: Path,
+    original: Path,
+    merged: Path,
+    include_extract: bool,
+    catalog: list[dict[str, Any]] | None = None,
+) -> PublishedFetch:
+    """報表連到 Published Data Source 時：下載資料源（.tdsx／.tds）到 folder，原本的報表移到 original，
+    併入後的報表寫到 merged。folder 中已有、且伺服器上沒有更新的資料源不重新下載。"""
+    from tmig.parser.published import merge_published, workbook_refs
+
+    refs = workbook_refs(path)
+    if not refs:
+        return PublishedFetch(path, [])
+    items = catalog if catalog is not None else client.datasources()
+    by_url = {str(d.get("contentUrl")): d for d in items}
+    notes: list[str] = []
+    folder.mkdir(parents=True, exist_ok=True)
+    for ref in refs:
+        found = by_url.get(ref.content_url)
+        if found is None:
+            notes.append(
+                f"找不到 Published Data Source「{ref.caption}」（{ref.content_url}）或沒有權限"
+            )
+            continue
+        stamp = folder / f"{ref.content_url}.updated"
+        existing = [p for p in folder.glob(f"{ref.content_url}.tds*") if p.suffix in DATASOURCE]
+        current = str(found.get("updatedAt") or "")
+        if existing and stamp.is_file() and stamp.read_text(encoding="utf-8") == current:
+            continue
+        for old in existing:
+            old.unlink()
+        try:
+            client.download_datasource(
+                str(found["id"]), folder / ref.content_url, include_extract=include_extract
+            )
+        except (TableauError, httpx.HTTPError) as exc:
+            notes.append(f"Published Data Source「{ref.caption}」下載失敗：{exc}")
+            continue
+        stamp.write_text(current, encoding="utf-8")
+    original.parent.mkdir(parents=True, exist_ok=True)
+    if path.resolve() != original.resolve():
+        path.replace(original)
+    result = merge_published(original, folder, merged)
+    notes += [
+        f"Published Data Source「{r.caption}」未併入（{r.content_url}）" for r in result.missing
+    ]
+    notes += [
+        f"已併入 Published Data Source「{m.ref.caption}」" + (f"（{m.note}）" if m.note else "")
+        for m in result.merged
+    ]
+    return PublishedFetch(result.out, notes)
+
+
 # ---------------------------------------------------------------- 盤點
 
 
@@ -424,6 +512,7 @@ def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
 
     entries: list[dict[str, Any]] = []
     used: set[str] = set()
+    catalog: list[dict[str, Any]] | None = None
     for i, wb in enumerate(workbooks, start=1):
         wb_id = str(wb["id"])
         name = str(wb.get("name", wb_id))
@@ -442,6 +531,7 @@ def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
             "connections": [],
             "file": None,
             "download_error": None,
+            "published": [],
         }
         try:
             entry["connections"] = sorted(
@@ -472,9 +562,25 @@ def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
         else:
             try:
                 path = client.download(wb_id, out / relative, include_extract=False)
-                entry["file"] = path.relative_to(out).as_posix()
                 entry["download_error"] = None
                 status = "已下載"
+                if not args.no_published and "sqlproxy" in entry["connections"]:
+                    # 連到 Published Data Source：下載資料源的定義（不含萃取）併入後再盤點
+                    if catalog is None:
+                        catalog = client.datasources()
+                    fetched = fetch_published(
+                        client,
+                        path,
+                        folder=out / "datasources",
+                        original=out / "original" / path.relative_to(out / "workbooks"),
+                        merged=path.with_suffix(".twbx"),
+                        include_extract=False,
+                        catalog=catalog,
+                    )
+                    path = fetched.merged
+                    entry["published"] = fetched.notes
+                    status += "；" + "；".join(fetched.notes) if fetched.notes else ""
+                entry["file"] = path.relative_to(out).as_posix()
             except (TableauError, httpx.HTTPError) as exc:
                 entry["download_error"] = str(exc)
                 status = f"下載失敗：{exc}"
@@ -560,7 +666,7 @@ def starter_cases(
         f"workbook: {workbook_id}",
         f"tableau_views_url: {json.dumps(url, ensure_ascii=False)}",
         "fetched_at: null",
-        "sheets:",
+        "sheets:" if pairs else "sheets: []",
     ]
     for worksheet, view in pairs:
         lines += [
@@ -596,8 +702,21 @@ def run_fetch(client: TableauClient, args: argparse.Namespace) -> int:
     fixture: Path = args.fixture or ROOT / "fixtures" / slug
     print(f"下載「{wb.get('name')}」（含萃取）到 {fixture}…", file=sys.stderr)
     path = client.download(str(wb["id"]), fixture / fixture.name, include_extract=True)
-    if path.suffix == ".twb":
-        print("注意：伺服器回傳 .twb（不含資料）；這份報表沒有嵌入式萃取，不符合起步條件")
+    # 連到 Published Data Source：下載資料源（含萃取）併入報表；原本的報表移到 original/
+    fetched = fetch_published(
+        client,
+        path,
+        folder=fixture / "published",
+        original=fixture / "original" / path.name,
+        merged=fixture / f"{fixture.name}.twbx",
+        include_extract=True,
+    )
+    for note in fetched.notes:
+        print(note)
+    if fetched.merged != path:
+        path = fetched.merged
+    elif path.suffix == ".twb":
+        print("注意：伺服器回傳 .twb（不含資料）；這份報表沒有嵌入式萃取，資料要從 Live 連線取得")
 
     report = run_census(path)
     failed = [c for c in report.checks if c.status == "fail"]
@@ -689,6 +808,11 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--limit", type=int, help="只盤點前 N 份（試跑用）")
     inventory.add_argument("--refresh", action="store_true", help="全部重新下載，不沿用上次的檔案")
     inventory.add_argument("--no-download", action="store_true", help="只列清單與檢視次數，不下載")
+    inventory.add_argument(
+        "--no-published",
+        action="store_true",
+        help="不下載報表用到的 Published Data Source 定義（預設會下載並併入後再盤點）",
+    )
     inventory.set_defaults(handler=run_inventory)
 
     fetch = commands.add_parser(

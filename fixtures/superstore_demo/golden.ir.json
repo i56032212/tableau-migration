@@ -578,6 +578,7 @@
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
+      "published": null,
       "source_ref": "/workbook/datasources/datasource[2]"
     }
   ],

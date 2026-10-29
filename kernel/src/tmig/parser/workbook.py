@@ -231,6 +231,7 @@ class WorkbookParser:
                 settings=DatasourceSettings(week_start=state.week_start),
                 fields=state.fields,
                 filters=state.filters,
+                published=state.published,
                 source_ref=state.element.getroottree().getpath(state.element),
             )
             for state in ctx.datasources.values()

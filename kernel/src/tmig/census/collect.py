@@ -504,7 +504,7 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
             if _norm(f) not in packaged_paths and PurePath(_norm(f)).name not in packaged_names
         ]
         if ds.published:
-            problems.append(f"「{ds.caption}」是 Published Data Source")
+            problems.append(f"「{ds.caption}」是 Published Data Source（需先下載 .tdsx 併入報表）")
         elif not ds.data_in_hyper:
             # Live 連線（第三階段）：連到資料庫的可以下推查詢；連到檔案的尚不支援。
             # 連線類型與關聯方式是否支援由解析器判斷（列入 unsupported）

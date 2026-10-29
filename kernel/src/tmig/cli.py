@@ -13,6 +13,7 @@ tmig connections template <報表或資料夾>...      產生 Live 連線的設�
 tmig connections check <報表或資料夾>...         檢查 Live 連線的設定並測試連線
 tmig extract refresh <報表> [--incremental]       從來源資料庫更新萃取的 DuckDB 檔（完整或增量）
 tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取比對（列數、總和、最小值、最大值）
+tmig published merge <報表> [--published 目錄]     把 Published Data Source 的 .tdsx 併入報表
 tmig serve [--fixtures 目錄] [--port 8000]       啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
@@ -538,6 +539,32 @@ def _cmd_extract_compare(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_published_merge(args: argparse.Namespace) -> int:
+    from tmig.parser.published import PublishedError, merge_published
+
+    source: Path = args.path
+    folder: Path = args.published or source.parent / "published"
+    out: Path = args.out or source.with_name(f"{source.stem}.merged.twbx")
+    try:
+        result = merge_published(source, folder, out)
+    except (PublishedError, WorkbookFormatError) as exc:
+        print(f"失敗  {source}：{exc}", file=sys.stderr)
+        return 1
+    if not result.merged and not result.missing:
+        print("報表沒有 Published Data Source，不需要併入")
+    for item in result.merged:
+        detail = f"，萃取 {item.hyper}" if item.hyper else ""
+        note = f"（{item.note}）" if item.note else ""
+        print(f"併入  {item.ref.caption}（{item.ref.content_url}）← {item.file.name}{detail}{note}")
+    for ref in result.missing:
+        print(
+            f"缺少  {ref.caption}（{ref.content_url}）：{folder} 中找不到對應的 .tdsx／.tds",
+            file=sys.stderr,
+        )
+    print(f"→ {result.out}")
+    return 0 if result.ok else 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from tmig_service import serve
@@ -729,6 +756,20 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--data-dir", type=Path, help="新萃取的目錄；預設為報表旁的 data")
     compare.add_argument("--datasource", help="只比對這個資料源（id）")
     compare.set_defaults(handler=_cmd_extract_compare)
+
+    published_parser = commands.add_parser("published", help="Published Data Source")
+    published_commands = published_parser.add_subparsers(
+        dest="published_command", required=True, metavar="子指令"
+    )
+    merge = published_commands.add_parser(
+        "merge", help="把 Published Data Source 的 .tdsx 併入報表，寫出自含的 .twbx"
+    )
+    merge.add_argument("path", type=Path, metavar="報表", help=".twb／.twbx")
+    merge.add_argument(
+        "--published", type=Path, help=".tdsx／.tds 所在的目錄；預設為報表旁的 published"
+    )
+    merge.add_argument("--out", type=Path, help="輸出的 .twbx；預設為 <報表>.merged.twbx")
+    merge.set_defaults(handler=_cmd_published_merge)
 
     serve = commands.add_parser("serve", help="啟動查詢服務與檢視器")
     serve.add_argument(

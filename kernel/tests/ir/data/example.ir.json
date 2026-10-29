@@ -131,6 +131,7 @@
         }
       ],
       "filters": [],
+      "published": null,
       "source_ref": "/workbook/datasources/datasource[2]"
     }
   ],

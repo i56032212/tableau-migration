@@ -27,6 +27,7 @@ from tmig.ir.models import (
     LogicalTable,
     ModelRelation,
     Parameter,
+    PublishedSource,
     SourceColumn,
     TableRelation,
     Unsupported,
@@ -201,7 +202,11 @@ class DatasourceParser:
         placeholder = ExtractConnection(kind="extract", hyper_file="(無)", table="(無)")
         published = conn.get("class") == "sqlproxy"
         if published:
-            ctx.flag(el, f"資料源「{self.caption}」是 Published Data Source，v0 不支援")
+            ctx.flag(
+                el,
+                f"資料源「{self.caption}」是 Published Data Source，需先下載 .tdsx 併入報表"
+                "（tools/tableau_server fetch 會自動下載併入，或 tmig published merge）",
+            )
             if not ctx.lenient:
                 return None
         located = None if published else self._data_connection(conn)
@@ -228,6 +233,7 @@ class DatasourceParser:
             caption=self.caption,
             connection=connection,
             week_start=self._week_start(),
+            published=None if published else self._published(),
         )
         self._fields(state, conn, data_conn, via_extract)
         if not state.fields:
@@ -246,6 +252,20 @@ class DatasourceParser:
         return state
 
     # ------------------------------------------------------------ 連線
+
+    def _published(self) -> PublishedSource | None:
+        """併入報表的 Published Data Source（N8）：repository-location 指向伺服器上的資料源。"""
+        location = child(self.el, "repository-location")
+        if location is None or not (location.get("path") or "").rstrip("/").endswith("datasources"):
+            return None
+        content_url = location.get("id") or ""
+        if not content_url:
+            return None
+        return PublishedSource(
+            content_url=content_url,
+            site=location.get("site") or None,
+            revision=location.get("revision") or None,
+        )
 
     def _data_connection(self, conn: etree._Element) -> tuple[etree._Element, bool] | None:
         """找出指向 .hyper 的連線：嵌入式萃取，或直接以 .hyper 為來源。"""

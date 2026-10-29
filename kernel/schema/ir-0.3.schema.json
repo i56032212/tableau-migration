@@ -995,6 +995,18 @@
           "title": "Filters",
           "type": "array"
         },
+        "published": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublishedSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -2003,6 +2015,47 @@
         "field"
       ],
       "title": "ParameterAction",
+      "type": "object"
+    },
+    "PublishedSource": {
+      "additionalProperties": false,
+      "description": "Published Data Source：定義已由 .tdsx 併入報表（N8），原本在 Tableau Server 上。",
+      "properties": {
+        "content_url": {
+          "description": "資料源在 Tableau Server 上的網址名稱",
+          "minLength": 1,
+          "title": "Content Url",
+          "type": "string"
+        },
+        "site": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Site"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        }
+      },
+      "required": [
+        "content_url"
+      ],
+      "title": "PublishedSource",
       "type": "object"
     },
     "RangeFilter": {

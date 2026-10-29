@@ -15,6 +15,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     Parameter,
+    PublishedSource,
     Unsupported,
     WeekDay,
     Zone,
@@ -57,6 +58,8 @@ class DsState:
     analyzer: Analyzer | None = None
     levels: dict[str, CalcLevel | None] = field(default_factory=dict)
     """計算欄位 id → 計算層級；公式無法分析時為 None。"""
+    published: PublishedSource | None = None
+    """已併入的 Published Data Source（N8）。"""
 
     def add_field(self, data_field: DataField) -> None:
         self.fields.append(data_field)

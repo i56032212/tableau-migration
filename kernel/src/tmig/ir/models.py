@@ -506,6 +506,14 @@ FieldFilter = CategoricalFilter | RangeFilter | TopNFilter | ConditionFilter | R
 """單一欄位的篩選（TupleFilter 以外）。"""
 
 
+class PublishedSource(IRModel):
+    """Published Data Source：定義已由 .tdsx 併入報表（N8），原本在 Tableau Server 上。"""
+
+    content_url: str = Field(min_length=1, description="資料源在 Tableau Server 上的網址名稱")
+    site: str | None = None
+    revision: str | None = None
+
+
 class Datasource(IRModel):
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱")
@@ -514,6 +522,9 @@ class Datasource(IRModel):
     settings: DatasourceSettings
     fields: list[DataField] = Field(min_length=1)
     filters: list[Filter] = Field(default_factory=list, description="萃取篩選與資料源篩選")
+    published: PublishedSource | None = Field(
+        default=None, description="來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")

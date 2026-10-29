@@ -31,6 +31,9 @@ uv run python tools/tableau_server/tableau_server.py fetch --server https://tabl
   `TABLEAU_PAT_SECRET`，沒有就提示輸入）、`--user` 帳號密碼（`TABLEAU_PASSWORD` 或提示輸入）、
   `--browser-session` 沿用 fetch_expected `--login` 的瀏覽器登入（只能 SSO 登入時使用；實驗性）
 - 工具不會把密鑰、密碼或登入權杖寫進任何檔案；憑證以作業系統的信任清單驗證，公司內部 CA 也適用（必要時 `--ca-bundle`）
+- 連到 Published Data Source 的報表：`fetch` 一併下載資料源的 .tdsx（含萃取，需要資料源的下載權限）併入報表，
+  原本的報表放在 `original/`、資料源在 `published/`；`inventory` 預設下載資料源的定義（不含萃取，放在 `datasources/`，
+  沒有更新時沿用）併入後再盤點，`--no-published` 可關閉
 - `inventory` 的其他選項：`--project`（可重複）、`--limit N` 試跑、`--no-download` 只列清單、`--refresh` 全部重新下載
   （預設只重新下載有更新的報表）
 - 輸出在 `inventory/`（不進版控）：`inventory.md`、`inventory.csv`（Excel 可直接開）、`features.csv`
