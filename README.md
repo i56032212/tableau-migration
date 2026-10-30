@@ -25,14 +25,16 @@
 檢視器的篩選群組、自動尺寸、各種動作、群組與篩選條件都有端到端測試。以 156 份公開的 .twb／.twbx 盤點，符合起步條件的 75 份中，
 解析後沒有不支援元素、可以直接開始的從擴充前的 1 份增加到 19 份。
 
-第三階段（來源資料庫、權限、排程）進行中。Live 連線已能查詢：工作表的 SQL 中不含 Table Calculation 的部分
+第三階段（來源資料庫、權限、排程）的功能都已完成，連線設定待公司環境實測（N4）。Live 連線已能查詢：工作表的 SQL 中不含 Table Calculation 的部分
 轉成來源資料庫的方言下推執行，結果取回 DuckDB 再算 Table Calculation（兩段式執行）。兩份報表的萃取資料載入
 PostgreSQL 與 Spark（Databricks 的引擎）、資料源改成 Live 連線後，116 項計算比對全部通過，每個公式函式也都實跑比對；
 Oracle 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
 Relationship 模型（見「Relationship 模型」）；公開報表盤點中符合起步條件的從 75 份增加到 90 份。
 萃取型的報表可以由萃取層從來源資料庫更新（完整或增量、原子替換），並與 Tableau 的萃取比對（見「萃取層」）。
 以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）；
-查詢服務與檢視器可以要求登入（反向代理標頭或 OIDC，開發模式可切換使用者；見「身分驗證」）。
+查詢服務與檢視器可以要求登入（反向代理標頭或 OIDC，開發模式可切換使用者；見「身分驗證」），並依 Tableau Server 匯出的
+Project、workbook、view 權限開放（見「權限」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
+PDF、PNG 寄出訂閱（見「排程與訂閱」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
@@ -70,7 +72,8 @@ uv run python scripts/check.py --fix # 先自動修正 lint 與格式
    也可以直接 `uv run tmig inventory <資料夾>`
 2. **下載**：`tableau_server.py fetch`（同上的登入參數）`--workbook "<報表名稱>"`，下載含萃取的 .twbx 到
    `fixtures/<報表>/`，並產生起始的 `cases.yaml`。報表連到 Published Data Source 時，一併下載資料源的
-   .tdsx（含萃取）併入報表（見「Published Data Source」）
+   .tdsx（含萃取）併入報表（見「Published Data Source」）；報表用到使用者函式時，以登入帳號填好 `user`
+   （預期結果要用同一個帳號抓取，見「列層級權限」）
 3. **解析**：`uv run tmig parse fixtures/<報表>/<報表>.twbx --out fixtures/<報表>/golden.ir.json`
    - 結束碼 3 表示有不支援的元素，清單會印出來；unsupported 必須是空的才往下
    - 人工對照 Tableau Desktop 核對 IR（欄位、篩選、計算方向、區塊位置）後提交，之後測試會要求解析結果與它逐字相同
@@ -81,6 +84,10 @@ uv run python scripts/check.py --fix # 先自動修正 lint 與格式
 7. **欄位對照**：`uv run tmig mapping suggest fixtures/<報表>`，人工確認後把 `confirmed` 改成 `true`
 8. **計算比對**：`uv run tmig verify fixtures/<報表>`，差異報告在 `report/calc.json`；修到 fail 為 0
 9. **目視與簽核**：`uv run tmig serve` 開 dashboard；`uv run python tools/compare_screens/compare_screens.py fixtures/<報表>` 產生並列頁給擁有者簽核
+10. **上線設定**（需要站台管理員）：`tableau_server.py directory`、`permissions`、`schedules --timezone <時區>` 匯出
+    使用者與群組、權限、排程與訂閱；依 `service/auth.example.toml`、`service/mail.example.toml` 寫好設定後，
+    `uv run tmig serve --auth auth.toml` 提供檢視，`uv run tmig schedule serve schedules.json --mail mail.toml --auth auth.toml`
+    執行萃取更新與訂閱（見「身分驗證」「權限」「排程與訂閱」）
 
 除錯時可以單獨看某張工作表的 SQL 與結果：
 
@@ -295,16 +302,18 @@ tableau-migration/
 │   ├── census/             功能盤點與起步條件檢查
 │   ├── formula/            公式解析、語法樹、型別與層級判定
 │   ├── planner/            篩選與參數狀態、登入者的身分與列層級權限
-│   ├── access/             使用者目錄（Tableau Server 的使用者與群組）
+│   ├── access/             使用者目錄與權限（Tableau Server 的使用者、群組、Project／workbook／view 權限）
+│   ├── schedule/           排程與訂閱的模型、下次執行時間、排程器
+│   ├── catalog.py          報表目錄與 Tableau workbook、Published Data Source 的對應
 │   ├── sqlgen/             公式與工作表 → DuckDB SQL（依運算順序分段）、方言轉譯
 │   ├── data/               Hyper 匯入、DuckDB 唯讀執行器、Live 連線（兩段式執行、連線設定）
 │   ├── render/             Vega-Lite 規格與數字格式
 │   ├── verify/             cases.yaml、欄位對照、正規化、比對、差異報告
 │   └── cli.py              tmig 命令列
 ├── kernel/schema/          IR 的 JSON Schema（由程式產生）
-├── service/                FastAPI 查詢服務（tmig_service）
+├── service/                FastAPI 查詢服務（tmig_service：身分驗證、權限、訂閱、使用紀錄）
 ├── web/                    React＋TypeScript 檢視器（建置結果在 web/dist）
-├── tools/                  Playwright 工具：fetch_expected、compare_screens
+├── tools/                  連 Tableau Server 的工具：tableau_server（盤點、下載、匯出）、fetch_expected、compare_screens
 ├── fixtures/<報表>/         .twbx、golden IR、cases、mapping、預期結果、SQL 與規格快照
 └── scripts/                一鍵檢查、示範報表的建置與獨立計算
 ```
