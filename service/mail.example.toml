@@ -1,0 +1,16 @@
+# 訂閱（Q3）的郵件設定：複製成 mail.toml，以 tmig schedule serve <排程檔> --mail mail.toml --auth auth.toml 使用。
+# 密碼一律寫成 ${環境變數}，不寫進這個檔案。
+
+[smtp]
+host = "smtp.example.com"
+port = 587
+# 587 埠通常用 STARTTLS；465 埠改成 ssl = true、starttls = false
+starttls = true
+ssl = false
+username = "bi-bot"
+password = "${TMIG_SMTP_PASSWORD}"
+sender = "報表平台 <bi@example.com>"
+
+[site]
+# 郵件中每個 view 的連結
+url = "https://bi.example.com"

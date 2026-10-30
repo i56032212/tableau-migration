@@ -602,6 +602,7 @@ def _schedule_inputs(args: argparse.Namespace):
 
 
 def _scheduler(args: argparse.Namespace):
+    """（工作, 排程器, 結束時的清理）。"""
     import datetime as dt
 
     from tmig.schedule.runner import Handler, JobKind, Scheduler, extract_handler, utc_now
@@ -621,12 +622,23 @@ def _scheduler(args: argparse.Namespace):
     if subscription is not None:
         handlers["subscription"] = subscription
     state_dir = args.state_dir or args.schedules.parent / "schedule-state"
-    return jobs, Scheduler(jobs, timezone, handlers, state_dir, clock)
+    cleanup = subscription.close if subscription is not None else (lambda: None)
+    return jobs, Scheduler(jobs, timezone, handlers, state_dir, clock), cleanup
 
 
 def _subscription_handler(args: argparse.Namespace):
-    """訂閱的處理程式（Q3）；尚未設定時為 None（訂閱的工作記為失敗）。"""
-    return None
+    """訂閱的處理程式（Q3）：需要郵件設定檔（--mail）與身分驗證設定檔中的使用者目錄（--auth 或 TMIG_AUTH）；
+    沒有郵件設定時為 None（訂閱的工作記為失敗）。"""
+    if not getattr(args, "mail", None):
+        return None
+    try:
+        from tmig_service.auth import load_auth
+        from tmig_service.subscriptions import Renderer, SubscriptionHandler, load_mail
+    except ImportError as exc:
+        raise ValueError("訂閱需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync") from exc
+    mail = load_mail(args.mail)
+    renderer = Renderer(args.fixtures, load_auth(args.auth), getattr(args, "web", None))
+    return SubscriptionHandler(renderer, mail)
 
 
 def _cmd_schedule_list(args: argparse.Namespace) -> int:
@@ -672,11 +684,14 @@ def _cmd_schedule_tick(args: argparse.Namespace) -> int:
     from tmig.schedule.model import ScheduleError
 
     try:
-        _, scheduler = _scheduler(args)
-    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        _, scheduler, cleanup = _scheduler(args)
+    except (ScheduleError, FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
-    records = scheduler.tick()
+    try:
+        records = scheduler.tick()
+    finally:
+        cleanup()
     for record in records:
         print(f"{'通過' if record.status == 'ok' else '失敗'}  {record.job}：{record.detail}")
     if not records:
@@ -688,18 +703,23 @@ def _cmd_schedule_run(args: argparse.Namespace) -> int:
     from tmig.schedule.model import ScheduleError
 
     try:
-        jobs, scheduler = _scheduler(args)
-    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        jobs, scheduler, cleanup = _scheduler(args)
+    except (ScheduleError, FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
     job = next((j for j in jobs if j.id == args.job), None)
     if job is None:
+        cleanup()
         print(f"失敗：找不到工作 {args.job}", file=sys.stderr)
         return 1
     if not job.runnable:
+        cleanup()
         print(f"失敗：{job.id} 不能執行：{job.problem}", file=sys.stderr)
         return 1
-    record = scheduler.run(job)
+    try:
+        record = scheduler.run(job)
+    finally:
+        cleanup()
     print(f"{'通過' if record.status == 'ok' else '失敗'}  {record.job}：{record.detail}")
     return 0 if record.status == "ok" else 1
 
@@ -708,8 +728,8 @@ def _cmd_schedule_serve(args: argparse.Namespace) -> int:
     from tmig.schedule.model import ScheduleError
 
     try:
-        jobs, scheduler = _scheduler(args)
-    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        jobs, scheduler, cleanup = _scheduler(args)
+    except (ScheduleError, FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
     print(f"排程器：{sum(1 for j in jobs if j.runnable)} 個工作，狀態在 {scheduler.state_dir}")
@@ -722,6 +742,8 @@ def _cmd_schedule_serve(args: argparse.Namespace) -> int:
         )
     except KeyboardInterrupt:
         print("排程器已停止")
+    finally:
+        cleanup()
     return 0
 
 
@@ -971,6 +993,16 @@ def build_parser() -> argparse.ArgumentParser:
             "--state-dir", type=Path, help="狀態與執行紀錄的目錄；預設為排程檔旁的 schedule-state"
         )
         sub.add_argument("--config", type=Path, help="連線設定檔；預設讀環境變數 TMIG_CONNECTIONS")
+        if name != "list":
+            sub.add_argument(
+                "--mail", type=Path, help="郵件設定檔（訂閱；見 tmig_service.subscriptions）"
+            )
+            sub.add_argument(
+                "--auth",
+                type=Path,
+                help="身分驗證設定檔（訂閱者的使用者目錄與權限）；預設讀 TMIG_AUTH",
+            )
+            sub.add_argument("--web", type=Path, help="檢視器的建置目錄；預設為 web/dist")
         if name in ("list", "tick"):
             sub.add_argument("--now", help="以這個時間計算（ISO 格式含時區；測試用）")
         if name == "run":

@@ -243,6 +243,15 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
   再從現在起算下一次。同時到期的工作依 Tableau 的優先順序（數字小的先）逐一執行，一個失敗不影響其他工作；
   每次的結果（到期、開始、結束時間、成功或失敗與說明）逐行寫入 `runs.jsonl`
 
+訂閱（`service/src/tmig_service/subscriptions.py`）：排程器加上 `--mail mail.toml`（範本見 `service/mail.example.toml`）與
+`--auth auth.toml`（使用者目錄與權限）後執行訂閱的工作：
+
+- 以訂閱者的身分開啟檢視器（排程器在本機另外啟動一個只接受簽章工作階段的查詢服務），列層級權限與權限都照套；
+  沒有權限、不在使用者目錄中或沒有 email 時這次訂閱失敗並記錄原因
+- view 的訂閱為該 dashboard 或工作表，整份報表的訂閱為每個 dashboard（沒有時為每張工作表）；
+  圖片內嵌在郵件內文、PDF（依紙張大小與方向）合併成一個附件，內文附每個 view 的連結
+- view 沒有資料、而訂閱設定為不寄送時不寄（與 Tableau 的「view 為空時不傳送」相同）
+
 ## 指令
 
 | 指令 | 用途 |

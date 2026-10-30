@@ -12,7 +12,7 @@ from pathlib import Path
 import uvicorn
 
 from tmig_service.app import create_app
-from tmig_service.auth import AuthSettings
+from tmig_service.auth import Authenticator, AuthSettings
 
 
 def free_port() -> int:
@@ -26,7 +26,7 @@ def running_server(
     fixtures: Path,
     web_dist: Path | None = None,
     port: int | None = None,
-    auth: AuthSettings | None = None,
+    auth: AuthSettings | Authenticator | None = None,
 ) -> Iterator[str]:
     """啟動服務並回傳網址；離開時關閉。auth 省略時不驗證身分（不讀環境變數 TMIG_AUTH）。"""
     chosen = port or free_port()

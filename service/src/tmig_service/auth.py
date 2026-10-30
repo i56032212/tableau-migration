@@ -64,7 +64,10 @@ AUTH_ENV = "TMIG_AUTH"
 SESSION_COOKIE = "tmig_session"
 LOGIN_COOKIE = "tmig_login"
 MODES = ("none", "dev", "proxy", "oidc")
-Mode = Literal["none", "dev", "proxy", "oidc"]
+"""設定檔可用的模式。"""
+Mode = Literal["none", "dev", "proxy", "oidc", "internal"]
+"""internal：只接受以伺服器金鑰簽章的工作階段 cookie，沒有登入入口；訂閱（Q3）以訂閱者的身分產生檔案時，
+由排程器啟動只在本機的查詢服務使用，不能寫在設定檔中。"""
 SIGNING_ALGORITHMS = ("RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384")
 """ID Token 接受的簽章演算法：只接受非對稱金鑰（不接受 none 與以 client_secret 簽的 HS256）。"""
 
@@ -461,7 +464,10 @@ class Authenticator:
             return self._proxy(request)
         session = self.codec.loads(request.cookies.get(SESSION_COOKIE))
         if session is None:
-            raise HTTPException(401, "請先登入" if mode == "oidc" else "請選擇使用者（開發模式）")
+            message = {"oidc": "請先登入", "dev": "請選擇使用者（開發模式）"}.get(
+                mode, "沒有登入者"
+            )
+            raise HTTPException(401, message)
         user = SessionUser.model_validate(session)
         return self.resolve(user.login, user.groups, user.name)
 
@@ -485,6 +491,11 @@ class Authenticator:
             return list(self.settings.dev_users)
         directory = self.settings.directory
         return [u.name for u in directory.users] if directory is not None else []
+
+    def session_token(self, login: str, seconds: float | None = None) -> str:
+        """工作階段 cookie 的值（訂閱以訂閱者的身分開啟檢視器時使用）。"""
+        hours = self.settings.session_hours * 3600
+        return self.codec.dumps(SessionUser(login=login).model_dump(), seconds or hours)
 
     def session_cookie(self, response: Response, user: SessionUser) -> None:
         seconds = self.settings.session_hours * 3600
