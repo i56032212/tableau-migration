@@ -15,6 +15,7 @@ tmig extract refresh <報表> [--incremental]       從來源資料庫更新萃�
 tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取比對（列數、總和、最小值、最大值）
 tmig published merge <報表> [--published 目錄]     把 Published Data Source 的 .tdsx 併入報表
 tmig schedule list|tick|run|serve <排程檔>         排程器：萃取更新與訂閱（Q2、Q3）
+tmig usage summary <使用紀錄目錄> [--days 90]      每份報表的檢視次數、使用者數與最後一次檢視（R1）
 tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]  啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
@@ -747,6 +748,70 @@ def _cmd_schedule_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_usage_summary(args: argparse.Namespace) -> int:
+    import csv
+    import datetime as dt
+
+    try:
+        from tmig_service.usage import UsageLog, summarize
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    from tmig.catalog import report_directories
+    from tmig.verify.run import load_fixture_ir
+
+    if args.days < 1:
+        print("失敗：--days 至少為 1", file=sys.stderr)
+        return 1
+    since = dt.datetime.now(dt.UTC) - dt.timedelta(days=args.days)
+    names: dict[str, str] = {}
+    if args.fixtures is not None:
+        names = {
+            d.name: load_fixture_ir(d).workbook.name for d in report_directories(args.fixtures)
+        }
+    usage = summarize(UsageLog(args.usage_dir).visits(since), names)
+    print(f"最近 {args.days} 天（{since.date()} 起）")
+    print("| 報表 | 檢視次數 | 使用者數 | 最後一次檢視 |")
+    print("| --- | ---: | ---: | --- |")
+    for item in usage:
+        last = item.last.astimezone().strftime("%Y-%m-%d %H:%M") if item.last else "—"
+        print(f"| {item.name}（{item.view}） | {item.visits} | {len(item.users)} | {last} |")
+    unused = [u for u in usage if u.visits == 0]
+    if unused:
+        print(f"期間內沒有檢視的報表 {len(unused)} 份：{'、'.join(u.name for u in unused)}")
+    if args.csv is not None:
+        args.csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.csv.open("w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(
+                ["報表", "報表名稱", "view", "檢視次數", "使用者數", "最後一次檢視（UTC）"]
+            )
+            for item in usage:
+                writer.writerow(
+                    [
+                        item.view,
+                        item.name,
+                        "",
+                        item.visits,
+                        len(item.users),
+                        item.last.isoformat() if item.last else "",
+                    ]
+                )
+                for view in item.views.values():
+                    writer.writerow(
+                        [
+                            item.view,
+                            item.name,
+                            view.view,
+                            view.visits,
+                            len(view.users),
+                            view.last.isoformat() if view.last else "",
+                        ]
+                    )
+        print(f"→ {args.csv}")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from tmig_service import serve
@@ -756,7 +821,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         return 1
     print(f"查詢服務：http://{args.host}:{args.port}（讀取 {args.fixtures}）")
     try:
-        serve(args.fixtures, args.host, args.port, args.web, args.auth)
+        serve(args.fixtures, args.host, args.port, args.web, args.auth, args.usage_dir)
     except AuthError as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
@@ -1019,7 +1084,25 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--auth", type=Path, help="身分驗證設定檔（TOML）；預設讀環境變數 TMIG_AUTH，沒有時不驗證"
     )
+    serve.add_argument(
+        "--usage-dir",
+        type=Path,
+        help="使用紀錄的目錄；預設讀環境變數 TMIG_USAGE_DIR，沒有時為報表目錄旁的 usage",
+    )
     serve.set_defaults(handler=_cmd_serve)
+
+    usage_parser = commands.add_parser("usage", help="使用紀錄")
+    usage_commands = usage_parser.add_subparsers(
+        dest="usage_command", required=True, metavar="子指令"
+    )
+    summary = usage_commands.add_parser(
+        "summary", help="每份報表的檢視次數、使用者數與最後一次檢視（含沒有檢視的報表）"
+    )
+    summary.add_argument("usage_dir", type=Path, metavar="使用紀錄目錄")
+    summary.add_argument("--fixtures", type=Path, help="報表目錄：列出期間內沒有檢視的報表")
+    summary.add_argument("--days", type=int, default=90, help="統計最近幾天（預設 90）")
+    summary.add_argument("--csv", type=Path, help="另外寫成 CSV（Excel 可直接開）")
+    summary.set_defaults(handler=_cmd_usage_summary)
 
     ir_parser = commands.add_parser("ir", help="IR 工具")
     ir_commands = ir_parser.add_subparsers(dest="ir_command", required=True, metavar="子指令")

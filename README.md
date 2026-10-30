@@ -252,6 +252,16 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
   圖片內嵌在郵件內文、PDF（依紙張大小與方向）合併成一個附件，內文附每個 view 的連結
 - view 沒有資料、而訂閱設定為不寄送時不寄（與 Tableau 的「view 為空時不傳送」相同）
 
+## 使用紀錄
+
+查詢服務記錄每次檢視的使用者、報表與時間（`service/src/tmig_service/usage.py`），供報表管理與廢棄判定，不做完整稽核：
+
+- 檢視器每開啟一個 dashboard 或工作表記一次（切換篩選不算新的檢視）；使用者取自登入者，沒有權限的檢視不記錄
+- 逐行寫入使用紀錄目錄的 `<年-月>.jsonl`（`tmig serve --usage-dir`，或環境變數 `TMIG_USAGE_DIR`；
+  預設為報表目錄旁的 `usage/`），只有時間、使用者、報表與 view，不記錄 IP
+- `GET /api/usage?days=90`（有權限檔時限管理員）與 `uv run tmig usage summary usage --fixtures fixtures --csv usage.csv`：
+  每份報表與 view 的檢視次數、不重複使用者數與最後一次檢視，期間內沒有檢視的報表也列出（廢棄候選）
+
 ## 指令
 
 | 指令 | 用途 |
@@ -270,8 +280,9 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 | `tmig extract refresh <報表> [--incremental] [--out-dir 目錄]` | 從來源資料庫更新萃取的 DuckDB 檔：完整或增量、原子替換（N7） |
 | `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
 | `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
-| `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2） |
-| `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]` | 查詢服務與檢視器（F2–F4；身分驗證見「身分驗證」） |
+| `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2、Q3：`--mail`、`--auth`） |
+| `tmig usage summary <使用紀錄目錄> [--fixtures 目錄] [--days 90] [--csv 檔案]` | 每份報表的檢視次數、使用者數與最後一次檢視（R1） |
+| `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔] [--usage-dir 目錄]` | 查詢服務與檢視器（F2–F4；身分驗證與使用紀錄見各節） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
 ## 專案結構

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +39,18 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def server(fixtures: Path) -> Any:
-    with running_server(fixtures, DIST, auth=AuthSettings(mode="dev", directory=DIRECTORY)) as url:
+def usage(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("usage")
+
+
+@pytest.fixture(scope="module")
+def server(fixtures: Path, usage: Path) -> Any:
+    settings = AuthSettings(mode="dev", directory=DIRECTORY)
+    with running_server(fixtures, DIST, auth=settings, usage_dir=usage) as url:
         yield url
 
 
-def test_dev_mode_user_switching(server: str, fixtures: Path) -> None:
+def test_dev_mode_user_switching(server: str, fixtures: Path, usage: Path) -> None:
     from playwright.sync_api import sync_playwright
 
     board = load_ir(fixtures / "secure" / "golden.ir.json").dashboards[0]
@@ -76,6 +83,17 @@ def test_dev_mode_user_switching(server: str, fixtures: Path) -> None:
         assert page.locator(".userbar select").input_value() == "alice"
         assert choose("carol") == {"Central", "South"}
         assert choose("dave") == {"Central", "East", "West"}  # 前 3 名
+        # 使用紀錄：每次開啟 dashboard 記一次，使用者為當時的登入者
+        visits = [
+            json.loads(line)
+            for path in usage.glob("*.jsonl")
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [(v["user"], v["view"]) for v in visits] == [
+            ("alice", board.name),
+            ("carol", board.name),
+            ("dave", board.name),
+        ]
 
         # 登出後回到選使用者的畫面
         with page.expect_navigation():

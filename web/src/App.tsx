@@ -131,6 +131,13 @@ function WorkbookPage({
     if (ir) setView(caseState(ir, cases.find((c) => c.name === caseName)));
   }, [ir, cases, caseName]);
 
+  // 使用紀錄：每開啟一個 dashboard 或工作表記一次（切換篩選不算）
+  const viewId = route.page === "dashboard" ? route.dashboard : route.page === "sheet" ? route.worksheet : null;
+  const known = ir !== null && viewId !== null && [...ir.dashboards, ...ir.worksheets].some((v) => v.id === viewId);
+  useEffect(() => {
+    if (known && viewId) void api.visit(workbook, viewId);
+  }, [workbook, viewId, known]);
+
   if (error) return <main className="error">載入失敗：{error}</main>;
   if (!ir || !view) return <main>載入中…</main>;
 

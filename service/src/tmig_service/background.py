@@ -27,11 +27,12 @@ def running_server(
     web_dist: Path | None = None,
     port: int | None = None,
     auth: AuthSettings | Authenticator | None = None,
+    usage_dir: Path | None = None,
 ) -> Iterator[str]:
     """啟動服務並回傳網址；離開時關閉。auth 省略時不驗證身分（不讀環境變數 TMIG_AUTH）。"""
     chosen = port or free_port()
     config = uvicorn.Config(
-        create_app(fixtures, web_dist, auth=auth or AuthSettings()),
+        create_app(fixtures, web_dist, auth=auth or AuthSettings(), usage_dir=usage_dir),
         host="127.0.0.1",
         port=chosen,
         log_level="warning",

@@ -11,6 +11,8 @@ API：
 - ``GET  /api/workbooks/{wb}/cases``：cases.yaml 的篩選組合（已轉成篩選狀態），供檢視器切換
 - ``GET  /api/workbooks/{wb}/files/{path}``：.twbx 內的圖片（圖片區塊與圖片按鈕）
 - ``GET  /api/me``：目前的登入者與身分驗證模式；``/auth/*``：登入、登出與開發模式的切換使用者
+- ``POST /api/workbooks/{wb}/views/{view}/visit``：檢視器開啟一個 dashboard 或工作表（使用紀錄，R1）
+- ``GET  /api/usage?days=90``：每份報表與 view 的檢視次數、使用者數與最後一次檢視（有權限檔時限管理員）
 
 其餘路徑提供檢視器（web/dist）。
 
@@ -24,7 +26,9 @@ API：
 
 from __future__ import annotations
 
+import datetime as dt
 import mimetypes
+import os
 import threading
 import zipfile
 from collections.abc import AsyncIterator
@@ -37,6 +41,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
+from tmig.access.permissions import ADMIN_ROLES
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
@@ -57,6 +62,7 @@ from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
 from tmig_service.access import Authorizer, Grant, viewer_ir
 from tmig_service.auth import Authenticator, AuthSettings, auth_router, load_auth
+from tmig_service.usage import UsageLog, Visit, summarize
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -142,9 +148,15 @@ def create_app(
     web_dist: Path | None = None,
     runtime: DataRuntime | None = None,
     auth: AuthSettings | Authenticator | None = None,
+    usage_dir: Path | None = None,
 ) -> FastAPI:
-    """auth：身分驗證的設定；省略時依環境變數 TMIG_AUTH 讀取（沒有設定時不驗證）。"""
+    """auth：身分驗證的設定；省略時依環境變數 TMIG_AUTH 讀取（沒有設定時不驗證）。
+    usage_dir：使用紀錄的目錄；省略時依環境變數 TMIG_USAGE_DIR，都沒有時不記錄。"""
     workspace = Workspace(fixtures or REPO_ROOT / "fixtures")
+    usage_path = usage_dir or (
+        Path(os.environ["TMIG_USAGE_DIR"]) if os.environ.get("TMIG_USAGE_DIR") else None
+    )
+    usage = UsageLog(usage_path) if usage_path is not None else None
     dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
     data = runtime or DataRuntime()
     authenticator = auth if isinstance(auth, Authenticator) else Authenticator(auth or load_auth())
@@ -170,6 +182,51 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/api/workbooks/{wb}/views/{view_id}/visit", status_code=204)
+    def visit(wb: str, view_id: str, user: User) -> Response:
+        """檢視器開啟一個 dashboard 或工作表；使用者取自登入者，沒有權限的檢視回應 404 不記錄。"""
+        loaded, grant = granted(wb, user)
+        ir = loaded.ir
+        board = next((d for d in ir.dashboards if d.id == view_id), None)
+        sheet = next((w for w in ir.worksheets if w.id == view_id), None)
+        if board is not None and grant.dashboard_allowed(board.name):
+            name, kind = board.name, "dashboard"
+        elif sheet is not None and grant.worksheet_allowed(ir, sheet.id):
+            name, kind = sheet.name, "worksheet"
+        else:
+            raise HTTPException(404, f"找不到 view「{view_id}」")
+        if usage is not None:
+            usage.record(
+                Visit(
+                    time=dt.datetime.now(dt.UTC),
+                    user=user.username if user is not None else None,
+                    workbook=wb,
+                    workbook_name=ir.workbook.name,
+                    view=name,
+                    view_id=view_id,
+                    kind=kind,  # type: ignore[arg-type]
+                )
+            )
+        return Response(status_code=204)
+
+    @app.get("/api/usage")
+    def usage_summary(user: User, days: int = 90) -> dict[str, Any]:
+        """期間內每份報表與 view 的使用量（沒有檢視的報表也列出）；有權限檔時只有管理員可以看。"""
+        if authorizer.permissions is not None and (
+            user is None or (user.site_role or "") not in ADMIN_ROLES
+        ):
+            raise HTTPException(403, "使用紀錄只有管理員可以看")
+        if days < 1:
+            raise HTTPException(422, "days 至少為 1")
+        since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+        names = {name: workspace.get(name).ir.workbook.name for name in workspace.names()}
+        visits = usage.visits(since) if usage is not None else iter(())
+        return {
+            "since": since.isoformat(),
+            "recording": usage is not None,
+            "workbooks": [u.to_dict() for u in summarize(visits, names)],
+        }
 
     @app.get("/api/workbooks")
     def workbooks(user: User) -> list[dict[str, Any]]:
@@ -427,8 +484,9 @@ def serve(
     port: int = 8000,
     web_dist: Path | None = None,
     auth: Path | None = None,
+    usage_dir: Path | None = None,
 ) -> None:
-    """auth：身分驗證設定檔；省略時讀環境變數 TMIG_AUTH。"""
+    """auth：身分驗證設定檔；省略時讀環境變數 TMIG_AUTH。usage_dir：使用紀錄的目錄（預設為報表目錄旁的 usage）。"""
     import sys
 
     import uvicorn
@@ -442,6 +500,14 @@ def serve(
     elif settings.mode == "dev":
         print("注意：開發模式，任何人都可以切換成任何使用者，不可用於正式環境", file=sys.stderr)
     # 不依 X-Forwarded-For 改寫來源位址：反向代理模式以實際連線的位址判斷是否信任
+    usage = usage_dir or (
+        Path(os.environ["TMIG_USAGE_DIR"])
+        if os.environ.get("TMIG_USAGE_DIR")
+        else fixtures.resolve().parent / "usage"
+    )
     uvicorn.run(
-        create_app(fixtures, web_dist, auth=settings), host=host, port=port, proxy_headers=False
+        create_app(fixtures, web_dist, auth=settings, usage_dir=usage),
+        host=host,
+        port=port,
+        proxy_headers=False,
     )

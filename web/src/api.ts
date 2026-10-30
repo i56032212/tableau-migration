@@ -41,6 +41,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(state),
     }),
+  /** 使用紀錄：開啟一個 dashboard 或工作表（R1）；失敗不影響檢視 */
+  visit: (id: string, view: string) =>
+    fetch(`${wb(id)}/views/${encodeURIComponent(view)}/visit`, { method: "POST" }).catch(() => undefined),
   domain: (id: string, fieldKey: string, kind?: "values" | "range") =>
     request<Domain>(`${wb(id)}/fields/${encodeURIComponent(fieldKey)}/domain`, {
       method: "POST",

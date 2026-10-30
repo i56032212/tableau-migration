@@ -29,3 +29,6 @@ fixtures/*/compare/
 
 # tools/tableau_server 的盤點輸出（含從 Tableau Server 下載的報表結構）
 /inventory/
+
+# 查詢服務的使用紀錄（tmig serve 預設寫在報表目錄旁的 usage/）
+/usage/
