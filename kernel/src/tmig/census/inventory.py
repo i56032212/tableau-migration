@@ -26,7 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from tmig.census.collect import features_outside_v0, run_census
-from tmig.census.model import CensusReport
+from tmig.census.model import CensusReport, ServerConnection
 from tmig.census.report import render_markdown
 from tmig.ir.models import Unsupported
 from tmig.parser.workbook import NoDatasourceError, parse_workbook
@@ -63,6 +63,10 @@ class ServerWorkbook(BaseModel):
     has_extracts: bool | None = None
     connections: list[str] = Field(
         default_factory=list, description="連線類型，例如 oracle、sqlproxy"
+    )
+    connection_details: list[ServerConnection] = Field(
+        default_factory=list,
+        description="各連線是否嵌入密碼（含報表連到的 Published Data Source 的連線）",
     )
     download_error: str | None = None
 
@@ -183,12 +187,20 @@ def _candidate(report: CensusReport, readiness: Readiness) -> Literal["A", "B"] 
 
 
 def inventory_workbook(
-    path: Path, *, extracts_omitted: bool = False
+    path: Path,
+    *,
+    extracts_omitted: bool = False,
+    server_connections: list[ServerConnection] | None = None,
 ) -> tuple[InventoryRow, CensusReport | None, list[Unsupported]]:
-    """盤點一份報表：census＋寬鬆模式解析。任何錯誤都記在列上，不中斷批次。"""
+    """盤點一份報表：census＋寬鬆模式解析。任何錯誤都記在列上，不中斷批次。
+
+    server_connections：Tableau Server 上這份報表的連線設定，檢查檢視者是否用自己的資料庫帳號連線。
+    """
     name = path.stem
     try:
-        report = run_census(path, extracts_omitted=extracts_omitted)
+        report = run_census(
+            path, extracts_omitted=extracts_omitted, server_connections=server_connections or ()
+        )
     except Exception as exc:  # 批次盤點：一份讀不了不影響其他報表
         return (
             InventoryRow(file=str(path), name=name, readiness="error", error=_error(exc)),
@@ -342,8 +354,12 @@ def run_inventory(
     stats: dict[tuple[str, str], FeatureStat] = {}
     used_names: set[str] = set()
     for i, path in enumerate(files, start=1):
-        row, report, unsupported = inventory_workbook(path, extracts_omitted=omitted)
         server = by_file.get(path)
+        row, report, unsupported = inventory_workbook(
+            path,
+            extracts_omitted=omitted,
+            server_connections=server.connection_details if server is not None else None,
+        )
         if server is not None:
             row.name = server.name
             row.project = server.project
@@ -513,8 +529,9 @@ def render_inventory(result: InventoryResult) -> str:
     )
     lines.append("")
     lines.append(
-        "起步條件：單一資料源、資料在 .twbx 的萃取（單表或 Relationship 模型）內或為可連線的資料庫（Live）、"
-        "沒有 Data Blending（用到列層級權限、dashboard 不是固定尺寸時列為需注意）。"
+        "起步條件：資料在 .twbx 的萃取（單表或 Relationship 模型）內或為可連線的資料庫（Live）、"
+        "沒有 Data Blending、連線不依賴檢視者的身分（檢視者用自己的資料庫帳號、Initial SQL 帶入登入者時"
+        "不符合；Windows 整合驗證、Kerberos、OAuth、用到列層級權限、dashboard 不是固定尺寸時列為需注意）。"
         "候選依「不支援數少 → 注意事項少 → 檢視次數多」排序。"
     )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 CENSUS_VERSION = "1"
 
@@ -54,6 +54,38 @@ class DatasourceInfo(BaseModel):
     filter_user_functions: list[str] = Field(description="資料源篩選中出現的使用者函式")
     filter_parameters: list[str] = Field(
         default_factory=list, description="用到使用者函式的資料源篩選中出現的參數"
+    )
+    authentication: list[str] = Field(
+        default_factory=list,
+        description="來源連線的驗證方式（.twb 的 authentication，例如 sspi、oauth）",
+    )
+    server_auth_modes: list[str] = Field(
+        default_factory=list,
+        description="Tableau Server 的驗證設定（.twb 的 workgroup-auth-mode，例如 prompt；as-is 不列）",
+    )
+    initial_sql: bool = Field(default=False, description="來源連線設定了 Initial SQL")
+    initial_sql_user: list[str] = Field(
+        default_factory=list,
+        description="Initial SQL 中用到的使用者參數，例如 [TableauServerUser]",
+    )
+
+
+class ServerConnection(BaseModel):
+    """Tableau Server 上報表或 Published Data Source 的連線設定（REST API；不含帳號與密碼）。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str = Field(description="連線類型，例如 oracle、databricks")
+    datasource: str | None = Field(default=None, description="資料源名稱")
+    published_datasource: str | None = Field(
+        default=None,
+        description="屬於報表連到的 Published Data Source 時，報表中這個資料源的名稱",
+    )
+    embed_password: bool | None = Field(
+        default=None, description="是否嵌入密碼；False 表示檢視者要用自己的帳號連線"
+    )
+    authentication: str | None = Field(
+        default=None, description="驗證方式（REST API 的 authenticationType，新版伺服器才有）"
     )
 
 

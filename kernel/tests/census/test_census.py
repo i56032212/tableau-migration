@@ -43,6 +43,7 @@ def make_twbx(tmp_path: Path, extract: str | None) -> Path:
 
 def test_pilot_passes_every_check(pilot: CensusReport) -> None:
     assert set(statuses(pilot).values()) == {"pass"}
+    assert detail(pilot, "viewer_identity") == "沒有 Live 連線（萃取的資料不依賴檢視者的帳號）"
     assert pilot.grade == "B"
     assert pilot.grade_reasons == [
         "LOD：FIXED 1",
@@ -133,10 +134,11 @@ def test_twbx_extract_matched_by_file_name(tmp_path: Path) -> None:
 
 
 def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
+    # 多個資料源已支援（各工作表查詢自己的資料源），不再是起步條件
     assert statuses(problems) == {
-        "single_datasource": "fail",
         "data_access": "fail",
         "single_table": "pass",
+        "viewer_identity": "pass",  # Oracle 以帳號密碼連線，沒有 Initial SQL
         "no_rls": "warn",  # 列層級權限已支援（P1），提醒驗證時設定 user
         "no_blending": "fail",
         "fixed_dashboards": "warn",
@@ -219,7 +221,7 @@ def test_markdown_report(pilot: CensusReport, problems: CensusReport) -> None:
     assert "| 函式 | 用到的計算欄位數 | v0 函式集 |" in text
     assert "| Overview | fixed 1200×800 |" in text
     bad = render_markdown(problems)
-    assert "- 起步條件：不符合 3 項" in bad  # 列層級權限已支援（P1）
+    assert "- 起步條件：不符合 2 項" in bad  # 列層級權限（P1）、多個資料源已支援
     assert 'IF [REGION] IN ("North", "South") THEN ATTR([REGION]) ELSE "[Other]" END' in bad
 
 

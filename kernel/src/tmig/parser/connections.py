@@ -3,6 +3,9 @@
 - 只記連線資訊（類型、主機、連接埠、資料庫、結構描述、Databricks 的 HTTP 路徑），不記帳號、密碼或權杖；
   部署環境依 connection_id 提供憑證
 - 連線類型對應 SQLGlot 的方言；對應不到的類型 dialect 為 None，報表列為不支援
+- 依檢視者的身分查詢資料庫的設定列為不支援：Initial SQL（平台不會執行，用到 [TableauServerUser] 時
+  資料庫可能依檢視者過濾資料）、要求檢視者輸入自己的帳號、以檢視者的身分模擬；
+  Windows 整合驗證、Kerberos 與 OAuth 由功能盤點列為需注意（伺服器上可能以服務帳號連線）
 - 關聯樹：資料表（type='table'）、自訂 SQL（type='text'）與 join（type='join'，條件為欄位或常值的比較，
   以 AND 連接）；
   union、Relationship 模型等其他寫法列為不支援
@@ -52,9 +55,62 @@ EXECUTABLE: frozenset[str] = frozenset({"oracle", "databricks", "spark", "postgr
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
 
 FILE_CLASSES = frozenset({"excel-direct", "textscan", "excel", "csv", "hyper", "dataengine"})
+
+INITIAL_SQL_PARAM = re.compile(r"\[([A-Za-z]+)\]")
+INITIAL_SQL_USER = {
+    "tableauserveruser": "[TableauServerUser]",
+    "tableauserveruserfull": "[TableauServerUserFull]",
+}
+"""Initial SQL 中代表檢視者的參數（Tableau Server 執行時代入登入者的帳號）。"""
+INTEGRATED_AUTH = ("sspi", "kerberos", "integrated", "windows", "gssapi", "negotiate")
+"""以作業系統或網域身分登入資料庫的驗證方式（Windows 整合驗證、Kerberos）。"""
+NO_AUTH = frozenset({"auth-none", "none", "noauth", "no-auth", "anonymous"})
+
 JOIN_KINDS = {"inner": "inner", "left": "left", "right": "right", "full": "full"}
 COMPARISONS = frozenset({"=", "!=", "<", "<=", ">", ">="})
 NUMBER = re.compile(r"-?\d+(\.\d+)?")
+
+
+def initial_sql_users(text: str) -> list[str]:
+    """Initial SQL 中代表檢視者的參數，例如 [TableauServerUser]。"""
+    found = {
+        INITIAL_SQL_USER[m.group(1).lower()]
+        for m in INITIAL_SQL_PARAM.finditer(text)
+        if m.group(1).lower() in INITIAL_SQL_USER
+    }
+    return sorted(found)
+
+
+def viewer_identity_problems(named: etree._Element, caption: str) -> list[str]:
+    """Live 連線依檢視者的身分查詢資料庫的設定：平台以唯讀服務帳號連線、不執行 Initial SQL，
+    原本依人不同的資料移轉後每個人都看得到，所以列為不支援。
+
+    - Initial SQL（平台尚不會執行；用到 [TableauServerUser] 時資料庫可能依檢視者過濾資料）
+    - Tableau Server 上要求檢視者輸入自己的資料庫帳號（workgroup-auth-mode=prompt）或以檢視者的身分模擬
+    """
+    problems: list[str] = []
+    initial = (named.get("one-time-sql") or "").strip()
+    if initial:
+        users = initial_sql_users(initial)
+        if users:
+            problems.append(
+                f"資料源「{caption}」的 Initial SQL 用到 {'、'.join(users)}，資料庫可能依檢視者的身分"
+                "過濾資料；平台不會執行 Initial SQL，需改用列層級權限（使用者函式或使用者篩選）"
+            )
+        else:
+            problems.append(f"資料源「{caption}」有 Initial SQL，平台尚不會執行")
+    mode = (named.get("workgroup-auth-mode") or "").strip()
+    if mode.lower() == "prompt":
+        problems.append(
+            f"資料源「{caption}」在 Tableau Server 上要求檢視者輸入自己的資料庫帳號；"
+            "平台以唯讀服務帳號連線，資料庫端依人不同的權限不會生效"
+        )
+    elif "imperson" in mode.lower():
+        problems.append(
+            f"資料源「{caption}」以檢視者的身分模擬（{mode}）查詢資料庫；"
+            "平台以唯讀服務帳號連線，資料庫端依人不同的權限不會生效"
+        )
+    return problems
 
 
 def connection_id(dbclass: str, server: str | None, database: str | None) -> str:
@@ -83,6 +139,8 @@ def live_connection(
         ctx.flag(named, f"資料源「{caption}」的連線類型 {dbclass or '（未標示）'} 尚不支援")
     elif dialect not in EXECUTABLE:
         ctx.flag(named, f"資料源「{caption}」的連線類型 {dbclass} 尚無 SQL 轉譯與執行器")
+    for problem in viewer_identity_problems(named, caption):
+        ctx.flag(named, problem)
     server = named.get("server") or None
     database = named.get("service") or named.get("v-catalog") or named.get("dbname") or None
     port_text = named.get("port") or ""

@@ -68,3 +68,47 @@ def test_names_are_case_sensitive(ir) -> None:
 def test_invalid_values(ir) -> None:
     with pytest.raises(CasesError, match="不是 integer"):
         case_state(ir, CaseSpec(name="x", url_params={"Quantity": "many"}))
+
+
+def test_url_params_apply_to_every_datasource(tmp_path: Path) -> None:
+    """與 Tableau 相同：網址參數套用到所有資料源中同名的欄位，每張工作表只取自己資料源的欄位。"""
+    from tmig.parser.workbook import parse_workbook
+    from tmig.planner.state import apply_state
+
+    from ..parser import builder as b
+
+    second = "federated.test02"
+    sheet = b.worksheet(
+        "{name}",
+        [
+            b.instance("[Region]", "None", "[none:Region:nk]"),
+            b.instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+        ],
+        rows=b.ref("none:Region:nk"),
+        cols=b.ref("sum:Sales:qk"),
+    )
+    sheets = sheet.replace("{name}", "Orders") + sheet.replace("{name}", "Returns").replace(
+        b.DS, second
+    )
+    datasources = b.extract_datasource() + b.extract_datasource(name=second, caption="Returns")
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(datasources, sheets)))
+    assert ir.unsupported == []
+    first_ds, second_ds = ir.datasources
+    region_ids = [
+        next(f.id for f in ds.fields if f.caption == "Region") for ds in (first_ds, second_ds)
+    ]
+    assert region_ids[0] != region_ids[1]
+
+    state = case_state(
+        ir, CaseSpec(name="x", url_params={"Region": "East", "YEAR(Order Date)": 2024})
+    )
+    assert [state.filters[i].values for i in region_ids] == [["East"], ["East"]]
+    assert len([k for k in state.filters if k.startswith("year(")]) == 2
+    for worksheet, ds in zip(ir.worksheets, (first_ds, second_ds), strict=True):
+        assert worksheet.datasource == ds.id
+        effective = apply_state(ir, worksheet, state)
+        own = {f.id for f in ds.fields}
+        assert effective.applied and all(
+            k.split("(")[-1].rstrip(")") in own for k in effective.applied
+        )
+        assert len(effective.skipped) == 2  # 另一個資料源的欄位

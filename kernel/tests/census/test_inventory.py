@@ -171,6 +171,49 @@ def test_server_meta_joins_and_ranks(tmp_path: Path) -> None:
     assert markdown.index("| 銷售總覽 |") < markdown.index("| 銷售總覽（舊） |")
 
 
+def test_server_connections_mark_viewer_credentials(tmp_path: Path) -> None:
+    """伺服器上沒有嵌入密碼的 Live 連線：檢視者用自己的資料庫帳號，列為不符合起步條件。"""
+    from tmig.census.collect import IDENTITY_TITLE
+
+    from ..parser import builder as b
+    from ..parser.test_connections import ORACLE, live_datasource, sheet
+
+    downloads = tmp_path / "server"
+    (downloads / "workbooks").mkdir(parents=True)
+    table = "<relation connection='db.1' name='ORDERS' table='[SALES].[ORDERS]' type='table' />"
+    xml = b.workbook(datasource=live_datasource(ORACLE, table), worksheets=sheet())
+    workbooks = []
+    for i, (name, embedded) in enumerate([("嵌入密碼", True), ("提示使用者", False)], start=1):
+        (downloads / "workbooks" / f"{i}.twb").write_text(xml, encoding="utf-8")
+        workbooks.append(
+            {
+                "file": f"workbooks/{i}.twb",
+                "id": str(i),
+                "name": name,
+                "connections": ["oracle"],
+                "connection_details": [
+                    {"type": "oracle", "datasource": "Orders", "embed_password": embedded}
+                ],
+            }
+        )
+    meta = {"server": "https://tableau.example.com", "workbooks": workbooks}
+    (downloads / "server.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    out = tmp_path / "out"
+    result = run_inventory([downloads], out, server_meta=downloads / "server.json")
+    rows = {r.name: r for r in result.rows}
+    assert rows["嵌入密碼"].readiness == "ready"
+    prompted = rows["提示使用者"]
+    assert prompted.readiness == "not_eligible"
+    assert prompted.failed_checks == [IDENTITY_TITLE]
+    assert prompted.detail is not None
+    detail = (out / prompted.detail).read_text(encoding="utf-8")
+    assert "「Orders」在 Tableau Server 上沒有嵌入密碼，檢視者用自己的資料庫帳號連線" in detail
+    with (out / "features.csv").open(encoding="utf-8-sig", newline="") as fh:
+        reasons = {r["項目"] for r in csv.DictReader(fh) if r["類別"] == "起步條件不符"}
+    assert reasons == {IDENTITY_TITLE}
+
+
 def test_unsupported_kind_groups_similar_reasons() -> None:
     def entry(reason: str) -> Unsupported:
         return Unsupported(source_ref="/workbook", reason=reason)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import PurePath
 
-from tmig.census.model import CensusReport
+from tmig.census.model import CensusReport, DatasourceInfo
 from tmig.formula.catalog import in_v0
 from tmig.parser.refs import qualified_parts
 
@@ -35,6 +35,16 @@ def _table(header: list[str], rows: list[list[object]]) -> list[str]:
     return lines
 
 
+def _connection_notes(d: DatasourceInfo) -> str:
+    """連線欄的補充：驗證方式、Tableau Server 的驗證設定、Initial SQL。"""
+    notes = [f"驗證：{a}" for a in d.authentication if a != "auth-none"]
+    notes += [f"Tableau Server：{m}" for m in d.server_auth_modes]
+    if d.initial_sql:
+        users = "、".join(d.initial_sql_user)
+        notes.append(f"Initial SQL（{users}）" if users else "Initial SQL")
+    return f"（{'；'.join(notes)}）" if notes else ""
+
+
 def render_markdown(r: CensusReport) -> str:
     lines: list[str] = [f"# 功能盤點：{PurePath(r.file).name}", ""]
     lines.append(f"- Tableau 版本：{r.tableau_version or '未知'}")
@@ -59,7 +69,8 @@ def render_markdown(r: CensusReport) -> str:
         [
             [
                 d.caption,
-                ("Published" if d.published else "、".join(d.connection_classes)),
+                ("Published" if d.published else "、".join(d.connection_classes))
+                + _connection_notes(d),
                 "、".join(d.extract_files),
                 "、".join(d.extract_tables),
                 "、".join(d.source_relation_types)

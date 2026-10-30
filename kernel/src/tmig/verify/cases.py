@@ -120,11 +120,15 @@ def _value(text: str, datatype: str) -> Scalar:
 
 
 def case_state(ir: IR, case: CaseSpec, today: str | None = None) -> QueryState:
-    """網址參數 → 篩選與參數狀態；today 為相對日期篩選的基準日（見 CasesFile.as_of）。"""
-    fields: dict[str, DataField] = {}
+    """網址參數 → 篩選與參數狀態；today 為相對日期篩選的基準日（見 CasesFile.as_of）。
+
+    與 Tableau 的網址參數相同，篩選套用到所有資料源中同名的欄位：每張工作表只取自己資料源的欄位
+    （見 tmig.planner.state.apply_state）。
+    """
+    fields: dict[str, list[DataField]] = {}
     for ds in ir.datasources:
         for item in ds.fields:
-            fields.setdefault(item.caption, item)
+            fields.setdefault(item.caption, []).append(item)
     params = {p.caption: p for p in ir.parameters}
     state = QueryState(today=today)
     for name, raw in case.url_params.items():
@@ -138,16 +142,16 @@ def case_state(ir: IR, case: CaseSpec, today: str | None = None) -> QueryState:
         match = _PART.match(name)
         if match and match.group("fn").lower() in DATE_PARTS and match.group("name") in fields:
             part = match.group("fn").lower()
-            item = fields[match.group("name")]
             values = [_value(v, "integer") for v in split_values(text)]
-            state.filters[f"{part}({item.id})"] = FilterValue(mode="include", values=values)
+            for item in fields[match.group("name")]:
+                state.filters[f"{part}({item.id})"] = FilterValue(mode="include", values=values)
             continue
         if name not in fields:
             known = "、".join(sorted(fields))
             raise CasesError(
                 f"篩選組合「{case.name}」的網址參數「{name}」不是欄位或參數名稱（大小寫須相符）；欄位有：{known}"
             )
-        item = fields[name]
-        values = [_value(v, item.datatype) for v in split_values(text)]
-        state.filters[item.id] = FilterValue(mode="include", values=values)
+        for item in fields[name]:
+            values = [_value(v, item.datatype) for v in split_values(text)]
+            state.filters[item.id] = FilterValue(mode="include", values=values)
     return state

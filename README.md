@@ -35,6 +35,11 @@ Relationship 模型（見「Relationship 模型」）；公開報表盤點中符
 查詢服務與檢視器可以要求登入（反向代理標頭或 OIDC，開發模式可切換使用者；見「身分驗證」），並依 Tableau Server 匯出的
 Project、workbook、view 權限開放（見「權限」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
 PDF、PNG 寄出訂閱（見「排程與訂閱」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
+一份報表可以有多個資料源（各工作表用各自的資料源，網址參數套用到所有資料源中同名的欄位）；同一張工作表混用多個資料源的
+Data Blending 尚不支援。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
+不會生效，盤點時列為不符合起步條件（見「依檢視者的身分連線」）。以 156 份公開報表重新盤點：放寬多個資料源後 12 份
+轉為符合起步條件；28 份要求檢視者輸入自己的資料庫帳號（Tableau Server Insights、TabMon 等連到 Tableau 資料庫的範例）
+改列為不符合，3 份以 Windows 整合驗證連線列為需注意。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
@@ -110,6 +115,23 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 
 連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra databricks`、`--extra postgres`。
 IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
+
+### 依檢視者的身分連線
+
+平台一律以唯讀的服務帳號連線、不執行 Initial SQL。Tableau 上依檢視者的身分查詢資料庫、由資料庫端過濾資料的報表，
+移轉後每個人會看到相同的資料，所以盤點時就列出（`tmig census`、`tmig inventory` 的「連線不依賴檢視者的身分」）：
+
+- **不符合起步條件**（解析時也列入 unsupported）：Tableau Server 上要求檢視者輸入自己的資料庫帳號（伺服器盤點比對
+  REST API 的「沒有嵌入密碼」，或 .twb 的 `workgroup-auth-mode='prompt'`）、以檢視者的身分模擬（impersonation）、
+  Initial SQL 用到 `[TableauServerUser]`／`[TableauServerUserFull]`（例如 Oracle VPD 的 `DBMS_SESSION.SET_IDENTIFIER`、
+  SQL Server 的 `EXECUTE AS USER`）。這類報表要改用列層級權限（使用者函式或使用者篩選）重寫後再移轉
+- **需注意**：Windows 整合驗證與 Kerberos（伺服器可能以 Run As 服務帳號連線，也可能以 Kerberos 委派用檢視者的身分，
+  請與 DBA 確認）、OAuth（伺服器上嵌入了登入資訊時不列）、其他 Initial SQL（平台不會執行，解析時列入 unsupported）、
+  萃取來源的 Initial SQL（檢視時讀萃取檔不受影響，但更新萃取時不會執行）、伺服器上沒有嵌入密碼但對不到資料源的連線
+
+萃取型的資料源檢視時讀萃取檔，與檢視者的帳號無關，不列。伺服器盤點的連線設定是目前的狀態：.twb 記錄的是發佈時的設定，
+之後在伺服器上嵌入了密碼的連線不列。確認資料庫端沒有依人不同的權限（例如所有檢視者本來就用同一個唯讀帳號）時，
+在 Tableau 上改成嵌入密碼重新發佈、再重新下載與盤點，這個決定才會留下紀錄。
 
 方言轉譯（`kernel/src/tmig/sqlgen/dialect.py`）只送出確定語意相同的 SQL：轉譯後的每個節點都要在該方言的允許清單中，
 轉不了的函式列為不支援，不會送出可能算錯的 SQL。驗證方式：
@@ -374,11 +396,16 @@ tableau-migration/
 - **使用者篩選與使用者函式**：Tableau「建立使用者篩選」產生的集合 XML 依公開資料推定（交集 level-members 與
   各使用者條件的成員聯集），工作表上以空的類別篩選表示「在集合中」；比對名稱不分大小寫、USERDOMAIN 對本機帳號的值
   （推定為 `local`）待真實報表確認；USERATTRIBUTE 系列只在 Tableau Cloud 與嵌入時有值，新平台取自 SSO 的宣告
+- **檢視者身分的連線設定**：.twb 的 `workgroup-auth-mode`（公開範例中有 `prompt`、`as-is`）、`one-time-sql`
+  （Initial SQL）與 REST API 連線的 `embedPassword`、`authenticationType` 依公開資料推定；以檢視者身分模擬
+  （impersonation）的屬性值未確認，含 `imperson` 的值一律列為不符合，其他不認得的值列為需注意。
+  伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
 集合（使用者篩選除外）與集合動作、成員別名、趨勢線、地圖、小計與總計、巢狀 LOD、百分位數與百分比等其他快速
 Table Calculation、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
-Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線。
+Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
+Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending。
 
 ## 開發規則
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import http.server
 import io
 import json
@@ -110,6 +111,26 @@ DATASOURCES: list[dict[str, Any]] = [
 ]
 PUBLISHED: dict[bool, bytes] = {}
 """Published Data Source 的 .tdsx：含萃取（True）與不含萃取（False）。"""
+WORKBOOK_CONNECTIONS: dict[str, list[dict[str, Any]]] = {
+    "wb-1": [{"id": "c", "type": "hyper", "embedPassword": False}],
+    "wb-2": [{"id": "c", "type": "sqlproxy", "embedPassword": False}],
+    # 萃取的來源連線沒有嵌入密碼：檢視時讀萃取檔，不影響起步條件
+    "wb-3": [
+        {
+            "id": "c",
+            "type": "oracle",
+            "embedPassword": False,
+            "userName": "scott",
+            "datasource": {"id": "d-3", "name": "Orders"},
+        }
+    ],
+    "wb-4": [{"id": "c", "type": "sqlproxy", "embedPassword": False}],
+    "wb-5": [{"id": "c", "type": "hyper", "embedPassword": False}],
+}
+DATASOURCE_CONNECTIONS: dict[str, list[dict[str, Any]]] = {
+    "ds-1": [{"id": "pc", "type": "oracle", "embedPassword": True, "userName": "reader"}]
+}
+"""Published Data Source 自己的連線。"""
 PUBLISHED_WORKBOOK: list[bytes] = [b""]
 RLS_WORKBOOK: list[bytes] = [b""]
 """用到使用者函式（列層級權限）的報表。"""
@@ -464,16 +485,12 @@ class FakeServer(http.server.BaseHTTPRequestHandler):
         elif rest.startswith("datasources/") and rest.endswith("/content"):
             include = query.get("includeExtract") == ["True"]
             self._file(PUBLISHED[include], "application/octet-stream", "OrdersPDS.tdsx")
+        elif rest.startswith("datasources/") and rest.endswith("/connections"):
+            items = DATASOURCE_CONNECTIONS[rest.split("/")[1]]
+            self._json(200, {"connections": {"connection": items}})
         elif rest.endswith("/connections"):
-            wb_id = rest.split("/")[1]
-            kinds = {
-                "wb-1": "hyper",
-                "wb-2": "sqlproxy",
-                "wb-3": "oracle",
-                "wb-4": "sqlproxy",
-                "wb-5": "hyper",
-            }
-            self._json(200, {"connections": {"connection": [{"id": "c", "type": kinds[wb_id]}]}})
+            items = WORKBOOK_CONNECTIONS[rest.split("/")[1]]
+            self._json(200, {"connections": {"connection": items}})
         elif rest.endswith("/views"):
             wb_id = rest.split("/")[1]
             views = [v for v in VIEWS if v["workbook"]["id"] == wb_id]
@@ -539,6 +556,17 @@ def test_inventory_end_to_end(server: str, tmp_path: Path) -> None:
     assert sales["connections"] == ["hyper"]
     assert sales["has_extracts"] is True
     assert entries["Ops.v2"]["file"] == "workbooks/Ops/Ops.v2.twb"
+    # 連線設定只記類型與是否嵌入密碼，不記帳號
+    assert entries["Ops.v2"]["connection_details"] == [
+        {
+            "type": "oracle",
+            "datasource": "Orders",
+            "published_datasource": None,
+            "embed_password": False,
+            "authentication": None,
+        }
+    ]
+    assert "scott" not in (out / "server.json").read_text(encoding="utf-8")
     finance = entries["財務月報"]
     assert finance["file"] is None
     assert "403019" in finance["download_error"] and "下載／另存新檔" in finance["download_error"]
@@ -698,13 +726,63 @@ def test_inventory_merges_published_definitions(
     assert (out / "original" / "Sales" / "Orders PDS.twb").is_file()
     calls = [c for c in FakeServer.calls if "/datasources/ds-1/content" in c]
     assert len(calls) == 1 and "includeExtract=False" in calls[0]
+    # 資料源自己的連線（嵌入了密碼）
+    assert entry["connection_details"] == [
+        {
+            "type": "oracle",
+            "datasource": "OrdersPDS",
+            "published_datasource": "Orders (Published)",
+            "embed_password": True,
+            "authentication": None,
+        }
+    ]
     rows = (out / "inventory.csv").read_text(encoding="utf-8-sig")
     line = next(r for r in rows.splitlines() if r.startswith("Orders PDS,"))
     assert "Published Data Source" not in line
+    assert "連線不依賴檢視者的身分" not in line
     # 第二次：資料源沒有更新時不重新下載
     FakeServer.calls = []
     assert tableau_server.main(["inventory", *auth(server), "--out", str(out), "--refresh"]) == 0
     assert not [c for c in FakeServer.calls if "/datasources/ds-1/content" in c]
+
+
+def test_inventory_flags_prompted_published_datasource(
+    server: str, tmp_path: Path, published: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live 的 Published Data Source 在伺服器上沒有嵌入密碼：檢視者用自己的資料庫帳號，不符合起步條件。"""
+    from tmig.census.collect import IDENTITY_TITLE
+
+    from ..parser import test_published as pds
+
+    live = pds.write_tdsx(tmp_path / "live.tdsx", pds.tds(extract=False), None).read_bytes()
+    monkeypatch.setitem(PUBLISHED, False, live)
+    monkeypatch.setitem(
+        DATASOURCE_CONNECTIONS, "ds-1", [{"id": "pc", "type": "oracle", "embedPassword": False}]
+    )
+    out = tmp_path / "inventory"
+    assert tableau_server.main(["inventory", *auth(server), "--out", str(out)]) == 0
+    with (out / "inventory.csv").open(encoding="utf-8-sig", newline="") as fh:
+        row = next(r for r in csv.DictReader(fh) if r["名稱"] == "Orders PDS")
+    assert row["起步狀態"] == "不符合起步條件"
+    assert row["不符合的起步條件"] == IDENTITY_TITLE
+    detail = (out / row["說明"]).read_text(encoding="utf-8")
+    assert "「Orders (Published)」在 Tableau Server 上沒有嵌入密碼" in detail
+    # 第二次（報表沒有更新、沿用上次的檔案）仍重新讀取資料源的連線設定
+    FakeServer.calls = []
+    assert tableau_server.main(["inventory", *auth(server), "--out", str(out)]) == 0
+    assert [c for c in FakeServer.calls if "/datasources/ds-1/connections" in c]
+
+
+def test_published_sources_in_merged_workbook(tmp_path: Path) -> None:
+    """報表中的 Published Data Source：還沒併入的 sqlproxy 連線，或已併入、保留 repository-location 的資料源。"""
+    from tmig.parser.published import merge_published
+
+    from ..parser import test_published as pds
+
+    report = pds.published_report(tmp_path, extract=False)
+    assert tableau_server.published_sources(report) == [("Orders (Published)", "OrdersPDS")]
+    merged = merge_published(report, tmp_path / "published", tmp_path / "merged.twbx").out
+    assert tableau_server.published_sources(merged) == [("Orders (Published)", "OrdersPDS")]
 
 
 # ---------------------------------------------------------------- 列層級權限（P1）

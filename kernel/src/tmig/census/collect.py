@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path, PurePath
 from typing import Literal
 
@@ -23,10 +24,11 @@ from tmig.census.model import (
     FormulaInfo,
     PackagedFileInfo,
     ParameterInfo,
+    ServerConnection,
     TableCalcInfo,
     WorksheetInfo,
 )
-from tmig.parser.connections import FILE_CLASSES
+from tmig.parser.connections import FILE_CLASSES, INTEGRATED_AUTH, NO_AUTH, initial_sql_users
 from tmig.parser.refs import parse_instance, qualified_parts, shelf_operators
 from tmig.parser.twbx import (
     attr,
@@ -120,10 +122,17 @@ PARAMETER_REF = re.compile(r"\[Parameters\]\.(\[[^\]]+\])")
 """公式中的參數參照，例如 [Parameters].[Parameter 1]。"""
 
 
-def run_census(path: str | Path, *, extracts_omitted: bool = False) -> CensusReport:
+def run_census(
+    path: str | Path,
+    *,
+    extracts_omitted: bool = False,
+    server_connections: Sequence[ServerConnection] = (),
+) -> CensusReport:
     """盤點一份 .twb／.twbx。
 
     extracts_omitted：.twbx 下載時刻意不含萃取檔（只盤點結構），缺萃取檔不算不符合起步條件。
+    server_connections：Tableau Server 上這份報表的連線設定（是否嵌入密碼），檢查檢視者是否用自己的
+    資料庫帳號連線；沒有時只依 .twb 判斷。
     """
     package = load_workbook_package(path)
     root = package.root
@@ -183,7 +192,9 @@ def run_census(path: str | Path, *, extracts_omitted: bool = False) -> CensusRep
         grade_reasons=[],
         element_inventory=dict(sorted(inventory.items(), key=lambda item: (-item[1], item[0]))),
     )
-    report.checks = _checks(report, extracts_omitted=extracts_omitted)
+    report.checks = _checks(
+        report, extracts_omitted=extracts_omitted, server_connections=server_connections
+    )
     report.grade, report.grade_reasons = _grade(report)
     return report
 
@@ -274,6 +285,15 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         if attr(g, "ui-builder") == "identity-set"
     ]
 
+    # 來源連線的驗證方式與 Initial SQL（萃取的來源連線只在更新萃取時使用）
+    sources = named or (
+        [conn]
+        if conn is not None and conn.get("class") not in (None, "", "federated", "sqlproxy")
+        else []
+    )
+    initial_sql = [text for c in sources if (text := (c.get("one-time-sql") or "").strip())]
+    initial_user = {name for text in initial_sql for name in initial_sql_users(text)}
+
     info = DatasourceInfo(
         name=name,
         caption=caption,
@@ -299,6 +319,12 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         extract_filters=len(list(descendants(extract, "filter"))),
         filter_user_functions=sorted(filter_users),
         filter_parameters=sorted(filter_params),
+        authentication=sorted({c.get("authentication", "") for c in sources} - {""}),
+        server_auth_modes=sorted(
+            {c.get("workgroup-auth-mode", "") for c in sources} - {"", "as-is"}
+        ),
+        initial_sql=bool(initial_sql),
+        initial_sql_user=sorted(initial_user),
     )
     return info, formulas, classes_used
 
@@ -491,26 +517,16 @@ def _norm(path: str) -> str:
     return path.replace("\\", "/").lstrip("./").lower()
 
 
-def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
+def _checks(
+    r: CensusReport,
+    *,
+    extracts_omitted: bool = False,
+    server_connections: Sequence[ServerConnection] = (),
+) -> list[Check]:
+    # 多個資料源（各工作表用各自的資料源）已支援：每張工作表查詢自己的資料源，
+    # 同一張工作表混用多個資料源（Data Blending）另外檢查
     checks: list[Check] = []
     dss = r.datasources
-
-    if len(dss) == 1:
-        checks.append(
-            Check(
-                key="single_datasource",
-                title="單一資料源",
-                status="pass",
-                detail=_quote([dss[0].caption]),
-            )
-        )
-    else:
-        detail = (
-            "沒有資料源" if not dss else f"有 {len(dss)} 個：{_quote([d.caption for d in dss])}"
-        )
-        checks.append(
-            Check(key="single_datasource", title="單一資料源", status="fail", detail=detail)
-        )
 
     packaged = r.packaged
     packaged_paths = {_norm(f.name) for f in r.files}
@@ -553,7 +569,7 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
             key="data_access",
             title="資料可以取得（萃取或 Live 連線）",
             status="fail" if problems or not dss else "pass",
-            detail="；".join(problems) or ok_detail,
+            detail="；".join(problems) or ok_detail or "沒有資料源",
         )
     )
 
@@ -589,10 +605,11 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
             key="single_table",
             title="單表萃取、Relationship 模型，或 Live 的資料表、自訂 SQL、join",
             status="fail" if problems or not dss else "pass",
-            detail="；".join(problems) or "；".join(notes),
+            detail="；".join(problems) or "；".join(notes) or "沒有資料源",
         )
     )
 
+    checks.append(identity_check(dss, server_connections))
     checks.append(_rls_check(r, dss))
 
     blended = [w.name for w in r.worksheets if w.blending]
@@ -652,6 +669,170 @@ def _checks(r: CensusReport, *, extracts_omitted: bool = False) -> list[Check]:
         )
     )
     return checks
+
+
+IDENTITY_KEY = "viewer_identity"
+IDENTITY_TITLE = "連線不依賴檢視者的身分（資料庫帳號、Initial SQL）"
+SAME_DATA = "移轉後改用唯讀服務帳號連線，每個人會看到相同的資料"
+INTEGRATED = "Windows 整合驗證或 Kerberos"
+
+
+def viewer_auth(value: str | None) -> str | None:
+    """驗證方式可能以檢視者自己的身分登入資料庫時，回傳名稱；否則 None。"""
+    text = (value or "").lower()
+    if any(key in text for key in INTEGRATED_AUTH):
+        return INTEGRATED
+    if "oauth" in text:
+        return "OAuth"
+    return None
+
+
+def _match_connection(dss: list[DatasourceInfo], conn: ServerConnection) -> list[DatasourceInfo]:
+    """伺服器上的連線屬於哪些資料源：先比資料源名稱，比不到再比連線類型。"""
+    candidates = [d for d in dss if not d.published]
+    target = (conn.published_datasource or conn.datasource or "").strip().casefold()
+    if target:
+        named = [d for d in candidates if target in (d.caption.casefold(), d.name.casefold())]
+        if named:
+            return named
+    return [d for d in candidates if conn.type in d.connection_classes]
+
+
+def identity_check(dss: list[DatasourceInfo], server: Sequence[ServerConnection] = ()) -> Check:
+    """資料是否依檢視者的身分而不同：平台以部署環境提供的唯讀服務帳號連線、不執行 Initial SQL，
+    原本靠資料庫端（檢視者自己的帳號、Initial SQL 帶入登入者）過濾的資料，移轉後每個人看到的都一樣。
+
+    - 不符合：Live 連線的 Initial SQL 用到 [TableauServerUser]、要求檢視者輸入帳號（.twb 的
+      workgroup-auth-mode=prompt，或伺服器上沒有嵌入密碼）、以檢視者的身分模擬（impersonation）
+    - 需注意：Windows 整合驗證、Kerberos 或 OAuth（Tableau Server 可能以服務帳號或檢視者的身分連線）、
+      其他 Initial SQL（平台不會執行）、萃取來源的 Initial SQL（更新萃取時不會執行）、
+      伺服器上沒有嵌入密碼但無法確定屬於哪個資料源的連線
+
+    伺服器的連線設定是目前的狀態：確認嵌入了密碼時，.twb 中記錄的 prompt 與 OAuth 不列。
+    """
+    failed: dict[str, None] = {}
+    warned: dict[str, None] = {}
+    prompted: set[str] = set()
+    integrated: set[str] = set()
+    oauth: dict[str, str] = {}
+    """OAuth 連線的資料源 → 說明；伺服器上確認嵌入了登入資訊時不列。"""
+    embedded: set[str] = set()
+    """伺服器上確認嵌入了密碼的資料源（伺服器的設定是目前的狀態，優先於 .twb 中記錄的設定）。"""
+    for conn in server:
+        matched = _match_connection(dss, conn) if conn.embed_password else []
+        if len(matched) == 1:
+            embedded.add(matched[0].caption)
+    for ds in dss:
+        if ds.published:
+            continue  # 連線在 Published Data Source 中（資料可以取得的檢查已列出）
+        name = f"「{ds.caption}」"
+        live = not ds.data_in_hyper
+        if ds.initial_sql_user:
+            params = "、".join(ds.initial_sql_user)
+            if live:
+                failed[
+                    f"{name}的 Initial SQL 用到 {params}：資料庫依檢視者的身分過濾資料，"
+                    f"平台不會執行 Initial SQL，{SAME_DATA}；需改用列層級權限（使用者函式或使用者篩選）"
+                ] = None
+            else:
+                warned[
+                    f"{name}的萃取來源有 Initial SQL 用到 {params}：平台更新萃取時不會執行，"
+                    "更新後的資料可能與 Tableau 不同"
+                ] = None
+        elif ds.initial_sql:
+            warned[
+                f"{name}有 Initial SQL：平台不會執行，請確認查詢結果不依賴它（驗證比對會顯示差異）"
+            ] = None
+        if not live:
+            continue  # 萃取：檢視時讀萃取檔，與檢視者的帳號無關
+        for mode in ds.server_auth_modes:
+            text = mode.lower()
+            if text == "prompt":
+                if ds.caption in embedded:
+                    continue  # 之後在伺服器上嵌入了密碼
+                prompted.add(ds.caption)
+                failed[
+                    f"{name}在 Tableau Server 上要求檢視者輸入自己的資料庫帳號，"
+                    f"資料庫端的權限隨人不同；{SAME_DATA}"
+                ] = None
+            elif "imperson" in text:
+                failed[
+                    f"{name}以檢視者的身分模擬（{mode}）查詢資料庫，資料庫端的權限隨人不同；{SAME_DATA}"
+                ] = None
+            else:
+                warned[
+                    f"{name}在 Tableau Server 上的驗證設定為 {mode}：請確認是否以檢視者的身分連線"
+                ] = None
+        for auth in ds.authentication:
+            kind = viewer_auth(auth)
+            if kind == INTEGRATED:
+                integrated.add(ds.caption)
+                warned[
+                    f"{name}以 {INTEGRATED}（{auth}）連線：Tableau Server 若設定了 Kerberos 委派，"
+                    f"是以檢視者自己的帳號查詢，資料庫端的權限隨人不同，{SAME_DATA}；請與 DBA 確認"
+                ] = None
+            elif kind is not None:
+                oauth[ds.caption] = (
+                    f"{name}以 {kind}（{auth}）連線：Tableau Server 上若要求檢視者自己登入，"
+                    f"資料庫端的權限隨人不同，{SAME_DATA}；是否嵌入登入資訊請以伺服器盤點確認"
+                )
+
+    for caption in embedded:
+        oauth.pop(caption, None)  # 伺服器上嵌入了登入資訊
+    for conn in server:
+        if conn.type in FILE_CLASSES | {"sqlproxy"}:
+            continue
+        if conn.embed_password is not False or (conn.authentication or "").lower() in NO_AUTH:
+            continue
+        matched = _match_connection(dss, conn)
+        live_matched = [d for d in matched if not d.data_in_hyper]
+        if not live_matched:
+            continue  # 萃取的來源連線：檢視時讀萃取檔
+        if len(matched) > 1:
+            label = conn.published_datasource or conn.datasource or conn.type
+            warned[
+                f"Tableau Server 上「{label}」的 {conn.type} 連線沒有嵌入密碼，無法確定是哪個資料源；"
+                f"若是 Live 連線，檢視者用自己的資料庫帳號連線，{SAME_DATA}"
+            ] = None
+            continue
+        ds = live_matched[0]
+        if ds.caption in prompted:
+            continue
+        if viewer_auth(conn.authentication) == INTEGRATED or ds.caption in integrated:
+            if ds.caption not in integrated:
+                integrated.add(ds.caption)
+                warned[
+                    f"「{ds.caption}」在 Tableau Server 上以 {INTEGRATED} 連線：若設定了 Kerberos 委派，"
+                    f"是以檢視者自己的帳號查詢，{SAME_DATA}；請與 DBA 確認"
+                ] = None
+            continue
+        prompted.add(ds.caption)
+        oauth.pop(ds.caption, None)
+        failed[
+            f"「{ds.caption}」在 Tableau Server 上沒有嵌入密碼，檢視者用自己的資料庫帳號連線，"
+            f"資料庫端的權限隨人不同；{SAME_DATA}"
+        ] = None
+    for caption, message in oauth.items():
+        if caption not in prompted:
+            warned[message] = None
+
+    if failed or warned:
+        return Check(
+            key=IDENTITY_KEY,
+            title=IDENTITY_TITLE,
+            status="fail" if failed else "warn",
+            detail="；".join([*failed, *warned]),
+        )
+    if not any(not d.published and not d.data_in_hyper for d in dss):
+        detail = "沒有 Live 連線（萃取的資料不依賴檢視者的帳號）"
+    elif server:
+        detail = "已比對 Tableau Server 的連線設定：Live 連線都嵌入了帳號密碼"
+    else:
+        detail = (
+            "Live 連線沒有以檢視者身分連線的設定；是否嵌入密碼請以伺服器盤點"
+            "（tools/tableau_server）確認"
+        )
+    return Check(key=IDENTITY_KEY, title=IDENTITY_TITLE, status="pass", detail=detail)
 
 
 def _rls_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:

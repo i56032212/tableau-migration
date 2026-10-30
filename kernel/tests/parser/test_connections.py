@@ -193,6 +193,63 @@ def test_unsupported_connections(tmp_path: Path) -> None:
     assert any("跨資料庫的關聯" in r for r in reasons(ir))
 
 
+def test_viewer_identity_settings_are_unsupported(tmp_path: Path) -> None:
+    """依檢視者的身分查詢資料庫的 Live 連線：平台以服務帳號連線、不執行 Initial SQL，列為不支援。"""
+    table = "<relation connection='db.1' name='ORDERS' table='[SALES].[ORDERS]' type='table' />"
+    vpd = ORACLE.replace(
+        "one-time-sql=''",
+        "one-time-sql='BEGIN DBMS_SESSION.SET_IDENTIFIER([TableauServerUser]); END;'",
+    )
+    for lenient in (False, True):
+        ir = parse(tmp_path, live_datasource(vpd, table), lenient=lenient)
+        assert reasons(ir) == [
+            "資料源「Orders」的 Initial SQL 用到 [TableauServerUser]，資料庫可能依檢視者的身分"
+            "過濾資料；平台不會執行 Initial SQL，需改用列層級權限（使用者函式或使用者篩選）"
+        ]
+
+    nls = ORACLE.replace("one-time-sql=''", "one-time-sql='ALTER SESSION SET NLS_SORT = BINARY'")
+    ir = parse(tmp_path, live_datasource(nls, table), lenient=True)
+    assert reasons(ir) == ["資料源「Orders」有 Initial SQL，平台尚不會執行"]
+
+    prompt = ORACLE.replace("/>", "workgroup-auth-mode='prompt' />")
+    ir = parse(tmp_path, live_datasource(prompt, table), lenient=True)
+    assert reasons(ir) == [
+        "資料源「Orders」在 Tableau Server 上要求檢視者輸入自己的資料庫帳號；"
+        "平台以唯讀服務帳號連線，資料庫端依人不同的權限不會生效"
+    ]
+
+    # 嵌入帳號密碼（as-is）、Kerberos 與 OAuth 不擋（功能盤點列為需注意）
+    for attrs in ("workgroup-auth-mode='as-is'", "authentication='kerberos'"):
+        conn = ORACLE.replace("authentication='username-password'", "").replace("/>", f"{attrs} />")
+        assert reasons(parse(tmp_path, live_datasource(conn, table), lenient=True)) == []
+
+
+def test_extract_source_initial_sql_is_not_flagged(tmp_path: Path) -> None:
+    """萃取的來源連線只在更新萃取時使用：檢視時讀萃取檔，Initial SQL 不影響解析。"""
+    source = ORACLE.replace("one-time-sql=''", "one-time-sql='EXEC AS [TableauServerUser]'")
+    datasource = (
+        b.extract_datasource()
+        .replace(
+            "<connection class='textscan' directory='C:/data' filename='orders.csv' />", source
+        )
+        .replace("table='[orders#csv]'", "table='[SALES].[ORDERS]'")
+    )
+    ir = parse(tmp_path, datasource)
+    assert reasons(ir) == []
+
+
+def test_initial_sql_users() -> None:
+    from tmig.parser.connections import initial_sql_users
+
+    assert initial_sql_users("EXECUTE AS USER = [TableauServerUser] WITH NO REVERT") == [
+        "[TableauServerUser]"
+    ]
+    assert initial_sql_users("SET x = [tableauserveruserfull]; SET y = [TableauApp]") == [
+        "[TableauServerUserFull]"
+    ]
+    assert initial_sql_users("SELECT [WorkbookName]") == []
+
+
 def test_executable_dialects_match_translation() -> None:
     from tmig.parser.connections import EXECUTABLE
     from tmig.sqlgen.dialect import SUPPORTED

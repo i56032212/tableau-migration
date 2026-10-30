@@ -38,7 +38,8 @@
 - ``workbooks/<Project>/<報表>.twbx``：不含萃取的報表檔，重跑時只重新下載有更新的報表；
   連到 Published Data Source 的報表，下載資料源的定義（datasources/，不含萃取）併入後再盤點，
   原本的報表在 original/
-- ``server.json``：Project、擁有者、檢視次數、連線類型、下載失敗原因
+- ``server.json``：Project、擁有者、檢視次數、連線類型與是否嵌入密碼（不記帳號與密碼）、下載失敗原因；
+  沒有嵌入密碼的 Live 連線（檢視者用自己的資料庫帳號）在盤點中列為不符合起步條件
 - ``inventory.md``、``inventory.csv``、``features.csv``、``census/``：見 ``tmig inventory``
 """
 
@@ -354,6 +355,11 @@ class TableauClient:
         data = self.get_json(f"workbooks/{workbook_id}/connections")
         return _list((data.get("connections") or {}).get("connection"))
 
+    def datasource_connections(self, datasource_id: str) -> list[dict[str, Any]]:
+        """Published Data Source 的連線（是否嵌入密碼）。"""
+        data = self.get_json(f"datasources/{datasource_id}/connections")
+        return _list((data.get("connections") or {}).get("connection"))
+
     def datasources(self) -> list[dict[str, Any]]:
         """Published Data Source 清單（網址名稱、更新時間）。"""
         return list(self.paged("datasources", "datasources", "datasource"))
@@ -537,6 +543,72 @@ def fetch_published(
         for m in result.merged
     ]
     return PublishedFetch(result.out, notes)
+
+
+def connection_detail(
+    conn: dict[str, Any], *, published: str | None = None, datasource: str | None = None
+) -> dict[str, Any]:
+    """REST API 的連線 → server.json 的 connection_details（只記類型與是否嵌入密碼，不記帳號）。"""
+    return {
+        "type": str(conn.get("type") or ""),
+        "datasource": datasource or (conn.get("datasource") or {}).get("name"),
+        "published_datasource": published,
+        "embed_password": _bool(conn.get("embedPassword")),
+        "authentication": conn.get("authenticationType") or None,
+    }
+
+
+def published_sources(path: Path) -> list[tuple[str, str]]:
+    """報表中的 Published Data Source：（報表中的資料源名稱, 伺服器上的網址名稱）。
+
+    還沒併入的 sqlproxy 連線，或已併入、保留資料源 repository-location 的資料源。
+    """
+    from tmig.parser.published import published_refs
+    from tmig.parser.twbx import child, children, load_workbook_package
+
+    root = load_workbook_package(path).root
+    found = [(ref.caption, ref.content_url) for ref in published_refs(root)]
+    for ds in children(child(root, "datasources"), "datasource"):
+        location = child(ds, "repository-location")
+        conn = child(ds, "connection")
+        if location is None or (conn is not None and conn.get("class") == "sqlproxy"):
+            continue
+        url = location.get("id") or ""
+        if url and (location.get("path") or "").rstrip("/").endswith("datasources"):
+            found.append((ds.get("caption") or ds.get("name", ""), url))
+    return found
+
+
+def published_connection_details(
+    client: TableauClient,
+    path: Path,
+    catalog: list[dict[str, Any]],
+    cache: dict[str, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """報表連到的 Published Data Source 的連線設定；回傳（connection_details, 讀不到的說明）。"""
+    from tmig.parser.twbx import WorkbookFormatError
+
+    by_url = {str(d.get("contentUrl")): d for d in catalog}
+    details: list[dict[str, Any]] = []
+    notes: list[str] = []
+    try:
+        sources = published_sources(path)
+    except (WorkbookFormatError, OSError) as exc:
+        return [], [f"讀不到報表中的 Published Data Source：{exc}"]
+    for caption, url in sources:
+        found = by_url.get(url)
+        if found is None:
+            continue  # 下載與併入時已列出找不到的資料源
+        ds_id = str(found["id"])
+        if ds_id not in cache:
+            try:
+                cache[ds_id] = client.datasource_connections(ds_id)
+            except TableauError as exc:
+                notes.append(f"讀不到 Published Data Source「{caption}」的連線設定：{exc}")
+                cache[ds_id] = []
+        name = str(found.get("name") or "") or None
+        details += [connection_detail(c, published=caption, datasource=name) for c in cache[ds_id]]
+    return details, notes
 
 
 # ---------------------------------------------------------------- 盤點
@@ -938,6 +1010,7 @@ def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
     entries: list[dict[str, Any]] = []
     used: set[str] = set()
     catalog: list[dict[str, Any]] | None = None
+    published_cache: dict[str, list[dict[str, Any]]] = {}
     for i, wb in enumerate(workbooks, start=1):
         wb_id = str(wb["id"])
         name = str(wb.get("name", wb_id))
@@ -954,14 +1027,18 @@ def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
             "url": wb.get("webpageUrl"),
             "has_extracts": _bool(wb.get("hasExtracts")),
             "connections": [],
+            "connection_details": [],
             "file": None,
             "download_error": None,
             "published": [],
         }
         try:
-            entry["connections"] = sorted(
-                {str(c.get("type", "")) for c in client.connections(wb_id) if c.get("type")}
-            )
+            raw = client.connections(wb_id)
+            entry["connections"] = sorted({str(c.get("type", "")) for c in raw if c.get("type")})
+            # 是否嵌入密碼：沒有嵌入時檢視者用自己的資料庫帳號連線（tmig inventory 列為不符合起步條件）
+            entry["connection_details"] = [
+                connection_detail(c) for c in raw if str(c.get("type", "")) != "sqlproxy"
+            ]
         except TableauError as exc:
             entry["download_error"] = str(exc)
 
@@ -1009,6 +1086,16 @@ def run_inventory(client: TableauClient, args: argparse.Namespace) -> int:
             except (TableauError, httpx.HTTPError) as exc:
                 entry["download_error"] = str(exc)
                 status = f"下載失敗：{exc}"
+        if entry["file"] and not args.no_published and "sqlproxy" in entry["connections"]:
+            # 連到 Published Data Source：資料源自己的連線是否嵌入密碼（每次重新讀取）
+            if catalog is None:
+                catalog = client.datasources()
+            details, notes = published_connection_details(
+                client, out / entry["file"], catalog, published_cache
+            )
+            entry["connection_details"] += details
+            if notes:
+                status += "；" + "；".join(notes)
         print(f"[{i}/{len(workbooks)}] {project}／{name}：{status}", file=sys.stderr)
         entries.append(entry)
 

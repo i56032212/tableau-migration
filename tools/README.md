@@ -36,6 +36,9 @@ uv run python tools/tableau_server/tableau_server.py fetch --server https://tabl
   沒有更新時沿用）併入後再盤點，`--no-published` 可關閉
 - 用到使用者函式或使用者篩選（列層級權限）的報表：`fetch` 以登入帳號的使用者名稱、全名、網域與群組
   （Active Directory 群組寫成 `網域\名稱`）填好 cases.yaml 的 `user`；預期結果必須用同一個帳號抓取
+- `inventory` 也讀取每個連線（含報表連到的 Published Data Source 的連線）是否嵌入密碼，記在 `server.json` 的
+  `connection_details`（只記連線類型與是否嵌入，不記帳號）；沒有嵌入密碼的 Live 連線表示檢視者用自己的資料庫帳號，
+  列為不符合起步條件（見 README「Live 連線」的「依檢視者的身分連線」）
 - `directory --out directory.json`：匯出使用者與群組（查詢服務身分驗證的使用者目錄；需要站台管理員）
 - `permissions --out permissions.json`：匯出 Project、workbook、view 的權限（查詢服務依此授權；需要站台管理員）
 - `schedules --timezone Asia/Taipei --out schedules.json`：匯出排程、萃取更新工作與訂閱（對象、view、頻率；需要站台管理員）。
