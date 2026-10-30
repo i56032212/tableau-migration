@@ -12,32 +12,14 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from tmig.access.permissions import ADMIN_ROLES, Access, Permissions, WorkbookEntry
+from tmig.catalog import workbook_url_name
 from tmig.ir import IR, iter_zones
 from tmig.planner.identity import Identity
-
-_VIEWS_URL = re.compile(r"/views/([^/?#]+)")
-
-
-def content_url(directory: Path) -> str | None:
-    """報表在 Tableau 上的網址名稱（cases.yaml 的 tableau_views_url，例如 …/views/SalesOverview）。"""
-    path = directory / "cases.yaml"
-    if not path.is_file():
-        return None
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
-        return None
-    url = data.get("tableau_views_url") if isinstance(data, dict) else None
-    match = _VIEWS_URL.search(str(url or ""))
-    return match.group(1) if match else None
 
 
 @dataclass(frozen=True)
@@ -81,7 +63,7 @@ class Authorizer:
 
     def entry(self, directory: Path, ir: IR) -> WorkbookEntry | None:
         assert self.permissions is not None
-        return self.permissions.workbook(content_url(directory), ir.workbook.name)
+        return self.permissions.workbook(workbook_url_name(directory), ir.workbook.name)
 
     def grant(self, user: Identity | None, directory: Path, ir: IR) -> Grant:
         """沒有權限檔時不限制（只要求登入）；有權限檔時依 Tableau 的規則判斷。"""
@@ -122,4 +104,4 @@ def viewer_ir(ir: IR, grant: Grant) -> dict[str, Any]:
     return data
 
 
-__all__ = ["OPEN", "Authorizer", "Grant", "content_url", "viewer_ir"]
+__all__ = ["OPEN", "Authorizer", "Grant", "viewer_ir"]

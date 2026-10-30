@@ -14,6 +14,7 @@ tmig connections check <報表或資料夾>...         檢查 Live 連線的設�
 tmig extract refresh <報表> [--incremental]       從來源資料庫更新萃取的 DuckDB 檔（完整或增量）
 tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取比對（列數、總和、最小值、最大值）
 tmig published merge <報表> [--published 目錄]     把 Published Data Source 的 .tdsx 併入報表
+tmig schedule list|tick|run|serve <排程檔>         排程器：萃取更新與訂閱（Q2、Q3）
 tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]  啟動查詢服務與檢視器
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
@@ -584,6 +585,146 @@ def _cmd_published_merge(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def _schedule_inputs(args: argparse.Namespace):
+    """排程檔、報表目錄與工作；排程檔沒有時區時報錯。"""
+    from tmig.catalog import Catalog
+    from tmig.schedule.model import ScheduleError, load_schedules
+    from tmig.schedule.runner import plan_jobs
+
+    schedules = load_schedules(args.schedules)
+    timezone = args.timezone or schedules.timezone
+    if not timezone:
+        raise ScheduleError(
+            "排程檔沒有時區：以 --timezone 指定 Tableau Server 的時區（例如 Asia/Taipei）"
+        )
+    catalog = Catalog.load(args.fixtures)
+    return schedules, timezone, plan_jobs(schedules, catalog)
+
+
+def _scheduler(args: argparse.Namespace):
+    import datetime as dt
+
+    from tmig.schedule.runner import Handler, JobKind, Scheduler, extract_handler, utc_now
+
+    _, timezone, jobs = _schedule_inputs(args)
+    clock = utc_now
+    if getattr(args, "now", None):
+        fixed = dt.datetime.fromisoformat(args.now)
+        if fixed.tzinfo is None:
+            raise ValueError("--now 必須含時區，例如 2026-11-02T06:00:00+08:00")
+
+        def clock() -> dt.datetime:
+            return fixed
+
+    handlers: dict[JobKind, Handler] = {"extract": extract_handler(args.config)}
+    subscription = _subscription_handler(args)
+    if subscription is not None:
+        handlers["subscription"] = subscription
+    state_dir = args.state_dir or args.schedules.parent / "schedule-state"
+    return jobs, Scheduler(jobs, timezone, handlers, state_dir, clock)
+
+
+def _subscription_handler(args: argparse.Namespace):
+    """訂閱的處理程式（Q3）；尚未設定時為 None（訂閱的工作記為失敗）。"""
+    return None
+
+
+def _cmd_schedule_list(args: argparse.Namespace) -> int:
+    import datetime as dt
+
+    from tmig.schedule.model import ScheduleError
+    from tmig.schedule.runner import last_runs
+
+    try:
+        _, timezone, jobs = _schedule_inputs(args)
+        now = dt.datetime.fromisoformat(args.now) if args.now else dt.datetime.now(dt.UTC)
+    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    state_dir = args.state_dir or args.schedules.parent / "schedule-state"
+    last = last_runs(state_dir)
+    for job in sorted(jobs, key=lambda j: (not j.runnable, j.id)):
+        schedule = job.schedule
+        when = (
+            schedule.frequency.describe()
+            if schedule is not None and schedule.frequency is not None
+            else "—"
+        )
+        print(f"{job.id}  {job.label()}")
+        print(f"    排程：{schedule.name if schedule else '—'}（{when}）")
+        if job.runnable:
+            assert schedule is not None and schedule.frequency is not None
+            upcoming = schedule.frequency.next_run(now, timezone)
+            print(
+                f"    下次：{upcoming.isoformat()}；對象：{'、'.join(t.describe() for t in job.targets)}"
+            )
+        else:
+            print(f"    不執行：{job.problem}")
+        if job.id in last:
+            item = last[job.id]
+            print(f"    上次：{item.get('finished')} {item.get('status')} {item.get('detail')}")
+    runnable = sum(1 for j in jobs if j.runnable)
+    print(f"共 {len(jobs)} 個工作，可執行 {runnable} 個")
+    return 0
+
+
+def _cmd_schedule_tick(args: argparse.Namespace) -> int:
+    from tmig.schedule.model import ScheduleError
+
+    try:
+        _, scheduler = _scheduler(args)
+    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    records = scheduler.tick()
+    for record in records:
+        print(f"{'通過' if record.status == 'ok' else '失敗'}  {record.job}：{record.detail}")
+    if not records:
+        print("沒有到期的工作")
+    return 1 if any(r.status != "ok" for r in records) else 0
+
+
+def _cmd_schedule_run(args: argparse.Namespace) -> int:
+    from tmig.schedule.model import ScheduleError
+
+    try:
+        jobs, scheduler = _scheduler(args)
+    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    job = next((j for j in jobs if j.id == args.job), None)
+    if job is None:
+        print(f"失敗：找不到工作 {args.job}", file=sys.stderr)
+        return 1
+    if not job.runnable:
+        print(f"失敗：{job.id} 不能執行：{job.problem}", file=sys.stderr)
+        return 1
+    record = scheduler.run(job)
+    print(f"{'通過' if record.status == 'ok' else '失敗'}  {record.job}：{record.detail}")
+    return 0 if record.status == "ok" else 1
+
+
+def _cmd_schedule_serve(args: argparse.Namespace) -> int:
+    from tmig.schedule.model import ScheduleError
+
+    try:
+        jobs, scheduler = _scheduler(args)
+    except (ScheduleError, FileNotFoundError, ValueError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    print(f"排程器：{sum(1 for j in jobs if j.runnable)} 個工作，狀態在 {scheduler.state_dir}")
+    try:
+        scheduler.serve(
+            on_record=lambda r: print(
+                f"{r.finished} {'通過' if r.status == 'ok' else '失敗'}  {r.job}：{r.detail}",
+                flush=True,
+            )
+        )
+    except KeyboardInterrupt:
+        print("排程器已停止")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from tmig_service import serve
@@ -804,6 +945,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     merge.add_argument("--out", type=Path, help="輸出的 .twbx；預設為 <報表>.merged.twbx")
     merge.set_defaults(handler=_cmd_published_merge)
+
+    schedule_parser = commands.add_parser("schedule", help="排程器：萃取更新與訂閱")
+    schedule_commands = schedule_parser.add_subparsers(
+        dest="schedule_command", required=True, metavar="子指令"
+    )
+    for name, handler, help_text in (
+        ("list", _cmd_schedule_list, "列出工作、下次執行時間、對應的報表與上次的結果"),
+        ("tick", _cmd_schedule_tick, "執行一次到期的工作（給作業系統的排程呼叫）"),
+        ("run", _cmd_schedule_run, "立即執行一個工作"),
+        ("serve", _cmd_schedule_serve, "常駐執行"),
+    ):
+        sub = schedule_commands.add_parser(name, help=help_text)
+        sub.add_argument(
+            "schedules",
+            type=Path,
+            metavar="排程檔",
+            help="tools/tableau_server 匯出的 schedules.json",
+        )
+        sub.add_argument(
+            "--fixtures", type=Path, default=Path("fixtures"), help="報表目錄（預設 fixtures）"
+        )
+        sub.add_argument("--timezone", help="Tableau Server 的時區；預設為排程檔中的時區")
+        sub.add_argument(
+            "--state-dir", type=Path, help="狀態與執行紀錄的目錄；預設為排程檔旁的 schedule-state"
+        )
+        sub.add_argument("--config", type=Path, help="連線設定檔；預設讀環境變數 TMIG_CONNECTIONS")
+        if name in ("list", "tick"):
+            sub.add_argument("--now", help="以這個時間計算（ISO 格式含時區；測試用）")
+        if name == "run":
+            sub.add_argument("--job", required=True, help="工作 id，例如 extract:<id>")
+        sub.set_defaults(handler=handler)
 
     serve = commands.add_parser("serve", help="啟動查詢服務與檢視器")
     serve.add_argument(

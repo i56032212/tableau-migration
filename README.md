@@ -227,6 +227,22 @@ Tableau 的權限評估規則開放（`kernel/src/tmig/access/permissions.py`、
 - 萃取更新工作：目標是報表（嵌入的萃取）或 Published Data Source、完整或增量更新、連續失敗次數
 - 訂閱：訂閱者、view 或整份報表、主旨、附圖片或 PDF、紙張方向與大小、暫停、view 沒有資料時是否寄送
 
+排程器（`kernel/src/tmig/schedule/runner.py`）依排程檔執行萃取更新與訂閱：
+
+```bash
+uv run tmig schedule list schedules.json --fixtures fixtures    # 工作、下次執行時間、對應的報表與上次的結果
+uv run tmig schedule serve schedules.json --fixtures fixtures   # 常駐執行
+uv run tmig schedule tick schedules.json --fixtures fixtures    # 執行一次到期的工作（給作業系統的排程或 Celery beat 呼叫）
+uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行一個工作
+```
+
+- 萃取更新工作對應到報表：目標是報表時更新它的嵌入萃取；目標是 Published Data Source 時更新每份用到它的報表
+  （N8 併入的萃取）。報表依 cases.yaml 的 `tableau_views_url` 或報表名稱對應；以連線設定檔連到來源資料庫（N7，原子替換）
+- 對應不到報表、排程無法辨識或已暫停的工作不執行，`schedule list` 列出原因
+- 下次執行時間記在狀態目錄的 `state.json`（預設為排程檔旁的 `schedule-state/`）；停機期間錯過的排程，啟動後補跑一次，
+  再從現在起算下一次。同時到期的工作依 Tableau 的優先順序（數字小的先）逐一執行，一個失敗不影響其他工作；
+  每次的結果（到期、開始、結束時間、成功或失敗與說明）逐行寫入 `runs.jsonl`
+
 ## 指令
 
 | 指令 | 用途 |
@@ -245,6 +261,7 @@ Tableau 的權限評估規則開放（`kernel/src/tmig/access/permissions.py`、
 | `tmig extract refresh <報表> [--incremental] [--out-dir 目錄]` | 從來源資料庫更新萃取的 DuckDB 檔：完整或增量、原子替換（N7） |
 | `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
 | `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
+| `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2） |
 | `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]` | 查詢服務與檢視器（F2–F4；身分驗證見「身分驗證」） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
