@@ -70,6 +70,7 @@
       "mark": {
         "type": "text",
         "fontSize": 10,
+        "lineBreak": "\n",
         "align": "left",
         "dx": 3
       },

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard
 
@@ -37,12 +38,13 @@ from tmig.ir.models import (
     ParamRef,
     ReferenceLine,
     Scalar,
+    TextRun,
     Worksheet,
 )
 from tmig.planner.state import use_key
 from tmig.render.format import (
     PERCENT_TABLE_CALCS,
-    d3_format,
+    axis_format,
     display_format,
     format_value,
     parse_format,
@@ -94,6 +96,9 @@ VL_MARKS = {
     "shape": "point",
 }
 ROW = "__row"
+TEXT_ROW_HEIGHT = 22
+"""文字表每一列的高度（像素）：與 Tableau 相同固定列高，列數多時在區塊內捲動。"""
+TEXT_COLOR_RANGE = ["#6baed6", "#08306b"]
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
 
@@ -151,6 +156,20 @@ class _Builder:
         self.notes: list[str] = []
         self.pane_values = pane_values or {}
         """詳細程度較粗的標記卡（ws.panes 的索引）各自的資料列（J3）。"""
+        self.rows = list(ws.rows)
+        self.columns = list(ws.columns)
+        """畫出的欄列架（見 build_spec：沒有對應量值的 Measure Names 不畫）。"""
+        self.label_fields: dict[int, str] = {}
+        """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
+
+    def label_field(self, marks: Marks) -> str | None:
+        """標記的標籤欄：自訂的標籤文字，或標籤上第一個欄位的顯示文字。"""
+        if id(marks) in self.label_fields:
+            return self.label_fields[id(marks)]
+        return self.ch(marks.label[0]).label if marks.label else None
+
+    def shown(self, use: FieldUse) -> bool:
+        return use.field not in SPECIAL_FIELDS or use.field in self.channels
 
     def with_pane_data(self, body: dict[str, Any], pane: Pane | None) -> dict[str, Any]:
         """標記卡有自己的資料時，這張圖改用它；工具提示只列出資料中有的欄位。"""
@@ -170,6 +189,15 @@ class _Builder:
     def is_measure(self, use: FieldUse) -> bool:
         return self.ch(use).role == "measure"
 
+    def is_continuous_date(self, use: FieldUse) -> bool:
+        """連續的完整日期（不取日期部分或截斷）。"""
+        ch = self.channels.get(use_key(use))
+        return use.continuous and ch is not None and ch.datatype in ("date", "datetime")
+
+    def is_axis(self, use: FieldUse) -> bool:
+        """欄列架上畫成座標軸的量值：連續的量值與 Measure Values。"""
+        return self.is_measure(use) and (use.continuous or use.field in SPECIAL_FIELDS)
+
     # ------------------------------------------------------------ 座標
 
     def axis_dim(self, uses: list[FieldUse], composite: str) -> dict[str, Any] | None:
@@ -185,9 +213,9 @@ class _Builder:
         encoding: dict[str, Any] = {"field": ch.name, "type": "quantitative", "title": ch.title}
         # Table Calculation 的軸只在百分比類時套用格式（累計、排名等沿用自動刻度）
         formatted = not use.table_calc or _table_calc_type(self.ws, use) in PERCENT_TABLE_CALCS
-        number = d3_format(parse_format(ch.format)) if formatted else None
-        if number:
-            encoding["axis"] = {"format": number}
+        axis = axis_format(parse_format(ch.format)) if formatted else None
+        if axis:
+            encoding["axis"] = axis
         return encoding
 
     # ------------------------------------------------------------ 單一圖
@@ -207,7 +235,9 @@ class _Builder:
         label_field: str | None = None
         label_type = ""
         if mark == "text" or not (rows_meas or cols_meas):
-            mark = "text"
+            # 方塊標記、只有維度並以顏色區分：醒目提示表（色塊加上文字）
+            highlight = mark == "square" and marks.color is not None
+            mark = "square" if highlight else "text"
             y = self.axis_dim(rows_dims, "rows_dim")
             x = self.axis_dim(cols_dims, "cols_dim")
             if y is not None:
@@ -217,13 +247,13 @@ class _Builder:
                     **x,
                     "axis": {"orient": "top", "labelAngle": 0, "title": x.get("title")},
                 }
-            text_use = marks.label[0] if marks.label else None
-            if text_use is None:
+            text_field = self.label_field(marks)
+            if text_field is None:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
-                text_use = measures[0].use if measures else None
-            vl_mark = {"type": "text", "tooltip": True}
-            if text_use is not None:
-                encoding["text"] = {"field": self.ch(text_use).label, "type": "nominal"}
+                text_field = measures[0].label if measures else None
+            vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
+            if text_field is not None:
+                encoding["text"] = {"field": text_field, "type": "nominal"}
             else:
                 encoding["text"] = {"value": "Abc"}
         else:
@@ -260,11 +290,23 @@ class _Builder:
                 vl_mark["point"] = True
             if mark == "shape":
                 vl_mark["filled"] = True
-            if marks.label:
-                label_field = self.ch(marks.label[0]).label
+            if marks.label or id(marks) in self.label_fields:
+                label_field = self.label_field(marks)
                 label_type = vl_type
 
         self.common(encoding, marks)
+        if mark == "square":
+            text = {
+                "mark": vl_mark,
+                "encoding": {"text": encoding.pop("text"), "color": {"value": "#1f2328"}},
+            }
+            return {
+                "encoding": encoding,
+                "layer": [{"mark": {"type": "rect", "tooltip": True}}, text],
+            }, mark
+        if vl_mark["type"] == "text" and encoding.get("color", {}).get("type") == "quantitative":
+            # 文字依量值著色：用較深的色階，淺色的值才看得清楚
+            encoding["color"]["scale"] = {"range": TEXT_COLOR_RANGE}
         if marks.path is not None and vl_mark["type"] in ("line", "area"):
             encoding["order"] = {"field": self.ch(marks.path).name}
         if label_field is not None:
@@ -332,6 +374,7 @@ class _Builder:
                     cols_dims,
                     [use] if axis == "rows" else rows_meas,
                     [use] if axis == "columns" else cols_meas,
+                    self.is_continuous_date,
                 )
             if mark in UNSUPPORTED_MARKS or mark == "pie":
                 self.notes.append(f"{self.ch(use).title} 的標記類型 {mark} 尚未支援，以長條呈現")
@@ -385,9 +428,13 @@ class _Builder:
         if cols_dims:
             encoding["column"] = self._facet(cols_dims, "cols_dim")
         mark: dict[str, Any] = {"type": "arc", "tooltip": True}
-        if not marks.label or rows_dims or cols_dims:
+        has_label = bool(marks.label) or id(marks) in self.label_fields
+        if not has_label or rows_dims or cols_dims:
             return {"mark": mark, "encoding": encoding}
-        text = "\n".join("{" + self.ch(u).label + "}" for u in marks.label)
+        if id(marks) in self.label_fields:
+            text = "{" + self.label_fields[id(marks)] + "}"
+        else:
+            text = "\n".join("{" + self.ch(u).label + "}" for u in marks.label)
         label = {
             "mark": {
                 "type": "text",
@@ -429,10 +476,14 @@ class _Builder:
         lines: list[str] = []
         for index, pane in holes:
             records = self.pane_values.get(index, values)
-            for use in pane.marks.label:
-                ch = self.ch(use)
+            fields = (
+                [self.label_fields[id(pane.marks)]]
+                if id(pane.marks) in self.label_fields
+                else [self.ch(use).label for use in pane.marks.label]
+            )
+            for name in fields:
                 for record in records:
-                    text = record.get(ch.label)
+                    text = record.get(name)
                     if text not in (None, "") and str(text) not in lines:
                         lines.append(str(text))
         if not lines:
@@ -485,7 +536,7 @@ def build_spec(
             role="measure" if column.role == "measure" else "dimension",
             datatype=column.datatype,
             use=column.use,
-            format=display_format(data_field.format, _table_calc_type(ws, column.use)),
+            format=value_format(ws, data_field, column.use),
         )
     uses = [*ws.rows, *ws.columns, *ws.marks.uses()]
     uses += [u for pane in ws.panes for u in pane.marks.uses()]
@@ -520,10 +571,30 @@ def build_spec(
             FieldUse(field=MEASURE_VALUES),
         )
 
-    rows_dims = [u for u in ws.rows if not builder.is_measure(u)]
-    rows_meas = [u for u in ws.rows if builder.is_measure(u)]
-    cols_dims = [u for u in ws.columns if not builder.is_measure(u)]
-    cols_meas = [u for u in ws.columns if builder.is_measure(u)]
+    params = {p.id: p.value for p in ir.parameters} | (parameters or {})
+    cards = [(None, ws.marks), *enumerate(p.marks for p in ws.panes)]
+    for n, (index, marks) in enumerate(cards):
+        if not marks.label_text:
+            continue
+        name = f"__text{n}"
+        builder.label_fields[id(marks)] = name
+        targets = [values]
+        if index is not None and index in pane_values:
+            targets = [pane_values[index]]
+        for records in targets:
+            for record in records:
+                record[name] = compose_text(marks.label_text, ir, params, channels, record)
+
+    # Measure Names 沒有對應的量值（Measure Values 卡是空的）時不畫：Tableau 只顯示空白的欄標題
+    builder.rows = [u for u in ws.rows if builder.shown(u)]
+    builder.columns = [u for u in ws.columns if builder.shown(u)]
+    if len(builder.rows) + len(builder.columns) < len(ws.rows) + len(ws.columns):
+        builder.notes.append("Measure Names 沒有對應的量值（Measure Values 卡是空的），不顯示")
+    # 欄列架上離散（藍色）的量值是標題、不是座標軸（例如以量值的值排成表格、INDEX() 的排名）
+    rows_dims = [u for u in builder.rows if not builder.is_axis(u)]
+    rows_meas = [u for u in builder.rows if builder.is_axis(u)]
+    cols_dims = [u for u in builder.columns if not builder.is_axis(u)]
+    cols_meas = [u for u in builder.columns if builder.is_axis(u)]
     composites: dict[str, list[FieldUse]] = {}
     if len(rows_dims) > 1:
         composites["rows_dim"] = rows_dims
@@ -553,10 +624,18 @@ def build_spec(
         body, mark = builder.multi(rows_dims, cols_dims, rows_meas, cols_meas)
     else:
         if mark == "automatic":
-            mark = _infer_mark(rows_dims, cols_dims, rows_meas, cols_meas)
+            mark = _infer_mark(
+                rows_dims, cols_dims, rows_meas, cols_meas, builder.is_continuous_date
+            )
         if mark in UNSUPPORTED_MARKS:
             return RenderResult(None, len(result.rows), mark, f"標記類型 {mark} 尚未支援")
         body, mark = builder.unit(ws.marks, mark, rows_dims, cols_dims, rows_meas, cols_meas)
+
+    for channel in ("row", "column"):
+        # 分面依資料的順序（查詢已依排序設定排好）；Vega-Lite 的分面不指定時會依字母排序
+        facet = body.get("encoding", {}).get(channel)
+        if isinstance(facet, dict) and facet.get("sort") is None:
+            facet["sort"] = list(dict.fromkeys(v.get(facet["field"]) for v in values))
 
     if ws.reference_lines:
         params = {p.id: p.value for p in ir.parameters} | (parameters or {})
@@ -591,8 +670,55 @@ def build_spec(
         # 多張圖無法自動填滿容器，由檢視器依區塊大小設定每張圖的寬高
         del spec["width"], spec["height"]
         spec["autosize"] = {"type": "pad"}
+    elif mark in ("text", "square") and rows_dims:
+        # 文字表與醒目提示表：固定列高，列數多時由檢視器在區塊內捲動
+        spec["height"] = {"step": TEXT_ROW_HEIGHT}
+        spec["autosize"] = {"type": "fit-x", "contains": "padding"}
     spec.update(body)
     return RenderResult(spec, len(values), mark, None, builder.notes)
+
+
+def value_format(ws: Worksheet, data_field: DataField, use: FieldUse) -> str | None:
+    """欄位值的顯示格式：工作表上設定的格式優先（Measure Values 的格式套用到其中每個量值），
+    其次是欄位的預設格式（百分比類的快速 Table Calculation 預設以百分比顯示）。"""
+    key = use_key(use)
+    sheet_format = ws.formats.get(key)
+    if sheet_format is None and any(use_key(u) == key for u in ws.measure_values):
+        sheet_format = ws.formats.get(MEASURE_VALUES)
+    return sheet_format or display_format(data_field.format, _table_calc_type(ws, use))
+
+
+def compose_text(
+    runs: list[TextRun],
+    ir: IR,
+    params: dict[str, Scalar],
+    channels: dict[str, Channel] | None = None,
+    record: dict[str, Any] | None = None,
+) -> str:
+    """自訂文字（標籤、標題）：文字、參數的值與這個標記的欄位值依序串接；Null 的欄位不顯示（與 Tableau 相同）。"""
+    parts: list[str] = []
+    for run in runs:
+        if run.text is not None:
+            parts.append(run.text)
+        elif run.parameter is not None:
+            param = next((p for p in ir.parameters if p.id == run.parameter), None)
+            value = params.get(run.parameter)
+            if param is not None and value is not None:
+                parts.append(format_value(value, param.datatype))
+        elif run.use is not None and channels is not None and record is not None:
+            key = run.use.field if run.use.field in SPECIAL_FIELDS else use_key(run.use)
+            ch = channels.get(key)
+            if ch is not None and record.get(ch.name) is not None:
+                parts.append(str(record.get(ch.label, "")))
+    return "".join(parts)
+
+
+def worksheet_title(ir: IR, ws: Worksheet, parameters: dict[str, Scalar] | None = None) -> str:
+    """工作表的標題：自訂標題（代入目前的參數值），沒有時為工作表名稱。"""
+    if not ws.title:
+        return ws.name
+    params = {p.id: p.value for p in ir.parameters} | (parameters or {})
+    return compose_text(ws.title, ir, params) or ws.name
 
 
 def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str, Any]]:
@@ -767,7 +893,7 @@ def _scope_keys(builder: _Builder) -> dict[str, list[str]]:
     """參考線範圍 → 分組用的資料欄名。"""
     pane: list[FieldUse] = []
     cell: list[FieldUse] = []
-    for shelf in (builder.ws.rows, builder.ws.columns):
+    for shelf in (builder.rows, builder.columns):
         discrete = [u for u in shelf if not builder.is_measure(u) and not u.continuous]
         cell += discrete
         innermost_discrete = bool(shelf) and bool(discrete) and shelf[-1] is discrete[-1]
@@ -910,7 +1036,7 @@ def _label_layer(
     """標籤：長條在尾端（堆疊時在各段內側），其他標記在點的上方。"""
     stacked = vl_type == "bar" and colored
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
-    mark: dict[str, Any] = {"type": "text", "fontSize": 10}
+    mark: dict[str, Any] = {"type": "text", "fontSize": 10, "lineBreak": "\n"}
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": "#1f2328"}}
     if vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
@@ -940,6 +1066,16 @@ def _dimension(ch: Channel) -> dict[str, Any]:
         }
     if use.continuous and ch.datatype in ("integer", "real"):
         return {"field": ch.name, "type": "quantitative", "title": ch.title}
+    if use.continuous and ch.datatype == "date":
+        # 連續的完整日期（不取日期部分或截斷）：時間軸；日期字串以 UTC 解讀，避免時區差一天
+        return {
+            "field": ch.name,
+            "type": "temporal",
+            "timeUnit": "utcyearmonthdate",
+            "title": ch.title,
+        }
+    if use.continuous and ch.datatype == "datetime":
+        return {"field": ch.name, "type": "temporal", "scale": {"type": "utc"}, "title": ch.title}
     return {"field": ch.label, "type": "ordinal", "sort": None, "title": ch.title}
 
 
@@ -948,6 +1084,7 @@ def _infer_mark(
     cols_dims: list[FieldUse],
     rows_meas: list[FieldUse],
     cols_meas: list[FieldUse],
+    is_continuous_date: Callable[[FieldUse], bool] = lambda use: False,
 ) -> str:
     """Tableau 的「自動」標記：沒有量值在欄列架上為文字表；連續日期為折線；其餘為長條。"""
     if not rows_meas and not cols_meas:
@@ -955,7 +1092,7 @@ def _infer_mark(
     if rows_meas and cols_meas:
         return "circle"
     for use in rows_dims + cols_dims:
-        if use.date is not None and use.continuous:
+        if (use.date is not None and use.continuous) or is_continuous_date(use):
             return "line"
     return "bar"
 

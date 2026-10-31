@@ -214,6 +214,28 @@ def test_server_connections_mark_viewer_credentials(tmp_path: Path) -> None:
     assert reasons == {IDENTITY_TITLE}
 
 
+def test_query_time_unsupported_counts(tmp_path: Path) -> None:
+    """解析時看不出、產生查詢時才知道的不支援（例如巢狀 Table Calculation）也列入盤點。"""
+    from ..parser import builder as b
+    from ..parser.builder import instance, ref, worksheet
+
+    calc = b.calc("Calculation_1", "Nested", "RUNNING_SUM(RANK(SUM([Sales])))")
+    sheet = worksheet(
+        "Nested",
+        [
+            instance("[Region]", "None", "[none:Region:nk]"),
+            instance("[Calculation_1]", "User", "[usr:Calculation_1:qk]", "quantitative"),
+        ],
+        rows=ref("none:Region:nk"),
+        cols=ref("usr:Calculation_1:qk"),
+    )
+    xml = b.workbook(b.extract_datasource(columns=calc), worksheets=sheet)
+    row, _, unsupported = inventory_workbook(b.write_twb(tmp_path, xml))
+    assert [u.reason for u in unsupported] == ["工作表「Nested」：尚不支援巢狀 Table Calculation"]
+    assert row.readiness == "needs_features"
+    assert row.unsupported_top == ["工作表「…」：尚不支援巢狀 Table Calculation（1）"]
+
+
 def test_unsupported_kind_groups_similar_reasons() -> None:
     def entry(reason: str) -> Unsupported:
         return Unsupported(source_ref="/workbook", reason=reason)

@@ -28,8 +28,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from tmig.census.collect import features_outside_v0, run_census
 from tmig.census.model import CensusReport, ServerConnection
 from tmig.census.report import render_markdown
-from tmig.ir.models import Unsupported
+from tmig.ir.models import IR, Unsupported
 from tmig.parser.workbook import NoDatasourceError, parse_workbook
+from tmig.planner.identity import Identity
+from tmig.sqlgen.query import QueryError, worksheet_sql
+
+INVENTORY_USER = Identity(username="inventory")
+"""試產生 SQL 用的身分：用到使用者函式的工作表也能產生查詢（只檢查能不能查，不執行）。"""
 
 WORKBOOK_SUFFIXES = frozenset({".twb", ".twbx"})
 SIMPLE_MARKS = frozenset({"Automatic", "Bar", "Line", "Text", "Area", "Circle", "Square", "Shape"})
@@ -210,9 +215,8 @@ def inventory_workbook(
     unsupported: list[Unsupported] = []
     parse_error = None
     try:
-        unsupported = parse_workbook(
-            path, lenient=True, extracts_omitted=extracts_omitted
-        ).unsupported
+        ir = parse_workbook(path, lenient=True, extracts_omitted=extracts_omitted)
+        unsupported = [*ir.unsupported, *query_unsupported(ir)]
     except NoDatasourceError as exc:
         # 沒有可移轉的資料源（例如都是尚無執行器的連線）：原因列為不支援，需先補功能
         unsupported = exc.unsupported
@@ -258,6 +262,26 @@ def inventory_workbook(
         error=parse_error,
     )
     return row, report, unsupported
+
+
+def query_unsupported(ir: IR) -> list[Unsupported]:
+    """查詢時才發現的不支援（例如巢狀 Table Calculation）：試產生每張工作表的 SQL（不執行）。"""
+    found: list[Unsupported] = []
+    for ws in ir.worksheets:
+        try:
+            worksheet_sql(ir, ws.id, user=INVENTORY_USER)
+        except QueryError as exc:
+            if exc.unsupported:
+                found.append(
+                    Unsupported(
+                        source_ref=ws.source_ref,
+                        reason=f"工作表「{ws.name}」：{exc}",
+                        element="worksheet",
+                    )
+                )
+        except Exception:  # 盤點：產生 SQL 的其他問題留給解析與驗證，不中斷批次
+            continue
+    return found
 
 
 def _error(exc: Exception) -> str:

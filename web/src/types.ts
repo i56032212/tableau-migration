@@ -259,6 +259,8 @@ export interface CaseInfo {
 export interface RenderResponse {
   worksheet: string;
   name?: string;
+  /** 工作表的標題：自訂標題代入目前的參數值；沒有自訂標題時為工作表名稱 */
+  title?: string;
   rows: number;
   mark?: string;
   spec: Record<string, unknown> | null;

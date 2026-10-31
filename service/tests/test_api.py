@@ -45,6 +45,7 @@ def test_render_with_state(client: TestClient) -> None:
     }
     data = client.post(f"{WB}/worksheets/ws_sales_by_region/render", json=body).json()
     assert data["rows"] == 2
+    assert data["title"] == data["name"]  # 沒有自訂標題時以工作表名稱為標題
     assert data["applied"] == ["f_category"]
     assert data["spec"]["$schema"].endswith("/v6.json")
     assert data["table"]["headers"][:3] == ["Region", "Category", "Sales"]

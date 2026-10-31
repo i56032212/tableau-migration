@@ -23,9 +23,11 @@
     ]
   },
   "width": "container",
-  "height": "container",
+  "height": {
+    "step": 22
+  },
   "autosize": {
-    "type": "fit",
+    "type": "fit-x",
     "contains": "padding"
   },
   "config": {
@@ -38,7 +40,8 @@
   },
   "mark": {
     "type": "text",
-    "tooltip": true
+    "tooltip": true,
+    "lineBreak": "\n"
   },
   "encoding": {
     "y": {

@@ -37,6 +37,7 @@ from tmig.ir.models import (
     Sort,
     TableCalc,
     TableCalcPreset,
+    TextRun,
     TupleFilter,
     Worksheet,
 )
@@ -51,9 +52,15 @@ from tmig.parser.fields import (
     use_from_name,
     value_type,
 )
+from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
+
+TEXT_TOKEN = re.compile(r"<([^<>]+)>")
+"""自訂文字中的參照：<[資料源].[欄位實例]>、<[Parameters].[參數]>、<Sheet Name>。"""
+LINE_BREAK = "\u00c6\n"
+"""Tableau 格式化文字的換行（Æ 加換行）。"""
 
 MARKS: dict[str, MarkType] = {
     "Automatic": "automatic",
@@ -291,6 +298,11 @@ class SheetParser:
 
         rows = self._shelf(child(table, "rows"))
         cols = self._shelf(child(table, "cols"))
+        for shelf, label in (("rows", "列"), ("cols", "欄")):
+            element = child(table, shelf)
+            if element is not None and element.get("total") == "true":
+                # 不能默默省略：總計的列與欄也是報表上的數字
+                ctx.flag(element, f"工作表「{self.name}」的{label}總計（Grand Total）尚不支援")
         pages = child(table, "pages")
         if pages is not None and (text_of(pages) or len(children(pages))):
             ctx.flag(pages, "頁面架（Pages）v0 不支援")
@@ -311,6 +323,9 @@ class SheetParser:
         self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
         reference_lines = self._reference_lines(child(table, "panes"))
+        formats = self._formats(child(table, "style"), [*rows, *cols])
+        title = self._title(child(el, "layout-options"))
+        self._check_label_text(card_uses, [marks, *(p.marks for p in panes)])
         worksheet = Worksheet(
             id=sheet_id,
             name=self.name,
@@ -324,6 +339,8 @@ class SheetParser:
             sorts=sorts,
             table_calcs=table_calcs,
             reference_lines=reference_lines,
+            formats=formats,
+            title=title,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -359,8 +376,6 @@ class SheetParser:
 
     def resolve(self, ref: str) -> FieldUse | str:
         assert self.ds is not None
-        from tmig.parser.refs import qualified_parts
-
         parts = qualified_parts(ref)
         if len(parts) == 2 and parts[0] not in (self.ds.name, "Parameters"):
             return f"參照了其他資料源 {parts[0]}"
@@ -602,7 +617,108 @@ class SheetParser:
             assert self.ds is not None
             if use.field not in SPECIAL_FIELDS and not is_aggregate(self.ds, use):
                 dims.append(use)
+        label = child(child(pane, "customized-label"), "formatted-text")
+        if label is not None:
+            marks.label_text = self._text_runs(label, f"工作表「{self.name}」的自訂標籤")
         return marks, dims
+
+    # ------------------------------------------------------------ 自訂文字、數字格式與標題
+
+    def _text_runs(
+        self, formatted: etree._Element, what: str, *, fields: bool = True
+    ) -> list[TextRun]:
+        """格式化文字（<formatted-text> 的各段 <run>）→ 文字與參照依序排列；樣式（字型、顏色）不保留。
+
+        參照可能被拆在相鄰的幾段中，所以先串成一段再找；認不得的 <…> 照原文保留。
+        """
+        text = "".join(str(part) for run in children(formatted, "run") for part in run.itertext())
+        # 單獨的 Æ 是格式化文字的分段記號，畫面上不顯示
+        text = text.replace(LINE_BREAK, "\n").replace("\u00c6", "").rstrip()
+        runs: list[TextRun] = []
+
+        def add_text(value: str) -> None:
+            if not value:
+                return
+            if runs and runs[-1].text is not None:
+                runs[-1] = TextRun(text=runs[-1].text + value)
+            else:
+                runs.append(TextRun(text=value))
+
+        position = 0
+        for match in TEXT_TOKEN.finditer(text):
+            add_text(text[position : match.start()])
+            position = match.end()
+            token = match.group(1)
+            if token == "Sheet Name":
+                add_text(self.name)
+                continue
+            parts = qualified_parts(token)
+            if len(parts) == 2 and parts[0] == "Parameters":
+                param = self.ctx.parameter(token)
+                if param is None:
+                    self.ctx.flag(formatted, f"{what}：找不到參數 {token}")
+                    continue
+                runs.append(TextRun(parameter=param.id))
+                continue
+            if len(parts) == 2 and self.ds is not None and parts[0] == self.ds.name:
+                resolved = self.resolve(token)
+                if isinstance(resolved, str):
+                    self.ctx.flag(formatted, f"{what}：{resolved}")
+                    continue
+                if not fields:
+                    caption = self.ds.field_by_id(resolved.field).caption
+                    self.ctx.flag(formatted, f"{what}用到欄位「{caption}」的值，尚不支援")
+                    continue
+                runs.append(TextRun(use=resolved))
+                continue
+            add_text(match.group(0))
+        add_text(text[position:])
+        return runs
+
+    def _check_label_text(self, uses: list[FieldUse], cards: list[Marks]) -> None:
+        """自訂標籤中的欄位必須在標記卡或欄列架上（查詢結果才有它的值）。"""
+        for marks in cards:
+            missing = [run.use for run in marks.label_text if run.use and run.use not in uses]
+            if missing:
+                assert self.ds is not None
+                names = "、".join(self.ds.field_by_id(u.field).caption for u in missing)
+                self.ctx.flag(
+                    self.el, f"工作表「{self.name}」的自訂標籤用到不在標記卡上的欄位 {names}"
+                )
+                marks.label_text = []
+
+    def _formats(self, style: etree._Element | None, shelves: list[FieldUse]) -> dict[str, str]:
+        """工作表上設定的數字格式：<style-rule element='cell'>（標記與文字表的值）與
+        element='label'（欄列標題）中依欄位設定的 text-format。同一欄位兩者都有時，
+        欄列架上的離散欄位（顯示成標題）取 label，其餘取 cell。"""
+        found: dict[str, dict[str, str]] = {"cell": {}, "label": {}}
+        for rule in children(style, "style-rule"):
+            target = found.get(rule.get("element", ""))
+            if target is None:
+                continue
+            for item in children(rule, "format"):
+                ref, value = item.get("field"), item.get("value")
+                if item.get("attr") != "text-format" or not ref or not value:
+                    continue
+                resolved = self.resolve(ref)
+                if isinstance(resolved, str):
+                    continue  # 格式設定的欄位已不在工作表上
+                target.setdefault(use_key(resolved), value)
+        headers = {use_key(u) for u in shelves if not u.continuous}
+        cell, label = found["cell"], found["label"]
+        formats: dict[str, str] = {}
+        for key in sorted(cell.keys() | label.keys()):
+            first, second = (label, cell) if key in headers else (cell, label)
+            formats[key] = first.get(key) or second[key]
+        return formats
+
+    def _title(self, layout: etree._Element | None) -> list[TextRun]:
+        """自訂的工作表標題；只有工作表名稱（<Sheet Name>）時與預設相同，回傳空的。"""
+        formatted = child(child(layout, "title"), "formatted-text")
+        if formatted is None:
+            return []
+        runs = self._text_runs(formatted, f"工作表「{self.name}」的標題", fields=False)
+        return [] if runs == [TextRun(text=self.name)] else runs
 
     # ------------------------------------------------------------ Measure Names／Values
 

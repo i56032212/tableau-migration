@@ -48,9 +48,8 @@ from tmig.data.sources import SourceConnectionError
 from tmig.ir import IR, iter_zones
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
-from tmig.render.format import display_format
 from tmig.render.format import format_value as display_value
-from tmig.render.vegalite import build_spec, caption
+from tmig.render.vegalite import build_spec, caption, value_format, worksheet_title
 from tmig.sqlgen.query import (
     QueryError,
     custom_sql_parameters,
@@ -358,6 +357,8 @@ def create_app(
                 raise HTTPException(422, str(exc)) from exc
             return {
                 "worksheet": sheet.id,
+                "name": sheet.name,
+                "title": worksheet_title(ir, sheet, query.state.parameters),
                 "rows": 0,
                 "spec": None,
                 "unsupported": str(exc),
@@ -385,13 +386,13 @@ def create_app(
                     cells.append(str(value))
                 else:
                     trunc = use.date.unit if use.date is not None else None
-                    tc = next((t for t in sheet.table_calcs if t.id == use.table_calc), None)
-                    fmt = display_format(fields[use.field].format, tc.type if tc else None)
+                    fmt = value_format(sheet, fields[use.field], use)
                     cells.append(display_value(value, column.datatype, fmt, trunc))
             table_rows.append(cells)
         return {
             "worksheet": sheet.id,
             "name": sheet.name,
+            "title": worksheet_title(ir, sheet, query.state.parameters),
             "rows": rendered.rows,
             "mark": rendered.mark,
             "spec": rendered.spec,

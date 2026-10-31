@@ -1707,6 +1707,14 @@
           "title": "Label",
           "type": "array"
         },
+        "label_text": {
+          "description": "自訂的標籤文字（Tableau 的「標籤＞文字」）；空的表示依 label 的欄位顯示",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Label Text",
+          "type": "array"
+        },
         "detail": {
           "items": {
             "$ref": "#/$defs/FieldUse"
@@ -2770,6 +2778,51 @@
       "title": "TableRelation",
       "type": "object"
     },
+    "TextRun": {
+      "additionalProperties": false,
+      "description": "自訂文字的一段：文字、欄位的值（依格式顯示）或參數的值；依序串接成標籤或標題。",
+      "properties": {
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "use": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parameter"
+        }
+      },
+      "title": "TextRun",
+      "type": "object"
+    },
     "TopNFilter": {
       "additionalProperties": false,
       "description": "依某個彙總運算式取前 N 或後 N；mode、values 為排名前先選取的成員（篩選對話框的「一般」頁）。",
@@ -3271,6 +3324,22 @@
             "$ref": "#/$defs/ReferenceLine"
           },
           "title": "Reference Lines",
+          "type": "array"
+        },
+        "formats": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "工作表上設定的數字格式（欄位鍵 → Tableau 格式字串），優先於欄位的預設格式",
+          "title": "Formats",
+          "type": "object"
+        },
+        "title": {
+          "description": "自訂的工作表標題（文字與參數的值）；空的表示以工作表名稱為標題",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Title",
           "type": "array"
         },
         "source_ref": {

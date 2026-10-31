@@ -57,6 +57,25 @@ function markOf(record: Record<string, unknown>, dimensions: Record<string, stri
   return mark;
 }
 
+/** 分面（欄列架上的維度把圓餅分成多個小圖）：容器寬高不適用於分面，依小圖的數量平分區塊的寬高。 */
+function sizeFacets(spec: Record<string, any>, width: number, height: number) {
+  const column = spec.encoding?.column?.field;
+  const row = spec.encoding?.row?.field;
+  if (!column && !row) return;
+  const values = (spec.data?.values ?? []) as Record<string, unknown>[];
+  const count = (field?: string) => (field ? new Set(values.map((v) => v[field])).size || 1 : 1);
+  const HEADER = 24; // 分面標題的高度
+  const GAP = 16;
+  spec.width = Math.max(Math.floor((width - 16) / count(column)) - GAP, 40);
+  spec.height = Math.max(Math.floor((height - HEADER) / count(row)) - HEADER - GAP, 40);
+  spec.autosize = { type: "pad" };
+  // 甜甜圈的洞以容器寬高計算，分面的小圖中改用固定的大小
+  const hole = Math.floor(Math.min(spec.width, spec.height) * 0.3);
+  visitSpecs(spec, (node) => {
+    if (node.mark?.innerRadius?.expr) node.mark = { ...node.mark, innerRadius: hole };
+  });
+}
+
 /** 多張圖（同一架上有多個量值）無法自動填滿容器：依區塊大小平分每張圖的寬高。 */
 function sizeConcat(spec: Record<string, any>, width: number, height: number) {
   const AXIS = 110; // 座標軸標籤與標題約占的寬度
@@ -145,6 +164,9 @@ export function WorksheetView({
       highlight(spec, rows);
     }
     sizeConcat(spec, element.clientWidth, element.clientHeight);
+    sizeFacets(spec, element.clientWidth, element.clientHeight);
+    // 文字表固定列高（height 為 step）：列數多時在區塊內捲動
+    element.dataset.scroll = typeof spec.height === "object" ? "true" : "false";
     embed(element, spec as any, { actions: false, renderer: "svg" })
       .then((result) => {
         if (disposed) {
@@ -197,7 +219,7 @@ export function WorksheetView({
     };
   }, [response, hideLegend, showTable, interactive, selectedKey]);
 
-  const title = response?.name ?? worksheet;
+  const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;
   const meta = (
     <span className="worksheet-meta">

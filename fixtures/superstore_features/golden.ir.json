@@ -896,6 +896,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -962,6 +963,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -991,6 +994,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1057,6 +1061,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -1086,6 +1092,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1133,6 +1140,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1170,6 +1179,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1211,6 +1221,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[4]"
     },
     {
@@ -1249,6 +1261,7 @@
         },
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1294,6 +1307,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[5]"
     },
     {
@@ -1333,6 +1348,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1363,6 +1379,7 @@
                 "table_calc": null
               }
             ],
+            "label_text": [],
             "detail": [],
             "tooltip": [],
             "shape": null,
@@ -1385,6 +1402,7 @@
             "color": null,
             "size": null,
             "label": [],
+            "label_text": [],
             "detail": [],
             "tooltip": [],
             "shape": null,
@@ -1398,6 +1416,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[6]"
     },
     {
@@ -1432,6 +1452,7 @@
             "table_calc": "tc_percent_of_total_sales"
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1462,6 +1483,8 @@
         }
       ],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[7]"
     },
     {
@@ -1499,6 +1522,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1511,6 +1535,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[8]"
     },
     {
@@ -1548,6 +1574,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1580,6 +1607,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[9]"
     },
     {
@@ -1617,6 +1646,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1649,6 +1679,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[10]"
     },
     {
@@ -1686,6 +1718,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1734,6 +1767,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[11]"
     },
     {
@@ -1771,6 +1806,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1783,6 +1819,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[12]"
     },
     {
@@ -1820,6 +1858,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1832,6 +1871,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[13]"
     },
     {
@@ -1861,6 +1902,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1873,6 +1915,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[14]"
     },
     {
@@ -1910,6 +1954,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -1943,6 +1988,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[15]"
     },
     {
@@ -1980,6 +2027,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2010,6 +2058,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[16]"
     },
     {
@@ -2047,6 +2097,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2077,6 +2128,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[17]"
     },
     {
@@ -2114,6 +2167,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2148,6 +2202,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[18]"
     },
     {
@@ -2188,6 +2244,7 @@
             "table_calc": "tc_difference_sales"
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [
           {
@@ -2235,6 +2292,8 @@
         }
       ],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[19]"
     },
     {
@@ -2272,6 +2331,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2284,6 +2344,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[20]"
     },
     {
@@ -2320,6 +2382,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2379,6 +2442,8 @@
           "source_ref": "/workbook/worksheets/worksheet[21]/table/panes/pane/reference-line[2]"
         }
       ],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[21]"
     },
     {
@@ -2408,6 +2473,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2476,6 +2542,8 @@
           "source_ref": "/workbook/worksheets/worksheet[22]/table/panes/pane/reference-line[2]"
         }
       ],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[22]"
     },
     {
@@ -2508,6 +2576,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [
           {
@@ -2568,6 +2637,8 @@
         }
       ],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[23]"
     },
     {
@@ -2596,6 +2667,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2632,6 +2704,7 @@
                 "table_calc": null
               }
             ],
+            "label_text": [],
             "detail": [],
             "tooltip": [],
             "shape": null,
@@ -2668,6 +2741,7 @@
                 "table_calc": null
               }
             ],
+            "label_text": [],
             "detail": [],
             "tooltip": [],
             "shape": null,
@@ -2681,6 +2755,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[24]"
     },
     {
@@ -2717,6 +2793,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [],
         "shape": null,
@@ -2747,6 +2824,7 @@
                 "table_calc": null
               }
             ],
+            "label_text": [],
             "detail": [],
             "tooltip": [],
             "shape": null,
@@ -2775,6 +2853,7 @@
             },
             "size": null,
             "label": [],
+            "label_text": [],
             "detail": [],
             "tooltip": [],
             "shape": null,
@@ -2788,6 +2867,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[25]"
     }
   ],

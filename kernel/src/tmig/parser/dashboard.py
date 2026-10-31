@@ -265,20 +265,27 @@ class DashboardParser:
         return Zone(kind="blank", **base)
 
     def _check_toggles(self, zones: list[Zone]) -> None:
-        """顯示／隱藏按鈕的區塊必須在同一個 dashboard 上；找不到時改為空白區塊。"""
+        """顯示／隱藏按鈕的區塊必須在同一個 dashboard 上。找不到的區塊（例如已刪除）在 Tableau 上
+        按了也沒有作用：只切換找得到的區塊；一個都找不到時改為空白區塊（記在略過的元素）。"""
         ids = {z.id for z in iter_zones(zones)}
         for zone in iter_zones(zones):
             if zone.button is None or zone.button.action != "toggle":
                 continue
             missing = [z for z in zone.button.zones if z not in ids]
-            if missing:
-                self.ctx.unsupported.append(
-                    Unsupported(
-                        source_ref=zone.source_ref,
-                        reason=f"顯示／隱藏按鈕的區塊 {'、'.join(missing)} 不在此 dashboard 上",
-                        element="zone",
-                    )
+            if not missing:
+                continue
+            self.ctx.ignored.append(
+                Unsupported(
+                    source_ref=zone.source_ref,
+                    reason=f"顯示／隱藏按鈕的區塊 {'、'.join(missing)} 不在此 dashboard 上"
+                    "（Tableau 上按了也沒有作用）",
+                    element="zone",
                 )
+            )
+            remaining = [z for z in zone.button.zones if z in ids]
+            if remaining:
+                zone.button = zone.button.model_copy(update={"zones": remaining})
+            else:
                 zone.kind, zone.button = "blank", None
 
     def _sheet(self, element: etree._Element, name: str | None) -> SheetState | None:

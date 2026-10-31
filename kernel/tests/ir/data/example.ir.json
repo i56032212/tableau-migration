@@ -193,6 +193,7 @@
             "table_calc": null
           }
         ],
+        "label_text": [],
         "detail": [],
         "tooltip": [
           {
@@ -280,6 +281,8 @@
         }
       ],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -312,6 +315,7 @@
         "color": null,
         "size": null,
         "label": [],
+        "label_text": [],
         "detail": [],
         "tooltip": [
           {
@@ -367,6 +371,8 @@
       "sorts": [],
       "table_calcs": [],
       "reference_lines": [],
+      "formats": {},
+      "title": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }
   ],

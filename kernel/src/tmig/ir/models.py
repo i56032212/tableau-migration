@@ -634,11 +634,29 @@ class Sort(IRModel):
         return self
 
 
+class TextRun(IRModel):
+    """自訂文字的一段：文字、欄位的值（依格式顯示）或參數的值；依序串接成標籤或標題。"""
+
+    text: str | None = None
+    use: FieldUse | None = None
+    parameter: Id | None = None
+
+    @model_validator(mode="after")
+    def _one(self) -> Self:
+        if sum(v is not None for v in (self.text, self.use, self.parameter)) != 1:
+            raise ValueError("text、use、parameter 必須、也只能指定一個")
+        return self
+
+
 class Marks(IRModel):
     type: MarkType
     color: FieldUse | None = None
     size: FieldUse | None = None
     label: list[FieldUse] = Field(default_factory=list)
+    label_text: list[TextRun] = Field(
+        default_factory=list,
+        description="自訂的標籤文字（Tableau 的「標籤＞文字」）；空的表示依 label 的欄位顯示",
+    )
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
     shape: FieldUse | None = None
@@ -707,6 +725,14 @@ class Worksheet(IRModel):
     sorts: list[Sort] = Field(default_factory=list)
     table_calcs: list[TableCalc] = Field(default_factory=list)
     reference_lines: list[ReferenceLine] = Field(default_factory=list)
+    formats: dict[str, str] = Field(
+        default_factory=dict,
+        description="工作表上設定的數字格式（欄位鍵 → Tableau 格式字串），優先於欄位的預設格式",
+    )
+    title: list[TextRun] = Field(
+        default_factory=list,
+        description="自訂的工作表標題（文字與參數的值）；空的表示以工作表名稱為標題",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")

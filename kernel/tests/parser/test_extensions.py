@@ -1208,7 +1208,6 @@ def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:
             "導覽按鈕的目標視窗找不到",
             "導覽按鈕的目標「Story」（storyboard）無法移轉",
             "導覽按鈕的目標 dashboard 無法移轉",
-            "顯示／隱藏按鈕的區塊 z99 不在此 dashboard 上",
             "匯出按鈕的格式 crosstab v0 不支援",
             "按鈕的動作 tabdoc:something-else v0 不支援",
             "dashboard 物件（不是按鈕）v0 不支援",
@@ -1217,3 +1216,8 @@ def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:
     )
     home = ir.dashboards[0]
     assert all(z.kind in ("container", "blank") for z in iter_zones(home.zones))
+    # 顯示／隱藏的區塊不存在（例如已刪除）：Tableau 上按了也沒有作用，改為空白區塊並記在略過的元素
+    assert any(
+        u.reason == "顯示／隱藏按鈕的區塊 z99 不在此 dashboard 上（Tableau 上按了也沒有作用）"
+        for u in ir.ignored
+    )
