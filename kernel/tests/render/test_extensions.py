@@ -47,7 +47,8 @@ def test_measure_values_text_table_is_folded() -> None:
     spec = render_features("ws_segment_kpis")
     values = spec["data"]["values"]
     assert len(values) == 12  # 3 個客群 × 4 個量值
-    assert [v["__mn"] for v in values[:4]] == ["Sales", "Profit", "CNTD(Order ID)", "利潤率"]
+    # CNTD(Order ID) 在 Measure Names 中的別名是「訂單數」
+    assert [v["__mn"] for v in values[:4]] == ["Sales", "Profit", "訂單數", "利潤率"]
     assert values[3]["__mv_label"].endswith("%")  # 各量值用自己的格式
     assert spec["encoding"]["x"]["field"] == "__mn"
     assert spec["encoding"]["text"]["field"] == "__mv_label"

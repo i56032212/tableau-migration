@@ -114,6 +114,13 @@ class ParamRef(IRModel):
 # ---------------------------------------------------------------- 資料源
 
 
+class MemberAlias(IRModel):
+    """別名：維度成員或參數值的顯示名稱（Tableau 的成員別名、參數的「顯示為」）。"""
+
+    value: Scalar = Field(description="原始值；Null 的別名為 null")
+    label: str = Field(description="顯示的名稱")
+
+
 class Calc(IRModel):
     """計算欄位。解析器只填 formula；ast 與 level 由公式引擎（B2）補上。"""
 
@@ -141,6 +148,11 @@ class DataField(IRModel):
         description="Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None",
     )
     calc: Calc | None = None
+    aliases: list[MemberAlias] = Field(
+        default_factory=list,
+        description="成員別名：只改變維度成員的顯示（標題、標籤、篩選控制項），"
+        "篩選、排序與計算仍用原始值",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -564,6 +576,9 @@ class Parameter(IRModel):
     datatype: DataType
     allowed: Allowed
     value: Scalar = Field(description="目前值")
+    aliases: list[MemberAlias] = Field(
+        default_factory=list, description="參數值的顯示名稱（控制項與標題中顯示）"
+    )
     source_ref: SourceRef
 
 
@@ -632,6 +647,13 @@ class Sort(IRModel):
         if (self.kind == "manual") != bool(self.manual_values):
             raise ValueError("只有 kind 為 manual 時必須、也只能指定 manual_values")
         return self
+
+
+class MeasureAlias(IRModel):
+    """Measure Names 的別名（資料源中設定）：量值在 Measure Names 的標題與圖例中顯示的名稱。"""
+
+    use: FieldUse = Field(description="Measure Values 卡上的量值")
+    label: str
 
 
 class TextRun(IRModel):
@@ -720,6 +742,9 @@ class Worksheet(IRModel):
     )
     measure_values: list[FieldUse] = Field(
         default_factory=list, description="Measure Values 卡上的量值，依顯示順序"
+    )
+    measure_aliases: list[MeasureAlias] = Field(
+        default_factory=list, description="Measure Names 的別名：量值在 Measure Names 中的顯示名稱"
     )
     filters: list[Filter] = Field(default_factory=list)
     sorts: list[Sort] = Field(default_factory=list)

@@ -35,6 +35,7 @@
           "column": "Region",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -49,6 +50,7 @@
           "column": "Category",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -63,6 +65,7 @@
           "column": "Order Date",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -77,6 +80,7 @@
           "column": "Sales",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -91,6 +95,7 @@
           "column": "Profit",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
@@ -109,6 +114,7 @@
             "ast": null,
             "level": null
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -127,6 +133,7 @@
             "ast": null,
             "level": null
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         }
       ],
@@ -148,6 +155,7 @@
         "step": 1
       },
       "value": 10,
+      "aliases": [],
       "source_ref": "/workbook/datasources/datasource[1]/column[1]"
     }
   ],
@@ -210,6 +218,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "categorical",
@@ -334,6 +343,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "range",

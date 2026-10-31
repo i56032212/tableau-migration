@@ -48,6 +48,7 @@ from tmig.data.sources import SourceConnectionError
 from tmig.ir import IR, iter_zones
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
+from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import build_spec, caption, value_format, worksheet_title
 from tmig.sqlgen.query import (
@@ -386,6 +387,12 @@ def create_app(
         fields = {f.id: f for ds in ir.datasources for f in ds.fields}
         shown = [c for c in query.columns if c.role != "sort" and c.use is not None]
         index = {key: i for i, key in enumerate(result.columns)}
+        # 成員別名：資料表與圖表相同，顯示別名
+        aliases = {
+            c.key: member_aliases(fields[c.use.field], c.use)
+            for c in shown
+            if c.use is not None and c.role == "dimension"
+        }
 
         def cells(row: Any, positions: dict[str, int], dropped: list[str]) -> list[str]:
             out: list[str] = []
@@ -396,7 +403,10 @@ def create_app(
                     continue
                 value = row[positions[column.key]] if column.key in positions else None
                 use = column.use
-                if use.date is not None and use.date.kind == "part" and value is not None:
+                alias = aliases.get(column.key, {}).get(alias_key(value))
+                if alias is not None:
+                    out.append(alias)
+                elif use.date is not None and use.date.kind == "part" and value is not None:
                     out.append(str(value))
                 else:
                     trunc = use.date.unit if use.date is not None else None

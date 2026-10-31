@@ -15,6 +15,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from tmig.ir.models import IR, FieldUse, TableCalc
+from tmig.planner.state import use_key
 from tmig.sqlgen.query import OutputColumn
 
 NumericMode = Literal["auto", "raw", "display"]
@@ -147,6 +148,11 @@ def suggest_sheet(
     candidates = {
         c.key: _labels(ir, c.use, sheet.table_calcs) for c in outputs if c.use is not None
     }
+    # Measure Names 的別名：Tableau 匯出的資料以別名為量值的欄名
+    for alias in sheet.measure_aliases:
+        key = use_key(alias.use)
+        if key in candidates:
+            candidates[key].insert(0, alias.label)
     mapping = SheetMapping()
     unmatched: list[str] = []
     if headers is None:

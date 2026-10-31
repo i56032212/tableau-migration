@@ -15,6 +15,12 @@ export interface FieldUse {
   table_calc: string | null;
 }
 
+/** 別名：維度成員或參數值的顯示名稱（只改變顯示，篩選仍用原始值）。 */
+export interface MemberAlias {
+  value: Scalar;
+  label: string;
+}
+
 export interface DataField {
   id: string;
   name: string;
@@ -22,6 +28,7 @@ export interface DataField {
   role: "dimension" | "measure";
   datatype: string;
   format: string | null;
+  aliases?: MemberAlias[];
 }
 
 export interface Datasource {
@@ -45,6 +52,7 @@ export interface Parameter {
   datatype: string;
   allowed: Allowed;
   value: Scalar;
+  aliases?: MemberAlias[];
 }
 
 export interface FieldFilter {

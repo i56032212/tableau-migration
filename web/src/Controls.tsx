@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { currentFilter, describeRelative, displayScalar, fieldCaption, fieldKey, findFilter, selectedValues } from "./state";
+import {
+  currentFilter,
+  describeRelative,
+  displayScalar,
+  fieldCaption,
+  fieldKey,
+  findFilter,
+  memberLabel,
+  parameterLabel,
+  selectedValues,
+} from "./state";
 import type { FilterValue, IR, Parameter, Scalar, Zone } from "./types";
 
 interface FilterProps {
@@ -90,6 +100,7 @@ function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) 
 
   const selected = selectedValues(value, domain);
   const selectedKeys = new Set(selected.map((v) => JSON.stringify(v)));
+  const label = (v: Scalar) => memberLabel(ir, use, v);
   const single = control === "single_dropdown" || control === "single_list" || control === "single_slider";
   const setSelection = (values: Scalar[]) => {
     if (values.length === domain.length) onChange(key, { mode: "all", values: [] });
@@ -112,7 +123,7 @@ function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) 
           <option value="__all__">（全部）</option>
           {domain.map((v) => (
             <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
-              {displayScalar(v)}
+              {label(v)}
             </option>
           ))}
         </select>
@@ -138,7 +149,7 @@ function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) 
   }
 
   const summary =
-    selected.length === domain.length ? "（全部）" : selected.length === 0 ? "（無）" : selected.map(displayScalar).join("、");
+    selected.length === domain.length ? "（全部）" : selected.length === 0 ? "（無）" : selected.map(label).join("、");
   return (
     <fieldset className="control" data-control={control}>
       <legend>{title}</legend>
@@ -172,7 +183,7 @@ function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) 
                     setSelection(next);
                   }}
                 />
-                {displayScalar(v)}
+                {label(v)}
               </label>
             );
           })}
@@ -203,7 +214,7 @@ export function ParameterControl({ parameter, control, value, onChange }: Parame
         <select value={JSON.stringify(value)} onChange={(e) => onChange(JSON.parse(e.target.value) as Scalar)}>
           {options.map((v) => (
             <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
-              {displayScalar(v)}
+              {parameterLabel(parameter, v)}
             </option>
           ))}
         </select>
@@ -214,7 +225,7 @@ export function ParameterControl({ parameter, control, value, onChange }: Parame
     return (
       <fieldset className="control" data-control="single_slider">
         <legend>
-          {parameter.caption}：<strong>{displayScalar(value)}</strong>
+          {parameter.caption}：<strong>{parameterLabel(parameter, value)}</strong>
         </legend>
         <input
           type="range"

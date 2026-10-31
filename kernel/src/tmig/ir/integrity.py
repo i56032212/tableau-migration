@@ -222,6 +222,9 @@ def check_references(ir: IR) -> list[str]:
                 errors.append(f"{base}.panes[{i}].measure：量值不在{pane.axis}架上")
         for i, use in enumerate(ws.measure_values):
             check_use(use, ws.datasource, f"{base}.measure_values[{i}]", tcs)
+        for i, alias in enumerate(ws.measure_aliases):
+            if alias.use not in ws.measure_values:
+                errors.append(f"{base}.measure_aliases[{i}]：量值不在 Measure Values 卡上")
         for flt in ws.filters:
             check_filter(flt, ws.datasource, f"{base}.filters[{flt.id}]", tcs)
         for i, srt in enumerate(ws.sorts):

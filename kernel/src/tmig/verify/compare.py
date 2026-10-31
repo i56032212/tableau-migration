@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tmig.data.executor import QueryResult, format_value
+from tmig.ir import IR
+from tmig.render.aliases import member_aliases
 from tmig.sqlgen.query import OutputColumn
 from tmig.verify.mapping import NumericMode, SheetMapping
 from tmig.verify.normalize import (
@@ -103,6 +105,26 @@ def _expected_value(text: str, datatype: str) -> Any:
     return text
 
 
+def dimension_aliases(ir: IR, columns: list[OutputColumn]) -> dict[str, dict[str, Any]]:
+    """維度欄的成員別名（欄位鍵 → 顯示名稱 → 原始值），供 compare 把匯出資料中的別名換回原始值。"""
+    fields = {f.id: f for ds in ir.datasources for f in ds.fields}
+    result: dict[str, dict[str, Any]] = {}
+    for column in columns:
+        if column.role != "dimension" or column.use is None or column.use.field not in fields:
+            continue
+        data_field = fields[column.use.field]
+        if member_aliases(data_field, column.use):
+            result[column.key] = {a.label: a.value for a in data_field.aliases}
+    return result
+
+
+def _expected_dimension(text: str, datatype: str, labels: dict[str, Any] | None) -> Any:
+    """預期 CSV 的維度值；是成員別名時換回原始值（與查詢結果的值以同樣方式正規化）。"""
+    if labels and text in labels:
+        return normalize_actual(labels[text], datatype)
+    return _expected_value(text, datatype)
+
+
 def _numbers_match(text: str, actual: float, mode: NumericMode) -> tuple[bool, str | None]:
     parsed = parse_number(text)
     expected = parsed.value
@@ -125,7 +147,10 @@ def compare(
     result: QueryResult,
     columns: list[OutputColumn],
     mapping: SheetMapping,
+    aliases: dict[str, dict[str, Any]] | None = None,
 ) -> Comparison:
+    """aliases：維度欄的成員別名（欄位鍵 → 顯示名稱 → 原始值）。Tableau 匯出的資料中維度可能是
+    別名，比對前換回原始值；是原始值時照常比對。"""
     headers, body = read_csv(expected_text)
     comparison = Comparison(expected_rows=len(body), actual_rows=len(result.rows))
     info = {c.key: c for c in columns}
@@ -153,8 +178,12 @@ def compare(
     dims = [(i, key) for i, key in mapped if info[key].role == "dimension"]
     measures = [(i, key) for i, key in mapped if info[key].role == "measure"]
 
+    reverse = aliases or {}
+
     def expected_key(row: list[str]) -> tuple[Any, ...]:
-        return tuple(_expected_value(row[i], info[key].datatype) for i, key in dims)
+        return tuple(
+            _expected_dimension(row[i], info[key].datatype, reverse.get(key)) for i, key in dims
+        )
 
     def actual_key(row: tuple[Any, ...]) -> tuple[Any, ...]:
         return tuple(normalize_actual(row[index[key]], info[key].datatype) for _, key in dims)

@@ -35,6 +35,7 @@
           "column": "Row ID",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
         {
@@ -49,6 +50,7 @@
           "column": "Order ID",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
         {
@@ -63,6 +65,7 @@
           "column": "Order Date",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
         {
@@ -77,6 +80,7 @@
           "column": "Ship Date",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
         {
@@ -91,6 +95,7 @@
           "column": "Ship Mode",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
         {
@@ -105,6 +110,7 @@
           "column": "Customer ID",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
         {
@@ -119,6 +125,7 @@
           "column": "Customer Name",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
         {
@@ -133,6 +140,7 @@
           "column": "Segment",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
         {
@@ -147,6 +155,7 @@
           "column": "Country/Region",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
         {
@@ -161,6 +170,7 @@
           "column": "City",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
         {
@@ -175,6 +185,7 @@
           "column": "State/Province",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
         {
@@ -189,6 +200,7 @@
           "column": "Postal Code",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -203,6 +215,7 @@
           "column": "Region",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
         {
@@ -217,6 +230,7 @@
           "column": "Product ID",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
         {
@@ -231,6 +245,7 @@
           "column": "Category",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
         {
@@ -245,6 +260,7 @@
           "column": "Sub-Category",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
         {
@@ -259,6 +275,7 @@
           "column": "Product Name",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
         {
@@ -273,6 +290,7 @@
           "column": "Sales",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
         {
@@ -287,6 +305,7 @@
           "column": "Quantity",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
         {
@@ -301,6 +320,7 @@
           "column": "Discount",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
         {
@@ -315,6 +335,7 @@
           "column": "Profit",
           "table": null,
           "calc": null,
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
         {
@@ -366,6 +387,7 @@
             },
             "level": "aggregate"
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -413,6 +435,7 @@
             },
             "level": "lod"
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -464,6 +487,7 @@
             },
             "level": "aggregate"
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -502,6 +526,7 @@
             },
             "level": "table_calc"
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -555,6 +580,7 @@
             },
             "level": "aggregate"
           },
+          "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
@@ -617,7 +643,8 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource[2]/column[9]"
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[10]"
         },
         {
           "id": "f_ship_speed",
@@ -675,7 +702,13 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource[2]/column[10]"
+          "aliases": [
+            {
+              "value": "Other",
+              "label": "Standard"
+            }
+          ],
+          "source_ref": "/workbook/datasources/datasource[2]/column[11]"
         },
         {
           "id": "f_quantity_bin",
@@ -725,7 +758,8 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource[2]/column[11]"
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[12]"
         },
         {
           "id": "f_selected_region_sales",
@@ -786,7 +820,8 @@
             },
             "level": "row"
           },
-          "source_ref": "/workbook/datasources/datasource[2]/column[12]"
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[13]"
         },
         {
           "id": "f_zero",
@@ -814,7 +849,8 @@
             },
             "level": "aggregate"
           },
-          "source_ref": "/workbook/datasources/datasource[2]/column[13]"
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[14]"
         }
       ],
       "filters": [
@@ -857,6 +893,24 @@
         ]
       },
       "value": "East",
+      "aliases": [
+        {
+          "value": "Central",
+          "label": "中區"
+        },
+        {
+          "value": "East",
+          "label": "東區"
+        },
+        {
+          "value": "South",
+          "label": "南區"
+        },
+        {
+          "value": "West",
+          "label": "西區"
+        }
+      ],
       "source_ref": "/workbook/datasources/datasource[1]/column"
     }
   ],
@@ -905,6 +959,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "categorical",
@@ -1005,6 +1060,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "categorical",
@@ -1105,6 +1161,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "categorical",
@@ -1223,6 +1280,18 @@
           "table_calc": null
         }
       ],
+      "measure_aliases": [
+        {
+          "use": {
+            "field": "f_order_id",
+            "agg": "countd",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          },
+          "label": "訂單數"
+        }
+      ],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -1293,6 +1362,7 @@
           "table_calc": null
         }
       ],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "range",
@@ -1422,6 +1492,7 @@
         }
       ],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -1479,6 +1550,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [
@@ -1545,6 +1617,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -1599,6 +1672,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "tuple",
@@ -1673,6 +1747,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "tuple",
@@ -1747,6 +1822,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "tuple",
@@ -1837,6 +1913,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -1891,6 +1968,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -1937,6 +2015,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -1991,6 +2070,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "relative_date",
@@ -2066,6 +2146,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "condition",
@@ -2138,6 +2219,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "condition",
@@ -2210,6 +2292,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [
         {
           "kind": "top_n",
@@ -2297,6 +2380,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [
@@ -2378,6 +2462,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -2431,6 +2516,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -2524,6 +2610,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -2644,6 +2731,7 @@
       },
       "panes": [],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [
@@ -2797,6 +2885,7 @@
         }
       ],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],
@@ -2911,6 +3000,7 @@
         }
       ],
       "measure_values": [],
+      "measure_aliases": [],
       "filters": [],
       "sorts": [],
       "table_calcs": [],

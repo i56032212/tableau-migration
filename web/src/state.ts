@@ -1,4 +1,15 @@
-import type { Action, FieldFilter, FieldUse, FilterValue, IR, Mark, QueryState, Scalar } from "./types";
+import type {
+  Action,
+  FieldFilter,
+  FieldUse,
+  FilterValue,
+  IR,
+  Mark,
+  MemberAlias,
+  Parameter,
+  QueryState,
+  Scalar,
+} from "./types";
 
 /** 檢視器的狀態：各工作表的篩選、參數、篩選動作的選取。 */
 export interface ViewState {
@@ -199,4 +210,20 @@ export function displayScalar(value: Scalar): string {
   if (value === null) return "Null";
   if (typeof value === "boolean") return value ? "True" : "False";
   return String(value);
+}
+
+function aliasOf(aliases: MemberAlias[] | undefined, value: Scalar): string | undefined {
+  return aliases?.find((a) => a.value === value)?.label;
+}
+
+/** 篩選控制項中維度成員的顯示名稱：成員別名只用於維度的原始成員（沒有日期衍生與彙總）。 */
+export function memberLabel(ir: IR, use: FieldUse, value: Scalar): string {
+  if (use.date || use.agg || use.table_calc) return displayScalar(value);
+  const field = ir.datasources.flatMap((d) => d.fields).find((f) => f.id === use.field);
+  return aliasOf(field?.aliases, value) ?? displayScalar(value);
+}
+
+/** 參數值的顯示名稱（Tableau 的「顯示為」）。 */
+export function parameterLabel(parameter: Parameter, value: Scalar): string {
+  return aliasOf(parameter.aliases, value) ?? displayScalar(value);
 }

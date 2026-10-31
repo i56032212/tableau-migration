@@ -19,6 +19,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     FilterStage,
+    MemberAlias,
     ParamRef,
     RangeFilter,
     RelativeDateFilter,
@@ -600,9 +601,23 @@ def ui_attr(element: etree._Element, name: str) -> str | None:
     return attr(element, name)
 
 
-def has_aliases(column: etree._Element | None) -> bool:
-    aliases = child(column, "aliases")
-    return aliases is not None and any(True for _ in descendants(aliases, "alias"))
+def member_aliases(
+    ctx: ParseContext, column: etree._Element | None, datatype: str, what: str
+) -> list[MemberAlias]:
+    """成員別名：<aliases><alias key='"High School"' value='H-Sch' />；key 是 Tableau 常值，
+    %null% 為 Null 的別名。無法解析的 key 列為不支援（別名會改變顯示值，不能默默略過）。"""
+    result: list[MemberAlias] = []
+    for alias in descendants(child(column, "aliases"), "alias"):
+        key, label = alias.get("key"), alias.get("value")
+        if key is None or label is None:
+            continue
+        try:
+            value = parse_literal(key, datatype)
+        except LiteralError as exc:
+            ctx.flag(alias, f"{what}的別名「{key}」無法解析：{exc}")
+            continue
+        result.append(MemberAlias(value=value, label=label))
+    return result
 
 
 def field_label(name: str) -> str:

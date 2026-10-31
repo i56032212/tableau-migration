@@ -1,13 +1,13 @@
 Segment,Measure Names,Measure Values
 Consumer,Sales,1161401.345
 Consumer,Profit,134119.20919999995
-Consumer,Distinct count of Order ID,2586
+Consumer,訂單數,2586
 Consumer,利潤率,0.11548050101491829
 Corporate,Sales,706146.3668
 Corporate,Profit,91979.13399999999
-Corporate,Distinct count of Order ID,1514
+Corporate,訂單數,1514
 Corporate,利潤率,0.13025505521867395
 Home Office,Sales,429653.1485
 Home Office,Profit,60298.67849999999
-Home Office,Distinct count of Order ID,909
+Home Office,訂單數,909
 Home Office,利潤率,0.14034268970334332

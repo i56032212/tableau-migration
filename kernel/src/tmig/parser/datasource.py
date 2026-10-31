@@ -25,6 +25,7 @@ from tmig.ir.models import (
     FieldUse,
     LiveConnection,
     LogicalTable,
+    MemberAlias,
     ModelRelation,
     Parameter,
     PublishedSource,
@@ -36,7 +37,7 @@ from tmig.ir.models import (
 from tmig.ir.scope import DatasourceScope
 from tmig.parser.connections import DIALECTS, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
-from tmig.parser.fields import FilterParser, has_aliases, instance_key, use_from_instance
+from tmig.parser.fields import FilterParser, instance_key, member_aliases, use_from_instance
 from tmig.parser.groups import (
     GroupError,
     bin_formula,
@@ -152,10 +153,32 @@ def parse_parameters(ctx: ParseContext, ds_el: etree._Element) -> None:
             datatype=datatype,  # type: ignore[arg-type]
             allowed=allowed,
             value=value,
+            aliases=_parameter_aliases(ctx, column, datatype, caption),
             source_ref=xpath(column),
         )
         ctx.parameters.append(param)
         ctx.params_by_name[name] = param
+
+
+def _parameter_aliases(
+    ctx: ParseContext, column: etree._Element, datatype: str, caption: str
+) -> list[MemberAlias]:
+    """參數值的顯示名稱：<aliases>，或清單中各 <member alias=…>（兩者 Tableau 都會寫，內容相同）。"""
+    aliases = member_aliases(ctx, column, datatype, f"參數「{caption}」")
+    if aliases:
+        return aliases
+    result: list[MemberAlias] = []
+    for member in descendants(child(column, "members"), "member"):
+        label = member.get("alias")
+        if label is None:
+            continue
+        try:
+            result.append(
+                MemberAlias(value=parse_literal(member.get("value"), datatype), label=label)
+            )
+        except LiteralError as exc:
+            ctx.flag(member, f"參數「{caption}」的別名「{member.get('value')}」無法解析：{exc}")
+    return result
 
 
 def _allowed(column: etree._Element, domain: str, datatype: str) -> Allowed | None:
@@ -529,8 +552,7 @@ class DatasourceParser:
         if datatype not in DATATYPES:
             self.ctx.flag(anchor, f"欄位「{caption}」的型別 {datatype} v0 不支援")
             return
-        if has_aliases(column):
-            self.ctx.flag(anchor, f"欄位「{caption}」設有成員別名，會改變顯示值，v0 不支援")
+        aliases = member_aliases(self.ctx, column, datatype, f"欄位「{caption}」")
         role = (column.get("role") if column is not None else None) or (
             "measure" if datatype in ("integer", "real") else "dimension"
         )
@@ -551,6 +573,7 @@ class DatasourceParser:
                 column=physical.get(name, strip_brackets(name)),
                 table=self._field_table(state, record),
                 calc=None,
+                aliases=aliases,
                 source_ref=xpath(anchor),
             )
         )
@@ -757,8 +780,7 @@ def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) ->
     if datatype not in DATATYPES:
         ctx.flag(column, f"計算欄位「{caption}」的型別 {datatype} v0 不支援")
         return None
-    if has_aliases(column):
-        ctx.flag(column, f"計算欄位「{caption}」設有成員別名，會改變顯示值，v0 不支援")
+    aliases = member_aliases(ctx, column, datatype, f"計算欄位「{caption}」")
     role = column.get("role") or ("measure" if datatype in ("integer", "real") else "dimension")
     agg_text = column.get("aggregation", "")
     data_field = DataField(
@@ -772,6 +794,7 @@ def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) ->
         hidden=column.get("hidden") == "true",
         column=None,
         calc=Calc(formula=formula),
+        aliases=aliases,
         source_ref=xpath(column),
     )
     state.add_field(data_field)

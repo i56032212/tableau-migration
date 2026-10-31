@@ -42,6 +42,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.planner.state import use_key
+from tmig.render.aliases import alias_key, member_aliases, parameter_label
 from tmig.render.format import (
     PERCENT_TABLE_CALCS,
     axis_format,
@@ -116,6 +117,8 @@ class Channel:
     datatype: str
     use: FieldUse
     format: str | None = None
+    aliases: dict[Any, str] = field(default_factory=dict)
+    """成員別名（原始值的比對鍵 → 顯示名稱）；只有離散維度的原始成員有。"""
 
 
 @dataclass
@@ -541,6 +544,7 @@ def build_spec(
             datatype=column.datatype,
             use=column.use,
             format=value_format(ws, data_field, column.use),
+            aliases=member_aliases(data_field, column.use) if column.role == "dimension" else {},
         )
     uses = [*ws.rows, *ws.columns, *ws.marks.uses()]
     uses += [u for pane in ws.panes for u in pane.marks.uses()]
@@ -569,7 +573,8 @@ def build_spec(
         pane_values = {}
     builder.pane_values = pane_values
     if long:
-        values = _fold(values, [builder.ch(u) for u in ws.measure_values])
+        names = {use_key(a.use): a.label for a in ws.measure_aliases}
+        values = _fold(values, [builder.ch(u) for u in ws.measure_values], names)
         channels[MEASURE_NAMES] = Channel(
             "__mn",
             "__mn",
@@ -726,11 +731,13 @@ def compose_text(
             param = next((p for p in ir.parameters if p.id == run.parameter), None)
             value = params.get(run.parameter)
             if param is not None and value is not None:
-                parts.append(format_value(value, param.datatype))
+                label = parameter_label(param, value)
+                parts.append(label if label is not None else format_value(value, param.datatype))
         elif run.use is not None and channels is not None and record is not None:
             key = run.use.field if run.use.field in SPECIAL_FIELDS else use_key(run.use)
             ch = channels.get(key)
-            if ch is not None and record.get(ch.name) is not None:
+            # Null 的欄位不顯示，除非 Null 設有別名
+            if ch is not None and (record.get(ch.name) is not None or None in ch.aliases):
                 parts.append(str(record.get(ch.label, "")))
     return "".join(parts)
 
@@ -773,7 +780,10 @@ def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str
             use = ch.use
             trunc = use.date.unit if use.date is not None and use.date.kind == "trunc" else None
             record[ch.name] = _json_value(raw)
-            if use.date is not None and use.date.kind == "part" and raw is not None:
+            alias = ch.aliases.get(alias_key(raw)) if ch.aliases else None
+            if alias is not None:
+                record[ch.label] = alias
+            elif use.date is not None and use.date.kind == "part" and raw is not None:
                 record[ch.label] = str(raw)
             else:
                 record[ch.label] = format_value(raw, ch.datatype, ch.format, trunc)
@@ -1023,13 +1033,16 @@ def _table_calc_type(ws: Worksheet, use: FieldUse) -> str | None:
     return tc.type if tc is not None else None
 
 
-def _fold(values: list[dict[str, Any]], measures: list[Channel]) -> list[dict[str, Any]]:
-    """寬表 → 長表：每個量值一列，加上 Measure Names（名稱、順序）與 Measure Values（值、文字）。"""
+def _fold(
+    values: list[dict[str, Any]], measures: list[Channel], names: dict[str, str]
+) -> list[dict[str, Any]]:
+    """寬表 → 長表：每個量值一列，加上 Measure Names（名稱、順序）與 Measure Values（值、文字）。
+    names：Measure Names 的別名（量值的欄位鍵 → 顯示名稱）。"""
     long: list[dict[str, Any]] = []
     for record in values:
         for i, ch in enumerate(measures):
             item = dict(record)
-            item["__mn"] = ch.title
+            item["__mn"] = names.get(use_key(ch.use), ch.title)
             item["__mn_i"] = i
             item["__mv"] = record[ch.name]
             item["__mv_label"] = record[ch.label]

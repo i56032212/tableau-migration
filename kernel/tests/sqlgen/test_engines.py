@@ -31,7 +31,7 @@ from tmig.sqlgen.expr import ExprCompiler
 from tmig.sqlgen.query import domain_sql, worksheet_sql
 from tmig.sqlgen.source import datasource_source
 from tmig.verify.cases import case_state, load_cases
-from tmig.verify.compare import compare
+from tmig.verify.compare import compare, dimension_aliases
 from tmig.verify.mapping import load_mapping
 
 from ..engines import (
@@ -221,6 +221,7 @@ def test_fixture_checks(engine: Engine, directory: Path) -> None:
                 result,
                 query.columns,
                 mapping.sheets[sheet.worksheet],
+                dimension_aliases(ir, query.columns),
             )
             if not comparison.ok:
                 failures.append(f"{sheet.worksheet}／{case.name}：{comparison.errors[:2]}")

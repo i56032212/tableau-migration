@@ -27,6 +27,8 @@
 - 各標記卡的詳細程度不同（甜甜圈、依客群分色的折線）時，匯出的資料以工作表上所有維度的組合計算：
   Category Donut 為各類別（MIN(0) 為 0）、Region Sales and Segment Profit 為各地區 × 客群
 - 參考線只影響圖表：Sub-Category Sales、Region Sales Bands 的預期結果就是各標記的銷售額
+- 別名：匯出的資料中維度成員與 Measure Names 以別名顯示（Ship Speed 的 Other 為 Standard、
+  Segment KPIs 的 CNTD(Order ID) 為「訂單數」）；參數的別名只影響控制項的顯示
 """
 
 from __future__ import annotations
@@ -145,7 +147,7 @@ def segment_kpis(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]
         for name, value in (
             ("Sales", sales),
             ("Profit", profit),
-            ("Distinct count of Order ID", orders),
+            ("訂單數", orders),
             ("利潤率", profit / sales),
         ):
             body.append([segment, name, value])
@@ -258,7 +260,8 @@ def sales_by_ship_speed(rows: list[Row], case: Case) -> tuple[list[str], list[li
     sales: dict[str, float] = defaultdict(float)
     for row in rows:
         if keep(row):
-            speed = "Fast" if row["Ship Mode"] in ("First Class", "Same Day") else "Other"
+            # Other 的別名是 Standard（Tableau 匯出的資料以別名顯示）
+            speed = "Fast" if row["Ship Mode"] in ("First Class", "Same Day") else "Standard"
             sales[speed] += row["Sales"]
     return ["Ship Speed", "Sales"], [[k, v] for k, v in sorted(sales.items())]
 

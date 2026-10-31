@@ -30,6 +30,7 @@ from tmig.ir.models import (
     Filter,
     Marks,
     MarkType,
+    MeasureAlias,
     Pane,
     ParamRef,
     ReferenceLine,
@@ -53,7 +54,7 @@ from tmig.parser.fields import (
     value_type,
 )
 from tmig.parser.refs import qualified_parts
-from tmig.parser.twbx import attr, child, children, local_name, text_of, xpath
+from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
 
@@ -310,7 +311,9 @@ class SheetParser:
         marks, panes, mark_dims = self._marks(
             child(table, "panes"), rows, cols, _folded_axes(child(table, "style"))
         )
-        measure_values = self._measure_values(view, [*rows, *cols, *marks.uses()], panes)
+        measure_values, measure_aliases = self._measure_values(
+            view, [*rows, *cols, *marks.uses()], panes
+        )
         card_uses = [*rows, *cols, *marks.uses(), *(u for p in panes for u in p.marks.uses())]
         if not measure_values and any(u.field == MEASURE_VALUES for u in card_uses):
             return None  # 無法得知 Measure Values 的量值（已列為不支援）
@@ -332,6 +335,7 @@ class SheetParser:
             marks=marks,
             panes=panes,
             measure_values=measure_values,
+            measure_aliases=measure_aliases,
             filters=filters,
             sorts=sorts,
             table_calcs=table_calcs,
@@ -771,8 +775,25 @@ class SheetParser:
 
     def _measure_values(
         self, view: etree._Element, uses: list[FieldUse], panes: list[Pane]
-    ) -> list[FieldUse]:
-        """Measure Values 卡上的量值：Measure Names 篩選選取的量值，依手動排序的順序。"""
+    ) -> tuple[list[FieldUse], list[MeasureAlias]]:
+        """Measure Values 卡上的量值（Measure Names 篩選選取的量值，依手動排序的順序）與其別名。"""
+        values = self._measure_value_uses(view, uses, panes)
+        assert self.ds is not None
+        labels: dict[str, str] = {}
+        for column in children(self.ds.element, "column"):
+            if column.get("name") != "[:Measure Names]":
+                continue
+            for alias in descendants(child(column, "aliases"), "alias"):
+                key, label = alias.get("key"), alias.get("value")
+                if key is not None and label is not None:
+                    labels[instance_key(str(parse_literal(key, "string")))] = label
+        aliases = [MeasureAlias(use=use, label=labels[key]) for key, use in values if key in labels]
+        return [use for _, use in values], aliases
+
+    def _measure_value_uses(
+        self, view: etree._Element, uses: list[FieldUse], panes: list[Pane]
+    ) -> list[tuple[str, FieldUse]]:
+        """Measure Values 卡上的量值與其欄位實例（例如 [avg:Age:qk]），依顯示順序。"""
         all_uses = uses + [u for p in panes for u in p.marks.uses()]
         used = any(u.field == MEASURE_VALUES for u in all_uses)
         names_used = any(u.field == MEASURE_NAMES for u in all_uses)
@@ -809,7 +830,7 @@ class SheetParser:
                 if text_of(b) != "%all%"
             ]
             refs.sort(key=lambda r: ranked.index(r) if r in ranked else len(ranked))
-        result: list[FieldUse] = []
+        result: list[tuple[str, FieldUse]] = []
         for ref in refs:
             use = self._use(ref, element, "Measure Values 的量值")
             if use is None:
@@ -818,7 +839,7 @@ class SheetParser:
             if not is_aggregate(self.ds, use):
                 self.ctx.flag(element, f"Measure Values 中的 {ref} 不是量值")
                 continue
-            result.append(use)
+            result.append((instance_key(ref), use))
         return result
 
     def _member_refs(self, group: etree._Element | None) -> list[str] | None:

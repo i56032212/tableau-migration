@@ -115,13 +115,15 @@ def test_column_overrides(tmp_path: Path) -> None:
     assert (quantity.hidden, quantity.role, quantity.default_agg) == (True, "dimension", None)
 
 
-def test_member_aliases_are_unsupported(tmp_path: Path) -> None:
+def test_member_aliases_are_kept(tmp_path: Path) -> None:
+    """成員別名只改變顯示（詳見 render/test_aliases.py）。"""
     columns = (
         "<column datatype='string' name='[Region]' role='dimension' type='nominal'>"
         "<aliases><alias key='&quot;East&quot;' value='東區' /></aliases></column>"
     )
     ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=columns)))
-    assert any("成員別名" in r for r in reasons(ir))
+    assert reasons(ir) == []
+    assert [(a.value, a.label) for a in field(ir, "[Region]").aliases] == [("East", "東區")]
 
 
 def test_direct_hyper_datasource(tmp_path: Path) -> None:

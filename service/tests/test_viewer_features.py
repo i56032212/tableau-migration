@@ -196,12 +196,13 @@ def test_extended_charts_render(server: str) -> None:
             "ws_category_mix",
         ):
             assert page.locator(f"[data-worksheet='{name}'] svg").count() >= 1, name
-        # 文字表的 Measure Names 依 Measure Values 卡的順序
+        # 文字表的 Measure Names 依 Measure Values 卡的順序；CNTD(Order ID) 顯示別名「訂單數」
         headers = page.eval_on_selector_all(
             "[data-worksheet='ws_segment_kpis'] svg text", "els => els.map(e => e.textContent)"
         )
-        order = [h for h in headers if h in ("Sales", "Profit", "CNTD(Order ID)", "利潤率")]
-        assert order[:4] == ["Sales", "Profit", "CNTD(Order ID)", "利潤率"]
+        order = [h for h in headers if h in ("Sales", "Profit", "訂單數", "利潤率")]
+        assert order[:4] == ["Sales", "Profit", "訂單數", "利潤率"]
+        assert "CNTD(Order ID)" not in headers
         assert errors == []
         browser.close()
 
@@ -332,7 +333,9 @@ def test_groups_and_bins_render(server: str) -> None:
             )
 
         assert {"Coasts", "Central", "South"} <= set(texts("ws_sales_by_region_group"))
-        assert {"Fast", "Other"} <= set(texts("ws_sales_by_ship_speed"))
+        # 群組「其他」的成員別名：Other 顯示為 Standard
+        assert {"Fast", "Standard"} <= set(texts("ws_sales_by_ship_speed"))
+        assert "Other" not in texts("ws_sales_by_ship_speed")
         # x 軸的分組標籤依下限排序（之後的 0 是 y 軸的刻度）
         bins = [t for t in texts("ws_sales_by_quantity_bin") if t in {"0", "3", "6", "9", "12"}]
         assert bins[:5] == ["0", "3", "6", "9", "12"]
@@ -419,7 +422,11 @@ def test_url_parameter_and_navigate_actions(server: str) -> None:
         )
         assert body["parameters"] == {"p_selected_region": "West"}
         same_as_oracle(data, oracle.parameter_action("West"))
-        assert page.locator("[data-zone='z9'] select").input_value() == '"West"'
+        control = page.locator("[data-zone='z9'] select")
+        assert control.input_value() == '"West"'
+        # 參數的「顯示為」：選項顯示別名，值仍是原始值
+        assert control.locator("option:checked").inner_text() == "西區"
+        assert control.locator("option").all_inner_texts() == ["中區", "東區", "南區", "西區"]
 
         # 切換動作（選單）：點選 Selected Region Sales 的標記，選單中切到「篩選動作」
         page.locator(f"[data-worksheet='ws_selected_region_sales'] {bar}").first.click()

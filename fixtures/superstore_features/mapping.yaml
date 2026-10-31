@@ -26,7 +26,7 @@ sheets:
       Segment: f_segment
       Sales: sum(f_sales)
       Profit: sum(f_profit)
-      Distinct count of Order ID: countd(f_order_id)
+      訂單數: countd(f_order_id)
       利潤率: f_calc_1368249927221915648
     ignore: []
     numeric: auto

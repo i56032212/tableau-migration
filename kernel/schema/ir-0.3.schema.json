@@ -890,6 +890,14 @@
           ],
           "default": null
         },
+        "aliases": {
+          "description": "成員別名：只改變維度成員的顯示（標題、標籤、篩選控制項），篩選、排序與計算仍用原始值",
+          "items": {
+            "$ref": "#/$defs/MemberAlias"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -1771,6 +1779,64 @@
       "title": "Marks",
       "type": "object"
     },
+    "MeasureAlias": {
+      "additionalProperties": false,
+      "description": "Measure Names 的別名（資料源中設定）：量值在 Measure Names 的標題與圖例中顯示的名稱。",
+      "properties": {
+        "use": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "Measure Values 卡上的量值"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "use",
+        "label"
+      ],
+      "title": "MeasureAlias",
+      "type": "object"
+    },
+    "MemberAlias": {
+      "additionalProperties": false,
+      "description": "別名：維度成員或參數值的顯示名稱（Tableau 的成員別名、參數的「顯示為」）。",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "原始值；Null 的別名為 null",
+          "title": "Value"
+        },
+        "label": {
+          "description": "顯示的名稱",
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ],
+      "title": "MemberAlias",
+      "type": "object"
+    },
     "ModelRelation": {
       "additionalProperties": false,
       "description": "Relationship 模型（Tableau 2020.2 以後的資料模型）：多張邏輯資料表以關聯連成一棵樹。\n\n查詢時只取檢視用到的資料表；量值在自己的資料表彙總，不因其他資料表的一對多而重複計算。",
@@ -1936,6 +2002,14 @@
           ],
           "description": "目前值",
           "title": "Value"
+        },
+        "aliases": {
+          "description": "參數值的顯示名稱（控制項與標題中顯示）",
+          "items": {
+            "$ref": "#/$defs/MemberAlias"
+          },
+          "title": "Aliases",
+          "type": "array"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
@@ -3266,6 +3340,14 @@
             "$ref": "#/$defs/FieldUse"
           },
           "title": "Measure Values",
+          "type": "array"
+        },
+        "measure_aliases": {
+          "description": "Measure Names 的別名：量值在 Measure Names 中的顯示名稱",
+          "items": {
+            "$ref": "#/$defs/MeasureAlias"
+          },
+          "title": "Measure Aliases",
           "type": "array"
         },
         "filters": {

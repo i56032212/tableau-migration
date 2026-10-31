@@ -235,16 +235,23 @@ DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' nam
 SELECTED_CALC = "[Calculation_7D6C2A1F00000001]"
 PARAMETERS = """    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>
       <aliases enabled='yes' />
-      <column caption='Selected Region' datatype='string' name='[Parameter 1]' param-domain-type='list' role='measure' type='nominal' value='&quot;East&quot;'>
+      <column alias='東區' caption='Selected Region' datatype='string' name='[Parameter 1]' param-domain-type='list' role='measure' type='nominal' value='&quot;East&quot;'>
         <calculation class='tableau' formula='&quot;East&quot;' />
+        <aliases>
+          <alias key='&quot;Central&quot;' value='中區' />
+          <alias key='&quot;East&quot;' value='東區' />
+          <alias key='&quot;South&quot;' value='南區' />
+          <alias key='&quot;West&quot;' value='西區' />
+        </aliases>
         <members>
-          <member value='&quot;Central&quot;' />
-          <member value='&quot;East&quot;' />
-          <member value='&quot;South&quot;' />
-          <member value='&quot;West&quot;' />
+          <member alias='中區' value='&quot;Central&quot;' />
+          <member alias='東區' value='&quot;East&quot;' />
+          <member alias='南區' value='&quot;South&quot;' />
+          <member alias='西區' value='&quot;West&quot;' />
         </members>
       </column>
     </datasource>"""
+"""參數的「顯示為」（別名）：控制項顯示中文地區名，值仍是 Central、East…。"""
 SELECTED_COLUMN = f"""      <column caption='Selected Region Sales' datatype='real' name='{SELECTED_CALC}' role='measure' type='quantitative'>
         <calculation class='tableau' formula='IF [Region] = [Parameters].[Parameter 1] THEN [Sales] ELSE 0 END' />
       </column>"""
@@ -271,7 +278,17 @@ SHIP_SPEED = """      <column caption='Ship Speed' datatype='string' name='[Ship
             <value>&quot;Same Day&quot;</value>
           </bin>
         </calculation>
+        <aliases>
+          <alias key='&quot;Other&quot;' value='Standard' />
+        </aliases>
       </column>"""
+"""群組「其他」的成員別名：Other 顯示為 Standard。"""
+MEASURE_NAMES = f"""      <column datatype='string' name='[:Measure Names]' role='dimension' type='nominal'>
+        <aliases>
+          <alias key='&quot;[{DS}].[ctd:Order ID:qk]&quot;' value='訂單數' />
+        </aliases>
+      </column>"""
+"""Measure Names 的別名：Segment KPIs 的 CNTD(Order ID) 顯示為「訂單數」。"""
 QUANTITY_BIN = """      <column aggregation='None' caption='Quantity (bin)' datatype='integer' name='[Quantity (bin)]' role='dimension' type='ordinal'>
         <calculation class='bin' decimals='0' formula='[Quantity]' peg='0' size='3' />
       </column>"""
@@ -685,7 +702,7 @@ def sales_by_region_group() -> str:
 
 
 def sales_by_ship_speed() -> str:
-    """群組含「其他」：First Class、Same Day 合為 Fast，其餘歸入 Other。"""
+    """群組含「其他」：First Class、Same Day 合為 Fast，其餘歸入 Other（別名 Standard）。"""
     return worksheet(
         "Sales by Ship Speed",
         "7D6C2A1F-2B3C-4D5E-9F0A-00000000000D",
@@ -1489,7 +1506,7 @@ def twb(rows: int) -> str:
   </preferences>
   <datasources>
 {PARAMETERS}
-{demo.datasource(rows, "\n".join([REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, DATASOURCE_GROUPS]))}
+{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, DATASOURCE_GROUPS]))}
   </datasources>
 {shared_views()}
 {actions()}

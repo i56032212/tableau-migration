@@ -23,7 +23,7 @@ from tmig.parser.workbook import parse_workbook
 from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, worksheet_sql
 from tmig.verify.cases import CasesError, CasesFile, case_state, load_cases
-from tmig.verify.compare import MAX_DETAILS, Comparison, compare
+from tmig.verify.compare import MAX_DETAILS, Comparison, compare, dimension_aliases
 from tmig.verify.mapping import MappingFile, load_mapping
 
 REPORT_VERSION = "1.0"
@@ -231,7 +231,11 @@ def _check(
         base.diff = str(exc)
         return base
     comparison = compare(
-        expected_path.read_text(encoding="utf-8-sig"), result, query.columns, sheet_mapping
+        expected_path.read_text(encoding="utf-8-sig"),
+        result,
+        query.columns,
+        sheet_mapping,
+        dimension_aliases(ir, query.columns),
     )
     return _fill(base, comparison)
 
