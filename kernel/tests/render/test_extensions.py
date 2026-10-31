@@ -13,7 +13,7 @@ from tmig.data.executor import execute
 from tmig.ir import load_ir
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import build_spec
-from tmig.sqlgen.query import pane_sql, worksheet_sql
+from tmig.sqlgen.query import pane_sql, totals_sql, worksheet_sql
 from tmig.verify.run import ensure_data
 
 from ..parser import builder as b
@@ -277,6 +277,42 @@ def test_donut_spec() -> None:
     assert center["encoding"]["text"]["value"] == f"{total:,.0f}"
     assert center["data"] == {"values": [{}]}
     assert len(spec["data"]["values"]) == 3
+
+
+def test_totals_draw_coarser_panes_at_worksheet_detail() -> None:
+    """有總計時，較粗的標記卡不另外查詢（總計只依工作表的詳細程度查詢），長條也畫出總計。"""
+    worksheet_id = "ws_region_sales_and_segment_profit"
+    ir = features()
+    ir = ir.model_copy(
+        update={
+            "worksheets": [
+                w.model_copy(update={"totals": ["columns"]}) if w.id == worksheet_id else w
+                for w in ir.worksheets
+            ]
+        }
+    )
+    database = FEATURES / "data" / "ds_orders.duckdb"
+    query = worksheet_sql(ir, worksheet_id)
+    panes = {
+        i: (q.columns, execute(database, q.sql))
+        for i, q in pane_sql(ir, worksheet_id, query).items()
+    }
+    totals = [(t, execute(database, t.query.sql)) for t in totals_sql(ir, worksheet_id, query)]
+    result = execute(database, query.sql)
+    rendered = build_spec(ir, worksheet_id, query.columns, result, None, panes, totals)
+    spec = rendered.spec
+    assert spec is not None
+    assert [e.message for e in validator().iter_errors(spec)] == []
+    assert rendered.notes == ["有總計時，各標記卡一律以工作表的詳細程度呈現"]
+    bars, _line = spec["layer"]
+    assert "data" not in bars
+    assert rendered.rows == 12
+    # 總計欄：去掉欄架的 Region，折線標記卡上的 Segment 保留（每個客群一個總計）
+    region = next(n for n, key in spec["usermeta"]["dimensions"].items() if key == "f_region")
+    segment = next(n for n, key in spec["usermeta"]["dimensions"].items() if key == "f_segment")
+    grand = [v for v in spec["data"]["values"] if v.get("__total")]
+    assert {v[f"{region}_label"] for v in grand} == {"Grand Total"}
+    assert sorted(v[segment] for v in grand) == ["Consumer", "Corporate", "Home Office"]
 
 
 def test_dual_axis_with_coarser_pane() -> None:

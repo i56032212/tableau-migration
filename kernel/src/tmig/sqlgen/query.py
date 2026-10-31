@@ -1841,7 +1841,73 @@ def pane_sql(
     return result
 
 
+GRAND_TOTAL = "Grand Total"
+"""總計列與欄的標題（Tableau 英文介面的寫法）。"""
+
+
+@dataclass
+class TotalQuery:
+    """一種總計的查詢：shelves 為加上總計的架（rows、columns，或兩者＝右下角的總計），
+    dropped 為去掉的維度（欄位鍵），這些欄位在總計列中顯示為「Grand Total」。"""
+
+    shelves: tuple[str, ...]
+    dropped: list[str]
+    query: WorksheetSql
+
+
+def totals_sql(
+    ir: IR,
+    worksheet: str,
+    main: WorksheetSql,
+    state: QueryState | None = None,
+    user: Identity | None = None,
+) -> list[TotalQuery]:
+    """總計（Grand Total）的查詢：與 Tableau 的「自動」相同，在去掉該架上離散維度的詳細程度重新彙總
+    底層資料（平均是所有資料列的平均、相異計數是整體的相異數，不是各列結果再加總）；篩選照樣套用。
+
+    工作表的查詢（main）不含總計，計算比對以它為準；總計另外查詢，用於圖表與資料表的顯示。
+    尚不支援：總計中的 Table Calculation、與量值篩選一起使用（Tableau 只合計通過篩選的標記）。
+    """
+    ws = _find_worksheet(ir, worksheet)
+    if not ws.totals:
+        return []
+    dims = {c.key for c in main.columns if c.role == "dimension"}
+    headers = {
+        "rows": [u for u in ws.rows if use_key(u) in dims and not u.continuous],
+        "columns": [u for u in ws.columns if use_key(u) in dims and not u.continuous],
+    }
+    shelves = [shelf for shelf in ws.totals if headers[shelf]]
+    if not shelves:
+        return []
+    if any(c.use is not None and c.use.table_calc is not None for c in main.columns):
+        raise QueryError("總計中的 Table Calculation 尚不支援", unsupported=True)
+    if any(f.stage in ("measure", "table_calc") for f in main.state.filters):
+        raise QueryError("總計與量值篩選一起使用尚不支援", unsupported=True)
+    combos: list[tuple[str, ...]] = [(shelf,) for shelf in shelves]
+    if len(shelves) == 2:
+        combos.append(tuple(shelves))
+    result: list[TotalQuery] = []
+    for combo in combos:
+        dropped = [use_key(u) for shelf in combo for u in headers[shelf]]
+        fields = {u.field for shelf in combo for u in headers[shelf]}
+        virtual = ws.model_copy(
+            update={
+                "rows": [u for u in ws.rows if use_key(u) not in dropped],
+                "columns": [u for u in ws.columns if use_key(u) not in dropped],
+                "sorts": [s for s in ws.sorts if s.field not in fields],
+                "reference_lines": [],
+                "totals": [],
+            }
+        )
+        sub = ir.model_copy(
+            update={"worksheets": [virtual if w.id == ws.id else w for w in ir.worksheets]}
+        )
+        result.append(TotalQuery(combo, dropped, worksheet_sql(sub, ws.id, state, user)))
+    return result
+
+
 __all__ = [
+    "GRAND_TOTAL",
     "PUSHDOWN_BOUNDARY",
     "STAGES",
     "CteDef",
@@ -1849,10 +1915,12 @@ __all__ = [
     "OutputColumn",
     "QueryError",
     "StageNote",
+    "TotalQuery",
     "WorksheetQuery",
     "WorksheetSql",
     "custom_sql_parameters",
     "domain_sql",
     "pane_sql",
+    "totals_sql",
     "worksheet_sql",
 ]

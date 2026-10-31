@@ -235,6 +235,27 @@ def test_query_time_unsupported_counts(tmp_path: Path) -> None:
     assert row.readiness == "needs_features"
     assert row.unsupported_top == ["工作表「…」：尚不支援巢狀 Table Calculation（1）"]
 
+    # 總計（Grand Total）中的 Table Calculation：產生總計的查詢時才知道
+    running = instance(
+        "[Sales]",
+        "Sum",
+        "[cum:sum:Sales:qk]",
+        "quantitative",
+        "<table-calc ordering-type='Rows' type='CumTotal' />",
+    )
+    totals = worksheet(
+        "Totals",
+        [instance("[Region]", "None", "[none:Region:nk]"), running],
+        rows=ref("none:Region:nk"),
+        mark="Text",
+        encodings=f"<text column='{ref('cum:sum:Sales:qk')}' />",
+    ).replace("<rows>", "<rows total='true'>")
+    xml = b.workbook(b.extract_datasource(), worksheets=totals)
+    _, _, unsupported = inventory_workbook(b.write_twb(tmp_path, xml))
+    assert [u.reason for u in unsupported] == [
+        "工作表「Totals」：總計中的 Table Calculation 尚不支援"
+    ]
+
 
 def test_unsupported_kind_groups_similar_reasons() -> None:
     def entry(reason: str) -> Unsupported:

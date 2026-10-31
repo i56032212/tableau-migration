@@ -49,7 +49,7 @@ from tmig.render.format import (
     format_value,
     parse_format,
 )
-from tmig.sqlgen.query import OutputColumn
+from tmig.sqlgen.query import GRAND_TOTAL, OutputColumn, TotalQuery
 
 SCHEMA = "https://vega.github.io/schema/vega-lite/v6.json"
 SEPARATOR = "｜"
@@ -96,6 +96,8 @@ VL_MARKS = {
     "shape": "point",
 }
 ROW = "__row"
+TOTAL = "__total"
+"""總計列的標記（資料中為 True）。"""
 TEXT_ROW_HEIGHT = 22
 """文字表每一列的高度（像素）：與 Tableau 相同固定列高，列數多時在區塊內捲動。"""
 TEXT_COLOR_RANGE = ["#6baed6", "#08306b"]
@@ -518,9 +520,11 @@ def build_spec(
     result: QueryResult,
     parameters: dict[str, Scalar] | None = None,
     panes: dict[int, tuple[list[OutputColumn], QueryResult]] | None = None,
+    totals: list[tuple[TotalQuery, QueryResult]] | None = None,
 ) -> RenderResult:
     """parameters：查詢時的參數值（參數的參考線用）；省略時為 IR 的預設值。
-    panes：詳細程度較粗的標記卡各自的查詢結果（tmig.sqlgen.query.pane_sql），以 ws.panes 的索引為鍵。"""
+    panes：詳細程度較粗的標記卡各自的查詢結果（tmig.sqlgen.query.pane_sql），以 ws.panes 的索引為鍵。
+    totals：總計的查詢結果（tmig.sqlgen.query.totals_sql），附加在資料最後；去掉的維度顯示為 Grand Total。"""
     ws = next(w for w in ir.worksheets if w.id == worksheet)
     ds = next(d for d in ir.datasources if d.id == ws.datasource)
     fields = {f.id: f for f in ds.fields}
@@ -545,11 +549,23 @@ def build_spec(
 
     # ---------------------------------------------------------- 資料
     values = _records(channels, result)
+    for total, total_result in totals or []:
+        for record in _records(channels, total_result):
+            for key in total.dropped:
+                if key in channels:
+                    record[channels[key].name] = None
+                    record[channels[key].label] = GRAND_TOTAL
+            record[TOTAL] = True
+            values.append(record)
     pane_values = {
         i: _records(channels, pane_result) for i, (_, pane_result) in (panes or {}).items()
     }
     if long and pane_values:
         builder.notes.append("用到 Measure Values 時，各標記卡一律以工作表的詳細程度呈現")
+        pane_values = {}
+    if totals and pane_values:
+        # 總計只依工作表的詳細程度查詢：較粗的標記卡另外查詢的資料中沒有總計
+        builder.notes.append("有總計時，各標記卡一律以工作表的詳細程度呈現")
         pane_values = {}
     builder.pane_values = pane_values
     if long:
@@ -602,10 +618,12 @@ def build_spec(
         composites["cols_dim"] = cols_dims
     pie_marks = _pie_marks(ws)
     for i, record in enumerate(values):
-        # 列號：檢視器選取標記時，以它找回未經 Vega 解析的原始值；圓餅各塊也依它排列
-        record[ROW] = i
+        # 列號：檢視器選取標記時，以它找回未經 Vega 解析的原始值；圓餅各塊也依它排列；總計不參與選取
+        record[ROW] = -1 if record.get(TOTAL) else i
         for name, members in composites.items():
-            record[name] = SEPARATOR.join(record[builder.ch(u).label] for u in members)
+            labels = [record[builder.ch(u).label] for u in members]
+            whole = record.get(TOTAL) and all(label == GRAND_TOTAL for label in labels)
+            record[name] = GRAND_TOTAL if whole else SEPARATOR.join(labels)
     for records in pane_values.values():
         for record in records:
             record[ROW] = -1  # 較粗的標記卡不參與選取
@@ -641,12 +659,14 @@ def build_spec(
         params = {p.id: p.value for p in ir.parameters} | (parameters or {})
         body = _with_reference_lines(builder, body, values, params)
 
+    # 列數不含總計（與工作表的查詢、計算比對的筆數相同）
+    marks_count = sum(1 for v in values if not v.get(TOTAL))
     spec: dict[str, Any] = {
         "$schema": SCHEMA,
         "usermeta": {
             "worksheet": ws.id,
             "name": ws.name,
-            "rows": len(values),
+            "rows": marks_count,
             "mark": mark,
             # 篩選與網址動作：標記的維度欄與量值欄（資料欄名 → 欄位鍵）
             "dimensions": {
@@ -675,7 +695,9 @@ def build_spec(
         spec["height"] = {"step": TEXT_ROW_HEIGHT}
         spec["autosize"] = {"type": "fit-x", "contains": "padding"}
     spec.update(body)
-    return RenderResult(spec, len(values), mark, None, builder.notes)
+    if totals and not ws.totals_colored:
+        _exclude_totals_from_color(spec, values, mark)
+    return RenderResult(spec, marks_count, mark, None, builder.notes)
 
 
 def value_format(ws: Worksheet, data_field: DataField, use: FieldUse) -> str | None:
@@ -719,6 +741,24 @@ def worksheet_title(ir: IR, ws: Worksheet, parameters: dict[str, Scalar] | None 
         return ws.name
     params = {p.id: p.value for p in ir.parameters} | (parameters or {})
     return compose_text(ws.title, ir, params) or ws.name
+
+
+def _exclude_totals_from_color(
+    spec: dict[str, Any], values: list[dict[str, Any]], mark: str
+) -> None:
+    """與 Tableau 的預設相同，依量值著色時總計不上色、也不影響色階的範圍（醒目提示表最明顯）。"""
+    color = spec.get("encoding", {}).get("color")
+    if not isinstance(color, dict) or color.get("type") != "quantitative":
+        return
+    numbers = [
+        v[color["field"]] for v in values if not v.get(TOTAL) and _is_number(v.get(color["field"]))
+    ]
+    if numbers:
+        color["scale"] = {**color.get("scale", {}), "domain": [min(numbers), max(numbers)]}
+    color["condition"] = {
+        "test": f"datum['{TOTAL}'] === true",
+        "value": "transparent" if mark == "square" else "#1f2328",
+    }
 
 
 def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str, Any]]:
@@ -801,6 +841,8 @@ def _with_reference_lines(
         group_keys = scopes[line.scope]
         groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
         for record in values:
+            if record.get(TOTAL):
+                continue  # 總計的列與欄不畫參考線，也不納入計算
             groups.setdefault(tuple(record.get(k) for k in group_keys), []).append(record)
         params_of_line: list[float | None] = (
             list(line.factors)

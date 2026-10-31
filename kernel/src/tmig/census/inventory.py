@@ -31,7 +31,7 @@ from tmig.census.report import render_markdown
 from tmig.ir.models import IR, Unsupported
 from tmig.parser.workbook import NoDatasourceError, parse_workbook
 from tmig.planner.identity import Identity
-from tmig.sqlgen.query import QueryError, worksheet_sql
+from tmig.sqlgen.query import QueryError, totals_sql, worksheet_sql
 
 INVENTORY_USER = Identity(username="inventory")
 """試產生 SQL 用的身分：用到使用者函式的工作表也能產生查詢（只檢查能不能查，不執行）。"""
@@ -269,7 +269,8 @@ def query_unsupported(ir: IR) -> list[Unsupported]:
     found: list[Unsupported] = []
     for ws in ir.worksheets:
         try:
-            worksheet_sql(ir, ws.id, user=INVENTORY_USER)
+            main = worksheet_sql(ir, ws.id, user=INVENTORY_USER)
+            totals_sql(ir, ws.id, main, user=INVENTORY_USER)
         except QueryError as exc:
             if exc.unsupported:
                 found.append(

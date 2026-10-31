@@ -3342,6 +3342,24 @@
           "title": "Title",
           "type": "array"
         },
+        "totals": {
+          "description": "總計（Grand Total）：rows＝列架加上總計列（每一欄的合計，在最下方），columns＝欄架加上總計欄（每一列的合計，在最右邊）",
+          "items": {
+            "enum": [
+              "rows",
+              "columns"
+            ],
+            "type": "string"
+          },
+          "title": "Totals",
+          "type": "array"
+        },
+        "totals_colored": {
+          "default": false,
+          "description": "依量值著色時總計也上色、納入色階的範圍（Tableau 色彩的「包含總計」）；預設與 Tableau 相同，總計不上色",
+          "title": "Totals Colored",
+          "type": "boolean"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,

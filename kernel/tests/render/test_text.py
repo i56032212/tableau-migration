@@ -15,7 +15,7 @@ from tmig.data.executor import execute
 from tmig.ir import IR, TextRun
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import build_spec, worksheet_title
-from tmig.sqlgen.query import worksheet_sql
+from tmig.sqlgen.query import GRAND_TOTAL, totals_sql, worksheet_sql
 
 from ..parser import builder as b
 from ..parser.builder import DS, instance, ref, worksheet
@@ -51,6 +51,17 @@ def render(ir: IR, db: Path, parameters: dict[str, Any] | None = None) -> Any:
     ws = ir.worksheets[0]
     query = worksheet_sql(ir, ws.id)
     rendered = build_spec(ir, ws.id, query.columns, execute(db, query.sql), parameters)
+    assert rendered.spec is not None, rendered.unsupported
+    assert [e.message for e in validator().iter_errors(rendered.spec)] == []
+    return rendered
+
+
+def render_with_totals(ir: IR, db: Path) -> Any:
+    """與檢視器相同：工作表的查詢之外，另外查詢總計，附加在圖表資料的最後。"""
+    ws = ir.worksheets[0]
+    query = worksheet_sql(ir, ws.id)
+    totals = [(t, execute(db, t.query.sql)) for t in totals_sql(ir, ws.id, query)]
+    rendered = build_spec(ir, ws.id, query.columns, execute(db, query.sql), totals=totals)
     assert rendered.spec is not None, rendered.unsupported
     assert [e.message for e in validator().iter_errors(rendered.spec)] == []
     return rendered
@@ -160,17 +171,76 @@ def test_label_fields_must_be_on_the_card(tmp_path: Path) -> None:
     assert ir.worksheets[0].marks.label_text == []
 
 
-def test_grand_totals_are_flagged(tmp_path: Path) -> None:
-    sheet = worksheet(
+def with_totals(sheet: str, *shelves: str) -> str:
+    """欄列架加上總計（Tableau 的 <rows total='true'>、<cols total='true'>）。"""
+    for shelf in shelves:
+        sheet = sheet.replace(f"<{shelf}>", f"<{shelf} total='true'>", 1)
+    return sheet
+
+
+def matrix(mark: str = "Text", encodings: str = "") -> str:
+    """Region × Category 的交叉表（文字表或醒目提示表），標記為 Sales 的合計。"""
+    return worksheet(
         "Matrix",
         [REGION, CATEGORY, SALES],
         rows=ref("none:Region:nk"),
         cols=ref("none:Category:nk"),
+        mark=mark,
+        encodings=encodings or f"<text column='{ref('sum:Sales:qk')}' />",
+    )
+
+
+def test_grand_totals_are_parsed(tmp_path: Path) -> None:
+    ir = parse(tmp_path, with_totals(matrix(), "rows", "cols"))
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    assert ws.totals == ["rows", "columns"]
+    assert ws.totals_colored is False
+    # 色彩的「包含總計」
+    colored = with_totals(matrix(), "rows").replace(
+        "<style />",
+        "<style><style-rule element='mark'><encoding attr='color' "
+        f"field='{ref('sum:Sales:qk')}' include-totals='true' type='interpolated' />"
+        "</style-rule></style>",
+    )
+    ws = parse(tmp_path, colored).worksheets[0]
+    assert ws.totals == ["rows"] and ws.totals_colored is True
+
+
+def test_grand_totals_need_discrete_headers(tmp_path: Path) -> None:
+    """架上只有量值（例如長條圖的 SUM(Sales)）時沒有總計可加：Tableau 也不顯示，列為略過。"""
+    bars = worksheet("Bars", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+    ir = parse(tmp_path, with_totals(bars, "cols"))
+    assert ir.unsupported == []
+    assert ir.worksheets[0].totals == []
+    assert [i.reason for i in ir.ignored] == [
+        "工作表「Bars」的總計：架上沒有離散的維度，沒有總計可加"
+    ]
+    # 列架上的維度可以加總計（長條圖最下方多一條 Grand Total）
+    assert parse(tmp_path, with_totals(bars, "rows")).worksheets[0].totals == ["rows"]
+
+
+def test_visual_totals_are_flagged(tmp_path: Path) -> None:
+    """Total Using（畫面上各標記的值再彙總）與自動的數字不同：不顯示總計，列為不支援。"""
+    visual = (
+        "<column-instance column='[Sales]' derivation='Avg' name='[avg:Sales:vtsum:qk]' "
+        "pivot='key' type='quantitative' visual-totals='Sum' />"
+    )
+    sheet = worksheet(
+        "Matrix",
+        [REGION, CATEGORY, visual],
+        rows=ref("none:Region:nk"),
+        cols=ref("none:Category:nk"),
         mark="Text",
-        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
-    ).replace("<rows>", "<rows total='true'>")
-    ir = parse(tmp_path, sheet)
-    assert [u.reason for u in ir.unsupported] == ["工作表「Matrix」的列總計（Grand Total）尚不支援"]
+        encodings=f"<text column='{ref('avg:Sales:vtsum:qk')}' />",
+    )
+    ir = parse(tmp_path, with_totals(sheet, "rows"))
+    assert [u.reason for u in ir.unsupported] == [
+        "工作表「Matrix」的總計計算方式（Total Using：Sum）尚不支援，只支援自動"
+    ]
+    assert ir.worksheets[0].totals == []
+    # 沒有總計時 Total Using 沒有作用
+    assert parse(tmp_path, sheet).unsupported == []
 
 
 # ---------------------------------------------------------------- 呈現
@@ -307,3 +377,70 @@ def test_title_uses_current_parameter_value(tmp_path: Path) -> None:
     assert worksheet_title(ir, ws, {region_pick: "West"}) == "West by Region"
     plain = parse(tmp_path, sheet)
     assert worksheet_title(plain, plain.worksheets[0]) == "Sales"
+
+
+def test_grand_totals_in_text_table(tmp_path: Path, db: Path) -> None:
+    """總計列在最下方、總計欄在最右邊，右下角是全部的合計；標題為 Grand Total。"""
+    rendered = render_with_totals(parse(tmp_path, with_totals(matrix(), "rows", "cols")), db)
+    spec = rendered.spec
+    # 列數只算工作表的標記（7 個 Region × Category 的組合），不含總計
+    assert rendered.rows == 7 and spec["usermeta"]["rows"] == 7
+    values = spec["data"]["values"]
+    marks, totals = values[:7], values[7:]
+    assert all("__total" not in v for v in marks)
+    assert [v["__row"] for v in marks] == list(range(7))
+    # 總計不參與選取
+    assert all(v["__total"] is True and v["__row"] == -1 for v in totals)
+    cells = {(v["c0_label"], v["c1_label"]): v["c2"] for v in totals}
+    assert cells == {
+        # 總計列（列架的總計）：每個 Category 的合計
+        (GRAND_TOTAL, "Furniture"): 530,
+        (GRAND_TOTAL, "Technology"): 700,
+        (GRAND_TOTAL, "Office"): 80,
+        # 總計欄（欄架的總計）：每個 Region 的合計
+        ("East", GRAND_TOTAL): 350,
+        ("West", GRAND_TOTAL): 800,
+        ("South", GRAND_TOTAL): 100,
+        ("North", GRAND_TOTAL): 60,
+        (GRAND_TOTAL, GRAND_TOTAL): 1310,
+    }
+    # 總計的原始值欄是空的（篩選與動作不會用到），顯示文字依量值的格式
+    corner = next(v for v in totals if v["c0_label"] == v["c1_label"] == GRAND_TOTAL)
+    assert corner["c0"] is None and corner["c1"] is None and corner["c2_label"] == "1,310"
+    # 依資料的順序排列：Grand Total 在各軸的最後
+    assert spec["encoding"]["y"]["sort"] is None and spec["encoding"]["x"]["sort"] is None
+
+
+def test_grand_totals_are_not_colored_by_default(tmp_path: Path, db: Path) -> None:
+    """與 Tableau 的預設相同：醒目提示表的總計不上色，色階的範圍也只看各標記的值。"""
+    encodings = f"<color column='{ref('sum:Sales:qk')}' /><text column='{ref('sum:Sales:qk')}' />"
+    sheet = with_totals(matrix("Square", encodings), "rows", "cols")
+    color = render_with_totals(parse(tmp_path, sheet), db).spec["encoding"]["color"]
+    assert color["scale"]["domain"] == [20, 500]
+    assert color["condition"] == {"test": "datum['__total'] === true", "value": "transparent"}
+    colored = sheet.replace(
+        "<style />",
+        "<style><style-rule element='mark'><encoding attr='color' "
+        f"field='{ref('sum:Sales:qk')}' include-totals='true' type='interpolated' />"
+        "</style-rule></style>",
+    )
+    color = render_with_totals(parse(tmp_path, colored), db).spec["encoding"]["color"]
+    assert "condition" not in color and "domain" not in color.get("scale", {})
+
+
+def test_grand_totals_with_nested_headers_and_bars(tmp_path: Path, db: Path) -> None:
+    year = instance("[Order Date]", "Year", "[yr:Order Date:ok]", "ordinal")
+    nested = worksheet(
+        "Nested",
+        [REGION, CATEGORY, SALES, year],
+        rows=f"({ref('yr:Order Date:ok')} / {ref('none:Region:nk')})",
+        cols=ref("sum:Sales:qk"),
+    )
+    rendered = render_with_totals(parse(tmp_path, with_totals(nested, "rows")), db)
+    values = rendered.spec["data"]["values"]
+    # 列架上兩層的標題合併成一欄：總計列整列都是 Grand Total
+    (total,) = [v for v in values if v.get("__total")]
+    assert total["rows_dim"] == GRAND_TOTAL
+    assert total["c2"] == 1310
+    assert values[-1] is total
+    assert rendered.mark == "bar"

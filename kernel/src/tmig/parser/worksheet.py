@@ -195,7 +195,7 @@ REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "cust
 KNOWN_UNSUPPORTED = {
     "trend-line": "趨勢線",
     "forecast-specification": "預測",
-    "subtotals": "小計與總計",
+    "subtotals": "小計（Subtotal）",
     "mapsources": "地圖",
     "mapsource": "地圖",
     "add-in": "工作表擴充功能",
@@ -298,11 +298,8 @@ class SheetParser:
 
         rows = self._shelf(child(table, "rows"))
         cols = self._shelf(child(table, "cols"))
-        for shelf, label in (("rows", "列"), ("cols", "欄")):
-            element = child(table, shelf)
-            if element is not None and element.get("total") == "true":
-                # 不能默默省略：總計的列與欄也是報表上的數字
-                ctx.flag(element, f"工作表「{self.name}」的{label}總計（Grand Total）尚不支援")
+        totals = self._totals(table, rows, cols)
+        totals_colored = bool(totals) and self._totals_colored(child(table, "style"))
         pages = child(table, "pages")
         if pages is not None and (text_of(pages) or len(children(pages))):
             ctx.flag(pages, "頁面架（Pages）v0 不支援")
@@ -341,6 +338,8 @@ class SheetParser:
             reference_lines=reference_lines,
             formats=formats,
             title=title,
+            totals=totals,
+            totals_colored=totals_colored,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -711,6 +710,54 @@ class SheetParser:
             first, second = (label, cell) if key in headers else (cell, label)
             formats[key] = first.get(key) or second[key]
         return formats
+
+    def _totals(
+        self, table: etree._Element, rows: list[FieldUse], cols: list[FieldUse]
+    ) -> list[Literal["rows", "columns"]]:
+        """總計（Grand Total）：欄列架的 total='true'。列架的總計是最下方的一列（每一欄的合計），
+        欄架的總計是最右邊的一欄（每一列的合計），都在去掉該架上離散維度的詳細程度重新彙總
+        （Tableau 的「自動」）。架上沒有離散維度（只有量值或 Measure Names）時沒有總計可以加。"""
+        assert self.ds is not None
+        totals: list[Literal["rows", "columns"]] = []
+        for tag, shelf, uses in (("rows", "rows", rows), ("cols", "columns", cols)):
+            element = child(table, tag)
+            if element is None or element.get("total") != "true":
+                continue
+            headers = [
+                u
+                for u in uses
+                if u.field not in SPECIAL_FIELDS
+                and not u.continuous
+                and not is_aggregate(self.ds, u)
+            ]
+            if not headers:
+                self.ctx.ignore(
+                    element, f"工作表「{self.name}」的總計：架上沒有離散的維度，沒有總計可加"
+                )
+                continue
+            totals.append(shelf)  # type: ignore[arg-type]
+        # 總計的計算方式改成「畫面上各標記的值再加總（或平均…）」（Total Using）尚不支援；
+        # 以自動的方式算會得到不同的數字，所以不顯示總計（列為不支援）
+        visual = [inst for inst in self.instances.values() if inst.get("visual-totals")]
+        if totals and visual:
+            for inst in visual:
+                self.ctx.flag(
+                    inst,
+                    f"工作表「{self.name}」的總計計算方式（Total Using：{inst.get('visual-totals')}）"
+                    "尚不支援，只支援自動",
+                )
+            return []
+        return totals
+
+    @staticmethod
+    def _totals_colored(style: etree._Element | None) -> bool:
+        """色彩的「包含總計」：標記樣式中色彩編碼的 include-totals='true'。"""
+        return any(
+            enc.get("attr") == "color" and enc.get("include-totals") == "true"
+            for rule in children(style, "style-rule")
+            if rule.get("element") == "mark"
+            for enc in children(rule, "encoding")
+        )
 
     def _title(self, layout: etree._Element | None) -> list[TextRun]:
         """自訂的工作表標題；只有工作表名稱（<Sheet Name>）時與預設相同，回傳空的。"""

@@ -733,6 +733,16 @@ class Worksheet(IRModel):
         default_factory=list,
         description="自訂的工作表標題（文字與參數的值）；空的表示以工作表名稱為標題",
     )
+    totals: list[Literal["rows", "columns"]] = Field(
+        default_factory=list,
+        description="總計（Grand Total）：rows＝列架加上總計列（每一欄的合計，在最下方），"
+        "columns＝欄架加上總計欄（每一列的合計，在最右邊）",
+    )
+    totals_colored: bool = Field(
+        default=False,
+        description="依量值著色時總計也上色、納入色階的範圍（Tableau 色彩的「包含總計」）；"
+        "預設與 Tableau 相同，總計不上色",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")

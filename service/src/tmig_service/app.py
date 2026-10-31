@@ -51,10 +51,12 @@ from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import build_spec, caption, value_format, worksheet_title
 from tmig.sqlgen.query import (
+    GRAND_TOTAL,
     QueryError,
     custom_sql_parameters,
     domain_sql,
     pane_sql,
+    totals_sql,
     worksheet_sql,
 )
 from tmig.verify.cases import CasesError, case_state, load_cases
@@ -347,12 +349,15 @@ def create_app(
             pane_queries = {}
             notes.append(f"各標記卡無法另外查詢，以工作表的詳細程度呈現：{exc}")
         try:
+            # 總計（Grand Total）也是報表上的數字：算不出來時整張工作表列為不支援，不默默省略
+            total_queries = totals_sql(ir, sheet.id, query, state, user)
             result = data.run(query, datasource, database)
             panes = {
                 i: (q.columns, data.run(q, datasource, database)) for i, q in pane_queries.items()
             }
+            totals = [(t, data.run(t.query, datasource, database)) for t in total_queries]
         except QueryError as exc:
-            # Live 連線：下推的 SQL 轉不成來源資料庫的方言
+            # 總計尚不支援的寫法，或 Live 連線下推的 SQL 轉不成來源資料庫的方言
             if not exc.unsupported:
                 raise HTTPException(422, str(exc)) from exc
             return {
@@ -369,26 +374,40 @@ def create_app(
         except ExecutionError as exc:
             raise HTTPException(500, str(exc)) from exc
         rendered = build_spec(
-            ir, sheet.id, query.columns, result, query.state.parameters, panes or None
+            ir,
+            sheet.id,
+            query.columns,
+            result,
+            query.state.parameters,
+            panes or None,
+            totals or None,
         )
         rendered.notes.extend(notes)
         fields = {f.id: f for ds in ir.datasources for f in ds.fields}
         shown = [c for c in query.columns if c.role != "sort" and c.use is not None]
         index = {key: i for i, key in enumerate(result.columns)}
-        table_rows = []
-        for row in result.rows:
-            cells = []
+
+        def cells(row: Any, positions: dict[str, int], dropped: list[str]) -> list[str]:
+            out: list[str] = []
             for column in shown:
                 assert column.use is not None
-                value = row[index[column.key]]
+                if column.key in dropped:
+                    out.append(GRAND_TOTAL)
+                    continue
+                value = row[positions[column.key]] if column.key in positions else None
                 use = column.use
                 if use.date is not None and use.date.kind == "part" and value is not None:
-                    cells.append(str(value))
+                    out.append(str(value))
                 else:
                     trunc = use.date.unit if use.date is not None else None
                     fmt = value_format(sheet, fields[use.field], use)
-                    cells.append(display_value(value, column.datatype, fmt, trunc))
-            table_rows.append(cells)
+                    out.append(display_value(value, column.datatype, fmt, trunc))
+            return out
+
+        table_rows = [cells(row, index, []) for row in result.rows]
+        for total, total_result in totals:
+            positions = {key: i for i, key in enumerate(total_result.columns)}
+            table_rows += [cells(row, positions, total.dropped) for row in total_result.rows]
         return {
             "worksheet": sheet.id,
             "name": sheet.name,

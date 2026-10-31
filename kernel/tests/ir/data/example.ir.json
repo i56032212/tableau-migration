@@ -283,6 +283,8 @@
       "reference_lines": [],
       "formats": {},
       "title": [],
+      "totals": [],
+      "totals_colored": false,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -373,6 +375,8 @@
       "reference_lines": [],
       "formats": {},
       "title": [],
+      "totals": [],
+      "totals_colored": false,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }
   ],
