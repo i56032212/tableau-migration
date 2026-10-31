@@ -31,6 +31,7 @@ from tmig.ir.models import (
     Marks,
     MarkType,
     MeasureAlias,
+    NestedTableCalc,
     Pane,
     ParamRef,
     ReferenceLine,
@@ -870,7 +871,9 @@ class SheetParser:
         result: list[TableCalc] = []
         # 依工作表相依清單的順序處理；只出現在篩選上的 Table Calculation 也要先建立
         for key, inst in self.instances.items():
-            calc_el = child(inst, "table-calc")
+            # 第一個沒有 field 的 <table-calc> 是這個欄位的設定；有 field 的是巢狀計算各自的計算方向
+            elements = children(inst, "table-calc")
+            calc_el = next((e for e in elements if e.get("field") is None), None)
             data_field = ds.by_name.get(inst.get("column", ""))
             is_formula = data_field is not None and ds.levels.get(data_field.id) == "table_calc"
             if calc_el is None and not is_formula:
@@ -880,12 +883,44 @@ class SheetParser:
                 self.ctx.flag(inst, f"Table Calculation 的欄位無法解析：{use}")
                 continue
             if calc_el is None:
-                result.append(self._default_formula_calc(use, row_dims, col_dims, mark_dims, inst))
+                created = self._default_formula_calc(use, row_dims, col_dims, mark_dims, inst)
+            else:
+                created = self._table_calc(calc_el, use, row_dims, col_dims, mark_dims)
+            if created is None:
                 continue
-            created = self._table_calc(calc_el, use, row_dims, col_dims, mark_dims)
-            if created is not None:
-                result.append(created)
+            nested = [
+                found
+                for e in elements
+                if e.get("field") is not None
+                and (found := self._nested_calc(e, row_dims, col_dims, mark_dims)) is not None
+            ]
+            result.append(created.model_copy(update={"nested": nested}) if nested else created)
         return result
+
+    def _nested_calc(
+        self,
+        calc_el: etree._Element,
+        row_dims: list[FieldUse],
+        col_dims: list[FieldUse],
+        mark_dims: list[FieldUse],
+    ) -> NestedTableCalc | None:
+        """巢狀計算的計算方向：<table-calc field='[ds].[Calculation1]' ordering-type='Rows' />。"""
+        assert self.ds is not None
+        ref = calc_el.get("field", "")
+        field_id = self._field_ref(ref)
+        if field_id is None:
+            self.ctx.flag(calc_el, f"巢狀計算的欄位 {ref} 找不到")
+            return None
+        if self.ds.levels.get(field_id) != "table_calc":
+            self.ctx.ignore(calc_el, "巢狀計算的設定指向非 Table Calculation 的欄位，不影響數字")
+            return None
+        direction = self._direction(calc_el, row_dims, col_dims, mark_dims)
+        if direction is None:
+            return None
+        preset, addressing, inferred = direction
+        return NestedTableCalc(
+            field=field_id, preset=preset, addressing=addressing, inferred=inferred
+        )
 
     def _default_formula_calc(
         self,
@@ -976,6 +1011,31 @@ class SheetParser:
                 )
                 return None
             options["offset"] = int(values[0])
+        direction = self._direction(calc_el, row_dims, col_dims, mark_dims)
+        if direction is None:
+            return None
+        preset, addressing, inferred = direction
+        caption = ds.field_by_id(use.field).caption
+        tc_id = self.ctx.ids.make("tc", f"{calc_type} {caption}", f"{calc_type} {use.field}")
+        use.table_calc = tc_id
+        return TableCalc(
+            id=tc_id,
+            type=calc_type,  # type: ignore[arg-type]
+            preset=preset,
+            addressing=addressing,
+            inferred=inferred,
+            options=options,
+            source_ref=xpath(calc_el),
+        )
+
+    def _direction(
+        self,
+        calc_el: etree._Element,
+        row_dims: list[FieldUse],
+        col_dims: list[FieldUse],
+        mark_dims: list[FieldUse],
+    ) -> tuple[TableCalcPreset, list[str], bool] | None:
+        """計算方向：(預設方向, 定址欄位, 是否推定)；設定認不得時列為不支援並回傳 None。"""
         ordering = calc_el.get("ordering-type")
         inferred = ordering is None
         preset: TableCalcPreset
@@ -989,35 +1049,23 @@ class SheetParser:
             )
             return None
         if preset == "table_down":
-            addressing = _field_ids(row_dims + mark_dims)
-        elif preset == "table_across":
-            addressing = _field_ids(col_dims + mark_dims)
-        else:
-            refs = [r for r in [calc_el.get("ordering-field")] if r]
-            refs += [o.get("field", "") for o in children(calc_el, "order")]
-            addressing = []
-            for ref in refs:
-                found = self._field_ref(ref)
-                if found is None:
-                    self.ctx.flag(calc_el, f"Table Calculation 的定址欄位 {ref} 找不到")
-                    return None
-                if found not in addressing:
-                    addressing.append(found)
-            if not addressing:
-                self.ctx.flag(calc_el, "指定維度的 Table Calculation 沒有列出定址欄位")
+            return preset, _field_ids(row_dims + mark_dims), inferred
+        if preset == "table_across":
+            return preset, _field_ids(col_dims + mark_dims), inferred
+        refs = [r for r in [calc_el.get("ordering-field")] if r]
+        refs += [o.get("field", "") for o in children(calc_el, "order")]
+        addressing: list[str] = []
+        for ref in refs:
+            found = self._field_ref(ref)
+            if found is None:
+                self.ctx.flag(calc_el, f"Table Calculation 的定址欄位 {ref} 找不到")
                 return None
-        caption = ds.field_by_id(use.field).caption
-        tc_id = self.ctx.ids.make("tc", f"{calc_type} {caption}", f"{calc_type} {use.field}")
-        use.table_calc = tc_id
-        return TableCalc(
-            id=tc_id,
-            type=calc_type,  # type: ignore[arg-type]
-            preset=preset,
-            addressing=addressing,
-            inferred=inferred,
-            options=options,
-            source_ref=xpath(calc_el),
-        )
+            if found not in addressing:
+                addressing.append(found)
+        if not addressing:
+            self.ctx.flag(calc_el, "指定維度的 Table Calculation 沒有列出定址欄位")
+            return None
+        return preset, addressing, inferred
 
     def _field_ref(self, ref: str) -> str | None:
         """[ds].[Region]（欄位名稱）或 [ds].[none:Region:nk]（欄位實例）→ 欄位 id。"""

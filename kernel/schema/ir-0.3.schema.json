@@ -1877,6 +1877,55 @@
       "title": "ModelRelation",
       "type": "object"
     },
+    "NestedTableCalc": {
+      "additionalProperties": false,
+      "description": "巢狀計算：公式中參照的另一個 Table Calculation 計算欄位，在這裡的計算方向\n（Tableau「編輯 Table Calculation」中「巢狀計算」各自的設定）。",
+      "properties": {
+        "field": {
+          "description": "被參照的 Table Calculation 計算欄位",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Field",
+          "type": "string"
+        },
+        "preset": {
+          "enum": [
+            "table_across",
+            "table_down",
+            "table_across_then_down",
+            "table_down_then_across",
+            "pane_across",
+            "pane_down",
+            "pane_across_then_down",
+            "pane_down_then_across",
+            "cell",
+            "specific"
+          ],
+          "title": "Preset",
+          "type": "string"
+        },
+        "addressing": {
+          "description": "解析後的計算方向欄位，依序",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Addressing",
+          "type": "array"
+        },
+        "inferred": {
+          "default": false,
+          "title": "Inferred",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "field",
+        "preset"
+      ],
+      "title": "NestedTableCalc",
+      "type": "object"
+    },
     "Pane": {
       "additionalProperties": false,
       "description": "個別量值的標記卡：同一架上有多個量值（各自一個軸）或雙軸時，每個量值可以有自己的標記設定。",
@@ -2803,6 +2852,14 @@
           "description": "例如 rank 的方式與方向",
           "title": "Options",
           "type": "object"
+        },
+        "nested": {
+          "description": "巢狀計算各自的計算方向；公式參照的 Table Calculation 計算欄位沒有列出時與外層相同",
+          "items": {
+            "$ref": "#/$defs/NestedTableCalc"
+          },
+          "title": "Nested",
+          "type": "array"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

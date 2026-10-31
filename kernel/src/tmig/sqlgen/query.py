@@ -50,6 +50,7 @@ from tmig.ir.models import (
     Filter,
     LiveConnection,
     Marks,
+    NestedTableCalc,
     Pane,
     ParamRef,
     RangeFilter,
@@ -211,6 +212,22 @@ class _Window:
     order: list[str]
 
 
+@dataclass
+class _Nested:
+    """巢狀 Table Calculation 中先算好的一段：被參照的 Table Calculation 計算欄位，或寫在另一個
+    Table Calculation 函式參數中的 Table Calculation 函式。視窗函式不能巢狀，所以分層計算：
+    depth 為它之前需要先算好的層數。"""
+
+    col: str
+    node: Node
+    window: _Window
+    depth: int
+    fields: dict[str, str]
+    """計算這一段時已經算好的計算欄位 id → 欄名。"""
+    calls: dict[Node, str]
+    """計算這一段時已經算好的 Table Calculation 函式（去掉位置資訊的語法樹）→ 欄名。"""
+
+
 def _strip(name: str) -> str:
     return name[1:-1].replace("]]", "]") if name.startswith("[") and name.endswith("]") else name
 
@@ -268,14 +285,24 @@ class _PostEnv:
         query: WorksheetQuery,
         agg_cols: dict[Call, str],
         window: _Window | None = None,
-        totals: dict[Call, str] | None = None,
+        totals: dict[Node, str] | None = None,
+        fields: dict[str, str] | None = None,
+        calls: dict[Node, str] | None = None,
     ) -> None:
         self.query = query
         self.agg_cols = agg_cols
         self.window = window
         self.totals = totals or {}
+        """TOTAL（去掉位置資訊的語法樹）→ 已併入的合計欄。"""
+        self.fields = fields or {}
+        self.calls = calls or {}
         self.week_start = query.week_start
         self.user = query.user
+
+    def calc_column(self, target: Target) -> str | None:
+        """巢狀計算中先算好的 Table Calculation 計算欄位。"""
+        col = self.fields.get(target.id)
+        return ident(col) if col is not None else None
 
     def column(self, target: Target) -> str:
         raise QueryError(f"列層級欄位 {target.id} 必須彙總")
@@ -293,8 +320,20 @@ class _PostEnv:
         return ident(col)
 
     def table_calc(self, node: Call) -> str:
+        key = self.query.canon(node)
+        if node.name == "TOTAL":
+            # TOTAL 依來源資料另外計算後併入，不是視窗函式：巢狀時也可以直接引用
+            col = self.totals.get(key)
+            if col is None:
+                raise QueryError("內部錯誤：TOTAL 沒有對應的欄位")
+            return ident(col)
+        if key in self.calls:
+            return ident(self.calls[key])
         if self.window is None:
-            raise QueryError("尚不支援巢狀 Table Calculation", unsupported=True)
+            raise QueryError(
+                f"這個位置不能計算 Table Calculation（{node.name}，例如依 Table Calculation 排序），尚不支援",
+                unsupported=True,
+            )
         return self.query.window_sql(node, self)
 
 
@@ -1389,7 +1428,7 @@ class WorksheetQuery:
 
     def _window(
         self,
-        tc: TableCalc,
+        tc: TableCalc | NestedTableCalc,
         dims: list[Dim],
         sorts: dict[str, Sort],
         sort_cols: dict[str, tuple[str, str]],
@@ -1438,30 +1477,58 @@ class WorksheetQuery:
         selects = ["m.*"]
         joins: list[str] = []
         expressions: list[str] = []
+        layers: dict[int, list[str]] = {}
         marks_rows: str | None = None
+        joined: dict[tuple[Node, tuple[str, ...]], str] = {}
+
+        def totals_for(expr: Node, window: _Window, skip: dict[str, str]) -> dict[Node, str]:
+            """這段運算式中的 TOTAL：依計算方向的分割在來源資料另外計算，併入後以欄位引用。"""
+            nonlocal marks_rows
+            found: dict[Node, str] = {}
+            for node in self._totals_in(expr, skip):
+                key = self.canon(node)
+                slot = (key, tuple(window.partition))
+                if slot not in joined:
+                    if marks_rows is None:
+                        marks_rows = self._marks_rows(dims, marks, rows_cte)
+                    partition_dims = [d for d in dims if ident(d.col) in window.partition]
+                    total_col, join = self._total(node, partition_dims, marks_rows, len(joins))
+                    joins.append(join)
+                    selects.append(f"t{len(joins) - 1}.{ident(VALUE_COL)} AS {ident(total_col)}")
+                    joined[slot] = total_col
+                found[key] = joined[slot]
+            return found
+
         for m in tc_measures:
             assert m.table_calc is not None
-            window = self._window(m.table_calc, dims, sorts, sort_cols)
-            totals: dict[Call, str] = {}
-            for node in self.table_calcs_in(m.node):
-                if node.name != "TOTAL" or node in totals:
-                    continue
-                if marks_rows is None:
-                    marks_rows = self._marks_rows(dims, marks, rows_cte)
-                partition_dims = [d for d in dims if ident(d.col) in window.partition]
-                total_col, join = self._total(node, partition_dims, marks_rows, len(joins))
-                totals[node] = total_col
-                joins.append(join)
-                selects.append(f"t{len(joins) - 1}.{ident(VALUE_COL)} AS {ident(total_col)}")
-            env = _PostEnv(self, agg_cols, window, totals)
+            tc = m.table_calc
+            window = self._window(tc, dims, sorts, sort_cols)
+            nested_windows = {n.field: self._window(n, dims, sorts, sort_cols) for n in tc.nested}
+            items: list[_Nested] = []
+            root = m.use.field if tc.type == "formula" else None
+            fields, calls, _ = self._prepare(m.node, window, root, nested_windows, items)
+            for item in items:
+                env = _PostEnv(
+                    self,
+                    agg_cols,
+                    item.window,
+                    totals_for(item.node, item.window, item.fields),
+                    item.fields,
+                    item.calls,
+                )
+                sql = self._compile(lambda item=item, env=env: self.compiler(env).post(item.node))
+                layers.setdefault(item.depth, []).append(f"{sql} AS {ident(item.col)}")
+            env = _PostEnv(
+                self, agg_cols, window, totals_for(m.node, window, fields), fields, calls
+            )
             sql = self._compile(lambda m=m, env=env: self.compiler(env).post(m.node))
             expressions.append(f"{sql} AS {ident(m.col)}")
-            tc = m.table_calc
             self.note(
                 7,
                 f"{m.key}：{tc.type}，計算方向 {tc.preset}"
                 + ("（推定）" if tc.inferred else "")
-                + f"，分割 {len(window.partition)} 個維度、定址 {len(dims) - len(window.partition)} 個維度",
+                + f"，分割 {len(window.partition)} 個維度、定址 {len(dims) - len(window.partition)} 個維度"
+                + (f"；巢狀的部分分 {max(i.depth for i in items) + 1} 層先算" if items else ""),
             )
         if joins:
             # 視窗函式不能直接引用同一層 SELECT 剛併入的欄位，先併入合計再計算
@@ -1471,7 +1538,97 @@ class WorksheetQuery:
                 f"SELECT {', '.join(selects)} FROM {base} m {' '.join(joins)}",
                 pushdown=True,
             )
+        for depth in sorted(layers):
+            # 視窗函式不能巢狀：內層先算成欄位，外層再引用
+            base = self.cte(
+                7, self.name("nested"), f"SELECT m.*, {', '.join(layers[depth])} FROM {base} m"
+            )
         return self.cte(7, "tc", f"SELECT m.*, {', '.join(expressions)} FROM {base} m")
+
+    def _prepare(
+        self,
+        expr: Node,
+        window: _Window,
+        root: str | None,
+        nested_windows: dict[str, _Window],
+        items: list[_Nested],
+    ) -> tuple[dict[str, str], dict[Node, str], int]:
+        """找出運算式中必須先算好的巢狀部分，加入 items（依計算順序）。
+
+        - 被參照的 Table Calculation 計算欄位：依它的巢狀計算方向（沒有設定時與外層相同）先算成欄位
+        - Table Calculation 函式參數中的 Table Calculation 函式：依同一個計算方向先算成欄位
+        回傳 (先算好的計算欄位, 先算好的函式, 需要的層數)。root 是工作表上這個欄位本身（不先算）。
+        """
+        fields: dict[str, str] = {}
+        calls: dict[Node, str] = {}
+        depth = 0
+
+        def add(node: Node, item_window: _Window, item_root: str | None) -> str:
+            nonlocal depth
+            sub_fields, sub_calls, sub_depth = self._prepare(
+                node, item_window, item_root, nested_windows, items
+            )
+            col = self.name("__nested")
+            items.append(_Nested(col, node, item_window, sub_depth, sub_fields, sub_calls))
+            depth = max(depth, sub_depth + 1)
+            return col
+
+        def visit(node: Node, inside: bool) -> None:
+            if isinstance(node, FieldRef):
+                target = self._resolve(node)
+                if target.kind != "field" or target.formula is None:
+                    return
+                ast = self.analyzer.calc_ast(target)
+                if target.id != root and self.level(target.id) == "tc":
+                    if target.id not in fields:
+                        item_window = nested_windows.get(target.id, window)
+                        fields[target.id] = add(ast, item_window, target.id)
+                    return
+                visit(ast, inside)
+                return
+            if isinstance(node, Lod):
+                return
+            if isinstance(node, Call):
+                spec = lookup(node.name, len(node.args))
+                if spec is not None and spec.kind == "aggregate":
+                    return
+                if spec is not None and spec.kind == "table_calc":
+                    if node.name == "TOTAL":
+                        return
+                    if inside:
+                        key = self.canon(node)
+                        if key not in calls:
+                            calls[key] = add(node, window, root)
+                        return
+                    for arg in node.args:
+                        visit(arg, True)
+                    return
+            for sub in children(node):
+                visit(sub, inside)
+
+        visit(expr, False)
+        return fields, calls, depth
+
+    def _totals_in(self, expr: Node, skip: dict[str, str]) -> list[Call]:
+        """運算式中的 TOTAL（走進計算欄位，但不走進已先算好的巢狀計算欄位與 LOD）。"""
+        found: list[Call] = []
+
+        def visit(node: Node) -> None:
+            if isinstance(node, FieldRef):
+                target = self._resolve(node)
+                if target.kind == "field" and target.formula is not None and target.id not in skip:
+                    visit(self.analyzer.calc_ast(target))
+                return
+            if isinstance(node, Lod):
+                return
+            if isinstance(node, Call) and node.name == "TOTAL":
+                found.append(node)
+                return
+            for sub in children(node):
+                visit(sub)
+
+        visit(expr)
+        return found
 
     def _marks_rows(self, dims: list[Dim], marks: str, rows_cte: str) -> str:
         """量值篩選後仍留在檢視中的標記所對應的列（TOTAL 依這些列計算）。"""
@@ -1516,7 +1673,7 @@ class WorksheetQuery:
     def window_sql(self, node: Call, env: _PostEnv) -> str:
         window = env.window
         assert window is not None
-        inner = self.compiler(_PostEnv(self, env.agg_cols, None, env.totals))
+        inner = self.compiler(_PostEnv(self, env.agg_cols, None, env.totals, env.fields, env.calls))
         name = node.name
         partition = f"PARTITION BY {', '.join(window.partition)}" if window.partition else ""
         order = f"ORDER BY {', '.join(window.order)}" if window.order else ""
@@ -1528,11 +1685,6 @@ class WorksheetQuery:
         def arg(i: int) -> str:
             return self._compile(lambda: inner.post(node.args[i]))
 
-        if name == "TOTAL":
-            col = env.totals.get(node)
-            if col is None:
-                raise QueryError("內部錯誤：TOTAL 沒有對應的欄位")
-            return ident(col)
         if name.startswith("RUNNING_"):
             fn = WINDOW_AGG[name.removeprefix("RUNNING_")]
             sql = f"{fn}({arg(0)}) {over('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW')}"

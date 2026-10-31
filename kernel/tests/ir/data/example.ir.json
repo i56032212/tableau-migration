@@ -286,6 +286,7 @@
           ],
           "inferred": false,
           "options": {},
+          "nested": [],
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/datasource-dependencies/column-instance[3]/table-calc"
         }
       ],

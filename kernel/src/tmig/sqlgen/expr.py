@@ -152,6 +152,11 @@ class ExprCompiler:
         if target.kind == "param":
             return self.env.param(target)
         if target.formula is not None:
+            # 巢狀 Table Calculation 中先算好的計算欄位（見 tmig.sqlgen.query 的分層計算）
+            calc_column = getattr(self.env, "calc_column", None)
+            precomputed = calc_column(target) if calc_column is not None else None
+            if precomputed is not None:
+                return precomputed
             return "(" + self.compile(self.analyzer.calc_ast(target), mode) + ")"
         if mode != "row":
             raise FormulaSemanticError(f"{node.text} 是列層級的欄位，這裡需要彙總", node.pos)

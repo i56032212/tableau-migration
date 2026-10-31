@@ -621,6 +621,16 @@ MarkType = Literal[
 ]
 
 
+class NestedTableCalc(IRModel):
+    """巢狀計算：公式中參照的另一個 Table Calculation 計算欄位，在這裡的計算方向
+    （Tableau「編輯 Table Calculation」中「巢狀計算」各自的設定）。"""
+
+    field: Id = Field(description="被參照的 Table Calculation 計算欄位")
+    preset: TableCalcPreset
+    addressing: list[Id] = Field(default_factory=list, description="解析後的計算方向欄位，依序")
+    inferred: bool = False
+
+
 class TableCalc(IRModel):
     """Table Calculation。type 為 formula 表示計算欄位內含 Table Calculation 函式。"""
 
@@ -630,6 +640,10 @@ class TableCalc(IRModel):
     addressing: list[Id] = Field(default_factory=list, description="解析後的計算方向欄位，依序")
     inferred: bool = Field(default=False, description="計算方向是否依 Tableau 預設規則推定")
     options: dict[str, Scalar] = Field(default_factory=dict, description="例如 rank 的方式與方向")
+    nested: list[NestedTableCalc] = Field(
+        default_factory=list,
+        description="巢狀計算各自的計算方向；公式參照的 Table Calculation 計算欄位沒有列出時與外層相同",
+    )
     source_ref: SourceRef
 
 

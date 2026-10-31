@@ -1563,6 +1563,7 @@
           ],
           "inferred": false,
           "options": {},
+          "nested": [],
           "source_ref": "/workbook/worksheets/worksheet[7]/table/view/datasource-dependencies/column-instance[2]/table-calc"
         }
       ],
@@ -2395,6 +2396,7 @@
           "options": {
             "offset": -1
           },
+          "nested": [],
           "source_ref": "/workbook/worksheets/worksheet[19]/table/view/datasource-dependencies/column-instance[2]/table-calc"
         },
         {
@@ -2408,6 +2410,7 @@
           "options": {
             "offset": -1
           },
+          "nested": [],
           "source_ref": "/workbook/worksheets/worksheet[19]/table/view/datasource-dependencies/column-instance[3]/table-calc"
         }
       ],
@@ -2749,6 +2752,7 @@
             "end": 0,
             "null_if_incomplete": false
           },
+          "nested": [],
           "source_ref": "/workbook/worksheets/worksheet[23]/table/view/datasource-dependencies/column-instance[3]/table-calc"
         },
         {
@@ -2765,6 +2769,7 @@
             "end": 1,
             "null_if_incomplete": true
           },
+          "nested": [],
           "source_ref": "/workbook/worksheets/worksheet[23]/table/view/datasource-dependencies/column-instance[4]/table-calc"
         }
       ],

@@ -240,6 +240,12 @@ def check_references(ir: IR) -> list[str]:
                     errors.append(
                         f"{base}.table_calcs[{tc.id}].addressing：欄位「{fid}」不在資料源「{ws.datasource}」中"
                     )
+            for nested in tc.nested:
+                for fid in [nested.field, *nested.addressing]:
+                    if fid not in fields_by_ds[ws.datasource]:
+                        errors.append(
+                            f"{base}.table_calcs[{tc.id}].nested：欄位「{fid}」不在資料源「{ws.datasource}」中"
+                        )
         for line in ws.reference_lines:
             where = f"{base}.reference_lines[{line.id}]"
             check_use(line.axis, ws.datasource, f"{where}.axis", tcs)
