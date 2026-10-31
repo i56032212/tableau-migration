@@ -60,6 +60,11 @@ ORACLE_UNSUPPORTED = {
     "SPLIT('a-b-c', '-', -1)",
 }
 """Oracle 尚不支援的公式；結果是布林值的公式也不支援（Oracle 沒有布林型別）。"""
+EMULATOR_GAPS = {
+    # 模擬時 EXTRACT(SECOND FROM 時間間隔) 以 DuckDB 執行，只取整數秒；Oracle 實機含小數秒
+    "DATETIME(FLOAT(#2024-01-01 12:34:56.5#))",
+}
+"""模擬的 Oracle 與實機不同、無法比對的公式（轉譯照樣檢查）。"""
 
 EXPR_SCHEMA = pa.schema(
     [
@@ -199,6 +204,8 @@ def test_expressions(engine: Engine) -> None:
             continue
         if unsupported:
             problems.append(f"{formula}：預期轉譯不了，卻能執行")
+        elif engine.name == "oracle" and formula in EMULATOR_GAPS:
+            continue
         elif not _matches(actual, expected):
             problems.append(f"{formula}{where}：{actual!r}，預期 {expected!r}")
     assert problems == [], f"{engine.name}：\n" + "\n".join(problems)

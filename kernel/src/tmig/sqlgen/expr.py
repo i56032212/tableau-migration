@@ -48,6 +48,11 @@ from tmig.sqlgen.sql import cast, literal
 
 Mode = str  # "row" | "agg" | "post"
 
+DAY_ZERO = "DATE '1899-12-30'"
+"""日期轉成數值時的第 0 天（與 Excel 相同）：整數部分是天數，小數部分是一天中的時間。"""
+UNIX_DAY = 25569
+"""1970-01-01 是第幾天（epoch 秒數換算成天數時加上）。"""
+
 
 class SqlEnv(Protocol):
     week_start: str
@@ -502,14 +507,18 @@ class ExprCompiler:
                 # 布林值先轉成 INTEGER（PostgreSQL 不能直接轉成 BIGINT）
                 return f"CAST(CAST({a[0]} AS INTEGER) AS BIGINT)"
             if t in ("date", "datetime"):
-                raise FormulaSemanticError("尚不支援把日期轉成整數", node.pos, unsupported=True)
+                # 日期的天數（1899-12-30 為第 0 天）；日期時間捨去時間
+                return f"CAST(date_diff('day', {DAY_ZERO}, CAST({a[0]} AS DATE)) AS BIGINT)"
             return f"CAST(trunc({a[0]}) AS BIGINT)"
         if name == "FLOAT":
             t = self.datatype(node.args[0])
             if t == "boolean":
                 return f"CAST(CAST({a[0]} AS INTEGER) AS DOUBLE)"
-            if t in ("date", "datetime"):
-                raise FormulaSemanticError("尚不支援把日期轉成小數", node.pos, unsupported=True)
+            if t == "date":
+                return f"CAST(date_diff('day', {DAY_ZERO}, {a[0]}) AS DOUBLE)"
+            if t == "datetime":
+                # 天數加上一天中的時間（小數）
+                return f"(epoch(CAST({a[0]} AS TIMESTAMP)) / 86400.0 + {UNIX_DAY})"
             if t in ("integer", "real"):
                 return f"CAST({a[0]} AS DOUBLE)"
             return f"TRY_CAST({a[0]} AS DOUBLE)"
@@ -518,8 +527,20 @@ class ExprCompiler:
         if name in ("DATE", "DATETIME"):
             # 日期之間的轉換不會失敗；只有字串等其他型別需要 TRY_CAST（無法轉換時為 Null）
             target = "DATE" if name == "DATE" else "TIMESTAMP"
-            if self.datatype(node.args[0]) in ("date", "datetime"):
+            source = self.datatype(node.args[0])
+            if source in ("date", "datetime"):
                 return f"CAST({a[0]} AS {target})"
+            if source in ("integer", "real"):
+                # 數值是天數（1899-12-30 為第 0 天），小數部分是一天中的時間
+                if name == "DATE":
+                    return f"({DAY_ZERO} + CAST(trunc({a[0]}) AS INTEGER))"
+                # 天數、一天中的整秒與微秒分開加：每一段的數值都不大（各資料庫的整數範圍都裝得下），
+                # 也不受大數的浮點誤差影響（例如 10:44:59.99999997 進位成 10:45:00）
+                seconds = f"(({a[0]} - floor({a[0]})) * 86400)"
+                days = f"to_days(CAST(floor({a[0]}) AS INTEGER))"
+                whole = f"to_seconds(floor({seconds}))"
+                micros = f"to_microseconds(CAST(round(({seconds} - floor({seconds})) * 1000000) AS BIGINT))"
+                return f"(CAST({DAY_ZERO} AS TIMESTAMP) + {days} + {whole} + {micros})"
             return f"TRY_CAST({a[0]} AS {target})"
         raise FormulaSemanticError(f"尚不支援函式 {name}", node.pos, unsupported=True)
 
