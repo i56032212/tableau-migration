@@ -50,13 +50,20 @@ from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.format import format_value as display_value
-from tmig.render.vegalite import build_spec, caption, value_format, worksheet_title
+from tmig.render.vegalite import (
+    build_spec,
+    caption,
+    title_values,
+    value_format,
+    worksheet_title,
+)
 from tmig.sqlgen.query import (
     GRAND_TOTAL,
     QueryError,
     custom_sql_parameters,
     domain_sql,
     pane_sql,
+    title_sql,
     totals_sql,
     worksheet_sql,
 )
@@ -350,13 +357,29 @@ def create_app(
             pane_queries = {}
             notes.append(f"各標記卡無法另外查詢，以工作表的詳細程度呈現：{exc}")
         try:
-            # 總計（Grand Total）也是報表上的數字：算不出來時整張工作表列為不支援，不默默省略
+            # 總計（Grand Total）與標題中的欄位值（例如 KPI 卡標題中的合計）也是報表上的數字：
+            # 算不出來時整張工作表列為不支援，不默默省略
             total_queries = totals_sql(ir, sheet.id, query, state, user)
+            title_queries = title_sql(ir, sheet.id, query, state, user)
             result = data.run(query, datasource, database)
             panes = {
                 i: (q.columns, data.run(q, datasource, database)) for i, q in pane_queries.items()
             }
             totals = [(t, data.run(t.query, datasource, database)) for t in total_queries]
+            title_fields: dict[str, str] = {}
+            if title_queries is not None:
+                measures = title_queries.measures
+                title_fields = title_values(
+                    ir,
+                    sheet,
+                    title_queries,
+                    data.run(measures, datasource, database) if measures is not None else None,
+                    {
+                        key: data.run(q, datasource, database)
+                        for key, q in title_queries.dimensions.items()
+                    },
+                    (query.columns, result),
+                )
         except QueryError as exc:
             # 總計尚不支援的寫法，或 Live 連線下推的 SQL 轉不成來源資料庫的方言
             if not exc.unsupported:
@@ -421,7 +444,7 @@ def create_app(
         return {
             "worksheet": sheet.id,
             "name": sheet.name,
-            "title": worksheet_title(ir, sheet, query.state.parameters),
+            "title": worksheet_title(ir, sheet, query.state.parameters, title_fields),
             "rows": rendered.rows,
             "mark": rendered.mark,
             "spec": rendered.spec,

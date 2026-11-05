@@ -2058,6 +2058,81 @@ def totals_sql(
     return result
 
 
+@dataclass
+class TitleQueries:
+    """標題中欄位值的查詢（與 Tableau 相同，以整張工作表計算）。"""
+
+    measures: WorksheetSql | None
+    """標題中的量值：全部資料（篩選之後）的彙總，一列。"""
+    dimensions: dict[str, WorksheetSql]
+    """標題中不在檢視中的維度（欄位鍵 → 只有這個維度的查詢）：只有一個值時顯示它，多個值時顯示 *。"""
+    from_main: list[str] = field(default_factory=list)
+    """標題中在檢視中的維度（欄位鍵）：直接取工作表查詢結果中的值（量值篩選也照樣生效）。"""
+
+
+def title_sql(
+    ir: IR,
+    worksheet: str,
+    main: WorksheetSql,
+    state: QueryState | None = None,
+    user: Identity | None = None,
+) -> TitleQueries | None:
+    """標題中的欄位值：量值在去掉所有維度的詳細程度彙總（例如 KPI 卡標題中的合計，與檢視的維度無關），
+    維度查出篩選後的各個值。標題沒有欄位值時為 None。
+
+    尚不支援：與量值篩選一起使用（Tableau 只計算通過篩選的標記）。
+    """
+    ws = _find_worksheet(ir, worksheet)
+    uses: list[FieldUse] = []
+    for run in ws.title:
+        if run.use is not None and run.use not in uses:
+            uses.append(run.use)
+    if not uses:
+        return None
+    if any(u.table_calc is not None or u.field in SPECIAL_FIELDS for u in uses):
+        raise QueryError("標題中的 Table Calculation 值尚不支援", unsupported=True)
+    classifier = WorksheetQuery(ir, worksheet, state, user)
+    measures = [u for u in uses if classifier.is_measure(u)]
+    in_view = {c.key for c in main.columns if c.role == "dimension"}
+    from_main = [use_key(u) for u in uses if not classifier.is_measure(u) and use_key(u) in in_view]
+    dimensions = [u for u in uses if not classifier.is_measure(u) and use_key(u) not in from_main]
+    if (measures or dimensions) and any(
+        f.stage in ("measure", "table_calc") for f in main.state.filters
+    ):
+        raise QueryError("標題中的欄位值與量值篩選一起使用尚不支援", unsupported=True)
+    empty = Marks(type=ws.marks.type)
+    base = ws.model_copy(
+        update={
+            "rows": [],
+            "columns": [],
+            "marks": empty,
+            "panes": [],
+            "measure_values": [],
+            "measure_aliases": [],
+            "sorts": [],
+            "reference_lines": [],
+            "totals": [],
+            "title": [],
+        }
+    )
+
+    def query_for(virtual: Worksheet) -> WorksheetSql:
+        sub = ir.model_copy(
+            update={"worksheets": [virtual if w.id == ws.id else w for w in ir.worksheets]}
+        )
+        return worksheet_sql(sub, ws.id, state, user)
+
+    measures_query = (
+        query_for(base.model_copy(update={"marks": empty.model_copy(update={"label": measures})}))
+        if measures
+        else None
+    )
+    dimension_queries = {
+        use_key(u): query_for(base.model_copy(update={"rows": [u]})) for u in dimensions
+    }
+    return TitleQueries(measures_query, dimension_queries, from_main)
+
+
 __all__ = [
     "GRAND_TOTAL",
     "PUSHDOWN_BOUNDARY",
@@ -2067,12 +2142,14 @@ __all__ = [
     "OutputColumn",
     "QueryError",
     "StageNote",
+    "TitleQueries",
     "TotalQuery",
     "WorksheetQuery",
     "WorksheetSql",
     "custom_sql_parameters",
     "domain_sql",
     "pane_sql",
+    "title_sql",
     "totals_sql",
     "worksheet_sql",
 ]

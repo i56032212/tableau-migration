@@ -628,9 +628,7 @@ class SheetParser:
 
     # ------------------------------------------------------------ 自訂文字、數字格式與標題
 
-    def _text_runs(
-        self, formatted: etree._Element, what: str, *, fields: bool = True
-    ) -> list[TextRun]:
+    def _text_runs(self, formatted: etree._Element, what: str) -> list[TextRun]:
         """格式化文字（<formatted-text> 的各段 <run>）→ 文字與參照依序排列；樣式（字型、顏色）不保留。
 
         參照可能被拆在相鄰的幾段中，所以先串成一段再找；認不得的 <…> 照原文保留。
@@ -668,10 +666,6 @@ class SheetParser:
                 resolved = self.resolve(token)
                 if isinstance(resolved, str):
                     self.ctx.flag(formatted, f"{what}：{resolved}")
-                    continue
-                if not fields:
-                    caption = self.ds.field_by_id(resolved.field).caption
-                    self.ctx.flag(formatted, f"{what}用到欄位「{caption}」的值，尚不支援")
                     continue
                 runs.append(TextRun(use=resolved))
                 continue
@@ -765,11 +759,29 @@ class SheetParser:
         )
 
     def _title(self, layout: etree._Element | None) -> list[TextRun]:
-        """自訂的工作表標題；只有工作表名稱（<Sheet Name>）時與預設相同，回傳空的。"""
+        """自訂的工作表標題；只有工作表名稱（<Sheet Name>）時與預設相同，回傳空的。
+
+        標題中的欄位值與 Tableau 相同，以整張工作表計算（量值是全部資料的彙總，維度只有一個值時顯示它、
+        多個值時顯示 *）；Table Calculation 與 Measure Names／Values 的值尚不支援。"""
         formatted = child(child(layout, "title"), "formatted-text")
         if formatted is None:
             return []
-        runs = self._text_runs(formatted, f"工作表「{self.name}」的標題", fields=False)
+        what = f"工作表「{self.name}」的標題"
+        runs: list[TextRun] = []
+        for run in self._text_runs(formatted, what):
+            use = run.use
+            if use is not None and (use.table_calc is not None or use.field in SPECIAL_FIELDS):
+                assert self.ds is not None
+                caption = (
+                    use.field
+                    if use.field in SPECIAL_FIELDS
+                    else self.ds.field_by_id(use.field).caption
+                )
+                self.ctx.flag(
+                    formatted, f"{what}用到「{caption}」的 Table Calculation 值，尚不支援"
+                )
+                continue
+            runs.append(run)
         return [] if runs == [TextRun(text=self.name)] else runs
 
     # ------------------------------------------------------------ Measure Names／Values

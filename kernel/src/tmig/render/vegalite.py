@@ -50,7 +50,7 @@ from tmig.render.format import (
     format_value,
     parse_format,
 )
-from tmig.sqlgen.query import GRAND_TOTAL, OutputColumn, TotalQuery
+from tmig.sqlgen.query import GRAND_TOTAL, OutputColumn, TitleQueries, TotalQuery
 
 SCHEMA = "https://vega.github.io/schema/vega-lite/v6.json"
 SEPARATOR = "｜"
@@ -721,8 +721,11 @@ def compose_text(
     params: dict[str, Scalar],
     channels: dict[str, Channel] | None = None,
     record: dict[str, Any] | None = None,
+    fields: dict[str, str] | None = None,
 ) -> str:
-    """自訂文字（標籤、標題）：文字、參數的值與這個標記的欄位值依序串接；Null 的欄位不顯示（與 Tableau 相同）。"""
+    """自訂文字（標籤、標題）：文字、參數的值與欄位值依序串接；Null 的欄位不顯示（與 Tableau 相同）。
+
+    欄位值取自這個標記（channels、record），或已算好的顯示文字（fields：欄位鍵 → 文字，標題用）。"""
     parts: list[str] = []
     for run in runs:
         if run.text is not None:
@@ -733,6 +736,8 @@ def compose_text(
             if param is not None and value is not None:
                 label = parameter_label(param, value)
                 parts.append(label if label is not None else format_value(value, param.datatype))
+        elif run.use is not None and fields is not None:
+            parts.append(fields.get(use_key(run.use), ""))
         elif run.use is not None and channels is not None and record is not None:
             key = run.use.field if run.use.field in SPECIAL_FIELDS else use_key(run.use)
             ch = channels.get(key)
@@ -742,12 +747,76 @@ def compose_text(
     return "".join(parts)
 
 
-def worksheet_title(ir: IR, ws: Worksheet, parameters: dict[str, Scalar] | None = None) -> str:
-    """工作表的標題：自訂標題（代入目前的參數值），沒有時為工作表名稱。"""
+def worksheet_title(
+    ir: IR,
+    ws: Worksheet,
+    parameters: dict[str, Scalar] | None = None,
+    fields: dict[str, str] | None = None,
+) -> str:
+    """工作表的標題：自訂標題（代入目前的參數值與標題中的欄位值，見 title_values），沒有時為工作表名稱。"""
     if not ws.title:
         return ws.name
     params = {p.id: p.value for p in ir.parameters} | (parameters or {})
-    return compose_text(ws.title, ir, params) or ws.name
+    return compose_text(ws.title, ir, params, fields=fields or {}) or ws.name
+
+
+MULTIPLE_VALUES = "*"
+"""標題中的維度有多個值時顯示的文字（與 Tableau 的 ATTR 相同）。"""
+
+
+def title_values(
+    ir: IR,
+    ws: Worksheet,
+    queries: TitleQueries,
+    measures: QueryResult | None,
+    dimensions: dict[str, QueryResult],
+    main: tuple[list[OutputColumn], QueryResult] | None = None,
+) -> dict[str, str]:
+    """標題中欄位值的顯示文字（欄位鍵 → 文字）：量值依格式顯示；維度只有一個值時顯示它（成員別名、
+    日期部分照樣套用），多個值時為 *；Null 與沒有資料時不顯示。
+    main：工作表查詢的欄位與結果（標題中在檢視中的維度直接取它的值）。"""
+    fields = {f.id: f for d in ir.datasources for f in d.fields}
+    texts: dict[str, str] = {}
+    if queries.measures is not None and measures is not None and measures.rows:
+        index = {key: i for i, key in enumerate(measures.columns)}
+        row = measures.rows[0]
+        for column in queries.measures.columns:
+            use = column.use
+            if use is None or column.key not in index or row[index[column.key]] is None:
+                continue
+            fmt = value_format(ws, fields[use.field], use)
+            texts[column.key] = format_value(row[index[column.key]], column.datatype, fmt)
+    sources: dict[str, tuple[OutputColumn, QueryResult]] = {}
+    for key, query in queries.dimensions.items():
+        column = next((c for c in query.columns if c.key == key), None)
+        if column is not None and key in dimensions:
+            sources[key] = (column, dimensions[key])
+    if main is not None:
+        main_columns, main_result = main
+        for column in main_columns:
+            if column.key in queries.from_main:
+                sources[column.key] = (column, main_result)
+    for key, (column, result) in sources.items():
+        if column.use is None or key not in result.columns:
+            continue
+        position = result.columns.index(key)
+        values = list(dict.fromkeys(row[position] for row in result.rows))
+        if len(values) > 1:
+            texts[key] = MULTIPLE_VALUES
+            continue
+        if not values or values[0] is None:
+            continue
+        value, use = values[0], column.use
+        alias = member_aliases(fields[use.field], use).get(alias_key(value))
+        if alias is not None:
+            texts[key] = alias
+        elif use.date is not None and use.date.kind == "part":
+            texts[key] = str(value)
+        else:
+            trunc = use.date.unit if use.date is not None else None
+            fmt = value_format(ws, fields[use.field], use)
+            texts[key] = format_value(value, column.datatype, fmt, trunc)
+    return texts
 
 
 def _exclude_totals_from_color(

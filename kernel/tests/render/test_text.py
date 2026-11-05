@@ -142,7 +142,7 @@ def test_sheet_name_title_is_the_default(tmp_path: Path) -> None:
         "</formatted-text></title></layout-options><table>",
     )
     assert parse(tmp_path, titled).worksheets[0].title == []
-    # 標題中的欄位值（Tableau 依檢視中的值顯示）尚不支援：列出，標題保留其餘文字
+    # 標題中的欄位值（以整張工作表計算，見 test_titles.py）
     with_field = sheet.replace(
         "<table>",
         "<layout-options><title><formatted-text>"
@@ -150,10 +150,9 @@ def test_sheet_name_title_is_the_default(tmp_path: Path) -> None:
         "</formatted-text></title></layout-options><table>",
     )
     ir = parse(tmp_path, with_field)
-    assert [u.reason for u in ir.unsupported] == [
-        "工作表「Sales」的標題用到欄位「Region」的值，尚不支援"
-    ]
-    assert ir.worksheets[0].title == [TextRun(text="Sales for ")]
+    assert ir.unsupported == []
+    region = ir.worksheets[0].rows[0]
+    assert ir.worksheets[0].title == [TextRun(text="Sales for "), TextRun(use=region)]
 
 
 def test_label_fields_must_be_on_the_card(tmp_path: Path) -> None:
