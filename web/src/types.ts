@@ -216,6 +216,50 @@ export interface Unsupported {
   reason: string;
 }
 
+/** 故事點記下的篩選動作選取：以這些標記執行動作（篩選目標工作表） */
+export interface StoryAction {
+  action: string;
+  marks: Mark[];
+}
+
+/** 故事點記下的工作表篩選：取代同一欄位的篩選 */
+export interface StoryFilter {
+  worksheet: string;
+  field: FieldUse;
+  mode: "include" | "exclude";
+  values: Scalar[];
+}
+
+/** 故事點記下的選取：工作表上醒目顯示的標記 */
+export interface StorySelection {
+  worksheet: string;
+  marks: Mark[];
+}
+
+/** 故事點：顯示一個 dashboard 或工作表，以及與預設不同的篩選與選取 */
+export interface StoryPoint {
+  id: string;
+  caption: string;
+  dashboard: string | null;
+  worksheet: string | null;
+  actions: StoryAction[];
+  filters: StoryFilter[];
+  selections: StorySelection[];
+}
+
+export interface Story {
+  id: string;
+  name: string;
+  /** 標題的文字；null 表示不顯示標題 */
+  title: string | null;
+  size: { width: number; height: number };
+  navigation: "caption" | "number" | "dots";
+  arrows: boolean;
+  points: StoryPoint[];
+  /** 開啟時顯示的故事點；null 表示第一個 */
+  active: string | null;
+}
+
 export interface IR {
   ir_version: string;
   workbook: { id: string; name: string };
@@ -224,6 +268,7 @@ export interface IR {
   worksheets: Worksheet[];
   dashboards: Dashboard[];
   actions: Action[];
+  stories?: Story[];
   unsupported: Unsupported[];
 }
 
@@ -254,6 +299,7 @@ export interface WorkbookSummary {
   name: string;
   dashboards: { id: string; name: string }[];
   worksheets: { id: string; name: string }[];
+  stories?: { id: string; name: string }[];
   unsupported: number;
 }
 

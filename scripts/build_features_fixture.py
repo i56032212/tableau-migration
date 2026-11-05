@@ -29,6 +29,9 @@
   以座標軸樣式的 fold 表示雙軸），在「甜甜圈」dashboard 上
 - J4 參考線：Sub-Category Sales 每個類別（窗格）的平均線與整張表的目標常數線；Region Sales Bands 的中位數
   與平均 ± 1 個母體標準差，在「參考線」dashboard 上（只影響圖表，不影響數字）
+- Story「銷售故事」：三個故事點——「篩選動作」dashboard 的預設狀態；同一個 dashboard 在 Region Picker
+  選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
+  之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
 """
 
 from __future__ import annotations
@@ -89,6 +92,7 @@ WINDOWS = {
     "篩選動作": "7D6C2A1F-2B3C-4D5E-9F0A-000000000021",
     "Region Sales Bands": "7D6C2A1F-2B3C-4D5E-9F0A-000000000022",
     HOME_DASHBOARD: "7D6C2A1F-2B3C-4D5E-9F0A-000000000023",
+    "銷售故事": "7D6C2A1F-2B3C-4D5E-9F0A-000000000025",
 }
 """<windows> 中的視窗（simple-id）：導覽按鈕以它指定目標。"""
 
@@ -1425,6 +1429,98 @@ def home_dashboard() -> str:
     </dashboard>"""
 
 
+STORY = "銷售故事"
+
+
+def story_filter(sheet: str, action: str, region: str) -> str:
+    """故事點記下的篩選動作：目標工作表上的動作篩選只保留選取的地區。"""
+    return f"""                      <worksheet name={attr(sheet)}>
+                        <filter class='categorical' column={attr(ref(ACTION_REGION))}>
+                          <groupfilter function='member' level='[Region]' member={attr(f'"{region}"')} user:ui-action-filter={attr(action)} user:ui-domain='database' user:ui-enumeration='inclusive' user:ui-marker='enumerate' />
+                        </filter>
+                      </worksheet>"""
+
+
+def story_selection(sheet: str, region: str) -> str:
+    """故事點記下的選取：來源工作表上選取的地區。"""
+    return f"""                      <worksheet name={attr(sheet)}>
+                        <selection-collection>
+                          <node-selection select-tuples='false'>
+                            <oriented-node-reference orientation='vertical'>
+                              <node-reference>
+                                <fields>
+                                  <field>{escape(ref("none:Region:nk"))}</field>
+                                </fields>
+                                <multibucket>
+                                  <bucket>{escape(f'"{region}"')}</bucket>
+                                </multibucket>
+                              </node-reference>
+                              <page-reference />
+                            </oriented-node-reference>
+                          </node-selection>
+                        </selection-collection>
+                      </worksheet>"""
+
+
+def story_segment(segment: str) -> str:
+    return f"""                      <worksheet name='Sales by Segment'>
+                        <filter class='categorical' column={attr(ref("none:Segment:nk"))} filter-group='{SEGMENT_GROUP}'>
+                          {member("[none:Segment:nk]", segment)}
+                        </filter>
+                      </worksheet>"""
+
+
+def story() -> str:
+    """Story：導覽為說明文字、有上一個／下一個箭頭，開啟時停在第一個故事點。"""
+    east = "\n".join(
+        [
+            story_filter("Category Detail", ACTION_CATEGORY, "East"),
+            story_filter("Segment Detail", ACTION_SEGMENT, "East"),
+            story_selection("Region Picker", "East"),
+        ]
+    )
+    return f"""    <dashboard name={attr(STORY)} type='storyboard'>
+      <layout-options>
+        <title>
+          <formatted-text>
+            <run>銷售故事：從全部地區看到東區</run>
+          </formatted-text>
+        </title>
+      </layout-options>
+      <style />
+      <size maxheight='964' maxwidth='1016' minheight='964' minwidth='1016' />
+      <zones>
+        <zone h='100000' id='2' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='98340' id='1' param='vert' removable='false' type-v2='layout-flow' w='98426' x='787' y='830'>
+            <zone h='4357' id='3' type-v2='title' w='98426' x='787' y='830' />
+            <zone h='8195' id='4' paired-zone-id='5' removable='false' type-v2='flipboard-nav' w='98426' x='787' y='5187' />
+            <zone h='85788' id='5' paired-zone-id='4' removable='false' type-v2='flipboard' w='98426' x='787' y='13382'>
+              <flipboard active-id='1' nav-type='caption' show-nav-arrows='true'>
+                <story-points>
+                  <story-point caption='全部地區' captured-sheet={attr(ACTIONS_DASHBOARD)} id='1' />
+                  <story-point caption='東區' captured-sheet={attr(ACTIONS_DASHBOARD)} id='2'>
+                    <capturedDeltas>
+{east}
+                    </capturedDeltas>
+                  </story-point>
+                  <story-point caption='個人客戶' captured-sheet='Sales by Segment' id='3'>
+                    <currentDeltas>
+{story_segment("Consumer")}
+                    </currentDeltas>
+                    <capturedDeltas>
+{story_segment("Corporate")}
+                    </capturedDeltas>
+                  </story-point>
+                </story-points>
+              </flipboard>
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{{WINDOWS[STORY]}}}' />
+    </dashboard>"""
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='功能總覽'>
       <style />
@@ -1524,6 +1620,7 @@ def twb(rows: int) -> str:
 {reference_dashboard()}
 {home_dashboard()}
 {donut_dashboard()}
+{story()}
   </dashboards>
   <windows source-height='30'>
 {windows()}

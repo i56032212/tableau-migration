@@ -1,6 +1,6 @@
 """使用紀錄（第三階段 R1）：查詢服務記錄每次檢視的使用者、報表與時間，供報表管理與廢棄判定（不做完整稽核）。
 
-- 檢視器每開啟一個 dashboard 或工作表送出一次檢視（切換篩選不算新的檢視，與 Tableau 的檢視次數相同）；
+- 檢視器每開啟一個 dashboard、工作表或 Story 送出一次檢視（切換篩選不算新的檢視，與 Tableau 的檢視次數相同）；
   使用者取自登入者的身分，不取自請求內容；沒有權限的檢視不記錄
 - 紀錄逐行寫入 <目錄>/<年-月>.jsonl（UTC 時間、使用者、報表、view），不記錄 IP 等其他資訊
 - 統計：每份報表與 view 的檢視次數、不重複使用者數與最後一次檢視的時間；期間內沒有檢視的報表也列出（廢棄候選）
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-ViewKind = Literal["dashboard", "worksheet"]
+ViewKind = Literal["dashboard", "worksheet", "story"]
 
 
 @dataclass(frozen=True)

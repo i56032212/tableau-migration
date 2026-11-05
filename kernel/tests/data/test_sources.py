@@ -243,7 +243,13 @@ def connections_ir(tmp_path: Path) -> Path:
         for i, c in enumerate(variants)
     ]
     ir = base.model_copy(
-        update={"datasources": datasources, "worksheets": [], "dashboards": [], "actions": []}
+        update={
+            "datasources": datasources,
+            "worksheets": [],
+            "dashboards": [],
+            "actions": [],
+            "stories": [],
+        }
     )
     path = tmp_path / "sales.ir.json"
     path.write_text(dumps_ir(ir), encoding="utf-8")

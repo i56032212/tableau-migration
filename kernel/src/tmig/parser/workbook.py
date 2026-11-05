@@ -34,6 +34,7 @@ from tmig.parser.context import DsState, ParseContext, SharedView
 from tmig.parser.dashboard import DashboardParser
 from tmig.parser.datasource import DatasourceParser, add_calc_field, analyze_calcs, parse_parameters
 from tmig.parser.fields import instance_key, use_from_name
+from tmig.parser.story import StoryParser
 from tmig.parser.twbx import (
     WorkbookPackage,
     child,
@@ -205,7 +206,11 @@ class WorkbookParser:
                     window.get("name", ""),
                 )
         dashboards = []
+        story_elements = []
         for db_el in children(child(root, "dashboards"), "dashboard"):
+            if db_el.get("type") == "storyboard":
+                story_elements.append(db_el)  # 故事點會參照 dashboard 與動作：最後才解析
+                continue
             board = DashboardParser(ctx, db_el).parse()
             if board is not None:
                 dashboards.append(board)
@@ -217,6 +222,11 @@ class WorkbookParser:
                 zone.kind, zone.button = "blank", None
 
         actions = self._actions(child(root, "actions"), worksheets, dashboards)
+        stories = [
+            story
+            for el in story_elements
+            if (story := StoryParser(ctx, el, worksheets, dashboards, actions).parse()) is not None
+        ]
 
         if not ctx.datasources:
             reasons = "；".join(u.reason for u in ctx.unsupported) or "workbook 沒有資料源"
@@ -245,6 +255,7 @@ class WorkbookParser:
                 worksheets=worksheets,
                 dashboards=dashboards,
                 actions=actions,
+                stories=stories,
                 unsupported=ctx.unsupported,
                 ignored=ctx.ignored,
             )
@@ -263,6 +274,7 @@ class WorkbookParser:
         sheet_ds = {ws.id: ws.datasource for ws in worksheets}
         result: list[Action] = []
         board_ids = {d.name: d.id for d in dashboards}
+        self._link_stale_filters(element, worksheets, dashboards, by_name)
         for item in children(element):
             tag = local_name(item)
             if tag in ("datasources", "datasource-dependencies"):
@@ -362,6 +374,59 @@ class WorkbookParser:
                 for f in ws.filters
             ]
         return result
+
+    def _link_stale_filters(
+        self,
+        element: etree._Element | None,
+        worksheets: list[Worksheet],
+        dashboards: list[Dashboard],
+        by_name: dict[str, str],
+    ) -> None:
+        """篩選動作的篩選參照已刪除的動作時（刪掉動作再重建，工作表上留下舊動作的篩選），
+        Tableau 照樣把篩選套用在工作表上，之後執行的篩選動作寫入同一個欄位、取代它。
+
+        會寫入這張工作表的篩選動作只有一個時連到它（選取時以選取取代，沒有選取時維持原本的值）；
+        沒有或有多個時維持靜態篩選。可能寫入的工作表：目標 dashboard 上的工作表，扣掉 exclude
+        參數列出的工作表與動作的來源工作表（Tableau 不以動作篩選來源工作表本身）。"""
+        stale = self.ctx.stale_action_filters
+        if not stale:
+            return
+        board_sheets = {
+            d.name: {z.worksheet for z in iter_zones(d.zones) if z.kind == "worksheet"}
+            for d in dashboards
+        }
+        scopes: dict[str, set[str | None]] = {}
+        for item in children(element, "action"):
+            if _command(item) != "tsc:tsl-filter":
+                continue
+            params = {
+                p.get("name"): p.get("value") or ""
+                for p in children(child(item, "command"), "param")
+            }
+            target = params.get("target") or ""
+            scope: set[str | None] = set(board_sheets.get(target, set()))
+            if target in by_name:
+                scope = {by_name[target]}
+            scope -= {by_name.get(n) for n in (params.get("exclude") or "").split(",")}
+            scope -= set(
+                self._action_sources(child(item, "source"), by_name, dashboards, worksheets)
+            )
+            action_id = self.ctx.action_ids.get(item.get("name", ""))
+            if action_id is not None:
+                scopes[action_id] = scope
+        for sheet_name, filter_id in stale:
+            sheet_id = by_name.get(sheet_name)
+            candidates = [a for a, scope in scopes.items() if sheet_id in scope]
+            if len(candidates) != 1:
+                continue
+            for ws in worksheets:
+                if ws.id == sheet_id:
+                    ws.filters = [
+                        f.model_copy(update={"action": candidates[0]})
+                        if isinstance(f, TupleFilter) and f.id == filter_id
+                        else f
+                        for f in ws.filters
+                    ]
 
     def _url_action(
         self,

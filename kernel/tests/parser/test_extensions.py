@@ -1211,7 +1211,7 @@ def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:
             "匯出按鈕的格式 crosstab v0 不支援",
             "按鈕的動作 tabdoc:something-else v0 不支援",
             "dashboard 物件（不是按鈕）v0 不支援",
-            "Story「Detail」v0 不支援",
+            "Story「Detail」沒有可以移轉的故事點",
         ]
     )
     home = ir.dashboards[0]

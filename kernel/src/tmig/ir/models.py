@@ -954,6 +954,76 @@ class Dashboard(IRModel):
     source_ref: SourceRef
 
 
+# ---------------------------------------------------------------- Story
+
+
+Mark = dict[str, Scalar]
+"""一個標記：欄位鍵 → 值（與 tmig.planner.state.QueryState.actions 相同的寫法）。"""
+
+
+class StoryAction(IRModel):
+    """故事點記下的篩選動作選取：以這些標記執行動作（篩選目標工作表）。"""
+
+    action: Id
+    marks: list[Mark] = Field(min_length=1)
+
+
+class StoryFilter(IRModel):
+    """故事點記下的工作表篩選：只保留（或排除）列出的值。"""
+
+    worksheet: Id
+    field: FieldUse
+    mode: Literal["include", "exclude"]
+    values: list[Scalar] = Field(default_factory=list)
+
+
+class StorySelection(IRModel):
+    """故事點記下的選取：工作表上醒目顯示的標記。"""
+
+    worksheet: Id
+    marks: list[Mark] = Field(min_length=1)
+
+
+class StoryPoint(IRModel):
+    """故事點：顯示一個 dashboard 或工作表，以及與其預設狀態不同的篩選與選取。
+
+    狀態取自擷取時記下的差異；擷取後又改過但沒有更新故事點時，取改過的狀態（與開啟報表時相同）。"""
+
+    id: Id
+    caption: str = Field(default="", description="導覽上的說明文字；空的表示以序號導覽")
+    dashboard: Id | None = None
+    worksheet: Id | None = None
+    actions: list[StoryAction] = Field(default_factory=list)
+    filters: list[StoryFilter] = Field(default_factory=list)
+    selections: list[StorySelection] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _one_target(self) -> Self:
+        if (self.dashboard is None) == (self.worksheet is None):
+            raise ValueError("故事點必須剛好顯示一個 dashboard 或工作表")
+        return self
+
+
+class Story(IRModel):
+    """Story（故事）：依序切換的故事點。"""
+
+    id: Id
+    name: str = Field(min_length=1)
+    title: str | None = Field(
+        default=None, description="標題的文字；None 表示不顯示標題（沒有標題區塊）"
+    )
+    size: Size
+    navigation: Literal["caption", "number", "dots"] = Field(
+        default="caption", description="導覽的樣式：說明文字、序號或圓點"
+    )
+    arrows: bool = Field(default=True, description="導覽兩側是否有上一個、下一個的箭頭")
+    points: list[StoryPoint] = Field(min_length=1)
+    active: Id | None = Field(
+        default=None, description="開啟時顯示的故事點（儲存報表時停留的故事點）；None 表示第一個"
+    )
+    source_ref: SourceRef
+
+
 # ---------------------------------------------------------------- 根
 
 
@@ -1065,6 +1135,7 @@ class IR(IRModel):
     worksheets: list[Worksheet] = Field(default_factory=list)
     dashboards: list[Dashboard] = Field(default_factory=list)
     actions: list[Action] = Field(default_factory=list)
+    stories: list[Story] = Field(default_factory=list)
     unsupported: list[Unsupported] = Field(default_factory=list)
     ignored: list[Unsupported] = Field(
         default_factory=list, description="刻意略過、不影響數字的元素，例如格式、註解、醒目提示動作"

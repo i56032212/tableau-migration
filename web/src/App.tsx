@@ -3,24 +3,33 @@ import { api } from "./api";
 import { caseState, DashboardView } from "./Dashboard";
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
+import { StoryView } from "./Story";
 import type { CaseInfo, IR, Me, WorkbookSummary } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
-// 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>；?case=<篩選組合>
+// 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>；
+// ?case=<篩選組合>
 type Route =
   | { page: "home" }
   | { page: "workbook"; workbook: string }
   | { page: "dashboard"; workbook: string; dashboard: string }
-  | { page: "sheet"; workbook: string; worksheet: string };
+  | { page: "sheet"; workbook: string; worksheet: string }
+  | { page: "story"; workbook: string; story: string };
 
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "w" && parts[1]) {
     if (parts[2] === "d" && parts[3]) return { page: "dashboard", workbook: parts[1], dashboard: parts[3] };
     if (parts[2] === "s" && parts[3]) return { page: "sheet", workbook: parts[1], worksheet: parts[3] };
+    if (parts[2] === "story" && parts[3]) return { page: "story", workbook: parts[1], story: parts[3] };
     return { page: "workbook", workbook: parts[1] };
   }
   return { page: "home" };
+}
+
+/** 檢視（dashboard、工作表、Story）的網址。 */
+function viewPath(workbook: string, kind: "d" | "s" | "story", id: string): string {
+  return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
 }
 
 export function navigate(to: string) {
@@ -84,12 +93,17 @@ function Home({ me }: { me: Me }) {
             <div className="wb-name">{wb.name}</div>
             <div className="wb-links">
               {wb.dashboards.map((d) => (
-                <Link key={d.id} to={`/w/${encodeURIComponent(wb.id)}/d/${encodeURIComponent(d.id)}`}>
+                <Link key={d.id} to={viewPath(wb.id, "d", d.id)}>
                   {d.name}
                 </Link>
               ))}
+              {wb.stories?.map((st) => (
+                <Link key={st.id} to={viewPath(wb.id, "story", st.id)}>
+                  Story：{st.name}
+                </Link>
+              ))}
               {wb.worksheets.map((w) => (
-                <Link key={w.id} to={`/w/${encodeURIComponent(wb.id)}/s/${encodeURIComponent(w.id)}`}>
+                <Link key={w.id} to={viewPath(wb.id, "s", w.id)}>
                   {w.name}
                 </Link>
               ))}
@@ -131,9 +145,19 @@ function WorkbookPage({
     if (ir) setView(caseState(ir, cases.find((c) => c.name === caseName)));
   }, [ir, cases, caseName]);
 
-  // 使用紀錄：每開啟一個 dashboard 或工作表記一次（切換篩選不算）
-  const viewId = route.page === "dashboard" ? route.dashboard : route.page === "sheet" ? route.worksheet : null;
-  const known = ir !== null && viewId !== null && [...ir.dashboards, ...ir.worksheets].some((v) => v.id === viewId);
+  // 使用紀錄：每開啟一個 dashboard、工作表或 Story 記一次（切換篩選、故事點不算）
+  const viewId =
+    route.page === "dashboard"
+      ? route.dashboard
+      : route.page === "sheet"
+        ? route.worksheet
+        : route.page === "story"
+          ? route.story
+          : null;
+  const known =
+    ir !== null &&
+    viewId !== null &&
+    [...ir.dashboards, ...ir.worksheets, ...(ir.stories ?? [])].some((v) => v.id === viewId);
   useEffect(() => {
     if (known && viewId) void api.visit(workbook, viewId);
   }, [workbook, viewId, known]);
@@ -141,16 +165,30 @@ function WorkbookPage({
   if (error) return <main className="error">載入失敗：{error}</main>;
   if (!ir || !view) return <main>載入中…</main>;
 
+  const stories = ir.stories ?? [];
   const dashboard = route.page === "dashboard" ? ir.dashboards.find((d) => d.id === route.dashboard) : undefined;
   const worksheet = route.page === "sheet" ? ir.worksheets.find((w) => w.id === route.worksheet) : undefined;
+  const story = route.page === "story" ? stories.find((s) => s.id === route.story) : undefined;
   const base = window.location.pathname;
-  const target = route.page === "workbook" && ir.dashboards[0]
-    ? `/w/${encodeURIComponent(workbook)}/d/${encodeURIComponent(ir.dashboards[0].id)}`
-    : null;
+  // 報表本身：開啟第一個 dashboard，沒有時開啟第一個 Story 或工作表
+  const target =
+    route.page !== "workbook"
+      ? null
+      : ir.dashboards[0]
+        ? viewPath(workbook, "d", ir.dashboards[0].id)
+        : stories[0]
+          ? viewPath(workbook, "story", stories[0].id)
+          : ir.worksheets[0]
+            ? viewPath(workbook, "s", ir.worksheets[0].id)
+            : null;
   if (target) {
     navigate(target + window.location.search);
     return null;
   }
+  const onNavigate = (to: { dashboard?: string | null; worksheet?: string | null }) => {
+    if (to.dashboard) navigate(viewPath(workbook, "d", to.dashboard) + window.location.search);
+    else if (to.worksheet) navigate(viewPath(workbook, "s", to.worksheet) + window.location.search);
+  };
 
   return (
     <div className="page">
@@ -159,15 +197,20 @@ function WorkbookPage({
         <span className="sep">/</span>
         <span className="wb">{ir.workbook.name}</span>
         <select
-          value={dashboard ? `d:${dashboard.id}` : worksheet ? `s:${worksheet.id}` : ""}
+          value={dashboard ? `d:${dashboard.id}` : worksheet ? `s:${worksheet.id}` : story ? `story:${story.id}` : ""}
           onChange={(e) => {
             const [kind, id] = e.target.value.split(":");
-            navigate(`/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}${window.location.search}`);
+            navigate(viewPath(workbook, kind as "d" | "s" | "story", id) + window.location.search);
           }}
         >
           {ir.dashboards.map((d) => (
             <option key={d.id} value={`d:${d.id}`}>
               dashboard：{d.name}
+            </option>
+          ))}
+          {stories.map((st) => (
+            <option key={st.id} value={`story:${st.id}`}>
+              Story：{st.name}
             </option>
           ))}
           {ir.worksheets.map((w) => (
@@ -202,10 +245,7 @@ function WorkbookPage({
           dashboard={dashboard}
           view={view}
           onView={(next) => setView(next)}
-          onNavigate={(target) => {
-            const [kind, id] = target.dashboard ? ["d", target.dashboard] : ["s", target.worksheet ?? ""];
-            if (id) navigate(`/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}${window.location.search}`);
-          }}
+          onNavigate={onNavigate}
           cases={cases}
         />
       )}
@@ -214,7 +254,8 @@ function WorkbookPage({
           <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(ir, worksheet.id, view)} />
         </div>
       )}
-      {!dashboard && !worksheet && <main className="error">找不到這個 dashboard 或工作表</main>}
+      {story && <StoryView workbook={workbook} ir={ir} story={story} base={view} cases={cases} onNavigate={onNavigate} />}
+      {!dashboard && !worksheet && !story && <main className="error">找不到這個 dashboard、工作表或 Story</main>}
     </div>
   );
 }

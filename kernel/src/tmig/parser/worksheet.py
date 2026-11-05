@@ -1147,9 +1147,11 @@ class SheetParser:
             self.ctx.flag(element, f"多欄位篩選的值無法解析：{exc}")
             return None
         action: str | None = None
+        stale = False
         if kind == "sheet_link":
             name = attr(root, "ui-action-filter") if root is not None else None
             action = self.ctx.action_ids.get(name or "")
+            stale = action is None
         elif kind == "vit" and "vit" not in self.ctx.notes:
             self.ctx.notes.add("vit")
             self.ctx.ignore(
@@ -1157,7 +1159,7 @@ class SheetParser:
                 "工具提示中的工作表（Viz in Tooltip）：以一般工作表呈現，工具提示不顯示圖表",
             )
         caption = element.get("column", "")
-        return TupleFilter(
+        found = TupleFilter(
             kind="tuple",
             id=self.ctx.ids.make("flt", instance_key(caption).strip("[]"), caption),
             fields=uses,
@@ -1167,6 +1169,9 @@ class SheetParser:
             action=action,
             source_ref=xpath(element),
         )
+        if stale:
+            self.ctx.stale_action_filters.append((self.name, found.id))
+        return found
 
     def _shared_filters(
         self,

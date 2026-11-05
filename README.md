@@ -17,12 +17,13 @@
 - 計算比對：4 張工作表 × 4 組篩選，16 項全部通過
 - 檢視器：區塊位置與 IR 相同；切換 4 組篩選後畫面上的數字與預期結果一致（Playwright 端到端測試）
 
-擴充階段以功能報表 `fixtures/superstore_features`（25 張工作表、10 個 dashboard）逐項加入真實報表常用的功能：
+擴充階段以功能報表 `fixtures/superstore_features`（25 張工作表、10 個 dashboard、1 個 Story）逐項加入真實報表常用的功能：
 全域篩選與篩選群組、自動尺寸的 dashboard、dashboard 上的圖片、按鈕與網頁、Measure Names／Values、同一架多個量值與雙軸、圓餅、
 排除選取的標記、篩選動作（點選標記篩選其他工作表）、網址、參數與切換動作、群組與數值分組、
-相對日期、條件與萬用字元篩選、在一般選取中取 Top N、差異與差異百分比、移動計算、參考線、甜甜圈與各標記卡不同的詳細程度。
+相對日期、條件與萬用字元篩選、在一般選取中取 Top N、差異與差異百分比、移動計算、參考線、甜甜圈與各標記卡不同的詳細程度、
+Story（故事點記下的篩選動作、篩選與選取）。
 25 張工作表 × 4 組篩選共 100 項計算比對全部通過，
-檢視器的篩選群組、自動尺寸、各種動作、群組與篩選條件都有端到端測試。以 156 份公開的 .twb／.twbx 盤點，符合起步條件的 75 份中，
+檢視器的篩選群組、自動尺寸、各種動作、群組與篩選條件、Story 都有端到端測試。以 156 份公開的 .twb／.twbx 盤點，符合起步條件的 75 份中，
 解析後沒有不支援元素、可以直接開始的從擴充前的 1 份增加到 19 份。
 
 第三階段（來源資料庫、權限、排程）的功能都已完成，連線設定待公司環境實測（N4）。Live 連線已能查詢：工作表的 SQL 中不含 Table Calculation 的部分
@@ -52,7 +53,8 @@ Data Blending 尚不支援。依檢視者的身分連線資料庫的報表（沒
 （KPI 卡標題中的合計、篩選到的地區）以整張工作表計算（見「標題中的欄位值」）。156 份公開報表中
 可直接開始的從 23 份增加到 37 份。巢狀 Table Calculation 也已支援（內層先算成欄位，巢狀計算各自的
 計算方向），HR 人資報表原本無法查詢的 5 張工作表都能查詢。盤點也加上產生查詢時才知道的不支援
-（例如總計中的 Table Calculation）。樣式（文字顏色、字型大小、自訂色盤）不在移轉範圍，
+（例如總計中的 Table Calculation）。Story 也已支援：故事點顯示的 dashboard 或工作表，以及記下的篩選動作、
+篩選與選取（見「已知限制與待驗證」），含 Story 的 3 份公開報表因此可直接開始，共 40 份。樣式（文字顏色、字型大小、自訂色盤）不在移轉範圍，
 深色背景的報表上標題與文字會看不清楚（見「已知限制與待驗證」）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
@@ -253,7 +255,8 @@ Tableau 的權限評估規則開放（`kernel/src/tmig/access/permissions.py`、
 - 管理員看得到全部、未授權（Unlicensed）的帳號看不到；擁有者、所在 Project 與上層 Project 的擁有者與 Project Leader
   看得到；其餘依規則：本人的允許或拒絕優先，其次任一群組拒絕就拒絕、任一群組允許就允許，都沒有設定時拒絕
 - Project 鎖定權限時用 Project 的 workbook 預設權限（上層鎖定也套用到巢狀的 Project）；workbook 不以分頁顯示工作表時，
-  各 view 另有權限，dashboard 的權限涵蓋其中的工作表
+  各 view 另有權限，dashboard 的權限涵蓋其中的工作表，Story 的權限涵蓋故事點顯示的 dashboard 與工作表
+  （報表清單只列出有權限的 view 本身）
 - 沒有檢視權限的報表不出現在清單中，報表的 API 一律回應 404；報表定義（IR）只給有「下載 workbook」權限的人完整版本，
   其他人拿到的版本不含連線、公式、資料源篩選與原始 XML
 - 報表依 cases.yaml 的 `tableau_views_url`（Tableau 上的網址名稱）或報表名稱對應到 Tableau 的 workbook；
@@ -299,7 +302,8 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 
 查詢服務記錄每次檢視的使用者、報表與時間（`service/src/tmig_service/usage.py`），供報表管理與廢棄判定，不做完整稽核：
 
-- 檢視器每開啟一個 dashboard 或工作表記一次（切換篩選不算新的檢視）；使用者取自登入者，沒有權限的檢視不記錄
+- 檢視器每開啟一個 dashboard、工作表或 Story 記一次（切換篩選、故事點不算新的檢視）；使用者取自登入者，
+  沒有權限的檢視不記錄
 - 逐行寫入使用紀錄目錄的 `<年-月>.jsonl`（`tmig serve --usage-dir`，或環境變數 `TMIG_USAGE_DIR`；
   預設為報表目錄旁的 `usage/`），只有時間、使用者、報表與 view，不記錄 IP
 - `GET /api/usage?days=90`（有權限檔時限管理員）與 `uv run tmig usage summary usage --fixtures fixtures --csv usage.csv`：
@@ -379,6 +383,14 @@ tableau-migration/
   網址參數另成一個篩選，不會取代篩選動作；計算比對的篩選組合不含選取（Tableau 的匯出無法指定選取）
 - **網址與參數動作**：網址中的欄位代入原始值（數字取 12 位有效數字），一律在新分頁開啟；
   參數動作的 XML（source-field、target-parameter）依公開資料推定，選取多個標記時依彙總方式計算
+- **篩選動作的舊參照**：動作刪掉重建後，工作表上留下參照舊動作的篩選（公開報表 Practice Activity Number 4），
+  Tableau 照樣套用它，之後執行的動作寫入同一個欄位、取代它。新平台把它連到唯一會寫入這張工作表的篩選動作
+  （目標 dashboard 上扣掉 exclude 與來源的工作表；沒有或有多個時維持靜態篩選），依 XML 結構推定
+- **Story**：故事點顯示的狀態取自擷取時記下的差異（`<capturedDeltas>`）；擷取後又改過、沒有按「更新」時取改過的
+  狀態（`<currentDeltas>`），推定開啟報表時看到的是它。篩選動作的篩選轉成以記下的標記執行動作（同一個動作在
+  每張目標工作表各記一次，值相同）、一般篩選取代同一欄位的篩選（與網址參數相同）、選取轉成醒目顯示的標記。
+  在故事點上的操作只影響目前的畫面，切換故事點即回到記下的狀態（Tableau 會保留改過的狀態並提供「還原」）。
+  導覽樣式（說明文字、序號、圓點）與箭頭照 .twb；Story 的尺寸不強制，故事點的 dashboard 以自己的尺寸顯示
 
 - **群組與數值分組**：群組沒有「其他」時，未列入的成員維持原值；數值分組的值為所在區間的下限
   （FLOOR((值 − 起點) ÷ 大小) × 大小 ＋ 起點），與 Tableau 的區間邊界一致與否待真實報表確認
@@ -449,7 +461,8 @@ tableau-migration/
 Table Calculation、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
-總計的 Total Using、總計中的 Table Calculation 或與量值篩選並用、標題中的 Table Calculation 值。
+總計的 Total Using、總計中的 Table Calculation 或與量值篩選並用、標題中的 Table Calculation 值、
+故事點記下的其他狀態（參數、範圍篩選、排序等）、導覽到 Story 的按鈕。
 
 ## 開發規則
 

@@ -1,5 +1,5 @@
 """功能報表的檢視器端到端：篩選群組與全域篩選（H1）、自動尺寸（I1）、擴充圖表（J1–J3）、參考線（J4）、
-群組（K1）、篩選條件（K4）、篩選、網址、參數與切換動作（L1、L2）。
+群組（K1）、篩選條件（K4）、篩選、網址、參數與切換動作（L1、L2）、Story。
 
 需要先建置檢視器（cd web && pnpm install && pnpm build）與 Playwright 的 Chromium；缺少時略過。
 """
@@ -570,5 +570,76 @@ def test_donut_and_mixed_detail(server: str) -> None:
             "[data-worksheet='ws_region_sales_and_segment_profit'] svg [aria-roledescription='bar']"
         )
         assert bars.count() == 4  # 各地區一根，不因折線的客群而拆開
+        assert errors == []
+        browser.close()
+
+
+def test_story(server: str) -> None:
+    """Story：開啟時停在第一個故事點（預設狀態）；「東區」以記下的選取執行兩個篩選動作、來源工作表顯示選取；
+    「個人客戶」顯示 Sales by Segment 只看 Consumer（擷取後改過、沒有更新故事點的狀態）。"""
+    from playwright.sync_api import sync_playwright
+
+    oracle = load_oracle()
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    story = next(s for s in ir.stories if s.name == "銷售故事")
+    targets = {"ws_category_detail", "ws_segment_detail"}
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 1100})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/story/{story.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(300)
+        assert page.locator(".story-title").inner_text() == "銷售故事：從全部地區看到東區"
+        points = page.locator(".story-points button")
+        assert points.all_inner_texts() == ["全部地區", "東區", "個人客戶"]
+        assert points.nth(0).get_attribute("aria-current") == "step"
+        first = {w: data for w, _, data in renders.items}
+        same_as_oracle(first["ws_category_detail"], oracle.selection("ws_category_detail", None))
+        assert first["ws_segment_detail"]["rows"] == 0
+        picker = page.locator("[data-worksheet='ws_region_picker']")
+        assert picker.locator(".selection").count() == 0
+
+        def show(caption: str, worksheets: set[str]) -> dict[str, tuple[Any, Any]]:
+            start = len(renders.items)
+            page.locator(".story-points button", has_text=caption).click()
+            renders.wait_for(page, worksheets, start)
+            page.wait_for_timeout(300)
+            return {w: (body, data) for w, body, data in renders.items[start:]}
+
+        latest = show("東區", targets)
+        assert set(latest) == targets  # 篩選沒有改變的工作表不重新查詢
+        for worksheet, (body, data) in latest.items():
+            action = f"act_filter_{worksheet.removeprefix('ws_')}"
+            assert body["actions"] == {action: [{"f_region": "East"}]}
+            same_as_oracle(data, oracle.selection(worksheet, ["East"]))
+            check_numbers(ir, worksheet, body, data)
+        assert picker.locator(".selection").inner_text().startswith("已選取 1 個標記")
+
+        start = len(renders.items)
+        page.get_by_role("button", name="下一個故事點").click()
+        renders.wait_for(page, {"ws_sales_by_segment"}, start)
+        page.wait_for_timeout(300)
+        [(body, data)] = [(b, d) for w, b, d in renders.items[start:] if w == "ws_sales_by_segment"]
+        assert body["filters"] == {"f_segment": {"mode": "include", "values": ["Consumer"]}}
+        consumer = oracle.Case("story", {"Segment": "Consumer"})
+        same_as_oracle(data, oracle.sales_by_segment(oracle.load_rows(), consumer))
+        assert page.get_by_role("button", name="下一個故事點").is_disabled()
+
+        # 回到第一個故事點：沒有選取，Category Detail 顯示全部、Segment Detail 不顯示任何值
+        latest = show("全部地區", targets)
+        assert all(body["actions"] == {} for body, _ in latest.values())
+        same_as_oracle(
+            latest["ws_category_detail"][1], oracle.selection("ws_category_detail", None)
+        )
+        assert latest["ws_segment_detail"][1]["rows"] == 0
+        assert page.locator("[data-worksheet='ws_region_picker'] .selection").count() == 0
+        assert page.get_by_role("button", name="上一個故事點").is_disabled()
         assert errors == []
         browser.close()

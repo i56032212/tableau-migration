@@ -124,6 +124,8 @@ class ParseContext:
     """空白工作表的名稱：dashboard 上以空白區塊呈現。"""
     action_ids: dict[str, str] = field(default_factory=dict)
     """篩選動作的內部名稱（例如 [Action1_…]）→ IR id；解析工作表前先配發。"""
+    stale_action_filters: list[tuple[str, str]] = field(default_factory=list)
+    """參照已不存在的篩選動作的篩選（工作表名稱、篩選 id）：解析動作時連到會寫入它的動作。"""
     notes: set[str] = field(default_factory=set)
     """已記在 ignored 的整份報表說明，避免重複。"""
     windows: dict[str, tuple[str, str]] = field(default_factory=dict)

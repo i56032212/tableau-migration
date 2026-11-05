@@ -5402,6 +5402,91 @@
       "source_ref": "/workbook/actions/edit-parameter-action"
     }
   ],
+  "stories": [
+    {
+      "id": "st_45562c38",
+      "name": "銷售故事",
+      "title": "銷售故事：從全部地區看到東區",
+      "size": {
+        "width": 1016,
+        "height": 964
+      },
+      "navigation": "caption",
+      "arrows": true,
+      "points": [
+        {
+          "id": "sp1",
+          "caption": "全部地區",
+          "dashboard": "db_577aa158",
+          "worksheet": null,
+          "actions": [],
+          "filters": [],
+          "selections": []
+        },
+        {
+          "id": "sp2",
+          "caption": "東區",
+          "dashboard": "db_577aa158",
+          "worksheet": null,
+          "actions": [
+            {
+              "action": "act_filter_category_detail",
+              "marks": [
+                {
+                  "f_region": "East"
+                }
+              ]
+            },
+            {
+              "action": "act_filter_segment_detail",
+              "marks": [
+                {
+                  "f_region": "East"
+                }
+              ]
+            }
+          ],
+          "filters": [],
+          "selections": [
+            {
+              "worksheet": "ws_region_picker",
+              "marks": [
+                {
+                  "f_region": "East"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sp3",
+          "caption": "個人客戶",
+          "dashboard": null,
+          "worksheet": "ws_sales_by_segment",
+          "actions": [],
+          "filters": [
+            {
+              "worksheet": "ws_sales_by_segment",
+              "field": {
+                "field": "f_segment",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              },
+              "mode": "include",
+              "values": [
+                "Consumer"
+              ]
+            }
+          ],
+          "selections": []
+        }
+      ],
+      "active": "sp1",
+      "source_ref": "/workbook/dashboards/dashboard[11]"
+    }
+  ],
   "unsupported": [],
   "ignored": [
     {

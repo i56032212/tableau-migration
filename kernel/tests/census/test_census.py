@@ -146,7 +146,8 @@ def test_problems_fail_the_right_checks(problems: CensusReport) -> None:
         "v0_features": "warn",
     }
     assert problems.grade == "C"
-    assert problems.grade_reasons[:4] == ["Data Blending", "自訂 SQL", "Story", "地圖"]
+    # Story 已支援，不再是 C 級的原因
+    assert problems.grade_reasons[:3] == ["Data Blending", "自訂 SQL", "地圖"]
 
 
 def test_problems_details(problems: CensusReport) -> None:
@@ -178,11 +179,11 @@ def test_problems_features(problems: CensusReport) -> None:
     for expected in [
         "趨勢線（Blended）",  # 參考線（J4）已支援
         "地圖（Map）",
-        "Story（Story 1）",
         "集合等特殊欄位（group 1）",
         "Dashboard action（tsc:url-action 1）",  # 網址動作（url）已支援
     ]:
         assert expected in features
+    assert "Story" not in features  # 已支援
 
 
 def test_actions(problems: CensusReport) -> None:

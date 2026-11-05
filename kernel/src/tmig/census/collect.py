@@ -880,7 +880,7 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     # 相對日期與條件篩選已在擴充階段支援（K4）；參考線已支援（J4，只影響圖表，畫不出來的種類解析時記為略過）
     add("趨勢線", [w.name for w in ws if w.trend_lines])
     add("地圖", [w.name for w in ws if w.maps])
-    add("Story", [d.name for d in r.dashboards if d.story])
+    # Story 已支援（故事點的篩選動作、篩選與選取）；認不得的狀態解析時另列為不支援
     # 群組（categorical-bin）與數值分組（bin）已在擴充階段支援（K1）
     special = {
         k: v for k, v in r.calc_classes.items() if k not in ("tableau", "bin", "categorical-bin")
@@ -907,8 +907,6 @@ def _grade(r: CensusReport) -> tuple[Grade, list[str]]:
         c_reasons.append("Data Blending")
     if any(d.custom_sql for d in r.datasources):
         c_reasons.append("自訂 SQL")
-    if any(d.story for d in r.dashboards):
-        c_reasons.append("Story")
     if any(w.maps for w in r.worksheets):
         c_reasons.append("地圖")
 

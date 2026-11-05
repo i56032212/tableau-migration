@@ -2773,6 +2773,309 @@
       "title": "SqlRelation",
       "type": "object"
     },
+    "Story": {
+      "additionalProperties": false,
+      "description": "Story（故事）：依序切換的故事點。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標題的文字；None 表示不顯示標題（沒有標題區塊）",
+          "title": "Title"
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "navigation": {
+          "default": "caption",
+          "description": "導覽的樣式：說明文字、序號或圓點",
+          "enum": [
+            "caption",
+            "number",
+            "dots"
+          ],
+          "title": "Navigation",
+          "type": "string"
+        },
+        "arrows": {
+          "default": true,
+          "description": "導覽兩側是否有上一個、下一個的箭頭",
+          "title": "Arrows",
+          "type": "boolean"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/StoryPoint"
+          },
+          "minItems": 1,
+          "title": "Points",
+          "type": "array"
+        },
+        "active": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "開啟時顯示的故事點（儲存報表時停留的故事點）；None 表示第一個",
+          "title": "Active"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "size",
+        "points",
+        "source_ref"
+      ],
+      "title": "Story",
+      "type": "object"
+    },
+    "StoryAction": {
+      "additionalProperties": false,
+      "description": "故事點記下的篩選動作選取：以這些標記執行動作（篩選目標工作表）。",
+      "properties": {
+        "action": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Action",
+          "type": "string"
+        },
+        "marks": {
+          "items": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Marks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "marks"
+      ],
+      "title": "StoryAction",
+      "type": "object"
+    },
+    "StoryFilter": {
+      "additionalProperties": false,
+      "description": "故事點記下的工作表篩選：只保留（或排除）列出的值。",
+      "properties": {
+        "worksheet": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Worksheet",
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "mode": {
+          "enum": [
+            "include",
+            "exclude"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "worksheet",
+        "field",
+        "mode"
+      ],
+      "title": "StoryFilter",
+      "type": "object"
+    },
+    "StoryPoint": {
+      "additionalProperties": false,
+      "description": "故事點：顯示一個 dashboard 或工作表，以及與其預設狀態不同的篩選與選取。\n\n狀態取自擷取時記下的差異；擷取後又改過但沒有更新故事點時，取改過的狀態（與開啟報表時相同）。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "caption": {
+          "default": "",
+          "description": "導覽上的說明文字；空的表示以序號導覽",
+          "title": "Caption",
+          "type": "string"
+        },
+        "dashboard": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dashboard"
+        },
+        "worksheet": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worksheet"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/StoryAction"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "filters": {
+          "items": {
+            "$ref": "#/$defs/StoryFilter"
+          },
+          "title": "Filters",
+          "type": "array"
+        },
+        "selections": {
+          "items": {
+            "$ref": "#/$defs/StorySelection"
+          },
+          "title": "Selections",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "StoryPoint",
+      "type": "object"
+    },
+    "StorySelection": {
+      "additionalProperties": false,
+      "description": "故事點記下的選取：工作表上醒目顯示的標記。",
+      "properties": {
+        "worksheet": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Worksheet",
+          "type": "string"
+        },
+        "marks": {
+          "items": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Marks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "worksheet",
+        "marks"
+      ],
+      "title": "StorySelection",
+      "type": "object"
+    },
     "TableCalc": {
       "additionalProperties": false,
       "description": "Table Calculation。type 為 formula 表示計算欄位內含 Table Calculation 函式。",
@@ -3812,6 +4115,13 @@
         "$ref": "#/$defs/Action"
       },
       "title": "Actions",
+      "type": "array"
+    },
+    "stories": {
+      "items": {
+        "$ref": "#/$defs/Story"
+      },
+      "title": "Stories",
       "type": "array"
     },
     "unsupported": {

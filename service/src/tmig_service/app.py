@@ -11,7 +11,7 @@ API：
 - ``GET  /api/workbooks/{wb}/cases``：cases.yaml 的篩選組合（已轉成篩選狀態），供檢視器切換
 - ``GET  /api/workbooks/{wb}/files/{path}``：.twbx 內的圖片（圖片區塊與圖片按鈕）
 - ``GET  /api/me``：目前的登入者與身分驗證模式；``/auth/*``：登入、登出與開發模式的切換使用者
-- ``POST /api/workbooks/{wb}/views/{view}/visit``：檢視器開啟一個 dashboard 或工作表（使用紀錄，R1）
+- ``POST /api/workbooks/{wb}/views/{view}/visit``：檢視器開啟一個 dashboard、工作表或 Story（使用紀錄，R1）
 - ``GET  /api/usage?days=90``：每份報表與 view 的檢視次數、使用者數與最後一次檢視（有權限檔時限管理員）
 
 其餘路徑提供檢視器（web/dist）。
@@ -194,15 +194,21 @@ def create_app(
 
     @app.post("/api/workbooks/{wb}/views/{view_id}/visit", status_code=204)
     def visit(wb: str, view_id: str, user: User) -> Response:
-        """檢視器開啟一個 dashboard 或工作表；使用者取自登入者，沒有權限的檢視回應 404 不記錄。"""
+        """檢視器開啟一個 dashboard、工作表或 Story（切換故事點不算）；使用者取自登入者，
+        沒有權限的檢視回應 404 不記錄。"""
         loaded, grant = granted(wb, user)
         ir = loaded.ir
         board = next((d for d in ir.dashboards if d.id == view_id), None)
         sheet = next((w for w in ir.worksheets if w.id == view_id), None)
-        if board is not None and grant.dashboard_allowed(board.name):
+        story = next((s for s in ir.stories if s.id == view_id), None)
+        if board is not None and (
+            grant.dashboard_allowed(board.name) or board.id in grant.story_dashboards(ir)
+        ):
             name, kind = board.name, "dashboard"
         elif sheet is not None and grant.worksheet_allowed(ir, sheet.id):
             name, kind = sheet.name, "worksheet"
+        elif story is not None and grant.story_allowed(story.name):
+            name, kind = story.name, "story"
         else:
             raise HTTPException(404, f"找不到 view「{view_id}」")
         if usage is not None:
@@ -260,6 +266,11 @@ def create_app(
                         {"id": w.id, "name": w.name}
                         for w in ir.worksheets
                         if grant.worksheet_allowed(ir, w.id)
+                    ],
+                    "stories": [
+                        {"id": s.id, "name": s.name}
+                        for s in ir.stories
+                        if grant.story_allowed(s.name)
                     ],
                     "unsupported": len(ir.unsupported),
                 }

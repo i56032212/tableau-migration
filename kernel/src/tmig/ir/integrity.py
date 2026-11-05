@@ -138,6 +138,8 @@ def check_references(ir: IR) -> list[str]:
             claim(tc.id, f"worksheets[{ws.id}].table_calcs[{tc.id}]")
     for db in ir.dashboards:
         claim(db.id, f"dashboards[{db.id}]")
+    for story in ir.stories:
+        claim(story.id, f"stories[{story.id}]")
 
     for act in ir.actions:
         claim(act.id, f"actions[{act.id}]")
@@ -281,5 +283,28 @@ def check_references(ir: IR) -> list[str]:
                 errors.append(f"{where}：工作表「{zone.worksheet}」不存在")
             elif zone.field is not None:
                 check_use(zone.field, sheet.datasource, f"{where}.field", None)
+
+    for story in ir.stories:
+        point_ids = [point.id for point in story.points]
+        if len(set(point_ids)) != len(point_ids):
+            errors.append(f"stories[{story.id}].points：故事點的 id 重複")
+        if story.active is not None and story.active not in point_ids:
+            errors.append(f"stories[{story.id}].active：故事點「{story.active}」不存在")
+        for point in story.points:
+            where = f"stories[{story.id}].points[{point.id}]"
+            if point.dashboard is not None and point.dashboard not in boards:
+                errors.append(f"{where}：dashboard「{point.dashboard}」不存在")
+            if point.worksheet is not None and point.worksheet not in sheets:
+                errors.append(f"{where}：工作表「{point.worksheet}」不存在")
+            for state in point.actions:
+                if state.action not in actions:
+                    errors.append(f"{where}.actions：動作「{state.action}」不存在")
+            for item in [*point.filters, *point.selections]:
+                if item.worksheet not in sheets:
+                    errors.append(f"{where}：工作表「{item.worksheet}」不存在")
+            for flt in point.filters:
+                sheet = sheets.get(flt.worksheet)
+                if sheet is not None:
+                    check_use(flt.field, sheet.datasource, f"{where}.filters", None)
 
     return errors

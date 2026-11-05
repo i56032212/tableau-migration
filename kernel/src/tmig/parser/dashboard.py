@@ -78,9 +78,6 @@ class DashboardParser:
 
     def parse(self) -> Dashboard | None:
         ctx, el = self.ctx, self.el
-        if el.get("type") == "storyboard":
-            ctx.flag(el, f"Story「{self.name}」v0 不支援")
-            return None
         size_el = child(el, "size")
         sizing = _size(size_el)
         width, height = sizing.width, sizing.height

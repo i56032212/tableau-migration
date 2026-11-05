@@ -1,0 +1,114 @@
+import { useEffect, useMemo, useState } from "react";
+import { DashboardView } from "./Dashboard";
+import { fieldKey, stateFor, type ViewState } from "./state";
+import type { CaseInfo, FilterValue, IR, Story, StoryPoint } from "./types";
+import { WorksheetView } from "./WorksheetView";
+
+/** 故事點的狀態：記下的篩選取代同一欄位的篩選（套在篩選組合之上），篩選動作與選取以記下的標記為準。 */
+export function pointState(point: StoryPoint, base: ViewState): ViewState {
+  const sheetFilters: Record<string, Record<string, FilterValue>> = {};
+  for (const [sheet, filters] of Object.entries(base.sheetFilters)) sheetFilters[sheet] = { ...filters };
+  for (const f of point.filters) {
+    sheetFilters[f.worksheet] = { ...(sheetFilters[f.worksheet] ?? {}), [fieldKey(f.field)]: { mode: f.mode, values: f.values } };
+  }
+  return {
+    ...base,
+    sheetFilters,
+    actions: Object.fromEntries(point.actions.map((a) => [a.action, a.marks])),
+    selections: Object.fromEntries(point.selections.map((s) => [s.worksheet, s.marks])),
+  };
+}
+
+function initialIndex(story: Story): number {
+  return Math.max(0, story.points.findIndex((p) => p.id === story.active));
+}
+
+interface Props {
+  workbook: string;
+  ir: IR;
+  story: Story;
+  /** 篩選組合的狀態（網址參數）；每個故事點以它為基礎 */
+  base: ViewState;
+  cases: CaseInfo[];
+  onNavigate: (target: { dashboard?: string | null; worksheet?: string | null }) => void;
+}
+
+/**
+ * Story：上方為標題與故事點導覽（說明文字、序號或圓點，兩側可有上一個／下一個箭頭），下方顯示目前故事點的
+ * dashboard 或工作表。在故事點上操作（篩選、選取）只影響目前的畫面，切換故事點時回到記下的狀態。
+ */
+export function StoryView({ workbook, ir, story, base, cases, onNavigate }: Props) {
+  const [index, setIndex] = useState(() => initialIndex(story));
+  useEffect(() => setIndex(initialIndex(story)), [story]);
+  const point = story.points[Math.min(index, story.points.length - 1)];
+  const captured = useMemo(() => pointState(point, base), [point, base]);
+  // 在故事點上的操作：只對同一個故事點（與同一個篩選組合）有效，切換後立刻回到記下的狀態
+  const [changed, setChanged] = useState<{ point: StoryPoint; base: ViewState; view: ViewState } | null>(null);
+  const view = changed && changed.point === point && changed.base === base ? changed.view : captured;
+  const setView = (next: ViewState) => setChanged({ point, base, view: next });
+
+  const dashboard = point.dashboard ? ir.dashboards.find((d) => d.id === point.dashboard) : undefined;
+  const worksheet = point.worksheet ? ir.worksheets.find((w) => w.id === point.worksheet) : undefined;
+  const last = story.points.length - 1;
+  const go = (next: number) => setIndex(Math.max(0, Math.min(last, next)));
+  const label = (p: StoryPoint, i: number) =>
+    story.navigation === "caption" && p.caption ? p.caption : story.navigation === "dots" ? "" : String(i + 1);
+
+  return (
+    <div className="story" data-story={story.id} style={{ minWidth: story.size.width }}>
+      {story.title && <div className="story-title">{story.title}</div>}
+      <nav className="story-nav" data-navigation={story.navigation} aria-label="故事點">
+        {story.arrows && (
+          <button type="button" className="story-arrow" aria-label="上一個故事點" disabled={index === 0} onClick={() => go(index - 1)}>
+            ‹
+          </button>
+        )}
+        <ol className="story-points">
+          {story.points.map((p, i) => (
+            <li key={p.id}>
+              <button
+                type="button"
+                className={i === index ? "active" : ""}
+                aria-current={i === index ? "step" : undefined}
+                aria-label={p.caption || `故事點 ${i + 1}`}
+                data-point={p.id}
+                onClick={() => go(i)}
+              >
+                {label(p, i)}
+              </button>
+            </li>
+          ))}
+        </ol>
+        {story.arrows && (
+          <button type="button" className="story-arrow" aria-label="下一個故事點" disabled={index === last} onClick={() => go(index + 1)}>
+            ›
+          </button>
+        )}
+      </nav>
+      <div className="story-point" data-point={point.id}>
+        {dashboard && (
+          <DashboardView
+            workbook={workbook}
+            ir={ir}
+            dashboard={dashboard}
+            view={view}
+            onView={setView}
+            onNavigate={onNavigate}
+            cases={cases}
+          />
+        )}
+        {worksheet && (
+          <div className="single-sheet">
+            <WorksheetView
+              workbook={workbook}
+              worksheet={worksheet.id}
+              state={stateFor(ir, worksheet.id, view)}
+              selected={view.selections[worksheet.id]}
+            />
+          </div>
+        )}
+        {!dashboard && !worksheet && <div className="error">找不到故事點顯示的 dashboard 或工作表</div>}
+      </div>
+    </div>
+  );
+}
