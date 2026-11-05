@@ -268,6 +268,18 @@ KEY_SALES_COLUMN = f"""      <column caption='Key Sales' datatype='real' name='{
       </column>"""
 """用到集合的計算欄位：重點子類別的銷售額，其他為 Null。"""
 
+# 巢狀 LOD：內層的 INCLUDE 相對於外層 LOD 的維度
+AVG_CUSTOMER_CALC = "[Calculation_7D6C2A1F00000004]"
+AVG_CUSTOMER_COLUMN = f"""      <column caption='Avg Customer Sales' datatype='real' name='{AVG_CUSTOMER_CALC}' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='{{FIXED [Region] : AVG({{INCLUDE [Customer Name] : SUM([Sales])}})}}' />
+      </column>"""
+"""每區客戶的平均銷售額（FIXED 之內的 INCLUDE，在維度篩選前計算）。"""
+TOP_ORDER_CALC = "[Calculation_7D6C2A1F00000005]"
+TOP_ORDER_COLUMN = f"""      <column caption='Top Order Sales' datatype='real' name='{TOP_ORDER_CALC}' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='{{EXCLUDE [Category] : MAX({{INCLUDE [Order ID] : SUM([Sales])}})}}' />
+      </column>"""
+"""每區最大一張訂單的銷售額（EXCLUDE 之內的 INCLUDE，在維度篩選後計算）。"""
+
 # 參數動作：點選地區設定參數，計算欄位依參數計算
 SELECTED_CALC = "[Calculation_7D6C2A1F00000001]"
 PARAMETERS = """    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>
@@ -424,6 +436,8 @@ def worksheets() -> str:
             profitable_sub_categories(),
             key_sub_categories(),
             key_sales_by_region(),
+            avg_customer_sales(),
+            top_order_by_region(),
         ]
     )
 
@@ -543,14 +557,77 @@ def key_sales_by_region() -> str:
                 ],
                 [],
             ),
-            KEY_SALES_COLUMN.replace("      <", "            <", 1).replace(
-                "\n      ", "\n            "
-            ),
+            dependent_column(KEY_SALES_COLUMN),
         ),
         "",
         pane("Bar", f"              <text column={attr(ref(f'sum:{key}:qk'))} />"),
         ref("none:Region:nk"),
         ref(f"sum:{key}:qk"),
+    )
+
+
+def dependent_column(column: str) -> str:
+    """資料源中的計算欄位 → 工作表 datasource-dependencies 中的寫法（多縮排一層）。"""
+    return column.replace("      <", "            <", 1).replace("\n      ", "\n            ")
+
+
+def avg_customer_sales() -> str:
+    """巢狀 LOD：{FIXED [Region] : AVG({INCLUDE [Customer Name] : SUM([Sales])})}，內層的 INCLUDE
+    相對於外層的 Region（每區每位客戶算一次）；FIXED 不受維度篩選影響，篩選只決定顯示哪些地區。"""
+    key = AVG_CUSTOMER_CALC.strip("[]")
+    return worksheet(
+        "Avg Customer Sales by Region",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000002D",
+        with_columns(
+            dependency(
+                [
+                    *GLOBAL_COLUMNS,
+                    ("[Customer Name]", "string", "dimension", "nominal"),
+                    ("[Sales]", "real", "measure", "quantitative"),
+                ],
+                [
+                    *GLOBAL_INSTANCES,
+                    instance(AVG_CUSTOMER_CALC, "Sum", f"[sum:{key}:qk]", "quantitative"),
+                ],
+                [],
+            ),
+            dependent_column(AVG_CUSTOMER_COLUMN),
+        ),
+        slices("none:Region:nk", "none:Ship Mode:nk"),
+        pane("Bar", f"              <text column={attr(ref(f'sum:{key}:qk'))} />"),
+        ref("none:Region:nk"),
+        ref(f"sum:{key}:qk"),
+    )
+
+
+def top_order_by_region() -> str:
+    """巢狀 LOD：{EXCLUDE [Category] : MAX({INCLUDE [Order ID] : SUM([Sales])})}，列架 Region／Category
+    的文字表；內層的 INCLUDE 相對於外層去掉 Category 後的 Region，在維度篩選後計算。"""
+    key = TOP_ORDER_CALC.strip("[]")
+    return worksheet(
+        "Top Order by Region",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000002E",
+        with_columns(
+            dependency(
+                [
+                    *GLOBAL_COLUMNS,
+                    ("[Category]", "string", "dimension", "nominal"),
+                    ("[Order ID]", "string", "dimension", "nominal"),
+                    ("[Sales]", "real", "measure", "quantitative"),
+                ],
+                [
+                    *GLOBAL_INSTANCES,
+                    instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                    instance(TOP_ORDER_CALC, "Sum", f"[sum:{key}:qk]", "quantitative"),
+                ],
+                [],
+            ),
+            dependent_column(TOP_ORDER_COLUMN),
+        ),
+        slices("none:Region:nk", "none:Ship Mode:nk"),
+        pane("Text", f"              <text column={attr(ref(f'sum:{key}:qk'))} />"),
+        f"({ref('none:Region:nk')} / {ref('none:Category:nk')})",
+        "",
     )
 
 
@@ -1795,7 +1872,7 @@ def twb(rows: int) -> str:
   </preferences>
   <datasources>
 {PARAMETERS}
-{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, KEY_SALES_COLUMN, DATASOURCE_GROUPS, SET_TOP, SET_KEY, SET_PROFITABLE]))}
+{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, KEY_SALES_COLUMN, AVG_CUSTOMER_COLUMN, TOP_ORDER_COLUMN, DATASOURCE_GROUPS, SET_TOP, SET_KEY, SET_PROFITABLE]))}
   </datasources>
 {shared_views()}
 {actions()}

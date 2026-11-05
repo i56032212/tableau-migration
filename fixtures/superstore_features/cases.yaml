@@ -66,6 +66,10 @@ sheets:
     view: KeySub-CategoriesbyCategory
   - worksheet: ws_key_sales_by_region
     view: KeySalesbyRegion
+  - worksheet: ws_avg_customer_sales_by_region
+    view: AvgCustomerSalesbyRegion
+  - worksheet: ws_top_order_by_region
+    view: TopOrderbyRegion
 cases:
   - name: default
     url_params: {}

@@ -255,8 +255,6 @@ class Analyzer:
         inner = self.analyze(node.expr)
         if inner.level != "agg":
             raise FormulaSemanticError("LOD 運算式內部必須是彙總", node.pos)
-        if inner.has_lod:
-            raise FormulaSemanticError("尚不支援巢狀 LOD", node.pos, unsupported=True)
         return Info(inner.datatype, "row", True)
 
     # ------------------------------------------------------------ 走訪

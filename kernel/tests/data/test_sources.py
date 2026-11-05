@@ -190,9 +190,9 @@ def test_verify_live_fixture(tmp_path: Path) -> None:
     shutil.copytree(FEATURES / "expected", fixture / "expected")
     (fixture / "golden.ir.json").write_text(dumps_ir(live_features()), encoding="utf-8")
     _, report = verify_fixture(fixture, DataRuntime(duckdb_configs()))
-    assert report.summary == {"pass": 116, "fail": 0, "unsupported": 0}
+    assert report.summary == {"pass": 124, "fail": 0, "unsupported": 0}
     _, report = verify_fixture(fixture, DataRuntime({}))
-    assert report.summary["fail"] == 116
+    assert report.summary["fail"] == 124
     assert "連線設定檔中沒有連線 sales_duckdb" in report.checks[0].diff
 
 

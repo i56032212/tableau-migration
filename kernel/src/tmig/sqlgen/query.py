@@ -21,6 +21,7 @@ LOD 的彙總語意：彙總的參數若只含 LOD（不含列層級欄位），
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -154,6 +155,19 @@ class Measure:
 class LodSpec:
     node: Lod
     col: str
+    outer: LodSpec | None = None
+    """外層的 LOD（巢狀時）：內層的 INCLUDE／EXCLUDE 相對於外層的維度，不是檢視的維度。"""
+    inner: dict[Lod, LodSpec] = field(default_factory=dict)
+    """運算式中的內層 LOD（同一個 LOD 用在不同的外層時各算一次）。"""
+
+    def in_fixed(self) -> bool:
+        """自己或外層有 FIXED：與 FIXED 一起在維度篩選前計算。"""
+        spec: LodSpec | None = self
+        while spec is not None:
+            if spec.node.kind == "fixed":
+                return True
+            spec = spec.outer
+        return False
 
 
 @dataclass
@@ -269,7 +283,7 @@ class _RowEnv:
 
     def lod(self, node: Lod) -> str:
         spec = self.query.lods.get(node)
-        if spec is None or node not in self.query.attached:
+        if spec is None or spec.col not in self.query.attached:
             raise QueryError(
                 "LOD 運算式在這個運算階段還不能使用（例如以 INCLUDE／EXCLUDE 作維度篩選）",
                 unsupported=True,
@@ -405,7 +419,9 @@ class WorksheetQuery:
         self.lods: dict[Lod, LodSpec] = {}
         self.cond_nodes: dict[str, Node] = {}
         """條件篩選 id → 條件的語法樹。"""
-        self.attached: set[Lod] = set()
+        self.attached: set[str] = set()
+        """已併到每一列的 LOD 欄名。"""
+        self._lod_count = 0
         self.sets: dict[str, str] = {}
         """Top N 與條件集合的欄位 id → 每一列是否在集合中的欄名（內容篩選後計算，見 _attach_sets）。"""
         self.attached_sets: set[str] = set()
@@ -613,12 +629,42 @@ class WorksheetQuery:
         for field_id in self.sets_in(node):
             self.sets.setdefault(field_id, f"__set_{len(self.sets)}")
         for lod in self.lods_in(node):
-            if lod in self.lods:
-                continue
-            for dim in lod.dims:
-                if self.lods_in(dim):
-                    raise QueryError("LOD 的維度本身含 LOD，尚不支援", unsupported=True)
-            self.lods[lod] = LodSpec(lod, f"__lod_{len(self.lods)}")
+            if lod not in self.lods:
+                self.lods[lod] = self._lod_spec(lod, None)
+
+    def _lod_spec(self, lod: Lod, outer: LodSpec | None) -> LodSpec:
+        for dim in lod.dims:
+            if self.lods_in(dim):
+                raise QueryError("LOD 的維度本身含 LOD，尚不支援", unsupported=True)
+        spec = LodSpec(lod, f"__lod_{self._lod_count}", outer)
+        self._lod_count += 1
+        for inner in self.lods_in(lod.expr):
+            if inner not in spec.inner:
+                spec.inner[inner] = self._lod_spec(inner, spec)
+        return spec
+
+    def _all_lods(self) -> list[LodSpec]:
+        """所有 LOD，內層在外層之前。"""
+        found: list[LodSpec] = []
+
+        def visit(spec: LodSpec) -> None:
+            for inner in spec.inner.values():
+                visit(inner)
+            found.append(spec)
+
+        for spec in self.lods.values():
+            visit(spec)
+        return found
+
+    @contextmanager
+    def _lod_scope(self, spec: LodSpec) -> Iterator[None]:
+        """編譯外層 LOD 的運算式時，其中的 LOD 指向內層各自的計算結果。"""
+        saved = self.lods
+        self.lods = {**saved, **spec.inner}
+        try:
+            yield
+        finally:
+            self.lods = saved
 
     # ------------------------------------------------------------ 主流程
 
@@ -682,8 +728,9 @@ class WorksheetQuery:
             if sort.by is not None:
                 self.register_lods(self.measure_node(sort.by))
 
-        fixed = [s for s in self.lods.values() if s.node.kind == "fixed"]
-        relative = [s for s in self.lods.values() if s.node.kind != "fixed"]
+        # 巢狀的 LOD：外層或自己有 FIXED 的在維度篩選前計算，內層先算
+        fixed = [s for s in self._all_lods() if s.in_fixed()]
+        relative = [s for s in self._all_lods() if not s.in_fixed()]
 
         # Relationship 模型：依用到的欄位決定要查哪些邏輯資料表、怎麼連接
         base_sql = self.source.from_sql
@@ -1350,39 +1397,75 @@ class WorksheetQuery:
 
     # ------------------------------------------------------------ LOD
 
+    def _lod_levels(
+        self, spec: LodSpec, view_dims: list[Dim] | None, compiler: ExprCompiler
+    ) -> list[tuple[str, str | None]]:
+        """LOD 的維度：SQL 與欄位 id（EXCLUDE 依欄位 id 去掉）。INCLUDE／EXCLUDE 相對於外層 LOD 的維度，
+        沒有外層時相對於檢視的維度。"""
+        lod = spec.node
+        if lod.kind == "fixed":
+            return [
+                (self._compile(lambda d=d: compiler.row(d)), self._dim_field(d)) for d in lod.dims
+            ]
+        if spec.outer is not None:
+            base = self._lod_levels(spec.outer, view_dims, compiler)
+        elif view_dims is None:
+            raise QueryError("INCLUDE／EXCLUDE LOD 只能用在檢視的量值", unsupported=True)
+        else:
+            base = [(self.dim_sql(d.use, compiler), d.use.field) for d in view_dims]
+        if lod.kind == "include":
+            levels = list(base)
+            for dim in lod.dims:
+                sql = self._compile(lambda dim=dim: compiler.row(dim))
+                if all(sql != known for known, _ in levels):
+                    levels.append((sql, self._dim_field(dim)))
+            return levels
+        excluded = {self._dim_field(d) for d in lod.dims} - {None}
+        return [(sql, fid) for sql, fid in base if fid not in excluded]
+
+    def _dim_field(self, node: Node) -> str | None:
+        return self._resolve(node).id if isinstance(node, FieldRef) else None
+
     def _lod_dims(
         self, spec: LodSpec, view_dims: list[Dim] | None, compiler: ExprCompiler
     ) -> list[str]:
-        lod = spec.node
-        if lod.kind == "fixed":
-            return [self._compile(lambda d=d: compiler.row(d)) for d in lod.dims]
-        if view_dims is None:
-            raise QueryError("INCLUDE／EXCLUDE LOD 只能用在檢視的量值", unsupported=True)
-        if lod.kind == "include":
-            sqls = [self.dim_sql(d.use, compiler) for d in view_dims]
-            for dim in lod.dims:
-                sql = self._compile(lambda dim=dim: compiler.row(dim))
-                if sql not in sqls:
-                    sqls.append(sql)
-            return sqls
-        excluded = {self._resolve(d).id for d in lod.dims}
-        return [self.dim_sql(d.use, compiler) for d in view_dims if d.use.field not in excluded]
+        return [sql for sql, _ in self._lod_levels(spec, view_dims, compiler)]
 
     def _lod_covered(self, spec: LodSpec, view_dims: list[Dim] | None) -> set[str]:
         lod = spec.node
-        if lod.kind == "fixed" or view_dims is None:
+        if lod.kind == "fixed":
             return self._covered([], lod.dims)
+        if spec.outer is not None:
+            base = self._lod_covered(spec.outer, view_dims)
+        elif view_dims is None:
+            return self._covered([], lod.dims)
+        else:
+            base = self._covered([d.use for d in view_dims])
         if lod.kind == "include":
-            return self._covered([d.use for d in view_dims], lod.dims)
-        excluded = {self._resolve(d).id for d in lod.dims}
-        return self._covered([d.use for d in view_dims if d.use.field not in excluded])
+            return base | self._covered([], lod.dims)
+        return base - {self._dim_field(d) for d in lod.dims}
 
     def _attach(
         self, specs: list[LodSpec], source: str, name: str, stage: int, view_dims: list[Dim] | None
     ) -> str:
-        """計算一組 LOD，併回每一列。"""
-        if not specs:
-            return source
+        """計算一組 LOD，併回每一列。巢狀時分層：內層先併回，外層再以併好的資料計算。"""
+        layers: list[list[LodSpec]] = []
+        depth: dict[str, int] = {}
+        for spec in specs:  # 內層在外層之前
+            inner = [depth[s.col] for s in spec.inner.values() if s.col in depth]
+            depth[spec.col] = max(inner, default=-1) + 1
+            if depth[spec.col] == len(layers):
+                layers.append([])
+            layers[depth[spec.col]].append(spec)
+        for i, layer in enumerate(layers):
+            source = self._attach_layer(
+                layer, source, name if i == 0 else f"{name}_{i}", stage, view_dims
+            )
+        return source
+
+    def _attach_layer(
+        self, specs: list[LodSpec], source: str, name: str, stage: int, view_dims: list[Dim] | None
+    ) -> str:
         joins: list[str] = []
         selects = ["r.*"]
         row_r = self.compiler(_RowEnv(self, "r"))
@@ -1390,13 +1473,7 @@ class WorksheetQuery:
             kind = {"fixed": "FIXED", "include": "INCLUDE", "exclude": "EXCLUDE"}[spec.node.kind]
             self._guard(self._lod_covered(spec, view_dims), f"{kind} LOD")
             dims = self._lod_dims(spec, view_dims, self.row)
-            inner = self._compile(lambda spec=spec: self.row.agg(spec.node.expr))
-            lod_name = self.name("lod")
-            keys = [f"__d{i}" for i in range(len(dims))]
-            cols = [f"{sql} AS {ident(k)}" for sql, k in zip(dims, keys, strict=True)]
-            group = f" GROUP BY {', '.join(str(i + 1) for i in range(len(dims)))}" if dims else ""
-            cols.append(f"{inner} AS {ident(VALUE_COL)}")
-            self.cte(stage, lod_name, f"SELECT {', '.join(cols)} FROM {source}{group}")
+            lod_name, keys = self._lod_values(spec, dims, source, stage, view_dims)
             alias = f"l{len(joins)}"
             r_dims = self._lod_dims(spec, view_dims, row_r)
             on = (
@@ -1410,8 +1487,39 @@ class WorksheetQuery:
             selects.append(f"{alias}.{ident(VALUE_COL)} AS {ident(spec.col)}")
             self.note(stage, f"{kind} LOD → {spec.col}")
         self.cte(stage, name, f"SELECT {', '.join(selects)} FROM {source} r {' '.join(joins)}")
-        self.attached.update(s.node for s in specs)
+        self.attached.update(s.col for s in specs)
         return name
+
+    def _lod_values(
+        self,
+        spec: LodSpec,
+        dims: list[str],
+        source: str,
+        stage: int,
+        view_dims: list[Dim] | None,
+    ) -> tuple[str, list[str]]:
+        """LOD 在它的維度上的值（CTE 名稱與維度的欄名）。運算式中有內層 LOD 時與檢視的彙總相同：
+        內層的值只含在彙總中時，每個（外層維度、內層維度）的組合算一次，不是每一列算一次。"""
+        if not spec.inner:
+            keys = [f"__d{i}" for i in range(len(dims))]
+            inner = self._compile(lambda: self.row.agg(spec.node.expr))
+            cols = [f"{sql} AS {ident(k)}" for sql, k in zip(dims, keys, strict=True)]
+            group = f" GROUP BY {', '.join(str(i + 1) for i in range(len(dims)))}" if dims else ""
+            cols.append(f"{inner} AS {ident(VALUE_COL)}")
+            lod_name = self.name("lod")
+            self.cte(stage, lod_name, f"SELECT {', '.join(cols)} FROM {source}{group}")
+            return lod_name, keys
+        with self._lod_scope(spec):
+            nodes = self.aggregates_in(spec.node.expr)
+            agg_name, agg_cols, keys = self.aggregate(
+                "lod_agg", nodes, dims, source, stage, view_dims
+            )
+            post = self.compiler(_PostEnv(self, agg_cols))
+            value = self._compile(lambda: post.post(spec.node.expr))
+        picks = [ident(k) for k in keys] + [f"{value} AS {ident(VALUE_COL)}"]
+        lod_name = self.name("lod")
+        self.cte(stage, lod_name, f"SELECT {', '.join(picks)} FROM {agg_name}")
+        return lod_name, keys
 
     # ------------------------------------------------------------ 彙總
 

@@ -194,3 +194,16 @@ sheets:
       Key Sales: sum(f_key_sales)
     ignore: []
     numeric: auto
+  ws_avg_customer_sales_by_region:
+    columns:
+      Region: f_region
+      Avg Customer Sales: sum(f_avg_customer_sales)
+    ignore: []
+    numeric: auto
+  ws_top_order_by_region:
+    columns:
+      Region: f_region
+      Category: f_category
+      Top Order Sales: sum(f_top_order_sales)
+    ignore: []
+    numeric: auto

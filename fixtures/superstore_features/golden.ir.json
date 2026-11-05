@@ -929,6 +929,146 @@
           "source_ref": "/workbook/datasources/datasource[2]/column[15]"
         },
         {
+          "id": "f_avg_customer_sales",
+          "name": "[Calculation_7D6C2A1F00000004]",
+          "caption": "Avg Customer Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "table": null,
+          "calc": {
+            "formula": "{FIXED [Region] : AVG({INCLUDE [Customer Name] : SUM([Sales])})}",
+            "ast": {
+              "node": "lod",
+              "kind": "fixed",
+              "dims": [
+                {
+                  "node": "field",
+                  "ref": "[Region]",
+                  "parts": [
+                    "Region"
+                  ],
+                  "target": "field",
+                  "id": "f_region"
+                }
+              ],
+              "expr": {
+                "node": "call",
+                "name": "AVG",
+                "args": [
+                  {
+                    "node": "lod",
+                    "kind": "include",
+                    "dims": [
+                      {
+                        "node": "field",
+                        "ref": "[Customer Name]",
+                        "parts": [
+                          "Customer Name"
+                        ],
+                        "target": "field",
+                        "id": "f_customer_name"
+                      }
+                    ],
+                    "expr": {
+                      "node": "call",
+                      "name": "SUM",
+                      "args": [
+                        {
+                          "node": "field",
+                          "ref": "[Sales]",
+                          "parts": [
+                            "Sales"
+                          ],
+                          "target": "field",
+                          "id": "f_sales"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "level": "lod"
+          },
+          "set": null,
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[16]"
+        },
+        {
+          "id": "f_top_order_sales",
+          "name": "[Calculation_7D6C2A1F00000005]",
+          "caption": "Top Order Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "table": null,
+          "calc": {
+            "formula": "{EXCLUDE [Category] : MAX({INCLUDE [Order ID] : SUM([Sales])})}",
+            "ast": {
+              "node": "lod",
+              "kind": "exclude",
+              "dims": [
+                {
+                  "node": "field",
+                  "ref": "[Category]",
+                  "parts": [
+                    "Category"
+                  ],
+                  "target": "field",
+                  "id": "f_category"
+                }
+              ],
+              "expr": {
+                "node": "call",
+                "name": "MAX",
+                "args": [
+                  {
+                    "node": "lod",
+                    "kind": "include",
+                    "dims": [
+                      {
+                        "node": "field",
+                        "ref": "[Order ID]",
+                        "parts": [
+                          "Order ID"
+                        ],
+                        "target": "field",
+                        "id": "f_order_id"
+                      }
+                    ],
+                    "expr": {
+                      "node": "call",
+                      "name": "SUM",
+                      "args": [
+                        {
+                          "node": "field",
+                          "ref": "[Sales]",
+                          "parts": [
+                            "Sales"
+                          ],
+                          "target": "field",
+                          "id": "f_sales"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "level": "lod"
+          },
+          "set": null,
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[17]"
+        },
+        {
           "id": "f_top_customers",
           "name": "[Top Customers]",
           "caption": "Top Customers",
@@ -3593,6 +3733,191 @@
       "totals_colored": false,
       "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[29]"
+    },
+    {
+      "id": "ws_avg_customer_sales_by_region",
+      "name": "Avg Customer Sales by Region",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_avg_customer_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_avg_customer_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "label_text": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "measure_aliases": [],
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_region_5",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "exclude",
+          "values": [
+            "Central"
+          ],
+          "ranges": [],
+          "group": "shared:ds_orders:f_region",
+          "source_ref": "/workbook/shared-views/shared-view/filter[1]"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_ship_mode_5",
+          "field": {
+            "field": "f_ship_mode",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "all",
+          "values": [],
+          "ranges": [],
+          "group": "shared:ds_orders:f_ship_mode",
+          "source_ref": "/workbook/shared-views/shared-view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "formats": {},
+      "title": [],
+      "totals": [],
+      "totals_colored": false,
+      "subtotals": [],
+      "source_ref": "/workbook/worksheets/worksheet[30]"
+    },
+    {
+      "id": "ws_top_order_by_region",
+      "name": "Top Order by Region",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        },
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [],
+      "marks": {
+        "type": "text",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_top_order_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "label_text": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "measure_aliases": [],
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_region_6",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "exclude",
+          "values": [
+            "Central"
+          ],
+          "ranges": [],
+          "group": "shared:ds_orders:f_region",
+          "source_ref": "/workbook/shared-views/shared-view/filter[1]"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_ship_mode_6",
+          "field": {
+            "field": "f_ship_mode",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "all",
+          "values": [],
+          "ranges": [],
+          "group": "shared:ds_orders:f_ship_mode",
+          "source_ref": "/workbook/shared-views/shared-view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "formats": {},
+      "title": [],
+      "totals": [],
+      "totals_colored": false,
+      "subtotals": [],
+      "source_ref": "/workbook/worksheets/worksheet[31]"
     }
   ],
   "dashboards": [

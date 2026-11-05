@@ -32,6 +32,9 @@
   （同額時名稱較小者優先）、Profitable Sub-Categories 為總利潤大於 0 的子類別；Key Sub-Categories 為
   Chairs、Phones、Storage。集合放在篩選架上＝只保留 In；Key Sales 為重點子類別的銷售額。集合動作改變
   Key Sub-Categories 的成員時，以 key_sub_categories、key_sales_by_region 的 members 計算
+- 巢狀 LOD：內層的 INCLUDE／EXCLUDE 相對於外層 LOD 的維度；外層有 FIXED 時以全部資料計算（不受維度篩選
+  影響），沒有 FIXED 時以篩選後的資料計算。Avg Customer Sales 為每區客戶銷售額的平均、Top Order Sales 為
+  篩選後每區最大一張訂單的銷售額
 - 別名：匯出的資料中維度成員與 Measure Names 以別名顯示（Ship Speed 的 Other 為 Standard、
   Segment KPIs 的 CNTD(Order ID) 為「訂單數」）；參數的別名只影響控制項的顯示
 """
@@ -478,6 +481,35 @@ def key_sales_by_region(
     return ["Region", "Key Sales"], body
 
 
+def avg_customer_sales(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    """{FIXED [Region] : AVG({INCLUDE [Customer Name] : SUM([Sales])})}：每區每位客戶的銷售額取平均，
+    以全部資料計算（FIXED 不受維度篩選影響）；顯示經篩選後還有資料的地區。"""
+    customers: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for row in rows:
+        customers[row["Region"]][row["Customer Name"]] += row["Sales"]
+    keep = case.keep({"Region": not_central})
+    shown = sorted({row["Region"] for row in rows if keep(row)})
+    body = [[region, sum(customers[region].values()) / len(customers[region])] for region in shown]
+    return ["Region", "Avg Customer Sales"], body
+
+
+def top_order_by_region(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    """{EXCLUDE [Category] : MAX({INCLUDE [Order ID] : SUM([Sales])})}：篩選後每區最大一張訂單的銷售額
+    （訂單以地區與訂單編號區分），區內每個類別都顯示同一個值。"""
+    keep = case.keep({"Region": not_central})
+    orders: dict[tuple[str, str], float] = defaultdict(float)
+    cells: set[tuple[str, str]] = set()
+    for row in rows:
+        if keep(row):
+            orders[(row["Region"], row["Order ID"])] += row["Sales"]
+            cells.add((row["Region"], row["Category"]))
+    top: dict[str, float] = {}
+    for (region, _), sales in orders.items():
+        top[region] = max(top.get(region, sales), sales)
+    body = [[region, category, top[region]] for region, category in sorted(cells)]
+    return ["Region", "Category", "Top Order Sales"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -508,6 +540,8 @@ SHEETS = {
     "ws_profitable_sub_categories": profitable_sub_categories,
     "ws_key_sub_categories_by_category": key_sub_categories,
     "ws_key_sales_by_region": key_sales_by_region,
+    "ws_avg_customer_sales_by_region": avg_customer_sales,
+    "ws_top_order_by_region": top_order_by_region,
 }
 
 

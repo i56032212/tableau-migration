@@ -1,0 +1,80 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_top_order_by_region",
+    "name": "Top Order by Region",
+    "rows": 9,
+    "mark": "text",
+    "dimensions": {
+      "c0": "f_region",
+      "c1": "f_category"
+    },
+    "measures": {
+      "c2": "sum(f_top_order_sales)"
+    }
+  },
+  "data": {
+    "values": "9 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label",
+      "c2",
+      "c2_label",
+      "rows_dim"
+    ]
+  },
+  "width": "container",
+  "height": {
+    "step": 22
+  },
+  "autosize": {
+    "type": "fit-x",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "text",
+    "tooltip": true,
+    "lineBreak": "\n"
+  },
+  "encoding": {
+    "y": {
+      "field": "rows_dim",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Region｜Category",
+      "axis": {
+        "orient": "left",
+        "title": "Region｜Category"
+      }
+    },
+    "text": {
+      "field": "c2_label",
+      "type": "nominal"
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Region"
+      },
+      {
+        "field": "c1_label",
+        "title": "Category"
+      },
+      {
+        "field": "c2_label",
+        "title": "Top Order Sales"
+      }
+    ]
+  }
+}

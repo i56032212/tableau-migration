@@ -109,7 +109,7 @@ def test_lod_is_row_level() -> None:
         ("WINDOW_SUM(SUM([Sales]), -1)", "必須同時指定起點與終點"),
         ("WINDOW_SUM(SUM([Sales]), [Parameters].[Top N], 0)", "視窗位移只支援"),
         ("[Loop A]", "循環參照"),
-        ("{FIXED [Region] : SUM({FIXED [Category] : SUM([Sales])})}", "尚不支援巢狀 LOD"),
+        ("{FIXED [Region] : {FIXED [Category] : SUM([Sales])}}", "LOD 運算式內部必須是彙總"),
         ("[Region] - [Order Date]", "無法相減"),
         ("[Order Date] - [Region]", "無法相減"),
         ("REGEXP_MATCH([Region], '(?=a)')", "前向查看"),
