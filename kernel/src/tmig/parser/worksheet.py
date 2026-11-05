@@ -164,6 +164,8 @@ KNOWN = frozenset(
         # 參考線（J4）
         "reference-line",
         "reference-line-value",
+        # 小計
+        "subtotals",
     }
 )
 OPAQUE = frozenset(
@@ -197,7 +199,6 @@ REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "cust
 KNOWN_UNSUPPORTED = {
     "trend-line": "趨勢線",
     "forecast-specification": "預測",
-    "subtotals": "小計（Subtotal）",
     "mapsources": "地圖",
     "mapsource": "地圖",
     "add-in": "工作表擴充功能",
@@ -300,8 +301,11 @@ class SheetParser:
 
         rows = self._shelf(child(table, "rows"))
         cols = self._shelf(child(table, "cols"))
-        totals = self._totals(table, rows, cols)
-        totals_colored = bool(totals) and self._totals_colored(child(table, "style"))
+        subtotals = self._subtotals(table, rows, cols)
+        totals = self._totals(table, rows, cols, bool(subtotals))
+        if subtotals and not totals and self._visual_totals():
+            subtotals = []  # Total Using（已列為不支援）
+        totals_colored = bool(totals or subtotals) and self._totals_colored(child(table, "style"))
         pages = child(table, "pages")
         if pages is not None and (text_of(pages) or len(children(pages))):
             ctx.flag(pages, "頁面架（Pages）v0 不支援")
@@ -345,6 +349,7 @@ class SheetParser:
             title=title,
             totals=totals,
             totals_colored=totals_colored,
+            subtotals=subtotals,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -710,8 +715,54 @@ class SheetParser:
             formats[key] = first.get(key) or second[key]
         return formats
 
-    def _totals(
+    def _headers(self, uses: list[FieldUse]) -> list[FieldUse]:
+        """架上的離散維度（總計與小計以它們為詳細程度）。"""
+        assert self.ds is not None
+        return [
+            u
+            for u in uses
+            if u.field not in SPECIAL_FIELDS and not u.continuous and not is_aggregate(self.ds, u)
+        ]
+
+    def _subtotals(
         self, table: etree._Element, rows: list[FieldUse], cols: list[FieldUse]
+    ) -> list[FieldUse]:
+        """小計：<subtotals> 列出的維度。同一架上之後還有離散維度時才有小計（最內層的維度沒有小計）；
+        不在架上的維度（之前放過、已移走）略過。之後只有 Measure Names 或離散的量值時，Tableau 的
+        小計怎麼畫未確認，列為不支援。"""
+        assert self.ds is not None
+        element = child(table, "subtotals")
+        found: list[FieldUse] = []
+        for column in children(element, "column"):
+            use = self.resolve(instance_key(text_of(column)))
+            if isinstance(use, str):
+                continue
+            for shelf in (rows, cols):
+                headers = self._headers(shelf)
+                if use not in headers:
+                    continue
+                inner = [u for u in shelf[shelf.index(use) + 1 :] if not u.continuous]
+                if any(u in headers for u in inner):
+                    if use not in found:
+                        found.append(use)
+                elif inner:
+                    caption = self.ds.field_by_id(use.field).caption
+                    self.ctx.flag(
+                        column,
+                        f"工作表「{self.name}」的小計：「{caption}」之後只有 Measure Names "
+                        "或離散的量值，v0 不支援",
+                    )
+        return found
+
+    def _visual_totals(self) -> list[etree._Element]:
+        return [inst for inst in self.instances.values() if inst.get("visual-totals")]
+
+    def _totals(
+        self,
+        table: etree._Element,
+        rows: list[FieldUse],
+        cols: list[FieldUse],
+        subtotals: bool = False,
     ) -> list[Literal["rows", "columns"]]:
         """總計（Grand Total）：欄列架的 total='true'。列架的總計是最下方的一列（每一欄的合計），
         欄架的總計是最右邊的一欄（每一列的合計），都在去掉該架上離散維度的詳細程度重新彙總
@@ -722,14 +773,7 @@ class SheetParser:
             element = child(table, tag)
             if element is None or element.get("total") != "true":
                 continue
-            headers = [
-                u
-                for u in uses
-                if u.field not in SPECIAL_FIELDS
-                and not u.continuous
-                and not is_aggregate(self.ds, u)
-            ]
-            if not headers:
+            if not self._headers(uses):
                 self.ctx.ignore(
                     element, f"工作表「{self.name}」的總計：架上沒有離散的維度，沒有總計可加"
                 )
@@ -737,8 +781,8 @@ class SheetParser:
             totals.append(shelf)  # type: ignore[arg-type]
         # 總計的計算方式改成「畫面上各標記的值再加總（或平均…）」（Total Using）尚不支援；
         # 以自動的方式算會得到不同的數字，所以不顯示總計（列為不支援）
-        visual = [inst for inst in self.instances.values() if inst.get("visual-totals")]
-        if totals and visual:
+        visual = self._visual_totals()
+        if (totals or subtotals) and visual:
             for inst in visual:
                 self.ctx.flag(
                     inst,

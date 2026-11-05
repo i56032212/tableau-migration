@@ -51,6 +51,7 @@ from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import (
+    after_groups,
     build_spec,
     caption,
     title_values,
@@ -58,7 +59,6 @@ from tmig.render.vegalite import (
     worksheet_title,
 )
 from tmig.sqlgen.query import (
-    GRAND_TOTAL,
     QueryError,
     custom_sql_parameters,
     domain_sql,
@@ -428,12 +428,12 @@ def create_app(
             if c.use is not None and c.role == "dimension"
         }
 
-        def cells(row: Any, positions: dict[str, int], dropped: list[str]) -> list[str]:
+        def cells(row: Any, positions: dict[str, int], labels: dict[str, str]) -> list[str]:
             out: list[str] = []
             for column in shown:
                 assert column.use is not None
-                if column.key in dropped:
-                    out.append(GRAND_TOTAL)
+                if column.key in labels:
+                    out.append(labels[column.key])
                     continue
                 value = row[positions[column.key]] if column.key in positions else None
                 use = column.use
@@ -448,10 +448,17 @@ def create_app(
                     out.append(display_value(value, column.datatype, fmt, trunc))
             return out
 
-        table_rows = [cells(row, index, []) for row in result.rows]
+        table_rows = [cells(row, index, {}) for row in result.rows]
+        # 與圖表相同：各架的小計緊接在它的組之後，總計與交叉處在最後
         for total, total_result in totals:
             positions = {key: i for i, key in enumerate(total_result.columns)}
-            table_rows += [cells(row, positions, total.dropped) for row in total_result.rows]
+            labels = {key: total.label(key) for key in total.dropped}
+            added = [cells(row, positions, labels) for row in total_result.rows]
+            if total.group is None:
+                table_rows += added
+                continue
+            at = [i for i, c in enumerate(shown) if c.key in total.group]
+            table_rows = after_groups(table_rows, added, lambda r, at=at: tuple(r[i] for i in at))
         return {
             "worksheet": sheet.id,
             "name": sheet.name,

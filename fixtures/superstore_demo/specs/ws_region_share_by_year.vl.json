@@ -63,7 +63,12 @@
     "x": {
       "field": "c1_label",
       "type": "ordinal",
-      "sort": null,
+      "sort": [
+        "2021",
+        "2022",
+        "2023",
+        "2024"
+      ],
       "title": "YEAR(Order Date)",
       "axis": {
         "orient": "top",

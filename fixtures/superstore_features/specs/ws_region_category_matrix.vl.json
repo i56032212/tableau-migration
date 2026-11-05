@@ -60,7 +60,11 @@
     "x": {
       "field": "c1_label",
       "type": "ordinal",
-      "sort": null,
+      "sort": [
+        "Furniture",
+        "Office Supplies",
+        "Technology"
+      ],
       "title": "Category",
       "axis": {
         "orient": "top",

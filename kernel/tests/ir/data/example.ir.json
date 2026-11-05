@@ -303,6 +303,7 @@
       "title": [],
       "totals": [],
       "totals_colored": false,
+      "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -396,6 +397,7 @@
       "title": [],
       "totals": [],
       "totals_colored": false,
+      "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }
   ],

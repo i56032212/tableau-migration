@@ -802,11 +802,16 @@ class WorksheetQuery:
                 name = f"__sort({d.key})"
                 outputs.append(f"{ident(sort_cols[d.key][0])} AS {ident(name)}")
                 columns.append(OutputColumn(name, "sort", "real", None))
-        order = []
+        fragments: dict[str, list[str]] = {}
         for d in dims:
-            if d.key in sort_cols:
-                order.append(sort_cols[d.key][1])
-            order.append(self._natural_order(d, sorts.get(d.use.field)))
+            fragments[d.key] = [sort_cols[d.key][1]] if d.key in sort_cols else []
+            fragments[d.key].append(self._natural_order(d, sorts.get(d.use.field)))
+        headers = self._column_headers(dims)
+        if headers:
+            rank = ", ".join(f for d in headers for f in fragments[d.key])
+            outputs.append(f"DENSE_RANK() OVER (ORDER BY {rank}) AS {ident(COLUMN_ORDER)}")
+            columns.append(OutputColumn(COLUMN_ORDER, "sort", "integer", None))
+        order = [f for d in dims for f in fragments[d.key]]
         order_sql = f"\nORDER BY {', '.join(order)}" if order else ""
         main = f"SELECT {', '.join(outputs)}\nFROM {final}{_where(conds)}{order_sql}"
         stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
@@ -1549,6 +1554,18 @@ class WorksheetQuery:
             self._sort_ctes[d.key] = (name, col)
         return result
 
+    def _column_headers(self, dims: list[Dim]) -> list[Dim]:
+        """欄標題的維度（欄架上的離散維度），列架上也有離散維度時才回傳。資料依列優先排序，
+        欄的順序因此另外以名次輸出（圖表的欄依它排列，第一列沒有的欄不會排到後面）；
+        欄架上有 Measure Names 或離散的量值時不輸出（依資料的順序）。"""
+        ws = self.worksheet
+        by_key = {d.key: d for d in dims}
+        rows = [u for u in ws.rows if not u.continuous and use_key(u) in by_key]
+        cols = [u for u in ws.columns if not u.continuous]
+        if not rows or not cols or any(use_key(u) not in by_key for u in cols):
+            return []
+        return [by_key[use_key(u)] for u in cols]
+
     def _natural_order(self, d: Dim, sort: Sort | None) -> str:
         col = ident(d.col)
         if sort is not None and sort.kind == "manual" and sort.manual_values:
@@ -2154,18 +2171,31 @@ def pane_sql(
     return result
 
 
+COLUMN_ORDER = "__order(columns)"
+"""欄標題的名次（DENSE_RANK，依欄架上離散維度自己的排序）：列與欄都有離散維度時才輸出。"""
 GRAND_TOTAL = "Grand Total"
 """總計列與欄的標題（Tableau 英文介面的寫法）。"""
+SUBTOTAL = "Total"
+"""小計列與欄的標題（Tableau 英文介面的寫法）。"""
 
 
 @dataclass
 class TotalQuery:
-    """一種總計的查詢：shelves 為加上總計的架（rows、columns，或兩者＝右下角的總計），
-    dropped 為去掉的維度（欄位鍵），這些欄位在總計列中顯示為「Grand Total」。"""
+    """一種總計（或小計）的查詢：shelves 為加上總計的架（rows、columns，或兩者＝交叉處），
+    dropped 為去掉的維度（欄位鍵），這些欄位在總計列中顯示為 labels 的名稱（總計為「Grand Total」，
+    小計為「Total」）。"""
 
     shelves: tuple[str, ...]
     dropped: list[str]
     query: WorksheetSql
+    labels: dict[str, str] = field(default_factory=dict)
+    group: list[str] | None = None
+    """各架的小計放在哪一組之後：這些欄位鍵的顯示值相同的最後一筆之後（表頭依資料的順序排列，
+    小計因此緊接在它的組之後）。列的小計以保留的列維度分組；欄的小計以列維度與保留的欄維度分組
+    （資料先依列排序）。None 時放在最後：總計，以及列與欄交叉處（表頭已由各架的小計與總計帶出）。"""
+
+    def label(self, key: str) -> str:
+        return self.labels.get(key, GRAND_TOTAL)
 
 
 def totals_sql(
@@ -2182,27 +2212,42 @@ def totals_sql(
     尚不支援：總計中的 Table Calculation、與量值篩選一起使用（Tableau 只合計通過篩選的標記）。
     """
     ws = _find_worksheet(ir, worksheet)
-    if not ws.totals:
+    if not ws.totals and not ws.subtotals:
         return []
     dims = {c.key for c in main.columns if c.role == "dimension"}
     headers = {
         "rows": [u for u in ws.rows if use_key(u) in dims and not u.continuous],
         "columns": [u for u in ws.columns if use_key(u) in dims and not u.continuous],
     }
-    shelves = [shelf for shelf in ws.totals if headers[shelf]]
-    if not shelves:
+    # 各架的選項：小計（去掉該維度之後的維度，依由外而內的順序）與總計（去掉架上所有離散維度）
+    options: dict[str, list[tuple[list[FieldUse], str]]] = {}
+    for shelf, uses in headers.items():
+        found = [(uses[i + 1 :], SUBTOTAL) for i, u in enumerate(uses[:-1]) if u in ws.subtotals]
+        if shelf in ws.totals and uses:
+            found.append((uses, GRAND_TOTAL))
+        options[shelf] = found
+    if not options["rows"] and not options["columns"]:
         return []
     if any(c.use is not None and c.use.table_calc is not None for c in main.columns):
         raise QueryError("總計中的 Table Calculation 尚不支援", unsupported=True)
     if any(f.stage in ("measure", "table_calc") for f in main.state.filters):
         raise QueryError("總計與量值篩選一起使用尚不支援", unsupported=True)
-    combos: list[tuple[str, ...]] = [(shelf,) for shelf in shelves]
-    if len(shelves) == 2:
-        combos.append(tuple(shelves))
+    # 列與欄的每一種組合（右下角等交叉處）；只有總計時與以前相同：列、欄、兩者
+    combos: list[list[tuple[str, list[FieldUse], str]]] = []
+    rows_opts: list[tuple[list[FieldUse], str] | None] = [*options["rows"], None]
+    cols_opts: list[tuple[list[FieldUse], str] | None] = [None, *options["columns"]]
+    for row in rows_opts:
+        for col in cols_opts:
+            combo = [("rows", *row)] if row is not None else []
+            combo += [("columns", *col)] if col is not None else []
+            if combo:
+                combos.append(combo)
+    combos.sort(key=lambda c: (len(c), [kind == GRAND_TOTAL for _, _, kind in c]))
     result: list[TotalQuery] = []
     for combo in combos:
-        dropped = [use_key(u) for shelf in combo for u in headers[shelf]]
-        fields = {u.field for shelf in combo for u in headers[shelf]}
+        labels = {use_key(u): kind for _, uses, kind in combo for u in uses}
+        dropped = list(labels)
+        fields = {u.field for _, uses, _ in combo for u in uses}
         virtual = ws.model_copy(
             update={
                 "rows": [u for u in ws.rows if use_key(u) not in dropped],
@@ -2210,12 +2255,28 @@ def totals_sql(
                 "sorts": [s for s in ws.sorts if s.field not in fields],
                 "reference_lines": [],
                 "totals": [],
+                "subtotals": [],
             }
         )
         sub = ir.model_copy(
             update={"worksheets": [virtual if w.id == ws.id else w for w in ir.worksheets]}
         )
-        result.append(TotalQuery(combo, dropped, worksheet_sql(sub, ws.id, state, user)))
+        group: list[str] | None = None
+        if len(combo) == 1 and combo[0][2] == SUBTOTAL:
+            kept = {
+                shelf: [use_key(u) for u in uses if use_key(u) not in labels]
+                for shelf, uses in headers.items()
+            }
+            group = kept["rows"] if combo[0][0] == "rows" else kept["rows"] + kept["columns"]
+        result.append(
+            TotalQuery(
+                tuple(shelf for shelf, _, _ in combo),
+                dropped,
+                worksheet_sql(sub, ws.id, state, user),
+                labels,
+                group,
+            )
+        )
     return result
 
 
@@ -2295,9 +2356,11 @@ def title_sql(
 
 
 __all__ = [
+    "COLUMN_ORDER",
     "GRAND_TOTAL",
     "PUSHDOWN_BOUNDARY",
     "STAGES",
+    "SUBTOTAL",
     "CteDef",
     "Guard",
     "OutputColumn",

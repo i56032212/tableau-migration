@@ -791,6 +791,7 @@
       "title": [],
       "totals": [],
       "totals_colored": false,
+      "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -884,6 +885,7 @@
       "title": [],
       "totals": [],
       "totals_colored": false,
+      "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -971,6 +973,7 @@
       "title": [],
       "totals": [],
       "totals_colored": false,
+      "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1079,6 +1082,7 @@
       "title": [],
       "totals": [],
       "totals_colored": false,
+      "subtotals": [],
       "source_ref": "/workbook/worksheets/worksheet[4]"
     }
   ],

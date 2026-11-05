@@ -848,6 +848,11 @@ class Worksheet(IRModel):
         description="依量值著色時總計也上色、納入色階的範圍（Tableau 色彩的「包含總計」）；"
         "預設與 Tableau 相同，總計不上色",
     )
+    subtotals: list[FieldUse] = Field(
+        default_factory=list,
+        description="小計：欄列架上這些離散維度的每個值之後加一列（或一欄）合計，在去掉同一架上"
+        "之後維度的詳細程度重新彙總（Tableau 的「自動」）",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")

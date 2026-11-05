@@ -32,6 +32,6 @@ WITH
 )
 -- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行
 -- 第 8 段：Table Calculation 篩選與輸出
-SELECT "__k0" AS "f_region", "__k1" AS "year(f_order_date)", "__m0" AS "f_calc_2049003526124994561", "__m1" AS "sum(f_sales)"
+SELECT "__k0" AS "f_region", "__k1" AS "year(f_order_date)", "__m0" AS "f_calc_2049003526124994561", "__m1" AS "sum(f_sales)", DENSE_RANK() OVER (ORDER BY "__k1" ASC NULLS LAST) AS "__order(columns)"
 FROM meas
 ORDER BY "__k0" ASC NULLS LAST, "__k1" ASC NULLS LAST

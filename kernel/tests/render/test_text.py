@@ -406,8 +406,11 @@ def test_grand_totals_in_text_table(tmp_path: Path, db: Path) -> None:
     # 總計的原始值欄是空的（篩選與動作不會用到），顯示文字依量值的格式
     corner = next(v for v in totals if v["c0_label"] == v["c1_label"] == GRAND_TOTAL)
     assert corner["c0"] is None and corner["c1"] is None and corner["c2_label"] == "1,310"
-    # 依資料的順序排列：Grand Total 在各軸的最後
-    assert spec["encoding"]["y"]["sort"] is None and spec["encoding"]["x"]["sort"] is None
+    # 列依資料的順序；欄依查詢算出的名次、與列無關（第一列 East 沒有 Office，Office 仍排在
+    # Technology 之前，與 Tableau 相同）。Grand Total 在各軸的最後
+    assert spec["encoding"]["y"]["sort"] is None
+    assert spec["encoding"]["x"]["sort"] == ["Furniture", "Office", "Technology", GRAND_TOTAL]
+    assert all("__order" not in v for v in values)
 
 
 def test_grand_totals_are_not_colored_by_default(tmp_path: Path, db: Path) -> None:

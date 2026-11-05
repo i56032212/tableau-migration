@@ -76,3 +76,51 @@ def test_unsupported_totals_mark_the_sheet_unsupported(client: TestClient) -> No
     assert data["spec"] is None
     assert data["unsupported"] == "總計中的 Table Calculation 尚不支援"
     assert data["name"] == "Sales by Region"
+
+
+@pytest.fixture(scope="module")
+def features(tmp_path_factory: pytest.TempPathFactory) -> TestClient:
+    """功能報表的「Sub-Category Sales」（列架 Category／Sub-Category 的長條圖）加上 Category 的小計與總計。"""
+    root = tmp_path_factory.mktemp("subtotals")
+    source = ROOT / "fixtures" / "superstore_features"
+    target = root / "subtotals"
+    target.mkdir()
+    for name in ("superstore_features.twbx", "cases.yaml"):
+        shutil.copy(source / name, target / name)
+    shutil.copytree(source / "data", target / "data")
+    ir = load_ir(source / "golden.ir.json")
+    worksheets = [
+        ws.model_copy(update={"subtotals": ws.rows[:1], "totals": ["rows"]})
+        if ws.id == "ws_sub_category_sales"
+        else ws
+        for ws in ir.worksheets
+    ]
+    ir = ir.model_copy(update={"worksheets": worksheets})
+    (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+    return TestClient(create_app(root, ROOT / "no-web-dist"))
+
+
+def test_subtotals_in_chart_and_data_table(features: TestClient) -> None:
+    data = features.post("/api/workbooks/subtotals/worksheets/ws_sub_category_sales/render").json()
+    assert data["unsupported"] is None
+    values = data["spec"]["data"]["values"]
+    marks = [v for v in values if not v.get("__total")]
+    assert data["rows"] == len(marks) == 17
+    # 圖表：每個 Category 的長條之後是它的 Total（Sales 的合計），最後是 Grand Total
+    categories = list(dict.fromkeys(v["c0"] for v in marks))
+    expected: list[str] = []
+    for category in categories:
+        expected += [v["rows_dim"] for v in marks if v["c0"] == category]
+        expected.append(f"{category}｜Total")
+    assert [v["rows_dim"] for v in values] == [*expected, "Grand Total"]
+    subtotals = {v["rows_dim"]: v["c2"] for v in values if v.get("__total")}
+    for category in categories:
+        total = sum(v["c2"] for v in marks if v["c0"] == category)
+        assert subtotals[f"{category}｜Total"] == pytest.approx(total)
+    assert subtotals["Grand Total"] == pytest.approx(sum(v["c2"] for v in marks))
+    # 資料表與圖表的順序相同：小計緊接在各組之後，去掉的維度顯示 Total
+    rows: list[list[str]] = []
+    for category in categories:
+        rows += [[v["c0_label"], v["c1_label"]] for v in marks if v["c0"] == category]
+        rows.append([category, "Total"])
+    assert [row[:2] for row in data["table"]["rows"]] == [*rows, ["Grand Total", "Grand Total"]]

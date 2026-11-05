@@ -4154,6 +4154,14 @@
           "title": "Totals Colored",
           "type": "boolean"
         },
+        "subtotals": {
+          "description": "小計：欄列架上這些離散維度的每個值之後加一列（或一欄）合計，在去掉同一架上之後維度的詳細程度重新彙總（Tableau 的「自動」）",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Subtotals",
+          "type": "array"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,

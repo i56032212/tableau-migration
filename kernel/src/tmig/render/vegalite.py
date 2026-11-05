@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard
 
@@ -50,7 +50,14 @@ from tmig.render.format import (
     format_value,
     parse_format,
 )
-from tmig.sqlgen.query import GRAND_TOTAL, OutputColumn, TitleQueries, TotalQuery
+from tmig.sqlgen.query import (
+    COLUMN_ORDER,
+    GRAND_TOTAL,
+    SUBTOTAL,
+    OutputColumn,
+    TitleQueries,
+    TotalQuery,
+)
 
 SCHEMA = "https://vega.github.io/schema/vega-lite/v6.json"
 SEPARATOR = "｜"
@@ -98,6 +105,10 @@ VL_MARKS = {
 }
 ROW = "__row"
 TOTAL = "__total"
+HEADER_LINE_HEIGHT = 12
+"""多層欄標題分行顯示時的行高（像素）。"""
+ORDER = "__order"
+"""欄標題的名次（查詢的 __order(columns)），只在產生規格時使用、不留在資料中。"""
 """總計列的標記（資料中為 True）。"""
 TEXT_ROW_HEIGHT = 22
 """文字表每一列的高度（像素）：與 Tableau 相同固定列高，列數多時在區塊內捲動。"""
@@ -250,10 +261,13 @@ class _Builder:
             if y is not None:
                 encoding["y"] = {**y, "axis": {"orient": "left", "title": y.get("title")}}
             if x is not None:
-                encoding["x"] = {
-                    **x,
-                    "axis": {"orient": "top", "labelAngle": 0, "title": x.get("title")},
-                }
+                axis: dict[str, Any] = {"orient": "top", "labelAngle": 0, "title": x.get("title")}
+                if x["field"] == "cols_dim":
+                    # 多層的欄標題分行顯示（外層在上），欄窄時不會疊在一起；多出的行往上排
+                    axis["labelExpr"] = f"split(datum.label, '{SEPARATOR}')"
+                    axis["labelLineHeight"] = HEADER_LINE_HEIGHT
+                    axis["labelPadding"] = 2 + HEADER_LINE_HEIGHT * (len(cols_dims) - 1)
+                encoding["x"] = {**x, "axis": axis}
             text_field = self.label_field(marks)
             if text_field is None:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
@@ -555,14 +569,25 @@ def build_spec(
 
     # ---------------------------------------------------------- 資料
     values = _records(channels, result)
+    if COLUMN_ORDER in result.columns:
+        at = result.columns.index(COLUMN_ORDER)
+        for record, row in zip(values, result.rows, strict=True):
+            record[ORDER] = row[at]
     for total, total_result in totals or []:
-        for record in _records(channels, total_result):
+        records = _records(channels, total_result)
+        for record in records:
             for key in total.dropped:
                 if key in channels:
                     record[channels[key].name] = None
-                    record[channels[key].label] = GRAND_TOTAL
+                    record[channels[key].label] = total.label(key)
             record[TOTAL] = True
-            values.append(record)
+        if total.group is None:
+            values += records
+        else:
+            keys = [channels[k].label for k in total.group if k in channels]
+            values = after_groups(
+                values, records, lambda r, keys=keys: tuple(r.get(k) for k in keys)
+            )
     pane_values = {
         i: _records(channels, pane_result) for i, (_, pane_result) in (panes or {}).items()
     }
@@ -629,8 +654,12 @@ def build_spec(
         record[ROW] = -1 if record.get(TOTAL) else i
         for name, members in composites.items():
             labels = [record[builder.ch(u).label] for u in members]
-            whole = record.get(TOTAL) and all(label == GRAND_TOTAL for label in labels)
-            record[name] = GRAND_TOTAL if whole else SEPARATOR.join(labels)
+            # 去掉的維度在架的後段，標題只寫一次：「East｜Total」、整列的「Grand Total」
+            dropped = [_dropped(record, builder.ch(u)) for u in members]
+            while len(labels) > 1 and dropped[-1] and dropped[-2] and labels[-1] == labels[-2]:
+                labels.pop()
+                dropped.pop()
+            record[name] = SEPARATOR.join(labels)
     for records in pane_values.values():
         for record in records:
             record[ROW] = -1  # 較粗的標記卡不參與選取
@@ -656,11 +685,21 @@ def build_spec(
             return RenderResult(None, len(result.rows), mark, f"標記類型 {mark} 尚未支援")
         body, mark = builder.unit(ws.marks, mark, rows_dims, cols_dims, rows_meas, cols_meas)
 
+    # 欄標題依查詢算出的名次排列（列與欄都有離散維度時）：資料依列優先排序，只看資料的順序時
+    # 第一列沒有的欄會排到後面
+    column_field: str | None = None
+    column_order: list[Any] = []
+    if cols_dims and any(ORDER in v for v in values):
+        column_field = "cols_dim" if len(cols_dims) > 1 else builder.ch(cols_dims[0]).label
+        column_order = _column_order(values, column_field, [builder.ch(u) for u in cols_dims])
     for channel in ("row", "column"):
         # 分面依資料的順序（查詢已依排序設定排好）；Vega-Lite 的分面不指定時會依字母排序
         facet = body.get("encoding", {}).get(channel)
         if isinstance(facet, dict) and facet.get("sort") is None:
-            facet["sort"] = list(dict.fromkeys(v.get(facet["field"]) for v in values))
+            if channel == "column" and facet.get("field") == column_field:
+                facet["sort"] = column_order
+            else:
+                facet["sort"] = list(dict.fromkeys(v.get(facet["field"]) for v in values))
 
     if ws.reference_lines:
         params = {p.id: p.value for p in ir.parameters} | (parameters or {})
@@ -702,6 +741,10 @@ def build_spec(
         spec["height"] = {"step": TEXT_ROW_HEIGHT}
         spec["autosize"] = {"type": "fit-x", "contains": "padding"}
     spec.update(body)
+    if column_field is not None:
+        _sort_headers(spec, column_field, column_order)
+    for record in values:
+        record.pop(ORDER, None)
     if totals and not ws.totals_colored:
         _exclude_totals_from_color(spec, values, mark)
     return RenderResult(spec, marks_count, mark, None, builder.notes)
@@ -819,6 +862,84 @@ def title_values(
             fmt = value_format(ws, fields[use.field], use)
             texts[key] = format_value(value, column.datatype, fmt, trunc)
     return texts
+
+
+def _dropped(record: dict[str, Any], ch: Channel) -> bool:
+    """總計或小計的資料列中，這個維度是去掉的（原始值為空、顯示 Total 或 Grand Total）。"""
+    return (
+        bool(record.get(TOTAL))
+        and record.get(ch.name) is None
+        and record.get(ch.label) in (GRAND_TOTAL, SUBTOTAL)
+    )
+
+
+def _column_order(values: list[dict[str, Any]], field: str, members: list[Channel]) -> list[Any]:
+    """欄標題的順序：工作表的標記依名次（只看欄維度自己的排序，與列無關）；小計緊接在它的組
+    （前段的標題相同的最後一欄）之後，總計在最後。"""
+    order: list[Any] = []
+    headers: dict[Any, tuple[Any, ...]] = {}
+    marks = [v for v in values if not v.get(TOTAL) and v.get(ORDER) is not None]
+    for record in sorted(marks, key=lambda v: v[ORDER]):
+        value = record.get(field)
+        if value not in headers:
+            headers[value] = tuple(record.get(ch.label) for ch in members)
+            order.append(value)
+    for record in values:
+        value = record.get(field)
+        if not record.get(TOTAL) or value in headers:
+            continue
+        headers[value] = tuple(record.get(ch.label) for ch in members)
+        kept: list[Any] = []
+        for ch in members:
+            if _dropped(record, ch):
+                break
+            kept.append(record.get(ch.label))
+        group = tuple(kept)
+        same = [i for i, v in enumerate(order) if kept and headers[v][: len(group)] == group]
+        order.insert(same[-1] + 1 if same else len(order), value)
+    return order
+
+
+def _sort_headers(node: Any, field: str, order: list[Any]) -> None:
+    """規格中（含圖層與並排的圖）以欄標題為欄位、依資料順序的 x 與 column 改為指定的順序。"""
+    if isinstance(node, list):
+        for item in node:
+            _sort_headers(item, field, order)
+        return
+    if not isinstance(node, dict):
+        return
+    encoding = node.get("encoding")
+    if isinstance(encoding, dict):
+        for channel in ("x", "column"):
+            enc = encoding.get(channel)
+            if isinstance(enc, dict) and enc.get("field") == field and enc.get("sort", 0) is None:
+                enc["sort"] = order
+    for key in ("layer", "vconcat", "hconcat", "concat", "spec"):
+        if key in node:
+            _sort_headers(node[key], field, order)
+
+
+def after_groups[RowT](
+    rows: Sequence[RowT], inserted: Sequence[RowT], group: Callable[[RowT], Hashable]
+) -> list[RowT]:
+    """小計放在各組之後：組相同（group 的值相同，含先放入的較內層小計）的最後一筆之後；
+    找不到所屬的組時放在最後。圖表的表頭依資料的順序排列，小計因此緊接在它的組之後。"""
+    last: dict[Hashable, int] = {}
+    for i, row in enumerate(rows):
+        last[group(row)] = i
+    after: dict[int, list[RowT]] = {}
+    tail: list[RowT] = []
+    for row in inserted:
+        i = last.get(group(row))
+        if i is None:
+            tail.append(row)
+        else:
+            after.setdefault(i, []).append(row)
+    result: list[RowT] = []
+    for i, row in enumerate(rows):
+        result.append(row)
+        result += after.get(i, [])
+    return result + tail
 
 
 def _exclude_totals_from_color(
