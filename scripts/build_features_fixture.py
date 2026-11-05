@@ -29,6 +29,10 @@
   以座標軸樣式的 fold 表示雙軸），在「甜甜圈」dashboard 上
 - J4 參考線：Sub-Category Sales 每個類別（窗格）的平均線與整張表的目標常數線；Region Sales Bands 的中位數
   與平均 ± 1 個母體標準差，在「參考線」dashboard 上（只影響圖表，不影響數字）
+- 集合：Top Customers（銷售額前 10 名的客戶，Top N）、Key Sub-Categories（Chairs、Phones、Storage，
+  固定成員）、Profitable Sub-Categories（總利潤大於 0，條件）。Top N 與條件集合以全部資料決定成員，
+  不受地區等維度篩選影響；在「集合」dashboard 上：IN/OUT 放在列架與顏色、集合放在篩選架、
+  計算欄位 Key Sales（IF [Key Sub-Categories] THEN [Sales] END）
 - Story「銷售故事」：三個故事點——「篩選動作」dashboard 的預設狀態；同一個 dashboard 在 Region Picker
   選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
   之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
@@ -235,6 +239,34 @@ DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' nam
         </groupfilter>
       </group>"""
 
+# 集合：Top N、固定成員與條件（資料源中的 <group user:ui-builder='filter-group'>）
+TOP_CUSTOMERS = "Top Customers"
+KEY_SUB_CATEGORIES = "Key Sub-Categories"
+PROFITABLE = "Profitable Sub-Categories"
+KEY_MEMBERS = ("Chairs", "Phones", "Storage")
+SET_TOP = f"""      <group caption='{TOP_CUSTOMERS}' name='[{TOP_CUSTOMERS}]' name-style='unqualified' user:ui-builder='filter-group'>
+        <groupfilter count='10' end='top' function='end' units='records' user:ui-marker='end' user:ui-top-by-field='true'>
+          <groupfilter direction='DESC' expression='SUM([Sales])' function='order' user:ui-marker='order'>
+            <groupfilter function='level-members' level='[Customer Name]' user:ui-enumeration='all' user:ui-marker='enumerate' />
+          </groupfilter>
+        </groupfilter>
+      </group>"""
+SET_KEY = f"""      <group caption='{KEY_SUB_CATEGORIES}' name='[{KEY_SUB_CATEGORIES}]' name-style='unqualified' user:ui-builder='filter-group'>
+        <groupfilter function='union' user:ui-domain='database' user:ui-enumeration='inclusive' user:ui-marker='enumerate'>
+{chr(10).join(f"          {member('[Sub-Category]', m)}" for m in KEY_MEMBERS)}
+        </groupfilter>
+      </group>"""
+SET_PROFITABLE = f"""      <group caption='{PROFITABLE}' name='[{PROFITABLE}]' name-style='unqualified' user:ui-builder='filter-group'>
+        <groupfilter expression='SUM([Profit]) &gt; 0' function='filter' user:ui-marker='filter'>
+          <groupfilter function='level-members' level='[Sub-Category]' user:ui-enumeration='all' user:ui-marker='enumerate' />
+        </groupfilter>
+      </group>"""
+KEY_SALES_CALC = "[Calculation_7D6C2A1F00000003]"
+KEY_SALES_COLUMN = f"""      <column caption='Key Sales' datatype='real' name='{KEY_SALES_CALC}' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='IF [{KEY_SUB_CATEGORIES}] THEN [Sales] END' />
+      </column>"""
+"""用到集合的計算欄位：重點子類別的銷售額，其他為 Null。"""
+
 # 參數動作：點選地區設定參數，計算欄位依參數計算
 SELECTED_CALC = "[Calculation_7D6C2A1F00000001]"
 PARAMETERS = """    <datasource hasconnection='false' inline='true' name='Parameters' version='18.1'>
@@ -387,11 +419,162 @@ def worksheets() -> str:
             monthly_moving_average(),
             category_donut(),
             region_sales_segment_profit(),
+            top_customers_vs_others(),
+            profitable_sub_categories(),
+            key_sub_categories(),
+            key_sales_by_region(),
         ]
     )
 
 
 PROFIT_RATIO = demo.CALC_PROFIT_RATIO
+
+
+def with_columns(deps: str, *columns: str) -> str:
+    """工作表用到的計算欄位列在 datasource-dependencies 中（集合本身不列，只列 IN/OUT 的欄位實例）。"""
+    return deps.replace(
+        "          </datasource-dependencies>",
+        "\n".join([*columns, "          </datasource-dependencies>"]),
+    )
+
+
+PROFITABLE_IO = f"""<column-instance column='[{PROFITABLE}]' derivation='InOut' name='[io:{PROFITABLE}:nk]' pivot='key' type='nominal'>
+              <aliases>
+                <alias key='false' value='虧損' />
+                <alias key='true' value='獲利' />
+              </aliases>
+            </column-instance>"""
+"""IN/OUT 的別名寫在欄位實例上（公開報表 Assignment 6 的 In top 5／Not in Top 5）。"""
+
+
+def top_customers_vs_others() -> str:
+    """Top N 集合：銷售額前 10 名的客戶以全部資料決定（不受全域篩選 Region 影響），In／Out 的銷售額與客戶數。"""
+    return worksheet(
+        "Top Customers vs Others",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000028",
+        dependency(
+            [
+                *GLOBAL_COLUMNS,
+                ("[Customer Name]", "string", "dimension", "nominal"),
+                ("[Sales]", "real", "measure", "quantitative"),
+            ],
+            [
+                *GLOBAL_INSTANCES,
+                instance(f"[{TOP_CUSTOMERS}]", "InOut", f"[io:{TOP_CUSTOMERS}:nk]", "nominal"),
+                instance("[Customer Name]", "CountD", "[ctd:Customer Name:qk]", "quantitative"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        slices("none:Region:nk", "none:Ship Mode:nk"),
+        pane("Bar", f"              <text column={attr(ref('ctd:Customer Name:qk'))} />"),
+        ref(f"io:{TOP_CUSTOMERS}:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def profitable_sub_categories() -> str:
+    """條件集合：總利潤大於 0 的子類別（以全部資料決定），以顏色區分 In／Out。"""
+    return worksheet(
+        "Profitable Sub-Categories",
+        "7D6C2A1F-2B3C-4D5E-9F0A-000000000029",
+        dependency(
+            [
+                ("[Sub-Category]", "string", "dimension", "nominal"),
+                ("[Profit]", "real", "measure", "quantitative"),
+            ],
+            [
+                PROFITABLE_IO,
+                instance("[Sub-Category]", "None", "[none:Sub-Category:nk]", "nominal"),
+                instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        "",
+        pane("Bar", f"              <color column={attr(ref(f'io:{PROFITABLE}:nk'))} />"),
+        ref("none:Sub-Category:nk"),
+        ref("sum:Profit:qk"),
+    )
+
+
+def key_sub_categories() -> str:
+    """固定成員的集合放在篩選架上（沒有條件＝只保留集合中的成員），依類別加總。"""
+    return worksheet(
+        "Key Sub-Categories by Category",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000002A",
+        dependency(
+            [
+                ("[Category]", "string", "dimension", "nominal"),
+                ("[Sales]", "real", "measure", "quantitative"),
+            ],
+            [
+                instance("[Category]", "None", "[none:Category:nk]", "nominal"),
+                instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+            ],
+            [],
+        ),
+        f"""          <filter class='categorical' column={attr(ref(KEY_SUB_CATEGORIES))} />
+          <slices>
+            <column>{escape(ref(KEY_SUB_CATEGORIES))}</column>
+          </slices>""",
+        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        ref("none:Category:nk"),
+        ref("sum:Sales:qk"),
+    )
+
+
+def key_sales_by_region() -> str:
+    """集合用在計算欄位中：Key Sales＝IF [Key Sub-Categories] THEN [Sales] END，依地區加總。"""
+    key = KEY_SALES_CALC.strip("[]")
+    return worksheet(
+        "Key Sales by Region",
+        "7D6C2A1F-2B3C-4D5E-9F0A-00000000002B",
+        with_columns(
+            dependency(
+                [
+                    ("[Region]", "string", "dimension", "nominal"),
+                    ("[Sales]", "real", "measure", "quantitative"),
+                    ("[Sub-Category]", "string", "dimension", "nominal"),
+                ],
+                [
+                    instance("[Region]", "None", "[none:Region:nk]", "nominal"),
+                    instance(KEY_SALES_CALC, "Sum", f"[sum:{key}:qk]", "quantitative"),
+                ],
+                [],
+            ),
+            KEY_SALES_COLUMN.replace("      <", "            <", 1).replace(
+                "\n      ", "\n            "
+            ),
+        ),
+        "",
+        pane("Bar", f"              <text column={attr(ref(f'sum:{key}:qk'))} />"),
+        ref("none:Region:nk"),
+        ref(f"sum:{key}:qk"),
+    )
+
+
+def sets_dashboard() -> str:
+    """集合（固定尺寸）：上方 Top N 與條件集合，下方集合放在篩選架與用在計算欄位中。"""
+    return f"""    <dashboard name='集合'>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 312)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 56, 488, 312)} id='7' name='Top Customers vs Others' />
+              <zone {zone_box(504, 56, 488, 312)} id='8' name='Profitable Sub-Categories' />
+            </zone>
+            <zone {zone_box(8, 376, 984, 316)} id='9' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 376, 488, 316)} id='10' name='Key Sub-Categories by Category' />
+              <zone {zone_box(504, 376, 488, 316)} id='11' name='Key Sales by Region' />
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-00000000002C}}' />
+    </dashboard>"""
 
 
 def measure_names(*instances: str, order: tuple[str, ...] | None = None) -> str:
@@ -1602,7 +1785,7 @@ def twb(rows: int) -> str:
   </preferences>
   <datasources>
 {PARAMETERS}
-{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, DATASOURCE_GROUPS]))}
+{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, KEY_SALES_COLUMN, DATASOURCE_GROUPS, SET_TOP, SET_KEY, SET_PROFITABLE]))}
   </datasources>
 {shared_views()}
 {actions()}
@@ -1620,6 +1803,7 @@ def twb(rows: int) -> str:
 {reference_dashboard()}
 {home_dashboard()}
 {donut_dashboard()}
+{sets_dashboard()}
 {story()}
   </dashboards>
   <windows source-height='30'>

@@ -81,7 +81,16 @@ AGG_WORDS = {"sum": "Sum", "avg": "Average", "min": "Minimum", "max": "Maximum"}
 
 
 def _labels(ir: IR, use: FieldUse, table_calcs: list[TableCalc]) -> list[str]:
-    caption = next(f.caption for ds in ir.datasources for f in ds.fields if f.id == use.field)
+    data_field = next(f for ds in ir.datasources for f in ds.fields if f.id == use.field)
+    caption = data_field.caption
+    if data_field.set is not None and use.agg is None:
+        # 集合的 IN/OUT：匯出的欄名寫法依版本而異（依公開資料推定）
+        return [
+            f"In/Out of {caption}",
+            f"In / Out of {caption}",
+            f"IN/OUT({caption})",
+            caption,
+        ]
     if use.date is not None:
         unit = use.date.unit
         word = unit.capitalize()

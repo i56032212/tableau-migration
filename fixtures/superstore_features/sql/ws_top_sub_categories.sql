@@ -3,7 +3,7 @@ WITH
 "src" AS (
   SELECT * FROM "Extract"."Extract" WHERE ("Country/Region" IN ('United States'))
 ),
--- 第 3 段：FIXED LOD、Top N
+-- 第 3 段：FIXED LOD、集合、Top N
 "topn_src" AS (
   SELECT * FROM src WHERE ("Sub-Category" IS NULL OR NOT ("Sub-Category" IN ('Phones')))
 ),

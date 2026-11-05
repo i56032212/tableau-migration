@@ -58,6 +58,14 @@ sheets:
     view: CategoryDonut
   - worksheet: ws_region_sales_and_segment_profit
     view: RegionSalesandSegmentProfit
+  - worksheet: ws_top_customers_vs_others
+    view: TopCustomersvsOthers
+  - worksheet: ws_profitable_sub_categories
+    view: ProfitableSub-Categories
+  - worksheet: ws_key_sub_categories_by_category
+    view: KeySub-CategoriesbyCategory
+  - worksheet: ws_key_sales_by_region
+    view: KeySalesbyRegion
 cases:
   - name: default
     url_params: {}

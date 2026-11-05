@@ -12,6 +12,10 @@ def _strip(name: str) -> str:
     return name[1:-1].replace("]]", "]") if name.startswith("[") and name.endswith("]") else name
 
 
+TABLE_OWNER = "__tableau_internal_object_id__"
+"""邏輯資料表的筆數欄位在公式中的前綴（[__tableau_internal_object_id__].[資料表 id]）。"""
+
+
 class DatasourceScope:
     """公式中的參照：[欄位內部名稱或顯示名稱]、[Parameters].[參數內部名稱或顯示名稱]、[資料源].[欄位]。"""
 
@@ -51,6 +55,9 @@ class DatasourceScope:
             owner, name = parts
             if owner == "Parameters":
                 return self._params.get(name)
+            if owner == TABLE_OWNER:
+                # 邏輯資料表的筆數欄位，例如 COUNT([__tableau_internal_object_id__].[Orders_A1B2…])
+                return self._fields.get(_strip(f"[{TABLE_OWNER}].[{name.replace(']', ']]')}]"))
             if owner != self.ds_name:
                 return None
             parts = (name,)

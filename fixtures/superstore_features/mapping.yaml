@@ -168,3 +168,29 @@ sheets:
       Profit: sum(f_profit)
     ignore: []
     numeric: auto
+  ws_top_customers_vs_others:
+    columns:
+      In/Out of Top Customers: f_top_customers
+      Sales: sum(f_sales)
+      Distinct count of Customer Name: countd(f_customer_name)
+    ignore: []
+    numeric: auto
+  ws_profitable_sub_categories:
+    columns:
+      Sub-Category: f_sub_category
+      In/Out of Profitable Sub-Categories: f_profitable_sub_categories
+      Profit: sum(f_profit)
+    ignore: []
+    numeric: auto
+  ws_key_sub_categories_by_category:
+    columns:
+      Category: f_category
+      Sales: sum(f_sales)
+    ignore: []
+    numeric: auto
+  ws_key_sales_by_region:
+    columns:
+      Region: f_region
+      Key Sales: sum(f_key_sales)
+    ignore: []
+    numeric: auto

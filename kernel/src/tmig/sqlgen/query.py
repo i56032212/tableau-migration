@@ -4,7 +4,7 @@
 
 1. 萃取篩選與資料源篩選  ``src``（萃取篩選在建立萃取時已套用，不重複）
 2. 內容篩選  ``ctx_pre`` → ``ctx``（含內容 Top N）
-3. FIXED LOD、Top N  ``lod_*``、``ctx_ext``、``topn_*``
+3. FIXED LOD、集合、Top N  ``lod_*``、``ctx_ext``、``sets_ext``、``topn_*``
 4. 維度篩選  ``dimf``
 5. INCLUDE／EXCLUDE LOD  ``lod_*``、``dimf_ext``
 6. 彙總、量值篩選  ``agg_*``、``meas``、``mf``
@@ -108,7 +108,7 @@ WINDOW_AGG = {
 STAGES = {
     1: "萃取篩選與資料源篩選",
     2: "內容篩選",
-    3: "FIXED LOD、Top N",
+    3: "FIXED LOD、集合、Top N",
     4: "維度篩選",
     5: "INCLUDE／EXCLUDE LOD",
     6: "彙總與量值篩選",
@@ -254,6 +254,8 @@ class _RowEnv:
 
     def column(self, target: Target) -> str:
         data_field = self.query.fields[target.id]
+        if data_field.set is not None and data_field.calc is None:
+            return self._qualify(self.query.set_column(data_field))
         if data_field.column is None:
             raise QueryError(f"欄位 {data_field.caption} 沒有實體欄位")
         return self._qualify(self.query.source.column(data_field))
@@ -369,6 +371,9 @@ class WorksheetQuery:
         self.cond_nodes: dict[str, Node] = {}
         """條件篩選 id → 條件的語法樹。"""
         self.attached: set[Lod] = set()
+        self.sets: dict[str, str] = {}
+        """Top N 與條件集合的欄位 id → 每一列是否在集合中的欄名（內容篩選後計算，見 _attach_sets）。"""
+        self.attached_sets: set[str] = set()
         self.row = ExprCompiler(self.analyzer, _RowEnv(self))
         self._names: dict[str, int] = {}
         self._canon: dict[Node, Node] = {}
@@ -537,7 +542,41 @@ class WorksheetQuery:
                     return True
         return False
 
+    def sets_in(self, node: Node) -> list[str]:
+        """用到的 Top N 與條件集合（含計算欄位與 LOD 之中的）。"""
+        found: list[str] = []
+
+        def visit(item: Node) -> None:
+            if isinstance(item, FieldRef):
+                target = self._resolve(item)
+                if target.kind != "field":
+                    return
+                data_field = self.fields[target.id]
+                if data_field.set is not None and data_field.calc is None:
+                    if target.id not in found:
+                        found.append(target.id)
+                elif target.formula is not None:
+                    visit(self.analyzer.calc_ast(target))
+                return
+            for sub in children(item):
+                visit(sub)
+
+        visit(node)
+        return found
+
+    def set_column(self, data_field: DataField) -> str:
+        col = self.sets.get(data_field.id)
+        if col is None or data_field.id not in self.attached_sets:
+            raise QueryError(
+                f"集合「{data_field.caption}」在這個運算階段還不能使用"
+                "（例如用在資料源篩選、內容篩選或 FIXED LOD 中），尚不支援",
+                unsupported=True,
+            )
+        return col
+
     def register_lods(self, node: Node) -> None:
+        for field_id in self.sets_in(node):
+            self.sets.setdefault(field_id, f"__set_{len(self.sets)}")
         for lod in self.lods_in(node):
             if lod in self.lods:
                 continue
@@ -647,8 +686,9 @@ class WorksheetQuery:
             for flt in stage["context"]:
                 self.note(2, f"內容篩選 {flt.id}")
 
-        # 3. FIXED LOD、Top N 與彙總條件（以內容篩選後、其他維度篩選前的資料計算）
+        # 3. FIXED LOD、集合、Top N 與彙總條件（以內容篩選後、其他維度篩選前的資料計算）
         source = self._attach(fixed, source, "ctx_ext", 3, view_dims=None)
+        source = self._attach_sets(source, 3)
         top_conds = [
             self._member_set(f, top_nodes, source, 3)
             for f in stage["top_n"] + stage["dimension"]
@@ -920,6 +960,16 @@ class WorksheetQuery:
             if target.kind != "field":
                 return
             data_field = self.fields[target.id]
+            if data_field.set is not None and data_field.calc is None:
+                # Top N 與條件集合：層級與排名依據（條件）用到的欄位
+                for use in data_field.set.levels:
+                    self.collect(self.field_node(use.field), usage, inside)
+                rule = data_field.set.rule
+                if rule.kind != "members":
+                    self.collect(
+                        parse_formula(rule.by if rule.kind == "top_n" else rule.condition), usage
+                    )
+                return
             if data_field.column is None and data_field.table is not None:
                 # 邏輯資料表的筆數欄位：SUM 即該資料表的列數
                 usage.add_table(data_field.table, inside)
@@ -1106,6 +1156,57 @@ class WorksheetQuery:
         ):
             raise QueryError("條件篩選含 INCLUDE／EXCLUDE LOD，尚不支援", unsupported=True)
         return node
+
+    def _attach_sets(self, source: str, stage: int) -> str:
+        """Top N 與條件集合：以內容篩選後的資料決定成員，每一列加上是否在集合中（TRUE／FALSE）。"""
+        if not self.sets:
+            return source
+        columns: list[str] = []
+        for field_id, col in self.sets.items():
+            data_field = self.fields[field_id]
+            columns.append(f"{self._set_member(data_field, source, stage)} AS {ident(col)}")
+            self.note(stage, f"集合 {field_id}（{data_field.caption}）")
+        name = self.cte(
+            stage, self.name("sets_ext"), f"SELECT *, {', '.join(columns)} FROM {source}"
+        )
+        self.attached_sets.update(self.sets)
+        return name
+
+    def _set_member(self, data_field: DataField, source: str, stage: int) -> str:
+        """集合的成員條件：與 Top N、彙總條件篩選相同的計算（集合沒有篩選的階段，以內容篩選後的資料計算）。"""
+        assert data_field.set is not None
+        rule = data_field.set.rule
+        use = data_field.set.levels[0]
+        if rule.kind == "top_n":
+            top = TopNFilter(
+                kind="top_n",
+                id=data_field.id,
+                field=use,
+                stage="top_n",
+                direction=rule.direction,
+                count=rule.count,
+                by=rule.by,
+                mode=rule.mode,
+                values=rule.values,
+                source_ref=data_field.source_ref,
+            )
+            return self._top_n(top, self._top_by(top), source, stage)
+        if rule.kind != "condition":
+            raise QueryError(f"集合「{data_field.caption}」的成員應以公式計算")
+        cond = ConditionFilter(
+            kind="condition",
+            id=data_field.id,
+            field=use,
+            stage="dimension",
+            condition=rule.condition,
+            mode=rule.mode,
+            values=rule.values,
+            source_ref=data_field.source_ref,
+        )
+        self.cond_nodes[cond.id] = self._condition_node(cond)
+        if self.analyzer.analyze(self.cond_nodes[cond.id]).level != "agg":
+            raise QueryError(f"集合「{data_field.caption}」的條件必須是彙總")
+        return self._member_set(cond, {}, source, stage)
 
     def _member_set(self, flt: Filter, top_nodes: dict[str, Node], source: str, stage: int) -> str:
         if isinstance(flt, TopNFilter):
@@ -1422,9 +1523,10 @@ class WorksheetQuery:
                 for i, v in enumerate(sort.manual_values)
             )
             return f"(CASE {cases} ELSE {len(sort.manual_values)} END), {col} ASC NULLS LAST"
-        if sort is not None and sort.kind == "alphabetic" and sort.order == "desc":
-            return f"{col} DESC NULLS LAST"
-        return f"{col} ASC NULLS LAST"
+        descending = sort is not None and sort.kind == "alphabetic" and sort.order == "desc"
+        if self.fields[d.use.field].set is not None and d.use.agg is None:
+            descending = not descending  # 集合的 IN/OUT：In（TRUE）在前，與 Tableau 相同
+        return f"{col} {'DESC' if descending else 'ASC'} NULLS LAST"
 
     def _window(
         self,
@@ -1885,6 +1987,15 @@ def domain_sql(
     query = WorksheetQuery(ir.model_copy(update={"worksheets": [holder]}), "domain", user=user)
     if query.is_measure(use):
         raise QueryError("量值沒有可選值")
+    data_field = query.fields[use.field]
+    if data_field.set is not None and data_field.calc is None:
+        # Top N 與條件集合：可選值一律為 In、Out（成員要以內容篩選後的資料計算）
+        if kind != "values":
+            raise QueryError("集合只有 In、Out 兩個值", unsupported=True)
+        return (
+            f"SELECT {ident('value')} FROM (SELECT FALSE AS {ident('value')} "
+            f"UNION ALL SELECT TRUE) AS t ORDER BY 1"
+        )
     query.register_lods(query.field_node(use.field))
     if query.lods:
         raise QueryError("含 LOD 的欄位尚不支援列出可選值", unsupported=True)

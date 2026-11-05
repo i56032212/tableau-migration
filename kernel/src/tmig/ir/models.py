@@ -121,6 +121,51 @@ class MemberAlias(IRModel):
     label: str = Field(description="顯示的名稱")
 
 
+class SetMembers(IRModel):
+    """固定成員的集合：列出的成員在集合中（mode 為 exclude 時，列出的以外在集合中）。
+
+    查詢時以解析器產生的布林公式（DataField.calc）計算；成員另外列在這裡，供集合動作改變成員時使用。"""
+
+    kind: Literal["members"]
+    mode: Literal["include", "exclude"] = "include"
+    members: list[list[Scalar]] = Field(
+        default_factory=list, description="每個成員在各層級的值（與 levels 對應）"
+    )
+
+
+class SetTop(IRModel):
+    """Top N 集合：依彙總公式排名，取前（或後）N 個成員；mode、values 為排名前先選取的成員。"""
+
+    kind: Literal["top_n"]
+    direction: Literal["top", "bottom"]
+    count: Annotated[StrictInt, Field(gt=0)] | ParamRef
+    by: str = Field(min_length=1, description="排名依據的 Tableau 彙總公式，例如 SUM([Sales])")
+    mode: Literal["include", "exclude", "all"] = "all"
+    values: list[Scalar] = Field(default_factory=list)
+
+
+class SetCondition(IRModel):
+    """條件集合：彙總條件成立的成員，例如 SUM([Profit]) > 0；mode、values 為先選取的成員。"""
+
+    kind: Literal["condition"]
+    condition: str = Field(min_length=1, description="Tableau 彙總公式（布林）")
+    mode: Literal["include", "exclude", "all"] = "all"
+    values: list[Scalar] = Field(default_factory=list)
+
+
+SetRule = Annotated[SetMembers | SetTop | SetCondition, Field(discriminator="kind")]
+
+
+class FieldSet(IRModel):
+    """集合：維度成員（或成員的組合）是否在集合中，值為 TRUE／FALSE（Tableau 顯示為 In／Out）。
+
+    Top N 與條件集合與 Top N、條件篩選相同，以內容篩選後、維度篩選前的資料決定成員；
+    固定成員的集合只看成員本身。"""
+
+    levels: list[FieldUse] = Field(min_length=1, description="集合所在的維度")
+    rule: SetRule
+
+
 class Calc(IRModel):
     """計算欄位。解析器只填 formula；ast 與 level 由公式引擎（B2）補上。"""
 
@@ -148,6 +193,11 @@ class DataField(IRModel):
         description="Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None",
     )
     calc: Calc | None = None
+    set: FieldSet | None = Field(
+        default=None,
+        description="集合（布林）：固定成員的集合同時有 calc（成員的公式），"
+        "Top N 與條件集合沒有 calc，查詢時另外計算成員",
+    )
     aliases: list[MemberAlias] = Field(
         default_factory=list,
         description="成員別名：只改變維度成員的顯示（標題、標籤、篩選控制項），"
@@ -157,8 +207,13 @@ class DataField(IRModel):
 
     @model_validator(mode="after")
     def _column_or_calc(self) -> Self:
-        if (self.column is None) == (self.calc is None):
-            raise ValueError("欄位必須剛好有 column（一般欄位）或 calc（計算欄位）其中之一")
+        computed = self.set is not None and self.set.rule.kind != "members"
+        if sum(x for x in (self.column is not None, self.calc is not None, computed)) != 1:
+            raise ValueError(
+                "欄位必須剛好有 column（一般欄位）、calc（計算欄位）或 Top N、條件集合其中之一"
+            )
+        if self.set is not None and self.datatype != "boolean":
+            raise ValueError("集合的型別必須是 boolean")
         return self
 
 

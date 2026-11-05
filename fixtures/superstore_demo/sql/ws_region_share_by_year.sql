@@ -3,7 +3,7 @@ WITH
 "src" AS (
   SELECT * FROM "Extract"."Extract" WHERE ("Country/Region" IN ('United States'))
 ),
--- 第 3 段：FIXED LOD、Top N
+-- 第 3 段：FIXED LOD、集合、Top N
 "lod" AS (
   SELECT "Region" AS "__d0", sum("Sales") AS "__v" FROM src GROUP BY 1
 ),

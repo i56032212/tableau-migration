@@ -9,6 +9,8 @@ from lxml import etree
 
 from tmig.formula.analyze import Analyzer
 from tmig.formula.ast import FieldRef, to_json
+from tmig.formula.lexer import FormulaSyntaxError
+from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
     Aggregation,
@@ -37,7 +39,13 @@ from tmig.ir.models import (
 from tmig.ir.scope import DatasourceScope
 from tmig.parser.connections import DIALECTS, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
-from tmig.parser.fields import FilterParser, instance_key, member_aliases, use_from_instance
+from tmig.parser.fields import (
+    FilterParser,
+    instance_key,
+    member_aliases,
+    use_from_instance,
+    use_from_name,
+)
 from tmig.parser.groups import (
     GroupError,
     bin_formula,
@@ -54,6 +62,7 @@ from tmig.parser.model import (
     relationships,
 )
 from tmig.parser.refs import qualified_parts
+from tmig.parser.sets import IN_OUT, Level, level_expr, parse_set
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 
@@ -510,7 +519,60 @@ class DatasourceParser:
             if attr(group, "ui-builder") == "identity-set":
                 self._add_identity_set(state, group)
                 continue
-            ctx.ignore(group, "集合或合併欄位（工作表若有使用會另列為不支援）")
+            if attr(group, "ui-builder") == "filter-group":
+                self._add_set(state, group)
+                continue
+            ctx.ignore(group, "合併欄位等群組（工作表若有使用會另列為不支援）")
+
+    def _add_set(self, state: DsState, group: etree._Element) -> None:
+        """集合 → 布林欄位（In／Out）：固定成員轉成公式，Top N 與條件集合在查詢時計算成員。"""
+        name = group.get("name", "")
+        caption = group.get("caption") or strip_brackets(name)
+        try:
+            field_set, formula = parse_set(
+                group, lambda level: self._set_level(state, level), self.ctx.parameter
+            )
+        except (GroupError, LiteralError) as exc:
+            self.ctx.flag(group, f"集合「{caption}」：{exc}")
+            return
+        data_field = DataField(
+            id=self.ctx.ids.make("f", caption, name),
+            name=name,
+            caption=caption,
+            role="dimension",
+            datatype="boolean",
+            column=None,
+            calc=Calc(formula=formula) if formula is not None else None,
+            set=field_set,
+            aliases=list(IN_OUT),
+            source_ref=xpath(group),
+        )
+        state.add_field(data_field)
+        state.set_fields.add(data_field.id)
+
+    def _set_level(self, state: DsState, name: str) -> Level:
+        """集合的層級（[State]、[none:State:nk]、[yr:Order Date:ok]）。"""
+        data_field = state.by_name.get(name)
+        if data_field is not None:
+            use = FieldUse(field=data_field.id)
+        else:
+            found = use_from_name(state, name)
+            if isinstance(found, str):
+                raise GroupError(f"層級 {name}：{found}")
+            if found.agg is not None:
+                raise GroupError(f"層級 {name} 不能是彙總")
+            use = FieldUse(field=found.field, date=found.date)
+            data_field = state.field_by_id(use.field)
+        if data_field.set is not None:
+            raise GroupError(f"層級 {name} 是集合")
+        if data_field.datatype not in DATATYPES:
+            raise GroupError(f"層級 {name} 的型別 {data_field.datatype} 不支援")
+        part = use.date is not None and use.date.kind == "part"
+        return Level(
+            use=use,
+            expr=level_expr(data_field.name, use),
+            datatype="integer" if part else data_field.datatype,
+        )
 
     def _add_identity_set(self, state: DsState, group: etree._Element) -> None:
         """Tableau 的使用者篩選（集合）→ 布林計算欄位：登入者看得到的成員為 TRUE（P1 列層級權限）。"""
@@ -537,6 +599,7 @@ class DatasourceParser:
         )
         state.add_field(data_field)
         state.identity_sets.add(data_field.id)
+        state.set_fields.add(data_field.id)
 
     def _add_raw(
         self,
@@ -809,12 +872,48 @@ def _level(info_level: str, has_lod: bool) -> CalcLevel:
     return "lod" if has_lod else "row"
 
 
+def _check_set(
+    ctx: ParseContext, state: DsState, analyzer: Analyzer, data_field: DataField
+) -> None:
+    """Top N 與條件集合：排名依據必須是彙總，條件必須是彙總的布林值（查詢時才計算成員）。"""
+    if data_field.id in state.levels or data_field.set is None:
+        return
+    rule = data_field.set.rule
+    if rule.kind == "members":
+        return
+    text, what = (rule.by, "排名依據") if rule.kind == "top_n" else (rule.condition, "條件")
+    try:
+        info = analyzer.analyze(parse_formula(text))
+        if info.level != "agg":
+            raise FormulaSemanticError(f"{what}必須是彙總")
+        if rule.kind == "condition" and info.datatype not in ("boolean", "null"):
+            raise FormulaSemanticError("條件必須是布林值")
+    except (FormulaSyntaxError, FormulaSemanticError) as exc:
+        state.levels[data_field.id] = None
+        message = exc.message if isinstance(exc, FormulaSemanticError) else str(exc)
+        unsupported = isinstance(exc, FormulaSemanticError) and exc.unsupported
+        ctx.unsupported.append(
+            Unsupported(
+                source_ref=data_field.source_ref,
+                reason=f"集合「{data_field.caption}」的{what}「{text}」：{message}"
+                + ("（v0 尚不支援）" if unsupported else ""),
+                element="group",
+                xml=text,
+            )
+        )
+        return
+    state.levels[data_field.id] = "row"
+
+
 def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
     """以公式引擎分析計算欄位：補上語法樹（附解析出的 id）與計算層級。"""
     scope = DatasourceScope(state.name, state.fields, ctx.parameters)
     analyzer = Analyzer(scope)
     state.analyzer = analyzer
     for data_field in state.fields:
+        if data_field.set is not None and data_field.calc is None:
+            _check_set(ctx, state, analyzer, data_field)
+            continue
         if data_field.calc is None or data_field.id in state.levels:
             continue
         target = scope.target(data_field.id)

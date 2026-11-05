@@ -90,6 +90,7 @@ NAME_PREFIXES = {
     "tsc": "Second-Trunc",
     "my": "MY",
     "mdy": "MDY",
+    "io": "InOut",
 }
 """欄位實例名稱的前綴（例如 [yr:Order Date:ok] 的 yr）→ 衍生方式；用於沒有 column-instance 的參照。"""
 
@@ -117,6 +118,14 @@ def use_from_instance(ds: DsState, instance: etree._Element) -> FieldUse | str:
     continuous = instance.get("type") == "quantitative"
     if derivation in ("None", "User"):
         return FieldUse(field=data_field.id, continuous=continuous)
+    if derivation == "InOut":
+        # 集合放在架上（IN/OUT）：成員是否在集合中，顯示為 In／Out；欄位實例上可以另設別名
+        if data_field.id not in ds.set_fields:
+            return f"{column} 不是集合，卻使用 IN/OUT"
+        labels = _in_out_aliases(instance)
+        if labels:
+            data_field.aliases = labels
+        return FieldUse(field=data_field.id)
     if derivation in AGG_DERIVATIONS:
         return FieldUse(field=data_field.id, agg=AGG_DERIVATIONS[derivation], continuous=continuous)
     if derivation in DATE_DERIVATIONS:
@@ -129,6 +138,23 @@ def use_from_instance(ds: DsState, instance: etree._Element) -> FieldUse | str:
             continuous=continuous,
         )
     return f"欄位衍生方式 {derivation}（{instance.get('name')}）v0 不支援"
+
+
+def _in_out_aliases(instance: etree._Element) -> list[MemberAlias]:
+    """IN/OUT 欄位實例上的別名（例如 In top 5／Not in Top 5）；沒寫的值維持 In／Out。"""
+    labels = {True: "In", False: "Out"}
+    found = False
+    for alias in descendants(child(instance, "aliases"), "alias"):
+        key = (alias.get("key") or "").strip().lower()
+        if key in ("true", "false") and alias.get("value") is not None:
+            labels[key == "true"] = alias.get("value", "")
+            found = True
+    if not found:
+        return []
+    return [
+        MemberAlias(value=True, label=labels[True]),
+        MemberAlias(value=False, label=labels[False]),
+    ]
 
 
 def use_from_name(ds: DsState, name: str) -> FieldUse | str:
@@ -302,8 +328,8 @@ class FilterParser:
         filter_id: str,
     ) -> Filter | None:
         groups = children(element, "groupfilter")
-        if not groups and use.field in self.ds.identity_sets:
-            # 使用者篩選（集合）放在篩選架上：只顯示集合中的成員，也就是布林欄位為 TRUE 的列
+        if not groups and use.field in self.ds.set_fields:
+            # 集合（含使用者篩選）放在篩選架上：只顯示集合中的成員，也就是布林欄位為 TRUE 的列
             return CategoricalFilter(
                 kind="categorical",
                 id=filter_id,

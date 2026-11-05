@@ -45,7 +45,9 @@ class DatasourceInfo(BaseModel):
     custom_sql: bool
     field_count: int
     calc_count: int
-    groups_or_sets: int = Field(description="群組與集合的數量（不含使用者篩選）")
+    groups_or_sets: int = Field(
+        description="尚未支援的群組數量（合併欄位等；不含集合、使用者篩選與 Tableau 自動產生的群組）"
+    )
     user_filters: list[str] = Field(
         default_factory=list, description="Tableau 的使用者篩選（伺服器 → 建立使用者篩選）"
     )

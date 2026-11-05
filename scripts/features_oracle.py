@@ -27,6 +27,10 @@
 - 各標記卡的詳細程度不同（甜甜圈、依客群分色的折線）時，匯出的資料以工作表上所有維度的組合計算：
   Category Donut 為各類別（MIN(0) 為 0）、Region Sales and Segment Profit 為各地區 × 客群
 - 參考線只影響圖表：Sub-Category Sales、Region Sales Bands 的預期結果就是各標記的銷售額
+- 集合：值為 In／Out。Top N 與條件集合以內容篩選後、維度篩選前的資料決定成員（這份報表沒有內容篩選，
+  所以是全部資料；全域篩選與網址參數都是維度篩選，不影響成員）：Top Customers 為總銷售額前 10 名的客戶
+  （同額時名稱較小者優先）、Profitable Sub-Categories 為總利潤大於 0 的子類別；Key Sub-Categories 為
+  Chairs、Phones、Storage。集合放在篩選架上＝只保留 In；Key Sales 為重點子類別的銷售額
 - 別名：匯出的資料中維度成員與 Measure Names 以別名顯示（Ship Speed 的 Other 為 Standard、
   Segment KPIs 的 CNTD(Order ID) 為「訂單數」）；參數的別名只影響控制項的顯示
 """
@@ -401,6 +405,68 @@ def region_sales_segment_profit(rows: list[Row], case: Case) -> tuple[list[str],
     return ["Region", "Segment", "Sales", "Profit"], body
 
 
+KEY_SUB_CATEGORIES = {"Chairs", "Phones", "Storage"}
+
+
+def in_out(member: bool) -> str:
+    return "In" if member else "Out"
+
+
+def top_customers(rows: list[Row]) -> set[str]:
+    """總銷售額前 10 名的客戶（全部資料；同額時名稱較小者優先）。"""
+    totals: dict[str, float] = defaultdict(float)
+    for row in rows:
+        totals[row["Customer Name"]] += row["Sales"]
+    ranked = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+    return {name for name, _ in ranked[:10]}
+
+
+def top_customers_vs_others(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    top = top_customers(rows)
+    keep = case.keep({"Region": not_central})
+    groups: dict[str, list[Row]] = defaultdict(list)
+    for row in rows:
+        if keep(row):
+            groups[in_out(row["Customer Name"] in top)].append(row)
+    body = [
+        [key, sum(r["Sales"] for r in items), len({r["Customer Name"] for r in items})]
+        for key, items in sorted(groups.items())
+    ]
+    return ["In/Out of Top Customers", "Sales", "Distinct count of Customer Name"], body
+
+
+def profitable_sub_categories(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    profit: dict[str, float] = defaultdict(float)
+    for row in rows:
+        profit[row["Sub-Category"]] += row["Profit"]
+    keep = case.keep({})
+    totals: dict[str, float] = defaultdict(float)
+    for row in rows:
+        if keep(row):
+            totals[row["Sub-Category"]] += row["Profit"]
+    # IN/OUT 的別名：獲利（In）、虧損（Out）
+    labels = {True: "獲利", False: "虧損"}
+    body = [[name, labels[profit[name] > 0], value] for name, value in sorted(totals.items())]
+    return ["Sub-Category", "In/Out of Profitable Sub-Categories", "Profit"], body
+
+
+def key_sub_categories(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({"Key Sub-Categories": lambda row: row["Sub-Category"] in KEY_SUB_CATEGORIES})
+    body = grouped(rows, keep, "Category", lambda items: sum(r["Sales"] for r in items))
+    return ["Category", "Sales"], body
+
+
+def key_sales_by_region(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({})
+
+    def key_sales(items: list[Row]) -> float | None:
+        values = [r["Sales"] for r in items if r["Sub-Category"] in KEY_SUB_CATEGORIES]
+        return sum(values) if values else None
+
+    body = grouped(rows, keep, "Region", key_sales)
+    return ["Region", "Key Sales"], body
+
+
 SHEETS = {
     "ws_sales_by_segment": sales_by_segment,
     "ws_profit_by_ship_mode": profit_by_ship_mode,
@@ -427,6 +493,10 @@ SHEETS = {
     "ws_monthly_moving_average": monthly_moving_average,
     "ws_category_donut": category_donut,
     "ws_region_sales_and_segment_profit": region_sales_segment_profit,
+    "ws_top_customers_vs_others": top_customers_vs_others,
+    "ws_profitable_sub_categories": profitable_sub_categories,
+    "ws_key_sub_categories_by_category": key_sub_categories,
+    "ws_key_sales_by_region": key_sales_by_region,
 }
 
 

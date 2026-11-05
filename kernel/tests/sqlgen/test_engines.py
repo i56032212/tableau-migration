@@ -60,6 +60,12 @@ ORACLE_UNSUPPORTED = {
     "SPLIT('a-b-c', '-', -1)",
 }
 """Oracle 尚不支援的公式；結果是布林值的公式也不支援（Oracle 沒有布林型別）。"""
+ORACLE_UNSUPPORTED_SHEETS = {
+    # 集合的 IN/OUT 是布林維度，Top N 集合的成員是布林欄位（Oracle 沒有布林型別）
+    "ws_top_customers_vs_others",
+    "ws_profitable_sub_categories",
+}
+"""Oracle 尚不支援的工作表：轉譯時列為不支援。"""
 EMULATOR_GAPS = {
     # 模擬時 EXTRACT(SECOND FROM 時間間隔) 以 DuckDB 執行，只取整數秒；Oracle 實機含小數秒
     "DATETIME(FLOAT(#2024-01-01 12:34:56.5#))",
@@ -221,6 +227,10 @@ def test_fixture_checks(engine: Engine, directory: Path) -> None:
     for sheet in cases.sheets:
         for case in cases.cases:
             query = worksheet_sql(ir, sheet.worksheet, case_state(ir, case, cases.as_of()))
+            if engine.name == "oracle" and sheet.worksheet in ORACLE_UNSUPPORTED_SHEETS:
+                with pytest.raises(DialectError, match="Oracle 沒有布林值"):
+                    execute_live(query, engine.executor)
+                continue
             result = execute_live(query, engine.executor)
             expected = directory / "expected" / sheet.worksheet / f"{case.name}.csv"
             comparison = compare(

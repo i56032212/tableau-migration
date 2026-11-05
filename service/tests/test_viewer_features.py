@@ -343,6 +343,56 @@ def test_groups_and_bins_render(server: str) -> None:
         browser.close()
 
 
+def test_sets_render(server: str) -> None:
+    """集合：IN/OUT 顯示為 In／Out（或欄位實例上的別名），數字與獨立計算的結果相同。"""
+    from playwright.sync_api import sync_playwright
+
+    oracle = load_oracle()
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "集合")
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(300)
+        assert page.locator(".placeholder.error, .placeholder.unsupported").count() == 0
+
+        def texts(worksheet: str) -> list[str]:
+            return page.eval_on_selector_all(
+                f"[data-worksheet='{worksheet}'] svg text", "els => els.map(e => e.textContent)"
+            )
+
+        assert {"In", "Out"} <= set(texts("ws_top_customers_vs_others"))
+        assert {"獲利", "虧損"} <= set(texts("ws_profitable_sub_categories"))
+        rows = oracle.load_rows()
+        default = oracle.Case("default", {})
+        latest = {w: data for w, _, data in renders.items}
+        for worksheet, compute in [
+            ("ws_top_customers_vs_others", oracle.top_customers_vs_others),
+            ("ws_key_sub_categories_by_category", oracle.key_sub_categories),
+            ("ws_key_sales_by_region", oracle.key_sales_by_region),
+        ]:
+            _, expected = compute(rows, default)
+            # 資料表的原始值是文字：IN/OUT 為 true／false（與 Tableau 相同 In 在前），整數照寫
+            raw_text = {"In": "true", "Out": "false"}
+            raw = [
+                [v if isinstance(v, float) else raw_text.get(str(v), str(v)) for v in r]
+                for r in expected
+            ]
+            raw.sort(key=lambda r: (r[0] != "true", str(r[0])))
+            same_as_oracle(latest[worksheet], (_, raw))
+        assert errors == []
+        browser.close()
+
+
 def test_condition_filters_render(server: str) -> None:
     """K4：相對日期與條件篩選的工作表畫得出來，篩選控制項顯示目前的設定。"""
     from playwright.sync_api import sync_playwright

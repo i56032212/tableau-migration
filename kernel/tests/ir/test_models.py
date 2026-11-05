@@ -257,10 +257,10 @@ def test_scalars_are_strict(doc: Doc) -> None:
 
 def test_field_needs_column_or_calc(doc: Doc) -> None:
     doc["datasources"][0]["fields"][0]["column"] = None
-    assert "column（一般欄位）或 calc（計算欄位）" in errors_of(doc)
+    assert "column（一般欄位）、calc（計算欄位）" in errors_of(doc)
     doc["datasources"][0]["fields"][0]["column"] = "Region"
     doc["datasources"][0]["fields"][0]["calc"] = {"formula": "1", "ast": None, "level": None}
-    assert "column（一般欄位）或 calc（計算欄位）" in errors_of(doc)
+    assert "column（一般欄位）、calc（計算欄位）" in errors_of(doc)
 
 
 def test_unsupported_entries_are_kept(doc: Doc) -> None:

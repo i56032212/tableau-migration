@@ -890,6 +890,18 @@
           ],
           "default": null
         },
+        "set": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldSet"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "集合（布林）：固定成員的集合同時有 calc（成員的公式），Top N 與條件集合沒有 calc，查詢時另外計算成員"
+        },
         "aliases": {
           "description": "成員別名：只改變維度成員的顯示（標題、標籤、篩選控制項），篩選、排序與計算仍用原始值",
           "items": {
@@ -1205,6 +1217,49 @@
         "columns"
       ],
       "title": "ExtractRefresh",
+      "type": "object"
+    },
+    "FieldSet": {
+      "additionalProperties": false,
+      "description": "集合：維度成員（或成員的組合）是否在集合中，值為 TRUE／FALSE（Tableau 顯示為 In／Out）。\n\nTop N 與條件集合與 Top N、條件篩選相同，以內容篩選後、維度篩選前的資料決定成員；\n固定成員的集合只看成員本身。",
+      "properties": {
+        "levels": {
+          "description": "集合所在的維度",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "minItems": 1,
+          "title": "Levels",
+          "type": "array"
+        },
+        "rule": {
+          "discriminator": {
+            "mapping": {
+              "condition": "#/$defs/SetCondition",
+              "members": "#/$defs/SetMembers",
+              "top_n": "#/$defs/SetTop"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SetMembers"
+            },
+            {
+              "$ref": "#/$defs/SetTop"
+            },
+            {
+              "$ref": "#/$defs/SetCondition"
+            }
+          ],
+          "title": "Rule"
+        }
+      },
+      "required": [
+        "levels",
+        "rule"
+      ],
+      "title": "FieldSet",
       "type": "object"
     },
     "FieldUse": {
@@ -2613,6 +2668,192 @@
         "source_ref"
       ],
       "title": "RelativeDateFilter",
+      "type": "object"
+    },
+    "SetCondition": {
+      "additionalProperties": false,
+      "description": "條件集合：彙總條件成立的成員，例如 SUM([Profit]) > 0；mode、values 為先選取的成員。",
+      "properties": {
+        "kind": {
+          "const": "condition",
+          "title": "Kind",
+          "type": "string"
+        },
+        "condition": {
+          "description": "Tableau 彙總公式（布林）",
+          "minLength": 1,
+          "title": "Condition",
+          "type": "string"
+        },
+        "mode": {
+          "default": "all",
+          "enum": [
+            "include",
+            "exclude",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "condition"
+      ],
+      "title": "SetCondition",
+      "type": "object"
+    },
+    "SetMembers": {
+      "additionalProperties": false,
+      "description": "固定成員的集合：列出的成員在集合中（mode 為 exclude 時，列出的以外在集合中）。\n\n查詢時以解析器產生的布林公式（DataField.calc）計算；成員另外列在這裡，供集合動作改變成員時使用。",
+      "properties": {
+        "kind": {
+          "const": "members",
+          "title": "Kind",
+          "type": "string"
+        },
+        "mode": {
+          "default": "include",
+          "enum": [
+            "include",
+            "exclude"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "members": {
+          "description": "每個成員在各層級的值（與 levels 對應）",
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "title": "Members",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "SetMembers",
+      "type": "object"
+    },
+    "SetTop": {
+      "additionalProperties": false,
+      "description": "Top N 集合：依彙總公式排名，取前（或後）N 個成員；mode、values 為排名前先選取的成員。",
+      "properties": {
+        "kind": {
+          "const": "top_n",
+          "title": "Kind",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "top",
+            "bottom"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ParamRef"
+            }
+          ],
+          "title": "Count"
+        },
+        "by": {
+          "description": "排名依據的 Tableau 彙總公式，例如 SUM([Sales])",
+          "minLength": 1,
+          "title": "By",
+          "type": "string"
+        },
+        "mode": {
+          "default": "all",
+          "enum": [
+            "include",
+            "exclude",
+            "all"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "direction",
+        "count",
+        "by"
+      ],
+      "title": "SetTop",
       "type": "object"
     },
     "Size": {

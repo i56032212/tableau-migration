@@ -179,11 +179,11 @@ def test_problems_features(problems: CensusReport) -> None:
     for expected in [
         "趨勢線（Blended）",  # 參考線（J4）已支援
         "地圖（Map）",
-        "集合等特殊欄位（group 1）",
         "Dashboard action（tsc:url-action 1）",  # 網址動作（url）已支援
     ]:
         assert expected in features
     assert "Story" not in features  # 已支援
+    assert "特殊欄位" not in features  # 集合（Top Customers）已支援
 
 
 def test_actions(problems: CensusReport) -> None:

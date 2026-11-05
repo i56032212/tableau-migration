@@ -308,11 +308,13 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         custom_sql="text" in relation_types,
         field_count=len(columns),
         calc_count=sum(classes_used.values()),
-        # 篩選動作、排除選取、工具提示產生的隱藏群組（user:auto-column）已在擴充階段支援
+        # 篩選動作、排除選取、工具提示產生的隱藏群組（user:auto-column）已在擴充階段支援；
+        # 使用者篩選（identity-set）與集合（filter-group）也已支援，剩下合併欄位等其他群組
         groups_or_sets=sum(
             1
             for g in children(ds, "group")
-            if attr(g, "auto-column") is None and attr(g, "ui-builder") != "identity-set"
+            if attr(g, "auto-column") is None
+            and attr(g, "ui-builder") not in ("identity-set", "filter-group")
         ),
         user_filters=user_filters,
         datasource_filters=len(ds_filters),
@@ -888,7 +890,7 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     groups = sum(d.groups_or_sets for d in r.datasources)
     if special or groups:
         parts = [f"{k} {v}" for k, v in special.items()] + ([f"group {groups}"] if groups else [])
-        features.append(f"集合等特殊欄位（{'、'.join(parts)}）")
+        features.append(f"合併欄位等特殊欄位（{'、'.join(parts)}）")
     # 篩選、網址、參數與切換動作已在擴充階段支援（L1、L2），醒目提示不影響數字
     kinds = Counter(a.kind for a in r.actions if a.kind not in SUPPORTED_ACTIONS)
     if kinds:

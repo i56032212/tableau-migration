@@ -1,0 +1,79 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "usermeta": {
+    "worksheet": "ws_profitable_sub_categories",
+    "name": "Profitable Sub-Categories",
+    "rows": 17,
+    "mark": "bar",
+    "dimensions": {
+      "c0": "f_sub_category",
+      "c1": "f_profitable_sub_categories"
+    },
+    "measures": {
+      "c2": "sum(f_profit)"
+    }
+  },
+  "data": {
+    "values": "17 列",
+    "fields": [
+      "__row",
+      "c0",
+      "c0_label",
+      "c1",
+      "c1_label",
+      "c2",
+      "c2_label"
+    ]
+  },
+  "width": "container",
+  "height": "container",
+  "autosize": {
+    "type": "fit",
+    "contains": "padding"
+  },
+  "config": {
+    "view": {
+      "stroke": null
+    },
+    "axis": {
+      "labelLimit": 160
+    }
+  },
+  "mark": {
+    "type": "bar",
+    "tooltip": true
+  },
+  "encoding": {
+    "x": {
+      "field": "c2",
+      "type": "quantitative",
+      "title": "Profit"
+    },
+    "y": {
+      "field": "c0_label",
+      "type": "ordinal",
+      "sort": null,
+      "title": "Sub-Category"
+    },
+    "color": {
+      "field": "c1_label",
+      "type": "nominal",
+      "title": "IN/OUT(Profitable Sub-Categories)",
+      "sort": null
+    },
+    "tooltip": [
+      {
+        "field": "c0_label",
+        "title": "Sub-Category"
+      },
+      {
+        "field": "c1_label",
+        "title": "IN/OUT(Profitable Sub-Categories)"
+      },
+      {
+        "field": "c2_label",
+        "title": "Profit"
+      }
+    ]
+  }
+}

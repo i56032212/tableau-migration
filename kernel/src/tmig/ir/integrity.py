@@ -130,6 +130,31 @@ def check_references(ir: IR) -> list[str]:
         _check_refresh(ds, errors)
     for prm in ir.parameters:
         claim(prm.id, f"parameters[{prm.id}]")
+    param_ids = {prm.id for prm in ir.parameters}
+    for ds in ir.datasources:
+        by_id = {fld.id: fld for fld in ds.fields}
+        for fld in ds.fields:
+            if fld.set is None:
+                continue
+            where = f"datasources[{ds.id}].fields[{fld.id}].set"
+            for use in fld.set.levels:
+                level = by_id.get(use.field)
+                if level is None:
+                    errors.append(f"{where}：層級欄位「{use.field}」不在資料源中")
+                elif level.set is not None or use.agg is not None or use.table_calc is not None:
+                    errors.append(f"{where}：層級「{use.field}」必須是一般的維度")
+            rule = fld.set.rule
+            if rule.kind == "members":
+                if any(len(m) != len(fld.set.levels) for m in rule.members):
+                    errors.append(f"{where}：成員的值與層級的數量不同")
+            elif len(fld.set.levels) != 1:
+                errors.append(f"{where}：Top N 與條件集合只能有一個層級")
+            if (
+                rule.kind == "top_n"
+                and isinstance(rule.count, ParamRef)
+                and rule.count.parameter not in param_ids
+            ):
+                errors.append(f"{where}：參數「{rule.count.parameter}」不存在")
     for ws in ir.worksheets:
         claim(ws.id, f"worksheets[{ws.id}]")
         for flt in ws.filters:

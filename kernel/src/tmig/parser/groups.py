@@ -159,7 +159,7 @@ def _set_condition(node: etree._Element, level: str, datatype: str | None) -> st
     if function == "empty-level":
         return "FALSE"
     if function == "member":
-        return _members_condition([parse_literal(node.get("member"), datatype)], level, datatype)
+        return members_condition([parse_literal(node.get("member"), datatype)], level, datatype)
     if function in ("union", "intersection"):
         union = function == "union"
         members = [p for p in parts if p.get("function") == "member"]
@@ -167,9 +167,9 @@ def _set_condition(node: etree._Element, level: str, datatype: str | None) -> st
         if members:
             values = [parse_literal(m.get("member"), datatype) for m in members]
             if union:
-                conditions.insert(0, _members_condition(values, level, datatype))
+                conditions.insert(0, members_condition(values, level, datatype))
             else:
-                conditions[:0] = [_members_condition([v], level, datatype) for v in values]
+                conditions[:0] = [members_condition([v], level, datatype) for v in values]
         if not conditions:
             return "FALSE" if union else "TRUE"
         return (
@@ -194,7 +194,7 @@ def _set_condition(node: etree._Element, level: str, datatype: str | None) -> st
     raise GroupError(f"集合的成員定義（function={function}）不支援")
 
 
-def _members_condition(values: list[Scalar], level: str, datatype: str | None) -> str:
+def members_condition(values: list[Scalar], level: str, datatype: str | None) -> str:
     """成員清單 → 不含 Null 的條件（只會是 TRUE 或 FALSE）。"""
     present = [v for v in values if v is not None]
     conditions: list[str] = []

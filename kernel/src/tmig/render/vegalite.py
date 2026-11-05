@@ -133,7 +133,9 @@ class RenderResult:
 def caption(ir_field: DataField, use: FieldUse, ws: Worksheet) -> str:
     """類似 Tableau 欄位膠囊上的名稱。"""
     name = ir_field.caption
-    if use.date is not None:
+    if ir_field.set is not None and use.agg is None:
+        name = f"IN/OUT({name})"
+    elif use.date is not None:
         name = f"{use.date.unit.upper()}({name})"
     elif use.agg is not None and AGG_LABELS[use.agg]:
         name = f"{AGG_LABELS[use.agg]}({name})"

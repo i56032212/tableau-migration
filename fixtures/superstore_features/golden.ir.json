@@ -35,6 +35,7 @@
           "column": "Row ID",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
@@ -50,6 +51,7 @@
           "column": "Order ID",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
@@ -65,6 +67,7 @@
           "column": "Order Date",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
@@ -80,6 +83,7 @@
           "column": "Ship Date",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
@@ -95,6 +99,7 @@
           "column": "Ship Mode",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
@@ -110,6 +115,7 @@
           "column": "Customer ID",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
@@ -125,6 +131,7 @@
           "column": "Customer Name",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
@@ -140,6 +147,7 @@
           "column": "Segment",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
@@ -155,6 +163,7 @@
           "column": "Country/Region",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
@@ -170,6 +179,7 @@
           "column": "City",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
@@ -185,6 +195,7 @@
           "column": "State/Province",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
@@ -200,6 +211,7 @@
           "column": "Postal Code",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
@@ -215,6 +227,7 @@
           "column": "Region",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
@@ -230,6 +243,7 @@
           "column": "Product ID",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
@@ -245,6 +259,7 @@
           "column": "Category",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
@@ -260,6 +275,7 @@
           "column": "Sub-Category",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
@@ -275,6 +291,7 @@
           "column": "Product Name",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
@@ -290,6 +307,7 @@
           "column": "Sales",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
@@ -305,6 +323,7 @@
           "column": "Quantity",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
@@ -320,6 +339,7 @@
           "column": "Discount",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
@@ -335,6 +355,7 @@
           "column": "Profit",
           "table": null,
           "calc": null,
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
@@ -387,6 +408,7 @@
             },
             "level": "aggregate"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
@@ -435,6 +457,7 @@
             },
             "level": "lod"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
@@ -487,6 +510,7 @@
             },
             "level": "aggregate"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
@@ -526,6 +550,7 @@
             },
             "level": "table_calc"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
@@ -580,6 +605,7 @@
             },
             "level": "aggregate"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
@@ -643,6 +669,7 @@
             },
             "level": "row"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[10]"
         },
@@ -702,6 +729,7 @@
             },
             "level": "row"
           },
+          "set": null,
           "aliases": [
             {
               "value": "Other",
@@ -758,6 +786,7 @@
             },
             "level": "row"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[12]"
         },
@@ -820,6 +849,7 @@
             },
             "level": "row"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[13]"
         },
@@ -849,8 +879,243 @@
             },
             "level": "aggregate"
           },
+          "set": null,
           "aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[14]"
+        },
+        {
+          "id": "f_key_sales",
+          "name": "[Calculation_7D6C2A1F00000003]",
+          "caption": "Key Sales",
+          "role": "measure",
+          "datatype": "real",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "table": null,
+          "calc": {
+            "formula": "IF [Key Sub-Categories] THEN [Sales] END",
+            "ast": {
+              "node": "if",
+              "branches": [
+                {
+                  "cond": {
+                    "node": "field",
+                    "ref": "[Key Sub-Categories]",
+                    "parts": [
+                      "Key Sub-Categories"
+                    ],
+                    "target": "field",
+                    "id": "f_key_sub_categories"
+                  },
+                  "then": {
+                    "node": "field",
+                    "ref": "[Sales]",
+                    "parts": [
+                      "Sales"
+                    ],
+                    "target": "field",
+                    "id": "f_sales"
+                  }
+                }
+              ],
+              "else": null
+            },
+            "level": "row"
+          },
+          "set": null,
+          "aliases": [],
+          "source_ref": "/workbook/datasources/datasource[2]/column[15]"
+        },
+        {
+          "id": "f_top_customers",
+          "name": "[Top Customers]",
+          "caption": "Top Customers",
+          "role": "dimension",
+          "datatype": "boolean",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "table": null,
+          "calc": null,
+          "set": {
+            "levels": [
+              {
+                "field": "f_customer_name",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              }
+            ],
+            "rule": {
+              "kind": "top_n",
+              "direction": "top",
+              "count": 10,
+              "by": "SUM([Sales])",
+              "mode": "all",
+              "values": []
+            }
+          },
+          "aliases": [
+            {
+              "value": true,
+              "label": "In"
+            },
+            {
+              "value": false,
+              "label": "Out"
+            }
+          ],
+          "source_ref": "/workbook/datasources/datasource[2]/group[3]"
+        },
+        {
+          "id": "f_key_sub_categories",
+          "name": "[Key Sub-Categories]",
+          "caption": "Key Sub-Categories",
+          "role": "dimension",
+          "datatype": "boolean",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "table": null,
+          "calc": {
+            "formula": "(NOT ISNULL([Sub-Category]) AND [Sub-Category] IN (\"Chairs\", \"Phones\", \"Storage\"))",
+            "ast": {
+              "node": "binary",
+              "op": "AND",
+              "left": {
+                "node": "unary",
+                "op": "NOT",
+                "operand": {
+                  "node": "call",
+                  "name": "ISNULL",
+                  "args": [
+                    {
+                      "node": "field",
+                      "ref": "[Sub-Category]",
+                      "parts": [
+                        "Sub-Category"
+                      ],
+                      "target": "field",
+                      "id": "f_sub_category"
+                    }
+                  ]
+                }
+              },
+              "right": {
+                "node": "in",
+                "operand": {
+                  "node": "field",
+                  "ref": "[Sub-Category]",
+                  "parts": [
+                    "Sub-Category"
+                  ],
+                  "target": "field",
+                  "id": "f_sub_category"
+                },
+                "values": [
+                  {
+                    "node": "literal",
+                    "kind": "string",
+                    "value": "Chairs"
+                  },
+                  {
+                    "node": "literal",
+                    "kind": "string",
+                    "value": "Phones"
+                  },
+                  {
+                    "node": "literal",
+                    "kind": "string",
+                    "value": "Storage"
+                  }
+                ]
+              }
+            },
+            "level": "row"
+          },
+          "set": {
+            "levels": [
+              {
+                "field": "f_sub_category",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              }
+            ],
+            "rule": {
+              "kind": "members",
+              "mode": "include",
+              "members": [
+                [
+                  "Chairs"
+                ],
+                [
+                  "Phones"
+                ],
+                [
+                  "Storage"
+                ]
+              ]
+            }
+          },
+          "aliases": [
+            {
+              "value": true,
+              "label": "In"
+            },
+            {
+              "value": false,
+              "label": "Out"
+            }
+          ],
+          "source_ref": "/workbook/datasources/datasource[2]/group[4]"
+        },
+        {
+          "id": "f_profitable_sub_categories",
+          "name": "[Profitable Sub-Categories]",
+          "caption": "Profitable Sub-Categories",
+          "role": "dimension",
+          "datatype": "boolean",
+          "default_agg": null,
+          "format": null,
+          "hidden": false,
+          "column": null,
+          "table": null,
+          "calc": null,
+          "set": {
+            "levels": [
+              {
+                "field": "f_sub_category",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              }
+            ],
+            "rule": {
+              "kind": "condition",
+              "condition": "SUM([Profit]) > 0",
+              "mode": "all",
+              "values": []
+            }
+          },
+          "aliases": [
+            {
+              "value": true,
+              "label": "獲利"
+            },
+            {
+              "value": false,
+              "label": "虧損"
+            }
+          ],
+          "source_ref": "/workbook/datasources/datasource[2]/group[5]"
         }
       ],
       "filters": [
@@ -3015,6 +3280,278 @@
       "totals": [],
       "totals_colored": false,
       "source_ref": "/workbook/worksheets/worksheet[25]"
+    },
+    {
+      "id": "ws_top_customers_vs_others",
+      "name": "Top Customers vs Others",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_top_customers",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_customer_name",
+            "agg": "countd",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "label_text": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "measure_aliases": [],
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_region_4",
+          "field": {
+            "field": "f_region",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "exclude",
+          "values": [
+            "Central"
+          ],
+          "group": "shared:ds_orders:f_region",
+          "source_ref": "/workbook/shared-views/shared-view/filter[1]"
+        },
+        {
+          "kind": "categorical",
+          "id": "flt_ship_mode_4",
+          "field": {
+            "field": "f_ship_mode",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "all",
+          "values": [],
+          "group": "shared:ds_orders:f_ship_mode",
+          "source_ref": "/workbook/shared-views/shared-view/filter[2]"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "formats": {},
+      "title": [],
+      "totals": [],
+      "totals_colored": false,
+      "source_ref": "/workbook/worksheets/worksheet[26]"
+    },
+    {
+      "id": "ws_profitable_sub_categories",
+      "name": "Profitable Sub-Categories",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_sub_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_profit",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": {
+          "field": "f_profitable_sub_categories",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        },
+        "size": null,
+        "label": [],
+        "label_text": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "measure_aliases": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "formats": {},
+      "title": [],
+      "totals": [],
+      "totals_colored": false,
+      "source_ref": "/workbook/worksheets/worksheet[27]"
+    },
+    {
+      "id": "ws_key_sub_categories_by_category",
+      "name": "Key Sub-Categories by Category",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_category",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "label_text": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "measure_aliases": [],
+      "filters": [
+        {
+          "kind": "categorical",
+          "id": "flt_key_sub_categories",
+          "field": {
+            "field": "f_key_sub_categories",
+            "agg": null,
+            "date": null,
+            "continuous": false,
+            "table_calc": null
+          },
+          "stage": "dimension",
+          "mode": "include",
+          "values": [
+            true
+          ],
+          "group": null,
+          "source_ref": "/workbook/worksheets/worksheet[28]/table/view/filter"
+        }
+      ],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "formats": {},
+      "title": [],
+      "totals": [],
+      "totals_colored": false,
+      "source_ref": "/workbook/worksheets/worksheet[28]"
+    },
+    {
+      "id": "ws_key_sales_by_region",
+      "name": "Key Sales by Region",
+      "datasource": "ds_orders",
+      "rows": [
+        {
+          "field": "f_region",
+          "agg": null,
+          "date": null,
+          "continuous": false,
+          "table_calc": null
+        }
+      ],
+      "columns": [
+        {
+          "field": "f_key_sales",
+          "agg": "sum",
+          "date": null,
+          "continuous": true,
+          "table_calc": null
+        }
+      ],
+      "marks": {
+        "type": "bar",
+        "color": null,
+        "size": null,
+        "label": [
+          {
+            "field": "f_key_sales",
+            "agg": "sum",
+            "date": null,
+            "continuous": true,
+            "table_calc": null
+          }
+        ],
+        "label_text": [],
+        "detail": [],
+        "tooltip": [],
+        "shape": null,
+        "angle": null,
+        "path": null
+      },
+      "panes": [],
+      "measure_values": [],
+      "measure_aliases": [],
+      "filters": [],
+      "sorts": [],
+      "table_calcs": [],
+      "reference_lines": [],
+      "formats": {},
+      "title": [],
+      "totals": [],
+      "totals_colored": false,
+      "source_ref": "/workbook/worksheets/worksheet[29]"
     }
   ],
   "dashboards": [
@@ -5279,6 +5816,231 @@
         }
       ],
       "source_ref": "/workbook/dashboards/dashboard[10]"
+    },
+    {
+      "id": "db_f8dd3e84",
+      "name": "集合",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "image": null,
+          "button": null,
+          "url": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "image": null,
+              "button": null,
+              "url": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "集合",
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 312,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 488,
+                      "h": 312,
+                      "worksheet": "ws_top_customers_vs_others",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 504,
+                      "y": 56,
+                      "w": 488,
+                      "h": 312,
+                      "worksheet": "ws_profitable_sub_categories",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]"
+                },
+                {
+                  "id": "z9",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 376,
+                  "w": 984,
+                  "h": 316,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [
+                    {
+                      "id": "z10",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 376,
+                      "w": 488,
+                      "h": 316,
+                      "worksheet": "ws_key_sub_categories_by_category",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[3]/zone[1]"
+                    },
+                    {
+                      "id": "z11",
+                      "kind": "worksheet",
+                      "x": 504,
+                      "y": 376,
+                      "w": 488,
+                      "h": 316,
+                      "worksheet": "ws_key_sales_by_region",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[3]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[3]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[11]"
     }
   ],
   "actions": [
@@ -5484,7 +6246,7 @@
         }
       ],
       "active": "sp1",
-      "source_ref": "/workbook/dashboards/dashboard[11]"
+      "source_ref": "/workbook/dashboards/dashboard[12]"
     }
   ],
   "unsupported": [],
