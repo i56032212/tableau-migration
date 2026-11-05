@@ -32,7 +32,8 @@
 - 集合：Top Customers（銷售額前 10 名的客戶，Top N）、Key Sub-Categories（Chairs、Phones、Storage，
   固定成員）、Profitable Sub-Categories（總利潤大於 0，條件）。Top N 與條件集合以全部資料決定成員，
   不受地區等維度篩選影響；在「集合」dashboard 上：IN/OUT 放在列架與顏色、集合放在篩選架、
-  計算欄位 Key Sales（IF [Key Sub-Categories] THEN [Sales] END）
+  計算欄位 Key Sales（IF [Key Sub-Categories] THEN [Sales] END）；點選 Profitable Sub-Categories 的子類別時，
+  集合動作把 Key Sub-Categories 換成選取的子類別（清除選取時加入所有值）
 - Story「銷售故事」：三個故事點——「篩選動作」dashboard 的預設狀態；同一個 dashboard 在 Region Picker
   選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
   之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
@@ -1390,6 +1391,15 @@ def actions() -> str:
         <param name='target' value={attr(ACTIONS_DASHBOARD)} />
       </params>
     </nav-action>
+    <edit-group-action caption='Set Key Sub-Categories' name='[Action7_7D6C2A1F2B3C4D5E9F0A000000000107]'>
+      <activation type='on-select' />
+      <source dashboard='集合' type='sheet' worksheet='{PROFITABLE}' />
+      <_.fcp.GroupActionAddRemove.true...add-or-remove-marks value='assign' />
+      <params>
+        <param name='selection-clear-set-option' value='show-all' />
+        <param name='target-group' value={attr(ref(KEY_SUB_CATEGORIES))} />
+      </params>
+    </edit-group-action>
     <edit-parameter-action caption='Set Selected Region' name='[Action5_7D6C2A1F2B3C4D5E9F0A000000000105]'>
       <activation type='on-select' />
       <source dashboard={attr(PARAMETER_DASHBOARD)} type='sheet' worksheet='Region Picker' />

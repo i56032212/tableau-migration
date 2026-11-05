@@ -23,6 +23,7 @@ from tmig.ir.models import (
     FieldUse,
     ParameterAction,
     Scalar,
+    SetAction,
     TupleFilter,
     Unsupported,
     UrlAction,
@@ -34,6 +35,7 @@ from tmig.parser.context import DsState, ParseContext, SharedView
 from tmig.parser.dashboard import DashboardParser
 from tmig.parser.datasource import DatasourceParser, add_calc_field, analyze_calcs, parse_parameters
 from tmig.parser.fields import instance_key, use_from_name
+from tmig.parser.refs import qualified_parts
 from tmig.parser.story import StoryParser
 from tmig.parser.twbx import (
     WorkbookPackage,
@@ -69,6 +71,14 @@ SHARED_VIEW_CHILDREN = frozenset({"datasources", "datasource-dependencies", "fil
 ACTION_KINDS = {"tsc:brush": "醒目提示", "tsc:tsl-filter": "篩選", "tsc:url": "網址"}
 
 
+SET_ACTION_CLEARING = {
+    "": "keep",
+    "keep": "keep",
+    "show-all": "add_all",
+    "show-none": "remove_all",
+    "remove-all": "remove_all",
+}
+"""集合動作清除選取時的行為（selection-clear-set-option；依公開資料推定，沒寫時保留集合的成員）。"""
 PARAM_ACTION_AGGS = {
     "attr": "attr",
     "sum": "sum",
@@ -289,9 +299,9 @@ class WorkbookParser:
                     result.append(found)
                 continue
             if tag == "edit-group-action":
-                ctx.flag(
-                    item, f"集合動作「{item.get('caption') or item.get('name', '')}」v0 不支援"
-                )
+                found = self._set_action(item, by_name, dashboards, worksheets)
+                if found is not None:
+                    result.append(found)
                 continue
             if tag != "action":
                 ctx.flag(item, f"動作清單中的未知元素 <{tag}>")
@@ -505,6 +515,69 @@ class WorkbookParser:
             p.get("name", ""): p.get("value", "") for p in children(child(item, "params"), "param")
         }
         return caption, activation, dashboard, sources, params
+
+    def _set_action(
+        self,
+        item: etree._Element,
+        by_name: dict[str, str],
+        dashboards: list[Dashboard],
+        worksheets: list[Worksheet],
+    ) -> Action | None:
+        """集合動作：以選取的標記改變 target-group 的成員（固定成員的集合）。
+
+        XML 依公開資料推定：取代、加入或移除寫在 add-or-remove-marks（功能旗標 GroupActionAddRemove），
+        清除選取時的行為寫在 selection-clear-set-option（show-all＝加入所有值）。"""
+        ctx = self.ctx
+        common = self._new_action_common(item, by_name, dashboards, worksheets, "集合動作")
+        if common is None:
+            return None
+        caption, activation, dashboard, sources, params = common
+        target = params.get("target-group", "")
+        parts = qualified_parts(target)
+        ds = ctx.datasources.get(parts[0]) if len(parts) == 2 else None
+        data_field = (
+            ds.by_name.get("[" + parts[1].replace("]", "]]") + "]") if ds is not None else None
+        )
+        if (
+            ds is None
+            or data_field is None
+            or data_field.set is None
+            or data_field.set.rule.kind != "members"
+        ):
+            ctx.flag(
+                item,
+                f"集合動作「{caption}」的目標 {target or '（未指定）'} 不是可以移轉的固定成員集合",
+            )
+            return None
+        sheet_ds = {ws.id: ws.datasource for ws in worksheets}
+        if any(sheet_ds.get(s) != ds.id for s in sources):
+            ctx.flag(item, f"集合動作「{caption}」的來源工作表與集合在不同的資料源，v0 不支援")
+            return None
+        marks = next((c for c in children(item) if local_name(c) == "add-or-remove-marks"), None)
+        behavior = (marks.get("value") if marks is not None else None) or "assign"
+        clearing = SET_ACTION_CLEARING.get(params.get("selection-clear-set-option", ""))
+        if behavior not in ("assign", "add", "remove") or clearing is None:
+            ctx.flag(
+                item,
+                f"集合動作「{caption}」的執行方式 {behavior}、清除方式 "
+                f"{params.get('selection-clear-set-option')} v0 不支援",
+            )
+            return None
+        return Action(
+            id=ctx.ids.make("act", caption or item.get("name", ""), item.get("name", "")),
+            name=item.get("name", "") or caption,
+            caption=caption,
+            kind="set",
+            set_action=SetAction(
+                target=data_field.id,
+                behavior=behavior,  # type: ignore[arg-type]
+                clearing=clearing,  # type: ignore[arg-type]
+            ),
+            activation=activation,  # type: ignore[arg-type]
+            dashboard=dashboard,
+            sources=sources,
+            source_ref=xpath(item),
+        )
 
     def _parameter_action(
         self,

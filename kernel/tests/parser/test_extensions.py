@@ -871,7 +871,7 @@ def test_parameter_and_navigate_actions(tmp_path: Path) -> None:
       <weird-action name='[Action10]' />"""
     ir = parse(tmp_path, action_workbook(action_filter(), actions=actions))
     assert reasons(ir) == [
-        "集合動作「Set Members」v0 不支援",
+        "集合動作「Set Members」的目標 （未指定） 不是可以移轉的固定成員集合",
         "動作清單中的未知元素 <weird-action>",
     ]
     nav, sheet_nav, param = ir.actions

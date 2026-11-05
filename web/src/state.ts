@@ -1,5 +1,6 @@
 import type {
   Action,
+  DataField,
   FieldFilter,
   FieldUse,
   FilterValue,
@@ -9,6 +10,7 @@ import type {
   Parameter,
   QueryState,
   Scalar,
+  SetValue,
 } from "./types";
 
 /** 檢視器的狀態：各工作表的篩選、參數、篩選動作的選取。 */
@@ -19,6 +21,8 @@ export interface ViewState {
   actions: Record<string, Mark[]>;
   /** 來源工作表 id → 目前選取的標記（畫面上醒目顯示） */
   selections: Record<string, Mark[]>;
+  /** 集合動作改變後的成員：集合 id → 成員（沒有列出的集合維持原本的成員） */
+  sets?: Record<string, SetValue>;
   /** 相對日期篩選的基準日；null 表示由查詢服務決定（cases.yaml 的基準日或今天） */
   today?: string | null;
 }
@@ -71,7 +75,67 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
   }
   const state: QueryState = { filters: view.sheetFilters[worksheet] ?? {}, parameters: view.parameters, actions };
   if (view.today) state.today = view.today;
+  // 集合動作：只帶這張工作表的資料源中的集合（其他資料源的集合不影響它）
+  const sheet = ir.worksheets.find((w) => w.id === worksheet);
+  const fields = new Set(ir.datasources.find((d) => d.id === sheet?.datasource)?.fields.map((f) => f.id) ?? []);
+  const sets = Object.entries(view.sets ?? {}).filter(([id]) => fields.has(id));
+  if (sets.length > 0) state.sets = Object.fromEntries(sets);
   return state;
+}
+
+function setFieldOf(ir: IR, id: string): DataField | undefined {
+  return ir.datasources.flatMap((d) => d.fields).find((f) => f.id === id && f.set?.rule.kind === "members");
+}
+
+function memberKey(row: Scalar[]): string {
+  return JSON.stringify(row);
+}
+
+/**
+ * 集合動作：選取標記時以標記在集合各層級的值取代、加入或移除成員；清除選取時保留、加入所有值或移除所有值。
+ * 來源工作表沒有集合的層級時不改變。回傳更新後的成員（沒有變化時回傳原物件）。
+ */
+export function applySetActions(
+  ir: IR,
+  actions: Action[],
+  marks: Mark[],
+  current: Record<string, SetValue>,
+): Record<string, SetValue> {
+  let next = current;
+  for (const action of actions) {
+    if (action.kind !== "set" || !action.set_action) continue;
+    const { target, behavior, clearing } = action.set_action;
+    const field = setFieldOf(ir, target);
+    if (!field?.set) continue;
+    const effective = action.single_select && marks.length > 1 ? [] : marks;
+    if (effective.length === 0) {
+      if (clearing === "add_all") next = { ...next, [target]: { mode: "exclude", members: [] } };
+      else if (clearing === "remove_all") next = { ...next, [target]: { mode: "include", members: [] } };
+      continue;
+    }
+    const keys = field.set.levels.map((u) => fieldKey(u));
+    const rows: Scalar[][] = [];
+    for (const mark of effective) {
+      if (!keys.every((k) => k in mark)) continue;
+      const row = keys.map((k) => mark[k]);
+      if (!rows.some((r) => memberKey(r) === memberKey(row))) rows.push(row);
+    }
+    if (rows.length === 0) continue;
+    const rule = field.set.rule;
+    const base: SetValue = next[target] ?? {
+      mode: rule.mode === "exclude" ? "exclude" : "include",
+      members: rule.members ?? [],
+    };
+    const picked = new Set(rows.map(memberKey));
+    const without = base.members.filter((r) => !picked.has(memberKey(r)));
+    const union = [...without, ...rows];
+    let value: SetValue;
+    if (behavior === "assign") value = { mode: "include", members: rows };
+    else if ((behavior === "add") === (base.mode === "include")) value = { mode: base.mode, members: union };
+    else value = { mode: base.mode, members: without };
+    next = { ...next, [target]: value };
+  }
+  return next;
 }
 
 const PERIODS: Record<string, [string, string, string, string]> = {

@@ -32,24 +32,13 @@ from tmig.ir.models import (
     SetMembers,
     SetTop,
 )
-from tmig.parser.groups import GroupError, members_condition
+from tmig.ir.setformula import members_formula
+from tmig.parser.groups import GroupError
 from tmig.parser.twbx import child, children
 from tmig.parser.values import parse_literal
 
 IN_OUT = [MemberAlias(value=True, label="In"), MemberAlias(value=False, label="Out")]
 """集合的值在 Tableau 上顯示為 In／Out。"""
-
-DATE_FUNCTIONS = {
-    "year": "YEAR({})",
-    "quarter": "QUARTER({})",
-    "month": "MONTH({})",
-    "day": "DAY({})",
-    "week": "DATEPART('week', {})",
-    "weekday": "DATEPART('weekday', {})",
-    "hour": "DATEPART('hour', {})",
-    "minute": "DATEPART('minute', {})",
-    "second": "DATEPART('second', {})",
-}
 
 
 @dataclass(frozen=True)
@@ -64,15 +53,6 @@ class Level:
 LevelResolver = Callable[[str], Level]
 """層級（[State]、[none:State:nk]、[yr:Order Date:ok]）→ Level；無法解析時丟出 GroupError。"""
 ParamLookup = Callable[[str], Parameter | None]
-
-
-def level_expr(name: str, use: FieldUse) -> str:
-    """欄位使用 → 公式中的寫法（日期部分寫成函式）。"""
-    if use.date is None:
-        return name
-    if use.date.kind == "part":
-        return DATE_FUNCTIONS[use.date.unit].format(name)
-    return f"DATETRUNC('{use.date.unit}', {name})"
 
 
 def parse_set(
@@ -243,29 +223,9 @@ def _members(root: etree._Element, resolve: LevelResolver) -> tuple[FieldSet, st
         raise GroupError("成員的層級不一致")
     levels = [found[key] for key in order]
     rows = [[m[key] for key in order] for m in members]
-    formula = members_formula(levels, rows, mode)
+    formula = members_formula([(level.expr, level.datatype) for level in levels], rows, mode)
     rule = SetMembers(kind="members", mode=mode, members=rows)
     return FieldSet(levels=[level.use for level in levels], rule=rule), formula
 
 
-def members_formula(
-    levels: list[Level], members: list[list[Scalar]], mode: Literal["include", "exclude"]
-) -> str:
-    """成員清單 → 布林公式（只會是 TRUE 或 FALSE；Null 也可以是成員）。"""
-    if len(levels) == 1:
-        level = levels[0]
-        values = [row[0] for row in members]
-        member = members_condition(values, level.expr, level.datatype) if values else "FALSE"
-    else:
-        rows = [
-            " AND ".join(
-                members_condition([value], level.expr, level.datatype)
-                for level, value in zip(levels, row, strict=True)
-            )
-            for row in members
-        ]
-        member = "(" + " OR ".join(f"({r})" for r in rows) + ")" if rows else "FALSE"
-    return f"NOT ({member})" if mode == "exclude" else member
-
-
-__all__ = ["IN_OUT", "Level", "level_expr", "members_formula", "parse_set"]
+__all__ = ["IN_OUT", "Level", "parse_set"]

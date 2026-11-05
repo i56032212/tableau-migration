@@ -393,6 +393,66 @@ def test_sets_render(server: str) -> None:
         browser.close()
 
 
+def test_set_action(server: str) -> None:
+    """集合動作：點選 Profitable Sub-Categories 的子類別時，Key Sub-Categories 換成選取的子類別，
+    用到這個集合的工作表隨之改變；再點一次清除選取時加入所有值（show-all）。"""
+    from playwright.sync_api import sync_playwright
+
+    oracle = load_oracle()
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "集合")
+    targets = {"ws_key_sub_categories_by_category", "ws_key_sales_by_region"}
+    renders = Renders()
+    rows = oracle.load_rows()
+    default = oracle.Case("default", {})
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(300)
+
+        def click(sub_category: str) -> dict[str, tuple[Any, Any]]:
+            start = len(renders.items)
+            page.locator(
+                "[data-worksheet='ws_profitable_sub_categories'] "
+                f"svg path[aria-roledescription='bar'][aria-label*='Sub-Category: {sub_category}']"
+            ).click()
+            renders.wait_for(page, targets, start)
+            page.wait_for_timeout(300)
+            return {w: (body, data) for w, body, data in renders.items[start:]}
+
+        def check(latest: dict[str, tuple[Any, Any]], members: set[str] | None) -> None:
+            for worksheet, compute in [
+                ("ws_key_sub_categories_by_category", oracle.key_sub_categories),
+                ("ws_key_sales_by_region", oracle.key_sales_by_region),
+            ]:
+                _, expected = compute(rows, default, members)
+                same_as_oracle(latest[worksheet][1], (_, expected))
+
+        latest = click("Tables")
+        for worksheet in targets:
+            body = latest[worksheet][0]
+            assert body["sets"] == {
+                "f_key_sub_categories": {"mode": "include", "members": [["Tables"]]}
+            }
+        check(latest, {"Tables"})
+        # 再點一次＝清除選取：加入所有值
+        latest = click("Tables")
+        assert latest["ws_key_sales_by_region"][0]["sets"] == {
+            "f_key_sub_categories": {"mode": "exclude", "members": []}
+        }
+        check(latest, None)
+        assert errors == []
+        browser.close()
+
+
 def test_condition_filters_render(server: str) -> None:
     """K4：相對日期與條件篩選的工作表畫得出來，篩選控制項顯示目前的設定。"""
     from playwright.sync_api import sync_playwright

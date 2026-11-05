@@ -37,6 +37,7 @@ from tmig.ir.models import (
     WeekDay,
 )
 from tmig.ir.scope import DatasourceScope
+from tmig.ir.setformula import level_expr
 from tmig.parser.connections import DIALECTS, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import (
@@ -62,7 +63,7 @@ from tmig.parser.model import (
     relationships,
 )
 from tmig.parser.refs import qualified_parts
-from tmig.parser.sets import IN_OUT, Level, level_expr, parse_set
+from tmig.parser.sets import IN_OUT, Level, parse_set
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 

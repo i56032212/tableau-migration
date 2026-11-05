@@ -21,6 +21,12 @@ export interface MemberAlias {
   label: string;
 }
 
+/** 集合的定義（只列出檢視器用到的部分：層級與固定成員） */
+export interface FieldSet {
+  levels: FieldUse[];
+  rule: { kind: "members" | "top_n" | "condition"; mode?: "include" | "exclude" | "all"; members?: Scalar[][] };
+}
+
 export interface DataField {
   id: string;
   name: string;
@@ -29,6 +35,8 @@ export interface DataField {
   datatype: string;
   format: string | null;
   aliases?: MemberAlias[];
+  /** 集合（TRUE／FALSE，顯示為 In／Out） */
+  set?: FieldSet | null;
 }
 
 export interface Datasource {
@@ -113,13 +121,21 @@ export interface ParameterAction {
   clear_value: Scalar;
 }
 
+export interface SetAction {
+  target: string;
+  behavior: "assign" | "add" | "remove";
+  clearing: "keep" | "add_all" | "remove_all";
+}
+
 export interface Action {
   id: string;
   name: string;
   caption: string;
-  kind: "filter" | "url" | "parameter" | "navigate";
+  kind: "filter" | "url" | "parameter" | "navigate" | "set";
   url?: UrlAction | null;
   parameter?: ParameterAction | null;
+  /** 集合動作：以選取的標記改變集合的成員 */
+  set_action?: SetAction | null;
   /** 切換動作的目標工作表 */
   target_worksheet?: string | null;
   activation: "select" | "hover" | "menu";
@@ -284,11 +300,19 @@ export interface FilterValue {
 /** 選取的一個標記：欄位鍵 → 值 */
 export type Mark = Record<string, Scalar>;
 
+/** 集合的成員：include 為列出的成員在集合中，exclude 為列出的以外在集合中 */
+export interface SetValue {
+  mode: "include" | "exclude";
+  members: Scalar[][];
+}
+
 export interface QueryState {
   filters: Record<string, FilterValue>;
   parameters: Record<string, Scalar>;
   /** 篩選動作的選取：動作 id → 選取的標記 */
   actions?: Record<string, Mark[]>;
+  /** 集合動作改變後的成員：集合 id → 成員 */
+  sets?: Record<string, SetValue>;
   /** 相對日期篩選的基準日（yyyy-mm-dd）；省略時由查詢服務決定 */
   today?: string | null;
 }

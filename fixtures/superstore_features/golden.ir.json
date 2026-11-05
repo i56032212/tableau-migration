@@ -6051,6 +6051,7 @@
       "kind": "filter",
       "url": null,
       "parameter": null,
+      "set_action": null,
       "activation": "select",
       "dashboard": "db_577aa158",
       "sources": [
@@ -6072,6 +6073,7 @@
       "kind": "filter",
       "url": null,
       "parameter": null,
+      "set_action": null,
       "activation": "select",
       "dashboard": "db_577aa158",
       "sources": [
@@ -6107,6 +6109,7 @@
         "delimiter": ","
       },
       "parameter": null,
+      "set_action": null,
       "activation": "menu",
       "dashboard": "db_577aa158",
       "sources": [
@@ -6126,6 +6129,7 @@
       "kind": "navigate",
       "url": null,
       "parameter": null,
+      "set_action": null,
       "activation": "menu",
       "dashboard": "db_fbfea9a6",
       "sources": [
@@ -6137,6 +6141,30 @@
       "clearing": "show_all",
       "single_select": false,
       "source_ref": "/workbook/actions/nav-action"
+    },
+    {
+      "id": "act_set_key_sub_categories",
+      "name": "[Action7_7D6C2A1F2B3C4D5E9F0A000000000107]",
+      "caption": "Set Key Sub-Categories",
+      "kind": "set",
+      "url": null,
+      "parameter": null,
+      "set_action": {
+        "target": "f_key_sub_categories",
+        "behavior": "assign",
+        "clearing": "add_all"
+      },
+      "activation": "select",
+      "dashboard": "db_f8dd3e84",
+      "sources": [
+        "ws_profitable_sub_categories"
+      ],
+      "targets": [],
+      "target_dashboard": null,
+      "target_worksheet": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/edit-group-action"
     },
     {
       "id": "act_set_selected_region",
@@ -6151,6 +6179,7 @@
         "clearing": "keep",
         "clear_value": null
       },
+      "set_action": null,
       "activation": "select",
       "dashboard": "db_fbfea9a6",
       "sources": [

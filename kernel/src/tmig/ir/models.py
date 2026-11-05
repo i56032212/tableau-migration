@@ -1119,6 +1119,18 @@ class ParameterAction(IRModel):
     clear_value: Scalar = None
 
 
+class SetAction(IRModel):
+    """集合動作：選取標記時，以標記在集合各層級的值改變集合的成員（固定成員的集合）。"""
+
+    target: Id = Field(description="目標集合的欄位 id")
+    behavior: Literal["assign", "add", "remove"] = Field(
+        default="assign", description="以選取的值取代集合的成員、加入集合或從集合移除"
+    )
+    clearing: Literal["keep", "add_all", "remove_all"] = Field(
+        default="keep", description="清除選取時：保留集合的成員、加入所有值、移除所有值"
+    )
+
+
 class Action(IRModel):
     """Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。
 
@@ -1127,14 +1139,16 @@ class Action(IRModel):
     - url：以標記的欄位值代入網址後開啟
     - parameter：把標記的欄位值設給參數
     - navigate：切換到 target_dashboard 或 target_worksheet
+    - set：以標記的欄位值改變集合的成員（用到這個集合的工作表隨之改變）
     """
 
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱，例如 [Action1_…]")
     caption: str
-    kind: Literal["filter", "url", "parameter", "navigate"]
+    kind: Literal["filter", "url", "parameter", "navigate", "set"]
     url: UrlAction | None = None
     parameter: ParameterAction | None = None
+    set_action: SetAction | None = None
     activation: Literal["select", "hover", "menu"]
     dashboard: Id | None = Field(
         default=None,
@@ -1162,6 +1176,8 @@ class Action(IRModel):
             raise ValueError("網址動作必須、也只有網址動作能指定 url")
         if (self.kind == "parameter") != (self.parameter is not None):
             raise ValueError("參數動作必須、也只有參數動作能指定 parameter")
+        if (self.kind == "set") != (self.set_action is not None):
+            raise ValueError("集合動作必須、也只有集合動作能指定 set_action")
         if self.kind != "filter" and self.targets:
             raise ValueError("只有篩選動作有目標工作表")
         if self.kind == "navigate" and (self.target_dashboard is None) == (

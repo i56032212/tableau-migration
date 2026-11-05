@@ -227,3 +227,95 @@ def test_unsupported_sets(tmp_path: Path) -> None:
         ]
     )
     assert "f_combined" not in {f.id for f in ir.datasources[0].fields}
+
+
+# ---------------------------------------------------------------- 集合動作
+
+
+def set_action(
+    target: str = "Coasts",
+    behavior: str | None = "assign",
+    clearing: str | None = "show-all",
+    name: str = "[Action1]",
+) -> str:
+    marks = (
+        f"<_.fcp.GroupActionAddRemove.true...add-or-remove-marks value='{behavior}' />"
+        if behavior is not None
+        else ""
+    )
+    clear = (
+        f"<param name='selection-clear-set-option' value='{clearing}' />"
+        if clearing is not None
+        else ""
+    )
+    return (
+        f"<edit-group-action caption='Pick {name}' name='{name}'><activation type='on-select' />"
+        "<source dashboard='Board' type='sheet' worksheet='Source' />"
+        f"{marks}<params>{clear}<param name='target-group' value='{ref(target)}' /></params>"
+        "</edit-group-action>"
+    )
+
+
+BOARD = """
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones><zone h='100000' id='2' name='Source' w='100000' x='0' y='0' /></zones>
+    </dashboard>"""
+COASTS = group(
+    "Coasts",
+    "<groupfilter function='union'>"
+    + member("[Region]", "East")
+    + member("[Region]", "West")
+    + "</groupfilter>",
+)
+
+
+def action_workbook(actions: str) -> str:
+    sheet = worksheet("Source", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+    return b.workbook(
+        b.extract_datasource(extra=COASTS + top_n("Top Regions")),
+        worksheets=sheet,
+        dashboards=BOARD,
+        actions=actions,
+    )
+
+
+def test_set_actions(tmp_path: Path) -> None:
+    """公開範例 filtering.twb 的寫法：assign 與 show-all；另有加入、移除與保留（沒寫清除方式）。"""
+    actions = "".join(
+        [
+            set_action(),
+            set_action(behavior="add", clearing=None, name="[Action2]"),
+            set_action(behavior="remove", clearing="show-none", name="[Action3]"),
+            set_action(behavior=None, clearing="keep", name="[Action4]"),
+        ]
+    )
+    ir = parse(tmp_path, action_workbook(actions))
+    assert reasons(ir) == []
+    found = [(a.kind, a.set_action, a.sources, a.dashboard, a.activation) for a in ir.actions]
+    assert [(f[1].target, f[1].behavior, f[1].clearing) for f in found if f[1] is not None] == [
+        ("f_coasts", "assign", "add_all"),
+        ("f_coasts", "add", "keep"),
+        ("f_coasts", "remove", "remove_all"),
+        ("f_coasts", "assign", "keep"),
+    ]
+    assert {(k, tuple(s), d, a) for k, _, s, d, a in found} == {
+        ("set", ("ws_source",), "db_board", "select")
+    }
+
+
+def test_unsupported_set_actions(tmp_path: Path) -> None:
+    actions = "".join(
+        [
+            set_action(target="Top Regions"),
+            set_action(target="Nope", name="[Action2]"),
+            set_action(clearing="mystery", name="[Action3]"),
+        ]
+    )
+    ir = parse(tmp_path, action_workbook(actions))
+    assert reasons(ir) == [
+        f"集合動作「Pick [Action1]」的目標 {ref('Top Regions')} 不是可以移轉的固定成員集合",
+        f"集合動作「Pick [Action2]」的目標 {ref('Nope')} 不是可以移轉的固定成員集合",
+        "集合動作「Pick [Action3]」的執行方式 assign、清除方式 mystery v0 不支援",
+    ]
+    assert ir.actions == []

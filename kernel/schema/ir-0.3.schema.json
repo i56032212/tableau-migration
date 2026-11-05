@@ -4,7 +4,7 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
-      "description": "Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。\n\n- filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的\n  TupleFilter，清除選取時依 clearing 處理\n- url：以標記的欄位值代入網址後開啟\n- parameter：把標記的欄位值設給參數\n- navigate：切換到 target_dashboard 或 target_worksheet",
+      "description": "Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。\n\n- filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的\n  TupleFilter，清除選取時依 clearing 處理\n- url：以標記的欄位值代入網址後開啟\n- parameter：把標記的欄位值設給參數\n- navigate：切換到 target_dashboard 或 target_worksheet\n- set：以標記的欄位值改變集合的成員（用到這個集合的工作表隨之改變）",
       "properties": {
         "id": {
           "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
@@ -27,7 +27,8 @@
             "filter",
             "url",
             "parameter",
-            "navigate"
+            "navigate",
+            "set"
           ],
           "title": "Kind",
           "type": "string"
@@ -47,6 +48,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/ParameterAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "set_action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SetAction"
             },
             {
               "type": "null"
@@ -2668,6 +2680,45 @@
         "source_ref"
       ],
       "title": "RelativeDateFilter",
+      "type": "object"
+    },
+    "SetAction": {
+      "additionalProperties": false,
+      "description": "集合動作：選取標記時，以標記在集合各層級的值改變集合的成員（固定成員的集合）。",
+      "properties": {
+        "target": {
+          "description": "目標集合的欄位 id",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Target",
+          "type": "string"
+        },
+        "behavior": {
+          "default": "assign",
+          "description": "以選取的值取代集合的成員、加入集合或從集合移除",
+          "enum": [
+            "assign",
+            "add",
+            "remove"
+          ],
+          "title": "Behavior",
+          "type": "string"
+        },
+        "clearing": {
+          "default": "keep",
+          "description": "清除選取時：保留集合的成員、加入所有值、移除所有值",
+          "enum": [
+            "keep",
+            "add_all",
+            "remove_all"
+          ],
+          "title": "Clearing",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "SetAction",
       "type": "object"
     },
     "SetCondition": {

@@ -43,9 +43,11 @@ from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
     IR,
     SPECIAL_FIELDS,
+    Calc,
     CategoricalFilter,
     ConditionFilter,
     DataField,
+    Datasource,
     FieldUse,
     Filter,
     LiveConnection,
@@ -56,6 +58,7 @@ from tmig.ir.models import (
     RangeFilter,
     RelativeDateFilter,
     Scalar,
+    SetMembers,
     Sort,
     TableCalc,
     TopNFilter,
@@ -63,8 +66,9 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.ir.scope import DatasourceScope
+from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
 from tmig.planner.identity import Identity
-from tmig.planner.state import EffectiveState, QueryState, apply_state, use_key
+from tmig.planner.state import EffectiveState, QueryState, SetValue, apply_state, use_key
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
 from tmig.sqlgen.model import Branch, ModelError, ModelPlan, ModelPlanner, RowFilter, Usage
 from tmig.sqlgen.source import SourceError, datasource_source
@@ -339,6 +343,35 @@ class _PostEnv:
         return self.query.window_sql(node, self)
 
 
+def with_set_values(datasource: Datasource, values: dict[str, SetValue]) -> Datasource:
+    """集合動作改變後的成員：重新產生固定成員集合的公式（只影響這次查詢）。
+    不在這個資料源的集合略過（檢視器把同一份狀態送給每張工作表）。"""
+    fields: list[DataField] = []
+    for data_field in datasource.fields:
+        value = values.get(data_field.id)
+        if value is None:
+            fields.append(data_field)
+            continue
+        if data_field.set is None or data_field.set.rule.kind != "members":
+            raise QueryError(f"「{data_field.caption}」不是固定成員的集合，不能由集合動作改變成員")
+        try:
+            formula = members_formula(
+                set_levels(datasource.fields, data_field.set), value.members, value.mode
+            )
+        except FormulaValueError as exc:
+            raise QueryError(f"集合「{data_field.caption}」的成員：{exc}") from exc
+        rule = SetMembers(kind="members", mode=value.mode, members=value.members)
+        fields.append(
+            data_field.model_copy(
+                update={
+                    "calc": Calc(formula=formula),
+                    "set": data_field.set.model_copy(update={"rule": rule}),
+                }
+            )
+        )
+    return datasource.model_copy(update={"fields": fields})
+
+
 class WorksheetQuery:
     """一張工作表在某個篩選狀態下的查詢。"""
 
@@ -354,6 +387,8 @@ class WorksheetQuery:
         self.user = user
         self.worksheet = _find_worksheet(ir, worksheet)
         self.datasource = next(ds for ds in ir.datasources if ds.id == self.worksheet.datasource)
+        if state is not None and state.sets:
+            self.datasource = with_set_values(self.datasource, state.sets)
         self.state = apply_state(ir, self.worksheet, state or QueryState())
         self.scope = DatasourceScope(self.datasource.name, self.datasource.fields, ir.parameters)
         self.analyzer = Analyzer(self.scope)

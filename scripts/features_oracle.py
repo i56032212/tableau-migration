@@ -30,7 +30,8 @@
 - 集合：值為 In／Out。Top N 與條件集合以內容篩選後、維度篩選前的資料決定成員（這份報表沒有內容篩選，
   所以是全部資料；全域篩選與網址參數都是維度篩選，不影響成員）：Top Customers 為總銷售額前 10 名的客戶
   （同額時名稱較小者優先）、Profitable Sub-Categories 為總利潤大於 0 的子類別；Key Sub-Categories 為
-  Chairs、Phones、Storage。集合放在篩選架上＝只保留 In；Key Sales 為重點子類別的銷售額
+  Chairs、Phones、Storage。集合放在篩選架上＝只保留 In；Key Sales 為重點子類別的銷售額。集合動作改變
+  Key Sub-Categories 的成員時，以 key_sub_categories、key_sales_by_region 的 members 計算
 - 別名：匯出的資料中維度成員與 Measure Names 以別名顯示（Ship Speed 的 Other 為 Standard、
   Segment KPIs 的 CNTD(Order ID) 為「訂單數」）；參數的別名只影響控制項的顯示
 """
@@ -450,17 +451,27 @@ def profitable_sub_categories(rows: list[Row], case: Case) -> tuple[list[str], l
     return ["Sub-Category", "In/Out of Profitable Sub-Categories", "Profit"], body
 
 
-def key_sub_categories(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
-    keep = case.keep({"Key Sub-Categories": lambda row: row["Sub-Category"] in KEY_SUB_CATEGORIES})
+def is_key(members: set[str] | None) -> Keep:
+    """Key Sub-Categories 的成員；None 表示所有值（集合動作清除選取時加入所有值）。"""
+    return lambda row: members is None or row["Sub-Category"] in members
+
+
+def key_sub_categories(
+    rows: list[Row], case: Case, members: set[str] | None = KEY_SUB_CATEGORIES
+) -> tuple[list[str], list[list[Any]]]:
+    keep = case.keep({"Key Sub-Categories": is_key(members)})
     body = grouped(rows, keep, "Category", lambda items: sum(r["Sales"] for r in items))
     return ["Category", "Sales"], body
 
 
-def key_sales_by_region(rows: list[Row], case: Case) -> tuple[list[str], list[list[Any]]]:
+def key_sales_by_region(
+    rows: list[Row], case: Case, members: set[str] | None = KEY_SUB_CATEGORIES
+) -> tuple[list[str], list[list[Any]]]:
     keep = case.keep({})
+    key = is_key(members)
 
     def key_sales(items: list[Row]) -> float | None:
-        values = [r["Sales"] for r in items if r["Sub-Category"] in KEY_SUB_CATEGORIES]
+        values = [r["Sales"] for r in items if key(r)]
         return sum(values) if values else None
 
     body = grouped(rows, keep, "Region", key_sales)

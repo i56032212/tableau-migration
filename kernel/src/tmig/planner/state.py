@@ -57,6 +57,17 @@ class FilterValue(BaseModel):
         return self.mode is None and (self.min is not None or self.max is not None)
 
 
+class SetValue(BaseModel):
+    """集合動作改變後的集合成員（固定成員的集合）：每個成員是集合各層級的值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["include", "exclude"] = Field(
+        default="include", description="include：列出的成員在集合中；exclude：列出的以外在集合中"
+    )
+    members: list[list[Scalar]] = Field(default_factory=list, max_length=10000)
+
+
 class QueryState(BaseModel):
     """篩選與參數的目前狀態。API 只接受這個格式，不接受 SQL。"""
 
@@ -67,6 +78,10 @@ class QueryState(BaseModel):
     actions: dict[str, list[dict[str, Scalar]]] = Field(
         default_factory=dict,
         description="篩選動作的選取：動作 id → 選取的標記（欄位鍵 → 值）；沒有列出或為空表示沒有選取",
+    )
+    sets: dict[str, SetValue] = Field(
+        default_factory=dict,
+        description="集合動作改變後的成員：集合 id → 成員；沒有列出的集合維持原本的成員",
     )
     today: str | None = Field(
         default=None,

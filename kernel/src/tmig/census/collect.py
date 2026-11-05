@@ -112,8 +112,8 @@ NEW_ACTIONS = {
     "edit-parameter-action": "parameter",
     "edit-group-action": "set",
 }
-SUPPORTED_ACTIONS = frozenset({"filter", "highlight", "url", "navigate", "parameter"})
-"""擴充階段已支援（L1、L2）或不影響數字的動作種類。"""
+SUPPORTED_ACTIONS = frozenset({"filter", "highlight", "url", "navigate", "parameter", "set"})
+"""已支援（篩選、網址、參數、切換、集合）或不影響數字（醒目提示）的動作種類。"""
 MAP_MARKS = frozenset({"Map", "Multipolygon"})
 DATA_FILE_CLASSES = frozenset({"hyper", "dataengine"})
 
@@ -891,7 +891,7 @@ def features_outside_v0(r: CensusReport) -> list[str]:
     if special or groups:
         parts = [f"{k} {v}" for k, v in special.items()] + ([f"group {groups}"] if groups else [])
         features.append(f"合併欄位等特殊欄位（{'、'.join(parts)}）")
-    # 篩選、網址、參數與切換動作已在擴充階段支援（L1、L2），醒目提示不影響數字
+    # 篩選、網址、參數、切換與集合動作已支援（L1、L2），醒目提示不影響數字
     kinds = Counter(a.kind for a in r.actions if a.kind not in SUPPORTED_ACTIONS)
     if kinds:
         features.append(

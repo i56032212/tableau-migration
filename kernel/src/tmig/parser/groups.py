@@ -16,12 +16,12 @@ Null 也可以是成員（%null%）。
 
 from __future__ import annotations
 
-import math
 import re
 
 from lxml import etree
 
 from tmig.ir.models import Scalar
+from tmig.ir.setformula import FormulaValueError, formula_literal, members_condition
 from tmig.parser.twbx import children, text_of
 from tmig.parser.values import parse_literal
 
@@ -34,25 +34,8 @@ CONVERT = {
 }
 
 
-class GroupError(ValueError):
-    pass
-
-
-def formula_literal(value: Scalar, datatype: str | None = None) -> str:
-    """值 → Tableau 公式中的常值。"""
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise GroupError(f"無法寫成公式的數值 {value}")
-        return repr(value)
-    if datatype in ("date", "datetime"):
-        return f"#{value}#"
-    return '"' + value.replace('"', '""') + '"'
+GroupError = FormulaValueError
+"""無法轉成公式的群組或集合定義。"""
 
 
 def group_formula(column: etree._Element, calc: etree._Element, source_datatype: str | None) -> str:
@@ -192,16 +175,3 @@ def _set_condition(node: etree._Element, level: str, datatype: str | None) -> st
         # 使用者條件在查詢時代入成 TRUE／FALSE（不包成 IFNULL：Oracle 的條件中不能有布林值）
         return f"(({expression}) AND {_set_condition(parts[0], level, datatype)})"
     raise GroupError(f"集合的成員定義（function={function}）不支援")
-
-
-def members_condition(values: list[Scalar], level: str, datatype: str | None) -> str:
-    """成員清單 → 不含 Null 的條件（只會是 TRUE 或 FALSE）。"""
-    present = [v for v in values if v is not None]
-    conditions: list[str] = []
-    if len(present) != len(values):
-        conditions.append(f"ISNULL({level})")
-    if present:
-        listed = ", ".join(formula_literal(v, datatype) for v in present)
-        test = f"{level} = {listed}" if len(present) == 1 else f"{level} IN ({listed})"
-        conditions.append(f"(NOT ISNULL({level}) AND {test})")
-    return conditions[0] if len(conditions) == 1 else "(" + " OR ".join(conditions) + ")"

@@ -177,3 +177,47 @@ def test_domain_of_a_computed_set(tmp_path: Path, db: Path) -> None:
     assert [row[0] for row in result.rows] == [False, True]
     with pytest.raises(QueryError, match="只有 In、Out"):
         domain_sql(ir, ir.datasources[0].id, use, "range")
+
+
+# ---------------------------------------------------------------- 集合動作改變成員
+
+
+def coast_sheet() -> str:
+    """各區的銷售額，只保留 Coasts 中的地區。"""
+    return worksheet(
+        "S",
+        [REGION, SALES],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=f"<filter class='categorical' column='{ref('Coasts')}' />",
+    )
+
+
+def test_set_values_from_set_actions(run: Run) -> None:
+    """集合動作改變後的成員只影響這次查詢：取代、全部扣掉列出的（加入所有值時為空清單）。"""
+    state = QueryState.model_validate({"sets": {"f_coasts": {"members": [["South"]]}}})
+    rows = run(coast_sheet(), ds_extra=COASTS, state=state)
+    assert [r["f_region"] for r in rows] == ["South"]
+    state = QueryState.model_validate({"sets": {"f_coasts": {"mode": "exclude", "members": []}}})
+    rows = run(coast_sheet(), ds_extra=COASTS, state=state)
+    assert [r["f_region"] for r in rows] == ["East", "North", "South", "West"]
+    state = QueryState.model_validate(
+        {"sets": {"f_coasts": {"mode": "exclude", "members": [["West"], [None]]}}}
+    )
+    rows = run(coast_sheet(), ds_extra=COASTS, state=state)
+    assert [r["f_region"] for r in rows] == ["East", "North", "South"]
+    # 其他資料源的集合略過
+    state = QueryState.model_validate({"sets": {"f_elsewhere": {"members": [["X"]]}}})
+    assert len(run(coast_sheet(), ds_extra=COASTS, state=state)) == 2
+
+
+def test_invalid_set_values(tmp_path: Path) -> None:
+    ir = parse(tmp_path, coast_sheet(), COASTS + top_n("Top Regions"))
+    ws = ir.worksheets[0].id
+    for sets, message in [
+        ({"f_top_regions": {"members": [["East"]]}}, "不是固定成員的集合"),
+        ({"f_coasts": {"members": [["East", "Furniture"]]}}, "數量不同"),
+        ({"f_coasts": {"members": [[float("inf")]]}}, "無法寫成公式的數值"),
+    ]:
+        with pytest.raises(QueryError, match=message):
+            worksheet_sql(ir, ws, QueryState.model_validate({"sets": sets}))

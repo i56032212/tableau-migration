@@ -186,6 +186,22 @@ def check_references(ir: IR) -> list[str]:
             )
         if act.parameter is not None and act.parameter.parameter not in params:
             errors.append(f"actions[{act.id}].parameter：參數「{act.parameter.parameter}」不存在")
+        if act.set_action is not None:
+            target = next(
+                (
+                    (ds, fld)
+                    for ds in ir.datasources
+                    for fld in ds.fields
+                    if fld.id == act.set_action.target
+                ),
+                None,
+            )
+            if target is None or target[1].set is None or target[1].set.rule.kind != "members":
+                errors.append(
+                    f"actions[{act.id}].set_action：集合「{act.set_action.target}」不存在或不是固定成員的集合"
+                )
+            elif any(sheets[s].datasource != target[0].id for s in act.sources if s in sheets):
+                errors.append(f"actions[{act.id}].set_action：來源工作表與集合在不同的資料源")
 
     def check_use(
         use: FieldUse,

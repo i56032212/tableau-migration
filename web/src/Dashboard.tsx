@@ -4,6 +4,7 @@ import { FilterControl, ParameterControl } from "./Controls";
 import { displaySize, layoutDashboard } from "./layout";
 import {
   actionUrl,
+  applySetActions,
   fieldKey,
   nextSelection,
   parameterValue,
@@ -23,6 +24,7 @@ import type {
   Mark,
   RenderResponse,
   Scalar,
+  SetValue,
   Zone,
 } from "./types";
 import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
@@ -31,6 +33,7 @@ import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
 const TABLEAU10 = ["#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b", "#eeca3b", "#b279a2", "#ff9da6", "#9d755d", "#bab0ac"];
 
 const isFieldFilter = (f: { kind: string }): f is FieldFilter => f.kind !== "top_n" && f.kind !== "tuple";
+const NO_SETS: Record<string, SetValue> = {};
 
 /** 篩選控制項的變更：同一篩選群組（套用到選取的工作表、全域篩選）的工作表一起更新。 */
 export function applyFilter(
@@ -161,6 +164,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
         actions: result.actions,
         selections: { ...view.selections, [worksheet]: marks },
         parameters: applyParameters(selectActions, values, view.parameters),
+        sets: applySetActions(ir, selectActions, marks, view.sets ?? {}),
       });
       // 選取時執行的網址動作：在新分頁開啟（點選的當下開啟，瀏覽器不會擋）
       for (const action of selectActions) {
@@ -185,14 +189,24 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
     const values = event.kind === "hover" && event.values ? [event.values] : [];
     const result = runActions(hover, marks, view.actions);
     const parameters = applyParameters(hover, values, view.parameters);
-    if (JSON.stringify(result.actions) !== JSON.stringify(view.actions) || parameters !== view.parameters) {
-      onView({ ...view, actions: result.actions, parameters });
+    const sets = applySetActions(ir, hover, marks, view.sets ?? NO_SETS);
+    if (
+      JSON.stringify(result.actions) !== JSON.stringify(view.actions) ||
+      parameters !== view.parameters ||
+      sets !== (view.sets ?? NO_SETS)
+    ) {
+      onView({ ...view, actions: result.actions, parameters, sets });
     }
   };
   const runMenu = (action: Action) => {
     if (!menu) return;
     const result = runActions([action], menu.marks, view.actions);
-    onView({ ...view, actions: result.actions, parameters: applyParameters([action], menu.values, view.parameters) });
+    onView({
+      ...view,
+      actions: result.actions,
+      parameters: applyParameters([action], menu.values, view.parameters),
+      sets: applySetActions(ir, [action], menu.marks, view.sets ?? {}),
+    });
     setMenu(null);
     if (result.navigate && result.navigate !== dashboard.id) onNavigate({ dashboard: result.navigate });
     else navigateTo([action]);
