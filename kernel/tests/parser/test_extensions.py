@@ -555,6 +555,22 @@ def test_filter_action_and_target_filter(tmp_path: Path) -> None:
     )
 
 
+def test_filter_action_across_datasources_is_unsupported(tmp_path: Path) -> None:
+    """來源與目標工作表在不同的資料源（公開範例 Logshark 的 VizqlDesktop）：Tableau 依欄位名稱對應，
+    v0 不支援，列為不支援、不建立動作（目標工作表照常顯示全部）。"""
+    second = "federated.test02"
+    xml = action_workbook(action_filter())
+    start = xml.index("<worksheet name='Target'>")
+    end = xml.index("</worksheet>", start)
+    xml = xml[:start] + xml[start:end].replace(DS, second) + xml[end:]
+    other = b.extract_datasource(extra=ACTION_GROUPS, name=second, caption="Returns")
+    xml = xml.replace("</datasources>", other + "</datasources>", 1)
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == ["篩選動作「Filter Region」跨資料源，v0 不支援"]
+    assert ir.actions == []
+    assert [ws.datasource for ws in ir.worksheets] == [ir.datasources[0].id, ir.datasources[1].id]
+
+
 def test_filter_action_exclude_all_when_cleared(tmp_path: Path) -> None:
     xml = action_workbook(action_filter("empty-level"), on_empty="none")
     ir = parse(tmp_path, xml)

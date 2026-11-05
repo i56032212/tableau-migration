@@ -350,6 +350,34 @@ def test_fixed_without_dims_and_row_level_mix(run: Run) -> None:
     assert by_region(rows, "f_above_min") == {"East": 200, "North": 0, "South": 60, "West": 500}
 
 
+def test_relative_lod_outside_the_view_is_unsupported(tmp_path: Path) -> None:
+    """INCLUDE／EXCLUDE 相對於檢視的維度。依欄位排序、Top N 的排名依據、彙總的條件篩選用到它時，
+    Tableau 在各自的層級計算（公開範例 Logshark 的 Apache），尚不支援：整張工作表列為不支援，
+    不默默以檢視的層級計算。"""
+    order_avg = ref("usr:Calculation_12:qk")
+    sort = (
+        f"<computed-sort column='{ref('none:Region:nk')}' direction='DESC' using='{order_avg}' />"
+    )
+    top = top_n("none:Region:nk", "2", by="[Calculation_13]")
+    condition = (
+        f"<filter class='categorical' column='{ref('none:Region:nk')}'>"
+        "<groupfilter expression='[Calculation_13] &gt; 100' function='filter'>"
+        "<groupfilter function='level-members' level='[none:Region:nk]' /></groupfilter></filter>"
+    )
+    for view_extra, message in (
+        (sort, "INCLUDE／EXCLUDE LOD 只能用在檢視的量值"),
+        (top, "Top N 的排名依據含 INCLUDE／EXCLUDE LOD，尚不支援"),
+        (condition, "條件篩選含 INCLUDE／EXCLUDE LOD，尚不支援"),
+    ):
+        sheet = lod_sheet(ref("none:Region:nk"), f"<text column='{order_avg}' />", view_extra)
+        xml = b.workbook(b.extract_datasource(columns=LOD_CALCS), worksheets=sheet)
+        ir = parse_workbook(b.write_twb(tmp_path, xml))
+        assert ir.unsupported == []
+        with pytest.raises(QueryError, match=message) as info:
+            worksheet_sql(ir, ir.worksheets[0].id)
+        assert info.value.unsupported
+
+
 # ---------------------------------------------------------------- D4 Table Calculation
 
 TC_CALCS = "".join(
