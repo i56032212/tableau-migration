@@ -70,6 +70,7 @@ export interface FieldFilter {
   stage: string;
   mode?: "include" | "exclude" | "all";
   values?: Scalar[];
+  ranges?: MemberRange[];
   min?: Scalar;
   max?: Scalar;
   include_null?: boolean;
@@ -295,6 +296,14 @@ export interface FilterValue {
   values?: Scalar[];
   min?: Scalar;
   max?: Scalar;
+  /** 工作表原本的篩選中連續的成員（只用於顯示控制項的勾選，不送給查詢服務） */
+  ranges?: MemberRange[];
+}
+
+/** 連續的一段成員（含頭尾） */
+export interface MemberRange {
+  start: Scalar;
+  end: Scalar;
 }
 
 /** 選取的一個標記：欄位鍵 → 值 */

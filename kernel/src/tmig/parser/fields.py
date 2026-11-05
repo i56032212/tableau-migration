@@ -20,6 +20,7 @@ from tmig.ir.models import (
     Filter,
     FilterStage,
     MemberAlias,
+    MemberRange,
     ParamRef,
     RangeFilter,
     RelativeDateFilter,
@@ -351,10 +352,14 @@ class FilterParser:
             return self._top_n(element, root, use, datatype, context, filter_id)
         if function == "filter":
             return self._condition(element, root, use, datatype, context, filter_id)
+        ranges: list[MemberRange] = []
         selection = self._selection(root, datatype)
         if selection is None:
-            self.ctx.flag(element, f"類別篩選的條件（function={function}）v0 不支援")
-            return None
+            ranged = self._ranged_selection(root, datatype)
+            if ranged is None:
+                self.ctx.flag(element, f"類別篩選的條件（function={function}）v0 不支援")
+                return None
+            selection, ranges = ranged
         mode, values = selection
         stage = self._stage_for_dimension(element, context)
         assert stage is not None
@@ -365,8 +370,58 @@ class FilterParser:
             stage=stage,
             mode=mode,
             values=values,
+            ranges=ranges,
             source_ref=_xpath(element),
         )
+
+    def _ranged_selection(
+        self, group: etree._Element, datatype: str
+    ) -> tuple[tuple[Literal["include", "exclude", "all"], list[Scalar]], list[MemberRange]] | None:
+        """含連續成員（range）的選取：在篩選清單中連續勾選時，Tableau 記成 from–to（含頭尾）。
+
+        include：range、union(member, range, …)；exclude：except(level-members, member／range／union…)。
+        排除「全部扣掉一些」等於只保留那些：except(level-members, except(level-members, …))。"""
+        function = group.get("function")
+        parts = children(group, "groupfilter")
+        if function in ("range", "union"):
+            found = self._range_members([group] if function == "range" else parts, datatype)
+            return None if found is None else (("include", found[0]), found[1])
+        if function != "except" or not parts or parts[0].get("function") != "level-members":
+            return None
+        rest = parts[1:]
+        if len(rest) == 1 and rest[0].get("function") == "except":
+            inner = children(rest[0], "groupfilter")
+            if inner and inner[0].get("function") == "level-members":
+                found = self._range_members(inner[1:], datatype)
+                return None if found is None else (("include", found[0]), found[1])
+            return None
+        found = self._range_members(rest, datatype)
+        return None if found is None else (("exclude", found[0]), found[1])
+
+    def _range_members(
+        self, parts: list[etree._Element], datatype: str
+    ) -> tuple[list[Scalar], list[MemberRange]] | None:
+        values: list[Scalar] = []
+        ranges: list[MemberRange] = []
+        for part in parts:
+            function = part.get("function")
+            if function == "member":
+                values.append(_literal(part.get("member"), datatype))
+            elif function == "range":
+                start = _literal(part.get("from"), datatype)
+                end = _literal(part.get("to"), datatype)
+                if start is None or end is None:
+                    return None
+                ranges.append(MemberRange(start=start, end=end))
+            elif function == "union":
+                nested = self._range_members(children(part, "groupfilter"), datatype)
+                if nested is None:
+                    return None
+                values += nested[0]
+                ranges += nested[1]
+            else:
+                return None
+        return values, ranges
 
     def _measure_selection(
         self,

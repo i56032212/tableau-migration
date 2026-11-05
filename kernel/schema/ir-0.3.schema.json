@@ -572,6 +572,14 @@
           "title": "Values",
           "type": "array"
         },
+        "ranges": {
+          "description": "另外列出的連續成員（與 values 一起只保留或排除），依值的大小比較",
+          "items": {
+            "$ref": "#/$defs/MemberRange"
+          },
+          "title": "Ranges",
+          "type": "array"
+        },
         "group": {
           "anyOf": [
             {
@@ -1902,6 +1910,58 @@
         "label"
       ],
       "title": "MemberAlias",
+      "type": "object"
+    },
+    "MemberRange": {
+      "additionalProperties": false,
+      "description": "連續的一段成員（含頭尾）：在篩選清單中連續勾選時，Tableau 記成從 start 到 end。",
+      "properties": {
+        "start": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Start"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "End"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "MemberRange",
       "type": "object"
     },
     "ModelRelation": {

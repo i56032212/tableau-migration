@@ -1134,6 +1134,7 @@
           "values": [
             "United States"
           ],
+          "ranges": [],
           "group": null,
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
@@ -1242,6 +1243,7 @@
             "Consumer",
             "Corporate"
           ],
+          "ranges": [],
           "group": "group:5",
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter"
         },
@@ -1260,6 +1262,7 @@
           "values": [
             "Central"
           ],
+          "ranges": [],
           "group": "shared:ds_orders:f_region",
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
@@ -1276,6 +1279,7 @@
           "stage": "dimension",
           "mode": "all",
           "values": [],
+          "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
@@ -1343,6 +1347,7 @@
             "Consumer",
             "Corporate"
           ],
+          "ranges": [],
           "group": "group:5",
           "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter"
         },
@@ -1361,6 +1366,7 @@
           "values": [
             "Central"
           ],
+          "ranges": [],
           "group": "shared:ds_orders:f_region",
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
@@ -1377,6 +1383,7 @@
           "stage": "dimension",
           "mode": "all",
           "values": [],
+          "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
@@ -1443,6 +1450,7 @@
           "values": [
             "Central"
           ],
+          "ranges": [],
           "group": "shared:ds_orders:f_region",
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
@@ -1459,6 +1467,7 @@
           "stage": "dimension",
           "mode": "all",
           "values": [],
+          "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
@@ -3342,6 +3351,7 @@
           "values": [
             "Central"
           ],
+          "ranges": [],
           "group": "shared:ds_orders:f_region",
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
@@ -3358,6 +3368,7 @@
           "stage": "dimension",
           "mode": "all",
           "values": [],
+          "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
@@ -3485,6 +3496,7 @@
           "values": [
             true
           ],
+          "ranges": [],
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[28]/table/view/filter"
         }

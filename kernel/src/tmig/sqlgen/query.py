@@ -1938,17 +1938,32 @@ def _where(conds: list[str]) -> str:
 
 
 def _categorical(value: str, flt: CategoricalFilter, datatype: str) -> str:
-    return _members(value, flt.mode, flt.values, datatype)
+    ranges = [(r.start, r.end) for r in flt.ranges]
+    return _members(value, flt.mode, flt.values, datatype, ranges)
 
 
-def _members(value: str, mode: str, values: list[Scalar], datatype: str) -> str:
-    """成員選取：include 只保留、exclude 排除列出的值（Null 也可以列出）；all 沒有條件。"""
+def _members(
+    value: str,
+    mode: str,
+    values: list[Scalar],
+    datatype: str,
+    ranges: list[tuple[Scalar, Scalar]] | None = None,
+) -> str:
+    """成員選取：include 只保留、exclude 排除列出的值（Null 也可以列出）與連續的成員（含頭尾）；
+    all 沒有條件。"""
     if mode == "all":
         return ""
     non_null = [v for v in values if v is not None]
     has_null = len(non_null) != len(values)
     items = ", ".join(_lit(v, datatype) for v in non_null)
-    member = f"{value} IN ({items})" if non_null else "FALSE"
+    parts = [f"{value} IN ({items})"] if non_null else []
+    parts += [
+        f"({value} >= {_lit(start, datatype)} AND {value} <= {_lit(end, datatype)})"
+        for start, end in ranges or []
+    ]
+    member = " OR ".join(parts) if parts else "FALSE"
+    if len(parts) > 1:
+        member = f"({member})"
     if mode == "include":
         return f"({member} OR {value} IS NULL)" if has_null else f"({member})"
     if has_null:

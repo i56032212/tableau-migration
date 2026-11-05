@@ -400,6 +400,13 @@ class DatasourceSettings(IRModel):
 # ---------------------------------------------------------------- 篩選
 
 
+class MemberRange(IRModel):
+    """連續的一段成員（含頭尾）：在篩選清單中連續勾選時，Tableau 記成從 start 到 end。"""
+
+    start: Scalar
+    end: Scalar
+
+
 class CategoricalFilter(IRModel):
     """以值清單篩選。mode 為 all 時不過濾。"""
 
@@ -409,6 +416,10 @@ class CategoricalFilter(IRModel):
     stage: FilterStage
     mode: Literal["include", "exclude", "all"]
     values: list[Scalar] = Field(default_factory=list)
+    ranges: list[MemberRange] = Field(
+        default_factory=list,
+        description="另外列出的連續成員（與 values 一起只保留或排除），依值的大小比較",
+    )
     group: str | None = Field(
         default=None,
         description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
@@ -420,8 +431,8 @@ class CategoricalFilter(IRModel):
         # measure、table_calc：以離散的彙總計算欄位篩選（每個標記的值是否在清單中）
         if self.stage == "top_n":
             raise ValueError(f"categorical 篩選不能屬於 {self.stage} 階段")
-        if self.mode == "all" and self.values:
-            raise ValueError("mode 為 all 時 values 必須為空")
+        if self.mode == "all" and (self.values or self.ranges):
+            raise ValueError("mode 為 all 時 values、ranges 必須為空")
         return self
 
 

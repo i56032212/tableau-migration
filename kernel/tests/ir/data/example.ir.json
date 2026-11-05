@@ -243,6 +243,7 @@
             "Furniture",
             "Technology"
           ],
+          "ranges": [],
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[1]"
         },

@@ -626,6 +626,7 @@
           "values": [
             "United States"
           ],
+          "ranges": [],
           "group": null,
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
@@ -728,6 +729,7 @@
             "Furniture",
             "Technology"
           ],
+          "ranges": [],
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[1]"
         },
@@ -957,6 +959,7 @@
             "Consumer",
             "Corporate"
           ],
+          "ranges": [],
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[3]/table/view/filter"
         }

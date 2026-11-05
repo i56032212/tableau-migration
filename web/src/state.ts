@@ -56,14 +56,24 @@ export function currentFilter(
   const original = findFilter(ir, worksheet, key);
   if (!original) return { mode: "all", values: [] };
   if (original.kind === "range") return { min: original.min ?? null, max: original.max ?? null };
-  return { mode: original.mode ?? "all", values: original.values ?? [] };
+  const value: FilterValue = { mode: original.mode ?? "all", values: original.values ?? [] };
+  if (original.ranges?.length) value.ranges = original.ranges;
+  return value;
+}
+
+/** 值是否在連續的一段成員中（與查詢相同，依值的大小比較；Null 不在任何一段中）。 */
+function inRange(v: Scalar, range: { start: Scalar; end: Scalar }): boolean {
+  if (v === null || range.start === null || range.end === null) return false;
+  return v >= range.start && v <= range.end;
 }
 
 export function selectedValues(value: FilterValue, domain: Scalar[]): Scalar[] {
   if (value.mode === "all" || value.mode === undefined) return domain;
   const listed = new Set((value.values ?? []).map((v) => JSON.stringify(v)));
-  if (value.mode === "include") return domain.filter((v) => listed.has(JSON.stringify(v)));
-  return domain.filter((v) => !listed.has(JSON.stringify(v)));
+  const ranges = value.ranges ?? [];
+  const member = (v: Scalar) => listed.has(JSON.stringify(v)) || ranges.some((r) => inRange(v, r));
+  if (value.mode === "include") return domain.filter(member);
+  return domain.filter((v) => !member(v));
 }
 
 /** 查詢一張工作表的狀態：只帶以它為目標的篩選動作，其他工作表的選取不會讓它重新查詢。 */

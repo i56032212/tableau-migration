@@ -217,7 +217,11 @@ def _replace(existing: Filter, value: FilterValue) -> Filter:
     if isinstance(existing, CategoricalFilter):
         mode = value.mode or "include"
         return existing.model_copy(
-            update={"mode": mode, "values": [] if mode == "all" else list(value.values)}
+            update={
+                "mode": mode,
+                "values": [] if mode == "all" else list(value.values),
+                "ranges": [],
+            }
         )
     return _new_filter(existing.id, existing.field, value, existing.stage)
 

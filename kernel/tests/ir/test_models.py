@@ -215,7 +215,7 @@ def test_range_filter_cannot_be_top_n_stage(doc: Doc) -> None:
 
 def test_categorical_all_mode_has_no_values(doc: Doc) -> None:
     ws(doc)["filters"][0]["mode"] = "all"
-    assert "mode 為 all 時 values 必須為空" in errors_of(doc)
+    assert "mode 為 all 時 values、ranges 必須為空" in errors_of(doc)
 
 
 def test_top_n_count_must_be_positive(doc: Doc) -> None:
