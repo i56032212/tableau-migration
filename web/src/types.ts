@@ -373,10 +373,38 @@ export interface UserInfo {
 
 /** /api/me：身分驗證的模式與目前的登入者 */
 export interface Me {
-  mode: "none" | "dev" | "proxy" | "oidc";
+  /** desktop：桌面版的本機引擎（登入者為作業系統的帳號） */
+  mode: "none" | "dev" | "proxy" | "oidc" | "desktop";
   user: UserInfo | null;
   /** oidc：登入的網址 */
   login?: string;
   /** dev：可以切換的使用者 */
   users?: string[];
+}
+
+/** 桌面版開啟中的檔案 */
+export interface DesktopDocument {
+  id: string;
+  name: string;
+  /** 開啟的檔案 */
+  source: string;
+  kind: "twbx" | "twb" | "package";
+  /** 最近一次存成的報表套件 */
+  saved: string | null;
+}
+
+export interface DesktopOpened {
+  document: DesktopDocument;
+  already_open: boolean;
+  unsupported_count: number;
+  unsupported: string[];
+}
+
+export interface DesktopSaved {
+  document: DesktopDocument;
+  path: string;
+  size: number;
+  datasources: string[];
+  files: string[];
+  missing_files: string[];
 }

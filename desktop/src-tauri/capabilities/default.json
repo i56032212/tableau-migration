@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主視窗：本機引擎提供的檢視器頁面（http://127.0.0.1:<埠號>）可以呼叫選檔與存檔對話框",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "allow-pick-open-path",
+    "allow-pick-save-path"
+  ]
+}

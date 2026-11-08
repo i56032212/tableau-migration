@@ -338,6 +338,7 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 | `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2、Q3：`--mail`、`--auth`） |
 | `tmig usage summary <使用紀錄目錄> [--fixtures 目錄] [--days 90] [--csv 檔案]` | 每份報表的檢視次數、使用者數與最後一次檢視（R1） |
 | `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔] [--usage-dir 目錄]` | 查詢服務與檢視器（F2–F4；身分驗證與使用紀錄見各節） |
+| `tmig desktop serve [--workspace 目錄] [--port 0] [--clean] [--exit-with-parent]` | 桌面版的本機引擎：只接受本機、帶權杖的連線，由桌面版外殼啟動（D0，見「桌面版」） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
 ## 專案結構
@@ -353,6 +354,7 @@ tableau-migration/
 │   ├── access/             使用者目錄與權限（Tableau Server 的使用者、群組、Project／workbook／view 權限）
 │   ├── schedule/           排程與訂閱的模型、下次執行時間、排程器
 │   ├── catalog.py          報表目錄與 Tableau workbook、Published Data Source 的對應
+│   ├── package.py          報表套件（.tmigx）：桌面版存檔的單一檔案
 │   ├── sqlgen/             公式與工作表 → DuckDB SQL（依運算順序分段）、方言轉譯
 │   ├── data/               Hyper 匯入、DuckDB 唯讀執行器、Live 連線（兩段式執行、連線設定）
 │   ├── render/             Vega-Lite 規格與數字格式
@@ -361,12 +363,31 @@ tableau-migration/
 ├── kernel/schema/          IR 的 JSON Schema（由程式產生）
 ├── service/                FastAPI 查詢服務（tmig_service：身分驗證、權限、訂閱、使用紀錄）
 ├── web/                    React＋TypeScript 檢視器（建置結果在 web/dist）
+├── desktop/                桌面版：Tauri 外殼、本機引擎的打包（PyInstaller）與冒煙測試
 ├── tools/                  連 Tableau Server 的工具：tableau_server（盤點、下載、匯出）、fetch_expected、compare_screens
 ├── fixtures/<報表>/         .twbx、golden IR、cases、mapping、預期結果、SQL 與規格快照
 └── scripts/                一鍵檢查、示範報表的建置與獨立計算
 ```
 
 核心函式庫不依賴服務、前端與瀏覽器自動化；外圍只透過核心的公開介面工作。
+
+## 桌面版
+
+桌面版（規格見 Claude Docs 的「桌面版編輯器規格」）是裝在作者電腦上的應用程式，功能目標是公司使用的
+Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twbx、.twb 或報表套件 .tmigx，以平台的引擎
+檢視與查詢，另存成報表套件；編輯在之後的階段加入。
+
+- **外殼**（`desktop/src-tauri`，Tauri 2）：啟動本機引擎、主視窗載入檢視器；檔案選單（開啟 Ctrl+O、儲存 Ctrl+S、
+  另存新檔 Ctrl+Shift+S、關閉報表 Ctrl+W）與選檔、存檔對話框
+- **本機引擎**（`tmig desktop serve`，見 `tmig_service.desktop`）：與伺服器同一份程式；只綁 127.0.0.1，
+  每次啟動產生權杖，檢視器第一次帶 `?token=` 進來時換成 cookie，Host 標頭不是本機的一律拒絕；
+  身分為作業系統的帳號（沒有群組）；開啟的檔案複製到工作區，原始檔不動
+- **報表套件**（`.tmigx`，見 `tmig.package`）：zip，內含 manifest、IR、萃取的 DuckDB 檔與圖片；不含帳號密碼；
+  開啟時檢查格式版本與成員路徑（不會解到工作區之外）
+- **安裝檔**：CI 的 desktop 工作流程在 Windows 上以 PyInstaller 打包引擎、實跑冒煙測試（開啟 .twbx 由 Hyper 匯入、
+  查詢每張工作表、存成報表套件），再以 Tauri 產生 NSIS 安裝檔（安裝在使用者資料夾，不需要系統管理員權限）
+
+開發與打包的方式見 `desktop/README.md`。
 
 ## 已知限制與待驗證
 

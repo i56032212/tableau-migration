@@ -17,6 +17,7 @@ tmig published merge <報表> [--published 目錄]     把 Published Data Source
 tmig schedule list|tick|run|serve <排程檔>         排程器：萃取更新與訂閱（Q2、Q3）
 tmig usage summary <使用紀錄目錄> [--days 90]      每份報表的檢視次數、使用者數與最後一次檢視（R1）
 tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]  啟動查詢服務與檢視器
+tmig desktop serve [--workspace 目錄] [--port 0]   桌面版的本機引擎（由桌面版外殼啟動）
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
 tmig ir validate <IR 檔>...                     驗證 IR JSON 檔
 """
@@ -828,6 +829,22 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_desktop_serve(args: argparse.Namespace) -> int:
+    try:
+        from tmig_service.desktop import default_workspace, serve_desktop
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    serve_desktop(
+        args.workspace or default_workspace(),
+        port=args.port,
+        web_dist=args.web,
+        clean=args.clean,
+        exit_with_parent=args.exit_with_parent,
+    )
+    return 0
+
+
 def _cmd_ir_schema(args: argparse.Namespace) -> int:
     text = ir_json_schema_text()
     if args.out is None:
@@ -1090,6 +1107,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="使用紀錄的目錄；預設讀環境變數 TMIG_USAGE_DIR，沒有時為報表目錄旁的 usage",
     )
     serve.set_defaults(handler=_cmd_serve)
+
+    desktop_parser = commands.add_parser("desktop", help="桌面版")
+    desktop_commands = desktop_parser.add_subparsers(
+        dest="desktop_command", required=True, metavar="子指令"
+    )
+    desktop_serve = desktop_commands.add_parser(
+        "serve",
+        help="桌面版的本機引擎：只接受本機、帶權杖的連線；就緒時在標準輸出印一行 JSON（埠號與權杖）",
+    )
+    desktop_serve.add_argument(
+        "--workspace", type=Path, help="工作區（開啟的檔案放這裡）；預設為使用者的應用程式資料夾"
+    )
+    desktop_serve.add_argument("--port", type=int, default=0, help="埠號；0（預設）為自動選一個")
+    desktop_serve.add_argument("--web", type=Path, help="檢視器的建置目錄；預設為 web/dist")
+    desktop_serve.add_argument("--clean", action="store_true", help="啟動前清空工作區")
+    desktop_serve.add_argument(
+        "--exit-with-parent",
+        action="store_true",
+        help="標準輸入關閉時結束（由桌面版外殼啟動時使用）",
+    )
+    desktop_serve.set_defaults(handler=_cmd_desktop_serve)
 
     usage_parser = commands.add_parser("usage", help="使用紀錄")
     usage_commands = usage_parser.add_subparsers(

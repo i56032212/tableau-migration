@@ -9,7 +9,7 @@ API：
 - ``POST /api/workbooks/{wb}/worksheets/{ws}/render``：依篩選與參數狀態查詢，回傳 Vega-Lite 規格（資料內嵌）與結果列數
 - ``POST /api/workbooks/{wb}/fields/{field}/domain``：篩選器的可選值，或最小值與最大值
 - ``GET  /api/workbooks/{wb}/cases``：cases.yaml 的篩選組合（已轉成篩選狀態），供檢視器切換
-- ``GET  /api/workbooks/{wb}/files/{path}``：.twbx 內的圖片（圖片區塊與圖片按鈕）
+- ``GET  /api/workbooks/{wb}/files/{path}``：報表的圖片（圖片區塊與圖片按鈕；.twbx 內或報表套件的 files/）
 - ``GET  /api/me``：目前的登入者與身分驗證模式；``/auth/*``：登入、登出與開發模式的切換使用者
 - ``POST /api/workbooks/{wb}/views/{view}/visit``：檢視器開啟一個 dashboard、工作表或 Story（使用紀錄，R1）
 - ``GET  /api/usage?days=90``：每份報表與 view 的檢視次數、使用者數與最後一次檢視（有權限檔時限管理員）
@@ -30,14 +30,13 @@ import datetime as dt
 import mimetypes
 import os
 import threading
-import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
@@ -46,6 +45,7 @@ from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
 from tmig.ir import IR, iter_zones
+from tmig.package import read_report_file
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
@@ -93,7 +93,7 @@ class Loaded:
 
 
 class Workspace:
-    """fixtures 目錄：每個含 golden.ir.json（或 .twbx）的子目錄是一份報表。"""
+    """fixtures 目錄：每個含 golden.ir.json（或 .twbx、.twb）的子目錄是一份報表。"""
 
     def __init__(self, fixtures: Path) -> None:
         self.fixtures = fixtures
@@ -107,7 +107,8 @@ class Workspace:
         return sorted(
             p.name
             for p in self.fixtures.iterdir()
-            if p.is_dir() and ((p / "golden.ir.json").is_file() or any(p.glob("*.twbx")))
+            if p.is_dir()
+            and ((p / "golden.ir.json").is_file() or any(p.glob("*.twbx")) or any(p.glob("*.twb")))
         )
 
     def get(self, name: str) -> Loaded:
@@ -123,6 +124,12 @@ class Workspace:
                 self._cache[name] = cached
                 self._data_ready.discard(name)
         return cached
+
+    def forget(self, name: str) -> None:
+        """報表目錄移除後（桌面版關閉報表）丟掉快取。"""
+        with self._lock:
+            self._cache.pop(name, None)
+            self._data_ready.discard(name)
 
     def database(self, name: str, datasource: str) -> Path:
         loaded = self.get(name)
@@ -158,9 +165,11 @@ def create_app(
     runtime: DataRuntime | None = None,
     auth: AuthSettings | Authenticator | None = None,
     usage_dir: Path | None = None,
+    routers: Sequence[APIRouter] = (),
 ) -> FastAPI:
     """auth：身分驗證的設定；省略時依環境變數 TMIG_AUTH 讀取（沒有設定時不驗證）。
-    usage_dir：使用紀錄的目錄；省略時依環境變數 TMIG_USAGE_DIR，都沒有時不記錄。"""
+    usage_dir：使用紀錄的目錄；省略時依環境變數 TMIG_USAGE_DIR，都沒有時不記錄。
+    routers：額外的 API（例如桌面版的開啟與儲存），排在檢視器的頁面之前。"""
     workspace = Workspace(fixtures or REPO_ROOT / "fixtures")
     usage_path = usage_dir or (
         Path(os.environ["TMIG_USAGE_DIR"]) if os.environ.get("TMIG_USAGE_DIR") else None
@@ -186,7 +195,10 @@ def create_app(
 
     app = FastAPI(title="Tableau 移轉查詢服務", version="0.1.0", lifespan=lifespan)
     app.state.authenticator = authenticator
+    app.state.workspace = workspace
     app.include_router(auth_router(authenticator))
+    for router in routers:
+        app.include_router(router)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -314,22 +326,21 @@ def create_app(
 
     @app.get("/api/workbooks/{wb}/files/{path:path}")
     def package_file(wb: str, path: str, user: User) -> Response:
-        """.twbx 內的圖片；只提供圖片，路徑須與封裝內的檔名完全相同（反斜線視為斜線）。"""
+        """報表的圖片：.twbx 內或報表套件解開的 files/；只提供圖片，路徑須與封裝內的檔名完全相同
+        （反斜線視為斜線）。"""
         loaded, _ = granted(wb, user)
         if Path(path).suffix.lower() not in IMAGE_TYPES:
             raise HTTPException(404, "只提供圖片檔")
-        for package in sorted(loaded.directory.glob("*.twbx")):
-            with zipfile.ZipFile(package) as archive:
-                names = {n.replace("\\", "/"): n for n in archive.namelist()}
-                if path in names:
-                    media = mimetypes.guess_type(path)[0] or "application/octet-stream"
-                    # 報表內的 SVG 可能含指令碼：直接開啟時也不執行
-                    headers = {
-                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
-                        "X-Content-Type-Options": "nosniff",
-                    }
-                    return Response(archive.read(names[path]), media_type=media, headers=headers)
-        raise HTTPException(404, f"找不到檔案「{path}」")
+        content = read_report_file(loaded.directory, path)
+        if content is None:
+            raise HTTPException(404, f"找不到檔案「{path}」")
+        media = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        # 報表內的 SVG 可能含指令碼：直接開啟時也不執行
+        headers = {
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+            "X-Content-Type-Options": "nosniff",
+        }
+        return Response(content, media_type=media, headers=headers)
 
     @app.post("/api/workbooks/{wb}/worksheets/{ws}/render")
     def render(wb: str, ws: str, user: User, state: QueryState | None = None) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { caseState, DashboardView } from "./Dashboard";
+import { closeDocument, installMenuCommands, openDocument, saveDocument } from "./desktop";
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
 import { StoryView } from "./Story";
@@ -64,11 +65,20 @@ export function App() {
 
   return (
     <SessionGate>
-      {(me) =>
-        route.page === "home" ? <Home me={me} /> : <WorkbookPage route={route} caseName={caseName} me={me} />
-      }
+      {(me) => (
+        <>
+          {me.mode === "desktop" && <DesktopCommands />}
+          {route.page === "home" ? <Home me={me} /> : <WorkbookPage route={route} caseName={caseName} me={me} />}
+        </>
+      )}
     </SessionGate>
   );
+}
+
+/** 桌面版：讓外殼的選單（開啟、儲存、另存新檔、關閉報表）呼叫檢視器。 */
+function DesktopCommands() {
+  useEffect(() => installMenuCommands(navigate), []);
+  return null;
 }
 
 function Home({ me }: { me: Me }) {
@@ -77,15 +87,27 @@ function Home({ me }: { me: Me }) {
   useEffect(() => {
     api.workbooks().then(setWorkbooks).catch((e: Error) => setError(e.message));
   }, []);
+  const desktop = me.mode === "desktop";
   return (
     <main className="home">
       <div className="home-header">
-        <h1>Tableau 移轉檢視器</h1>
+        <h1>{desktop ? "報表桌面版" : "Tableau 移轉檢視器"}</h1>
+        {desktop && (
+          <button type="button" className="primary" onClick={() => void openDocument(navigate)}>
+            開啟檔案…
+          </button>
+        )}
         <UserBar me={me} />
       </div>
       {error && <p className="error">無法連到查詢服務：{error}</p>}
       {workbooks?.length === 0 && (
-        <p>{me.mode === "none" ? "fixtures 中沒有報表。" : "沒有可以檢視的報表；請向報表的擁有者申請權限。"}</p>
+        <p>
+          {desktop
+            ? "還沒有開啟的報表：按「開啟檔案…」（Ctrl+O）開啟 Tableau 的 .twbx、.twb，或報表套件 .tmigx。"
+            : me.mode === "none"
+              ? "fixtures 中沒有報表。"
+              : "沒有可以檢視的報表；請向報表的擁有者申請權限。"}
+        </p>
       )}
       <ul className="workbooks">
         {workbooks?.map((wb) => (
@@ -109,10 +131,38 @@ function Home({ me }: { me: Me }) {
               ))}
             </div>
             {wb.unsupported > 0 && <div className="error">有 {wb.unsupported} 筆不支援的元素</div>}
+            {desktop && <DocumentActions workbook={wb.id} onClosed={() => setWorkbooks((list) => list?.filter((w) => w.id !== wb.id) ?? null)} />}
           </li>
         ))}
       </ul>
     </main>
+  );
+}
+
+/** 桌面版：一份報表的儲存、另存新檔與關閉。 */
+function DocumentActions({ workbook, onClosed }: { workbook: string; onClosed?: () => void }) {
+  return (
+    <div className="desktop-actions">
+      <button type="button" onClick={() => void saveDocument(workbook, false)}>
+        儲存
+      </button>
+      <button type="button" onClick={() => void saveDocument(workbook, true)}>
+        另存新檔…
+      </button>
+      {onClosed && (
+        <button
+          type="button"
+          onClick={() =>
+            void closeDocument(workbook, (to) => {
+              onClosed();
+              navigate(to);
+            })
+          }
+        >
+          關閉
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -236,6 +286,7 @@ function WorkbookPage({
           ))}
         </div>
         {ir.unsupported.length > 0 && <span className="error">不支援 {ir.unsupported.length} 筆</span>}
+        {me.mode === "desktop" && <DocumentActions workbook={workbook} onClosed={() => undefined} />}
         <UserBar me={me} />
       </header>
       {dashboard && (

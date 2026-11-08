@@ -65,9 +65,10 @@ SESSION_COOKIE = "tmig_session"
 LOGIN_COOKIE = "tmig_login"
 MODES = ("none", "dev", "proxy", "oidc")
 """設定檔可用的模式。"""
-Mode = Literal["none", "dev", "proxy", "oidc", "internal"]
+Mode = Literal["none", "dev", "proxy", "oidc", "internal", "desktop"]
 """internal：只接受以伺服器金鑰簽章的工作階段 cookie，沒有登入入口；訂閱（Q3）以訂閱者的身分產生檔案時，
-由排程器啟動只在本機的查詢服務使用，不能寫在設定檔中。"""
+由排程器啟動只在本機的查詢服務使用，不能寫在設定檔中。
+desktop：桌面版的本機引擎，登入者固定為作業系統的帳號（見 tmig_service.desktop），不能寫在設定檔中。"""
 SIGNING_ALGORITHMS = ("RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384")
 """ID Token 接受的簽章演算法：只接受非對稱金鑰（不接受 none 與以 client_secret 簽的 HS256）。"""
 

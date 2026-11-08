@@ -1,4 +1,15 @@
-import type { CaseInfo, Domain, IR, Me, QueryState, RenderResponse, WorkbookSummary } from "./types";
+import type {
+  CaseInfo,
+  DesktopDocument,
+  DesktopOpened,
+  DesktopSaved,
+  Domain,
+  IR,
+  Me,
+  QueryState,
+  RenderResponse,
+  WorkbookSummary,
+} from "./types";
 
 /** 查詢服務回應 401（沒有登入或登入逾時）時發出，SessionGate 收到後重新確認登入者。 */
 export const UNAUTHORIZED_EVENT = "tmig:unauthorized";
@@ -49,4 +60,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(kind ? { kind } : {}),
     }),
+  /** 桌面版：開啟中的檔案、開啟、存成報表套件、關閉 */
+  desktopDocuments: () => request<DesktopDocument[]>("/api/desktop/documents"),
+  desktopOpen: (path: string) =>
+    request<DesktopOpened>("/api/desktop/open", { method: "POST", body: JSON.stringify({ path }) }),
+  desktopSave: (workbook: string, path: string) =>
+    request<DesktopSaved>("/api/desktop/save", { method: "POST", body: JSON.stringify({ workbook, path }) }),
+  desktopClose: (workbook: string) =>
+    request<{ ok: boolean }>("/api/desktop/close", { method: "POST", body: JSON.stringify({ workbook }) }),
 };

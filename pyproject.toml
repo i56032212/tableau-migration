@@ -45,7 +45,7 @@ ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 known-first-party = ["tmig", "tmig_service"]
 
 [tool.pyright]
-include = ["kernel/src", "kernel/tests", "service/src", "service/tests", "scripts", "tools"]
+include = ["kernel/src", "kernel/tests", "service/src", "service/tests", "scripts", "tools", "desktop/engine/entry.py", "desktop/engine/smoke.py"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."

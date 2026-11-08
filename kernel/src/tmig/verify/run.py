@@ -115,10 +115,10 @@ def load_fixture_ir(directory: Path) -> IR:
     golden = directory / "golden.ir.json"
     if golden.is_file():
         return load_ir(golden)
-    twbx = next(directory.glob("*.twbx"), None)
-    if twbx is None:
-        raise FileNotFoundError(f"{directory} 沒有 golden.ir.json，也沒有 .twbx")
-    return parse_workbook(twbx)
+    workbook = next(directory.glob("*.twbx"), None) or next(directory.glob("*.twb"), None)
+    if workbook is None:
+        raise FileNotFoundError(f"{directory} 沒有 golden.ir.json，也沒有 .twbx 或 .twb")
+    return parse_workbook(workbook)
 
 
 def ensure_data(directory: Path, ir: IR) -> list[str]:
@@ -148,7 +148,10 @@ def ensure_data(directory: Path, ir: IR) -> list[str]:
 
     twbx = next(directory.glob("*.twbx"), None)
     if twbx is None:
-        raise FileNotFoundError(f"{directory} 缺少 DuckDB 檔，也沒有 .twbx 可以匯入")
+        raise FileNotFoundError(
+            f"{directory} 缺少萃取的資料（DuckDB 檔），也沒有 .twbx 可以匯入；"
+            ".twb 不含萃取的資料，請改用 .twbx"
+        )
     results = import_workbook(twbx, data, ir)
     bad = [r.datasource for r in results if not r.ok]
     if bad:

@@ -31,6 +31,14 @@ button { font: inherit; }
 .wb-name { font-weight: 600; margin-bottom: 6px; }
 .wb-links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; }
 
+/* 桌面版：開啟、儲存、關閉與短訊息 */
+button.primary { background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: 4px; padding: 4px 12px; cursor: pointer; }
+.desktop-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 13px; }
+.toolbar .desktop-actions { margin-top: 0; }
+.desktop-actions button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
+.toast { position: fixed; right: 16px; bottom: 16px; max-width: min(520px, calc(100vw - 32px)); z-index: 1000; background: var(--ink); color: #fff; border-radius: 6px; padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 16px rgb(0 0 0 / 20%); overflow-wrap: anywhere; }
+.toast.error { background: var(--error); }
+
 .page { padding: 12px 16px 32px; overflow-x: auto; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; font-size: 14px; }
 .toolbar .sep { color: var(--muted); }
