@@ -117,6 +117,8 @@ class ParseContext:
     """以 Tableau 內部名稱為鍵。"""
     parameters: list[Parameter] = field(default_factory=list)
     params_by_name: dict[str, Parameter] = field(default_factory=dict)
+    param_columns: dict[str, etree._Element] = field(default_factory=dict)
+    """參數 id → Parameters 資料源中的 <column>（欄列架上的參數當成計算欄位時，沿用它的別名）。"""
     """以內部名稱（含方括號，例如 [Parameter 1]）為鍵。"""
     sheets: dict[str, SheetState] = field(default_factory=dict)
     """以工作表名稱為鍵。"""

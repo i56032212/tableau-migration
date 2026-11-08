@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from tmig.formula.ast import LiteralNode, Node
+from tmig.formula.ast import FieldRef, LiteralNode, Node
 from tmig.formula.types import (
     DataType,
     FormulaSemanticError,
@@ -74,6 +74,19 @@ def string_literal(node: Node, name: str, allowed: tuple[str, ...], pos: int) ->
             f"{name} 不支援「{node.value}」，只支援 {'、'.join(allowed)}", pos, unsupported=True
         )
     return value
+
+
+def parameter_ref(node: Node) -> bool:
+    """[Parameters].[…]：值在查詢時才知道（例如以參數切換日期的單位：日、週、月）。"""
+    return isinstance(node, FieldRef) and len(node.parts) == 2 and node.parts[0] == "Parameters"
+
+
+def date_part(node: Node, info: Info, name: str, allowed: tuple[str, ...], pos: int) -> str | None:
+    """日期部分：字串常值，或字串參數（查詢時以參數目前的值代入並檢查，見 tmig.sqlgen.expr）。"""
+    if parameter_ref(node):
+        _need(info.datatype == "string", f"{name} 的日期部分參數必須是字串", pos)
+        return None
+    return string_literal(node, name, allowed, pos)
 
 
 def int_literal(node: Node, name: str, pos: int) -> int:
@@ -173,7 +186,7 @@ def _div(name: str) -> Checker:
 
 def _datepart(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
-        string_literal(nodes[0], name, DATE_PARTS, pos)
+        date_part(nodes[0], args[0], name, DATE_PARTS, pos)
         _need(is_temporal(args[1].datatype), f"{name} 的第 2 個參數必須是日期", pos)
         if len(nodes) == 3:
             string_literal(nodes[2], name, WEEK_STARTS, pos)
@@ -184,7 +197,7 @@ def _datepart(name: str) -> Checker:
 
 def _datetrunc(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
-        string_literal(nodes[0], name, TRUNC_PARTS, pos)
+        date_part(nodes[0], args[0], name, TRUNC_PARTS, pos)
         t = args[1].datatype
         _need(is_temporal(t), f"{name} 的第 2 個參數必須是日期", pos)
         if len(nodes) == 3:
@@ -196,7 +209,7 @@ def _datetrunc(name: str) -> Checker:
 
 def _dateadd(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
-        string_literal(nodes[0], name, ADD_PARTS, pos)
+        date_part(nodes[0], args[0], name, ADD_PARTS, pos)
         _need(args[1].datatype in ("integer", "null"), "DATEADD 的第 2 個參數必須是整數", pos)
         _need(is_temporal(args[2].datatype), "DATEADD 的第 3 個參數必須是日期", pos)
         return "datetime"
@@ -206,7 +219,7 @@ def _dateadd(name: str) -> Checker:
 
 def _datediff(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
-        string_literal(nodes[0], name, TRUNC_PARTS, pos)
+        date_part(nodes[0], args[0], name, TRUNC_PARTS, pos)
         _need(
             is_temporal(args[1].datatype) and is_temporal(args[2].datatype),
             "DATEDIFF 的日期參數必須是日期",
@@ -277,7 +290,7 @@ def _regexp(result: DataType) -> Callable[[str], Checker]:
 
 def _datename(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
-        string_literal(nodes[0], name, DATE_PARTS, pos)
+        date_part(nodes[0], args[0], name, DATE_PARTS, pos)
         _need(is_temporal(args[1].datatype), f"{name} 的第 2 個參數必須是日期", pos)
         if len(nodes) == 3:
             string_literal(nodes[2], name, WEEK_STARTS, pos)

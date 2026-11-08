@@ -186,6 +186,25 @@ export interface Button {
   background: string | null;
 }
 
+/** 一段文字的格式（Tableau 格式化文字的 run） */
+export interface TextStyle {
+  bold?: boolean | null;
+  italic?: boolean | null;
+  underline?: boolean | null;
+  /** 字級（pt） */
+  size?: number | null;
+  color?: string | null;
+  font?: string | null;
+  align?: "left" | "center" | "right" | null;
+}
+
+/** 文字物件與標題的一段：文字或參數的值 */
+export interface ZoneTextRun {
+  text?: string | null;
+  parameter?: string | null;
+  style?: TextStyle | null;
+}
+
 export interface Zone {
   id: string;
   kind: ZoneKind;
@@ -199,6 +218,8 @@ export interface Zone {
   control: string | null;
   legend: string | null;
   text: string | null;
+  /** 文字物件與標題的內容（參數換成目前的值、附格式）；空的時只用 text */
+  content?: ZoneTextRun[];
   image: string | null;
   button?: Button | null;
   /** 網頁區塊的網址 */

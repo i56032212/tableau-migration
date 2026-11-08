@@ -1,6 +1,6 @@
 import pytest
 
-from tmig.formula.ast import Lod
+from tmig.formula.ast import FieldRef, Lod
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError, Info
 
@@ -136,7 +136,8 @@ def test_expand_walks_into_calcs() -> None:
     node = parse_formula("SUM([Share of Region])")
     lods = [n for n in a.expand(node) if isinstance(n, Lod)]
     assert len(lods) == 1
-    assert lods[0].dims[0].parts == ("Region",)
+    dim = lods[0].dims[0]
+    assert isinstance(dim, FieldRef) and dim.parts == ("Region",)
 
 
 def test_calc_results_are_cached() -> None:

@@ -908,6 +908,83 @@ def test_parameter_and_navigate_actions(tmp_path: Path) -> None:
     }
 
 
+def test_newer_action_formats(tmp_path: Path) -> None:
+    """較新的版本：切換動作的目標寫在 sheet；來源為所有工作表（type='all'）扣掉排除的。"""
+    actions = f"""
+      <nav-action caption='Go' name='[Action11]'>
+        <activation type='on-select' />
+        <source dashboard='Board' type='sheet' worksheet='Target' />
+        <params><param name='sheet' value='Detail' /></params>
+      </nav-action>
+      <edit-parameter-action caption='Everywhere' name='[Action12]'>
+        <activation type='on-select' />
+        <source type='all'><exclude-sheet name='Target' /></source>
+        <agg-type type='attr' />
+        <params>
+          <param name='source-field' value='{ref("none:Region:nk")}' />
+          <param name='target-parameter' value='[Parameters].[Parameter 2]' />
+        </params>
+      </edit-parameter-action>"""
+    ir = parse(tmp_path, action_workbook(action_filter(), actions=actions))
+    assert reasons(ir) == []
+    nav, param = ir.actions
+    assert (nav.kind, nav.target_dashboard) == ("navigate", "db_detail")
+    assert param.sources == ["ws_source"]
+
+
+def test_dashboard_text_with_parameters_and_formatting(tmp_path: Path) -> None:
+    """文字物件與標題：參數換成參數的值（content 中的參數），保留各段的格式與換行；<Sheet Name> 為 dashboard 名稱。"""
+    board = """
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='20000' id='2' type-v2='text' w='50000' x='0' y='0'>
+            <formatted-text>
+              <run bold='true' fontsize='15'>REVENUE</run>
+              <run>Æ&#10;</run>
+              <run fontalignment='1' fontcolor='#47679a' fontname='Tableau Bold' fontsize='10'><![CDATA[THIS <[Parameters].[Parameter 2]> - <[Parameters].[Nope]>]]></run>
+            </formatted-text>
+          </zone>
+          <zone h='10000' id='3' type-v2='title' w='50000' x='50000' y='0'>
+            <formatted-text><run>&lt;Sheet Name&gt;</run></formatted-text>
+          </zone>
+          <zone h='10000' id='4' type-v2='text' w='50000' x='0' y='20000'>
+            <formatted-text><run>Plain note</run></formatted-text>
+          </zone>
+          <zone h='70000' id='5' name='Source' w='100000' x='0' y='30000' />
+        </zone>
+      </zones>
+    </dashboard>"""
+    sheets = worksheet("Source", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+    ir = parse(tmp_path, b.workbook(worksheets=sheets, dashboards=board))
+    zones = {z.source_ref.rsplit("/", 1)[-1]: z for z in iter_zones(ir.dashboards[0].zones)}
+    text = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "text" and z.content)
+    runs = [(r.text, r.parameter) for r in text.content]
+    assert runs == [
+        ("REVENUE", None),
+        ("\n", None),
+        ("THIS ", None),
+        (None, "p_region_pick"),
+        (" - <[Parameters].[Nope]>", None),
+    ]
+    assert text.content[0].style is not None and text.content[0].style.bold
+    assert text.content[0].style.size == 15
+    style = text.content[3].style
+    assert style is not None
+    assert (style.color, style.font, style.align, style.size) == (
+        "#47679a",
+        "Tableau Bold",
+        "center",
+        10,
+    )
+    title = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "title")
+    assert title.content == [] and title.text == "Board"
+    plain = [z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "text" and not z.content]
+    assert [z.text for z in plain] == ["Plain note"]
+    assert zones
+
+
 # ---------------------------------------------------------------- J4 參考線
 
 

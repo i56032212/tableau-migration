@@ -736,12 +736,25 @@ class MeasureAlias(IRModel):
     label: str
 
 
+class TextStyle(IRModel):
+    """一段文字的格式（Tableau 格式化文字中 run 的屬性）；沒有寫的沿用預設。"""
+
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    size: float | None = Field(default=None, gt=0, description="字級（pt）")
+    color: str | None = Field(default=None, description="#RRGGBB")
+    font: str | None = Field(default=None, description="字型名稱，例如 Tableau Bold")
+    align: Literal["left", "center", "right"] | None = Field(default=None, description="段落的對齊")
+
+
 class TextRun(IRModel):
     """自訂文字的一段：文字、欄位的值（依格式顯示）或參數的值；依序串接成標籤或標題。"""
 
     text: str | None = None
     use: FieldUse | None = None
     parameter: Id | None = None
+    style: TextStyle | None = None
 
     @model_validator(mode="after")
     def _one(self) -> Self:
@@ -973,6 +986,11 @@ class Zone(IRModel):
     control: ControlType | None = None
     legend: Literal["color", "size", "shape"] | None = None
     text: str | None = None
+    content: list[TextRun] = Field(
+        default_factory=list,
+        description="文字物件與標題的內容：依序的文字（換行為 \\n）與參數目前的值，附各段的格式；"
+        "空的表示只有 text",
+    )
     image: str | None = Field(default=None, description=".twbx 內的圖片路徑")
     button: Button | None = None
     url: str | None = Field(default=None, description="網頁區塊的網址")

@@ -3604,9 +3604,122 @@
           ],
           "default": null,
           "title": "Parameter"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "TextRun",
+      "type": "object"
+    },
+    "TextStyle": {
+      "additionalProperties": false,
+      "description": "一段文字的格式（Tableau 格式化文字中 run 的屬性）；沒有寫的沿用預設。",
+      "properties": {
+        "bold": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bold"
+        },
+        "italic": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Italic"
+        },
+        "underline": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Underline"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "字級（pt）",
+          "title": "Size"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "#RRGGBB",
+          "title": "Color"
+        },
+        "font": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "字型名稱，例如 Tableau Bold",
+          "title": "Font"
+        },
+        "align": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "段落的對齊",
+          "title": "Align"
+        }
+      },
+      "title": "TextStyle",
       "type": "object"
     },
     "TopNFilter": {
@@ -4320,6 +4433,14 @@
           ],
           "default": null,
           "title": "Text"
+        },
+        "content": {
+          "description": "文字物件與標題的內容：依序的文字（換行為 \\n）與參數目前的值，附各段的格式；空的表示只有 text",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Content",
+          "type": "array"
         },
         "image": {
           "anyOf": [

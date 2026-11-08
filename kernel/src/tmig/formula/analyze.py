@@ -251,7 +251,8 @@ class Analyzer:
         for dim in node.dims:
             info = self.analyze(dim)
             if info.level != "row":
-                raise FormulaSemanticError(f"LOD 的維度 {dim.text} 必須是列層級的欄位", dim.pos)
+                what = dim.text if isinstance(dim, FieldRef) else "運算式"
+                raise FormulaSemanticError(f"LOD 的維度 {what} 必須是列層級的欄位或運算式", dim.pos)
         inner = self.analyze(node.expr)
         if inner.level != "agg":
             raise FormulaSemanticError("LOD 運算式內部必須是彙總", node.pos)

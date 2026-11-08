@@ -54,5 +54,5 @@ def to_sexpr(node: Node) -> str:
                 parts += ["ELSE", to_sexpr(else_)]
             return f"({' '.join(parts)})"
         case Lod(kind=kind, dims=dims, expr=expr):
-            dim_text = " ".join(d.text for d in dims)
+            dim_text = " ".join(d.text if isinstance(d, FieldRef) else to_sexpr(d) for d in dims)
             return f"({kind.upper()} ({dim_text}) {to_sexpr(expr)})"

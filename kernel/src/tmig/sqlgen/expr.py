@@ -39,6 +39,7 @@ from tmig.formula.functions import (
     WEEK_STARTS,
     int_literal,
     lookup,
+    parameter_ref,
     string_literal,
     strptime_format,
     window_offset,
@@ -63,6 +64,10 @@ class SqlEnv(Protocol):
 
     def param(self, target: Target) -> str:
         """參數目前值的 SQL 常值。"""
+        ...
+
+    def param_value(self, target: Target) -> object:
+        """參數目前的值（例如日期部分以參數決定時代入）。"""
         ...
 
     def lod(self, node: Lod) -> str:
@@ -270,7 +275,20 @@ class ExprCompiler:
         return week_offset(self.env.week_start)
 
     def _part(self, node: Call, index: int, allowed: tuple[str, ...]) -> str:
-        return string_literal(node.args[index], node.name, allowed, node.pos)
+        """日期部分：字串常值，或參數目前的值（例如以參數切換日、週、月）。"""
+        arg = node.args[index]
+        if parameter_ref(arg):
+            assert isinstance(arg, FieldRef)
+            value = self.env.param_value(self.analyzer.resolve(arg))
+            part = value.lower() if isinstance(value, str) else ""
+            if part not in allowed:
+                raise FormulaSemanticError(
+                    f"{node.name} 的日期部分參數目前的值「{value}」不是 {'、'.join(allowed)} 之一",
+                    node.pos,
+                    unsupported=True,
+                )
+            return part
+        return string_literal(arg, node.name, allowed, node.pos)
 
     def _user_function(self, node: Call, a: list[str]) -> str:
         """使用者函式：以登入者的身分代入常值（tmig.planner.identity）。

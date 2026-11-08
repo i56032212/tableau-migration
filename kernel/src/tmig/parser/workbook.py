@@ -651,13 +651,13 @@ class WorkbookParser:
         dashboards: list[Dashboard],
         worksheets: list[Worksheet],
     ) -> Action | None:
-        """切換動作（前往工作表）：切換到 target 指定的 dashboard 或工作表。"""
+        """切換動作（前往工作表）：切換到 target（較新的版本為 sheet）指定的 dashboard 或工作表。"""
         ctx = self.ctx
         common = self._new_action_common(item, by_name, dashboards, worksheets, "切換動作")
         if common is None:
             return None
         caption, activation, dashboard, sources, params = common
-        target = params.get("target", "")
+        target = params.get("target") or params.get("sheet") or ""
         board = next((d.id for d in dashboards if d.name == target), None)
         sheet = by_name.get(target) if board is None else None
         if board is None and sheet is None:
@@ -683,7 +683,8 @@ class WorkbookParser:
         dashboards: list[Dashboard],
         worksheets: list[Worksheet],
     ) -> list[str]:
-        """來源：指定工作表；或 dashboard 上的所有工作表；或使用該資料源的所有工作表（扣掉 <exclude-sheet>）。"""
+        """來源：指定工作表；或 dashboard 上的所有工作表；或使用該資料源的所有工作表；或所有工作表
+        （type='all'）；都扣掉 <exclude-sheet>。"""
         if source is None:
             return []
         if source.get("worksheet"):
@@ -693,6 +694,8 @@ class WorkbookParser:
         if source.get("type") == "datasource":
             ds = self.ctx.datasources.get(source.get("datasource", ""))
             found_ids = [ws.id for ws in worksheets if ds is not None and ws.datasource == ds.id]
+        elif source.get("type") == "all" and not source.get("dashboard"):
+            found_ids = [ws.id for ws in worksheets]
         else:
             board = next((d for d in dashboards if d.name == source.get("dashboard")), None)
             if board is None:

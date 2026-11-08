@@ -22,10 +22,13 @@ import type {
   FilterValue,
   IR,
   Mark,
+  Parameter,
   RenderResponse,
   Scalar,
   SetValue,
+  TextStyle,
   Zone,
+  ZoneTextRun,
 } from "./types";
 import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
 
@@ -423,9 +426,21 @@ function ZoneContent({
     case "legend":
       return <Legend response={renders[zone.worksheet!]} kind={zone.legend} />;
     case "title":
-      return <div className="title">{zone.text ?? dashboard.name}</div>;
+      return (
+        <div className="title" style={richAlign(zone.content)}>
+          {zone.content?.length ? (
+            <RichText runs={zone.content} ir={ir} values={view.parameters} />
+          ) : (
+            (zone.text ?? dashboard.name)
+          )}
+        </div>
+      );
     case "text":
-      return <div className="text">{zone.text}</div>;
+      return (
+        <div className="text" style={richAlign(zone.content)}>
+          {zone.content?.length ? <RichText runs={zone.content} ir={ir} values={view.parameters} /> : zone.text}
+        </div>
+      );
     case "image":
       return <img className="zone-image" src={fileUrl(workbook, zone.image!)} alt="" />;
     case "web":
@@ -509,5 +524,65 @@ function Legend({ response, kind }: { response: RenderResponse | undefined; kind
         </div>
       ))}
     </div>
+  );
+}
+
+/** 參數顯示的值：有別名時用別名（例如 week → WEEK），否則為值本身。 */
+export function parameterText(parameter: Parameter, value: Scalar | undefined): string {
+  const current = value === undefined ? parameter.value : value;
+  const alias = parameter.aliases?.find((a) => a.value === current);
+  if (alias) return alias.label;
+  return current === null || current === undefined ? "" : String(current);
+}
+
+const TABLEAU_WEIGHTS: Record<string, number> = {
+  Light: 300,
+  Book: 400,
+  Regular: 400,
+  Medium: 500,
+  Semibold: 600,
+  Bold: 700,
+};
+
+function runStyle(style: TextStyle | null | undefined): React.CSSProperties | undefined {
+  if (!style) return undefined;
+  const css: React.CSSProperties = {};
+  if (style.bold) css.fontWeight = 700;
+  if (style.italic) css.fontStyle = "italic";
+  if (style.underline) css.textDecoration = "underline";
+  if (style.size) css.fontSize = `${style.size}pt`;
+  if (style.color) css.color = style.color;
+  if (style.font) {
+    // Tableau 自帶的字型（Tableau Bold、Tableau Medium…）以字重近似，其他字型照名稱
+    const weight = /^Tableau (\w+)$/.exec(style.font)?.[1];
+    if (weight && weight in TABLEAU_WEIGHTS) css.fontWeight = style.bold ? 700 : TABLEAU_WEIGHTS[weight];
+    else css.fontFamily = `"${style.font}", sans-serif`;
+  }
+  return css;
+}
+
+/** 文字物件的段落對齊：取第一段有寫的對齊。 */
+function richAlign(runs: ZoneTextRun[] | undefined): React.CSSProperties | undefined {
+  const align = runs?.find((r) => r.style?.align)?.style?.align;
+  return align ? { textAlign: align } : undefined;
+}
+
+/** 文字物件與標題：各段的格式，參數換成目前的值（與 Tableau 相同，切換參數時跟著變）。 */
+function RichText({ runs, ir, values }: { runs: ZoneTextRun[]; ir: IR; values: Record<string, Scalar> }) {
+  return (
+    <>
+      {runs.map((run, i) => {
+        let text = run.text ?? "";
+        if (run.parameter) {
+          const parameter = ir.parameters.find((p) => p.id === run.parameter);
+          text = parameter ? parameterText(parameter, values[run.parameter]) : "";
+        }
+        return (
+          <span key={i} style={runStyle(run.style)}>
+            {text}
+          </span>
+        );
+      })}
+    </>
   );
 }

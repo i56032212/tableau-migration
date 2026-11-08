@@ -17,6 +17,7 @@ Table Calculation 的計算方向（Tableau 的 Compute Using）依真實 .twb �
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import Literal
 
@@ -383,13 +384,48 @@ class SheetParser:
         if added:
             analyze_calcs(self.ctx, self.ds)
 
+    def _parameter_field(self, ref: str) -> FieldUse | str:
+        """欄列架或標記卡上的參數（例如放在文字上顯示目前的選擇）：當成公式只有這個參數的計算欄位，
+        沿用參數的別名（顯示的值與 Tableau 相同）。"""
+        assert self.ds is not None
+        param = self.ctx.parameter(ref)
+        if param is None:
+            return f"找不到參數 {ref}"
+        key = f"[Parameters].{param.name}"
+        if key in self.uses:
+            return self.uses[key]
+        name = f"[{param.name[1:-1]} (Parameter)]"
+        existing = self.ds.by_name.get(name)
+        if existing is None:
+            source = self.ctx.param_columns.get(param.id)
+            column = etree.Element("column")
+            column.set("name", name)
+            column.set("caption", param.caption)
+            column.set("datatype", param.datatype)
+            column.set("role", "dimension")
+            column.set("type", "nominal")
+            aliases = child(source, "aliases") if source is not None else None
+            if aliases is not None:
+                column.append(copy.deepcopy(aliases))
+            calculation = etree.SubElement(column, "calculation")
+            calculation.set("class", "tableau")
+            calculation.set("formula", f"[Parameters].{param.name}")
+            created = add_calc_field(self.ctx, self.ds, column)
+            if created is None:
+                return f"欄列架上的參數 {ref} 無法轉成計算欄位"
+            analyze_calcs(self.ctx, self.ds)
+            existing = created
+        use = FieldUse(field=existing.id)
+        self.uses[key] = use
+        return use
+
     def resolve(self, ref: str) -> FieldUse | str:
         assert self.ds is not None
         parts = qualified_parts(ref)
         if len(parts) == 2 and parts[0] not in (self.ds.name, "Parameters"):
             return f"參照了其他資料源 {parts[0]}"
         if parts and parts[0] == "Parameters":
-            return f"欄列架上的參數 {ref} v0 不支援"
+            return self._parameter_field(ref)
         key = instance_key(ref)
         if key in self.uses:
             return self.uses[key]

@@ -84,8 +84,9 @@ class Case:
 class Lod:
     pos: int
     kind: LodKind
-    dims: tuple[FieldRef, ...]
-    """{ SUM([Sales]) } 這種沒有關鍵字的寫法視為不帶維度的 FIXED。"""
+    dims: tuple[Node, ...]
+    """維度：欄位，或列層級的運算式（例如 MONTH([Date])、[Resort]=[Parameters].[…]）。
+    { SUM([Sales]) } 這種沒有關鍵字的寫法視為不帶維度的 FIXED。"""
     expr: Node
 
 
@@ -206,9 +207,7 @@ def from_json(data: dict[str, Any]) -> Node:
         return Case(0, from_json(data["subject"]), whens, else_)
     if kind == "lod":
         dims = tuple(from_json(d) for d in data["dims"])
-        if not all(isinstance(d, FieldRef) for d in dims):
-            raise ValueError("LOD 的維度必須是欄位")
-        return Lod(0, data["kind"], dims, from_json(data["expr"]))  # type: ignore[arg-type]
+        return Lod(0, data["kind"], dims, from_json(data["expr"]))
     raise ValueError(f"未知的節點類型：{kind}")
 
 

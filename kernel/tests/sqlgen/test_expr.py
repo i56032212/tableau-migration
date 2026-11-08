@@ -93,6 +93,9 @@ class Env:
     def param(self, target: Target) -> str:
         return "10"
 
+    def param_value(self, target: Target) -> object:
+        return 10
+
     def lod(self, node: Lod) -> str:
         raise AssertionError("not used")
 

@@ -294,13 +294,11 @@ class _Parser:
             self.expect_punct("}")
             return Lod(token.pos, "fixed", (), expr)
         self.advance()
-        dims: list[FieldRef] = []
+        dims: list[Node] = []
         if not (self.peek().kind == "punct" and self.peek().text == ":"):
             while True:
-                dim = self.expression(0)
-                if not isinstance(dim, FieldRef):
-                    raise FormulaSyntaxError("LOD 的維度只支援欄位", _pos(dim))
-                dims.append(dim)
+                # 維度可以是欄位或列層級的運算式（分析時檢查層級）
+                dims.append(self.expression(0))
                 if self.peek().kind == "punct" and self.peek().text == ",":
                     self.advance()
                     continue

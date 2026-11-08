@@ -16,9 +16,19 @@ from typing import Any, Literal
 from lxml import etree
 
 from tmig.ir.integrity import iter_zones
-from tmig.ir.models import Button, ControlType, Dashboard, Size, Unsupported, Zone
+from tmig.ir.models import (
+    Button,
+    ControlType,
+    Dashboard,
+    Size,
+    TextRun,
+    TextStyle,
+    Unsupported,
+    Zone,
+)
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.fields import instance_key
+from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 
 UNITS = 100000
@@ -158,9 +168,11 @@ class DashboardParser:
             show_title = element.get("show-title") != "false"
             return Zone(kind="worksheet", worksheet=sheet.id, show_title=show_title, **base)
         if kind_attr == "title":
-            return Zone(kind="title", text=_runs(element) or self.name, **base)
+            text, content = self._text(element)
+            return Zone(kind="title", text=text or self.name, content=content, **base)
         if kind_attr == "text":
-            return Zone(kind="text", text=_runs(element), **base)
+            text, content = self._text(element)
+            return Zone(kind="text", text=text, content=content, **base)
         if kind_attr == "bitmap":
             image = element.get("param")
             if not image:
@@ -285,6 +297,64 @@ class DashboardParser:
             else:
                 zone.kind, zone.button = "blank", None
 
+    def _text(self, element: etree._Element) -> tuple[str | None, list[TextRun]]:
+        """文字物件與標題：純文字（舊的寫法，參數保留原樣），與依序的各段（參數換成參數的值、附格式）。
+
+        Tableau 以 Æ 加換行表示段落；<Sheet Name> 為 dashboard 的名稱。只有一段、沒有參數也沒有格式時
+        content 為空（只用 text）。
+        """
+        content: list[TextRun] = []
+        plain: list[str] = []
+        parameters = False
+
+        def add(text: str, style: TextStyle | None) -> None:
+            if not text:
+                return
+            plain.append(text)
+            last = content[-1] if content else None
+            if last is not None and last.text is not None and last.style == style:
+                content[-1] = last.model_copy(update={"text": last.text + text})
+            else:
+                content.append(TextRun(text=text, style=style))
+
+        for run in descendants(child(element, "formatted-text"), "run"):
+            raw = (run.text or "").replace("Æ\n", "\n").replace("Æ", "")
+            style = _style(run)
+            position = 0
+            for match in TEXT_TOKEN.finditer(raw):
+                add(raw[position : match.start()], style)
+                position = match.end()
+                token = match.group(1)
+                if token == "Sheet Name":
+                    add(self.name, style)
+                    continue
+                parts = qualified_parts(token)
+                param = (
+                    self.ctx.parameter(token)
+                    if len(parts) == 2 and parts[0] == "Parameters"
+                    else None
+                )
+                if param is None:
+                    add(match.group(0), style)
+                    continue
+                parameters = True
+                plain.append(match.group(0))
+                content.append(TextRun(parameter=param.id, style=style))
+            add(raw[position:], style)
+        # 去掉開頭與結尾的空白（與 text 相同）
+        while content and content[0].text is not None and not content[0].text.strip():
+            content.pop(0)
+        while content and content[-1].text is not None and not content[-1].text.strip():
+            content.pop()
+        if content and content[0].text is not None:
+            content[0] = content[0].model_copy(update={"text": content[0].text.lstrip()})
+        if content and content[-1].text is not None:
+            content[-1] = content[-1].model_copy(update={"text": content[-1].text.rstrip()})
+        styled = any(r.style is not None for r in content)
+        if not parameters and not styled and len(content) <= 1:
+            content = []
+        return "".join(plain).strip() or None, content
+
     def _sheet(self, element: etree._Element, name: str | None) -> SheetState | None:
         sheet = self.ctx.sheets.get(name or "")
         if sheet is None:
@@ -403,7 +473,31 @@ def _size(size: etree._Element | None) -> Sizing:
     return Sizing("range", width, height, low, high)
 
 
+TEXT_TOKEN = re.compile(r"<([^<>]+)>")
+"""文字物件中的參照：<[Parameters].[參數]>、<Sheet Name>。"""
+ALIGN: dict[str, Literal["left", "center", "right"]] = {"0": "left", "1": "center", "2": "right"}
+
+
+def _style(run: etree._Element) -> TextStyle | None:
+    size = run.get("fontsize")
+    style = TextStyle(
+        bold=True if run.get("bold") == "true" else None,
+        italic=True if run.get("italic") == "true" else None,
+        underline=True if run.get("underline") == "true" else None,
+        size=float(size)
+        if size and re.fullmatch(r"\d+(\.\d+)?", size) and float(size) > 0
+        else None,
+        color=run.get("fontcolor")
+        if re.fullmatch(r"#[0-9A-Fa-f]{6}", run.get("fontcolor") or "")
+        else None,
+        font=run.get("fontname") or None,
+        align=ALIGN.get(run.get("fontalignment") or ""),
+    )
+    return style if style.model_dump(exclude_none=True) else None
+
+
 def _runs(element: etree._Element) -> str | None:
+    """格式化文字的純文字（Story 的標題等）：去掉 Æ 與前後的空白。"""
     texts = [run.text or "" for run in descendants(child(element, "formatted-text"), "run")]
     text = "".join(texts).replace("Æ", "").strip()
     return text or None

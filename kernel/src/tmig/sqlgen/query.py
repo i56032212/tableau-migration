@@ -281,6 +281,9 @@ class _RowEnv:
     def param(self, target: Target) -> str:
         return self.query.param_sql(target.id)
 
+    def param_value(self, target: Target) -> object:
+        return self.query.param_value(target.id)
+
     def lod(self, node: Lod) -> str:
         spec = self.query.lods.get(node)
         if spec is None or spec.col not in self.query.attached:
@@ -329,6 +332,9 @@ class _PostEnv:
 
     def param(self, target: Target) -> str:
         return self.query.param_sql(target.id)
+
+    def param_value(self, target: Target) -> object:
+        return self.query.param_value(target.id)
 
     def lod(self, node: Lod) -> str:
         raise QueryError("LOD 運算式必須彙總")
@@ -461,9 +467,11 @@ class WorksheetQuery:
     def note(self, stage: int, text: str) -> None:
         self.plan[stage].detail.append(text)
 
+    def param_value(self, param_id: str) -> object:
+        return self.state.parameters.get(param_id, self.params[param_id].value)
+
     def param_sql(self, param_id: str) -> str:
-        param = self.params[param_id]
-        return literal(self.state.parameters.get(param_id, param.value), param.datatype)
+        return literal(self.param_value(param_id), self.params[param_id].datatype)
 
     def compiler(self, env: object) -> ExprCompiler:
         return ExprCompiler(self.analyzer, env)  # type: ignore[arg-type]
@@ -976,8 +984,8 @@ class WorksheetQuery:
             return condition
         return semi.render(condition)
 
-    def _covered(self, uses: list[FieldUse], refs: tuple[FieldRef, ...] = ()) -> set[str]:
-        """彙總層級中直接以原值分組的實體欄位（不含日期衍生與計算欄位）。"""
+    def _covered(self, uses: list[FieldUse], refs: tuple[Node, ...] = ()) -> set[str]:
+        """彙總層級中直接以原值分組的實體欄位（不含日期衍生、計算欄位與 LOD 維度中的運算式）。"""
         covered = {
             u.field
             for u in uses
@@ -986,6 +994,8 @@ class WorksheetQuery:
             and self.fields[u.field].calc is None
         }
         for ref in refs:
+            if not isinstance(ref, FieldRef):
+                continue
             target = self._resolve(ref)
             raw = target.kind == "field" and target.formula is None
             if raw and self.fields[target.id].column is not None:
@@ -1420,8 +1430,14 @@ class WorksheetQuery:
                 if all(sql != known for known, _ in levels):
                     levels.append((sql, self._dim_field(dim)))
             return levels
+        # EXCLUDE：欄位依 id，運算式依 SQL 對應檢視（或外層 LOD）的維度；不在其中的維度沒有作用
         excluded = {self._dim_field(d) for d in lod.dims} - {None}
-        return [(sql, fid) for sql, fid in base if fid not in excluded]
+        expressions = {
+            self._compile(lambda d=d: compiler.row(d))
+            for d in lod.dims
+            if self._dim_field(d) is None
+        }
+        return [(sql, fid) for sql, fid in base if fid not in excluded and sql not in expressions]
 
     def _dim_field(self, node: Node) -> str | None:
         return self._resolve(node).id if isinstance(node, FieldRef) else None

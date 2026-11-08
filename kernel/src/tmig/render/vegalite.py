@@ -344,7 +344,8 @@ class _Builder:
         """顏色、大小、形狀、詳細資料與工具提示。"""
         if marks.color is not None:
             ch = self.ch(marks.color)
-            if ch.role == "measure":
+            # 量值以連續色彩呈現；彙總後是布林或文字（例如 ATTR([是否本週])）時與 Tableau 相同為離散色彩
+            if ch.role == "measure" and ch.datatype not in ("boolean", "string"):
                 encoding["color"] = {"field": ch.name, "type": "quantitative", "title": ch.title}
             else:
                 encoding["color"] = {
@@ -750,14 +751,29 @@ def build_spec(
     return RenderResult(spec, marks_count, mark, None, builder.notes)
 
 
+DISCRETE_INTEGER_FORMAT = "0"
+"""離散維度的整數沒有設定格式時不加千分位（與 Tableau 相同，例如年份顯示 2026 而不是 2,026）。"""
+
+
 def value_format(ws: Worksheet, data_field: DataField, use: FieldUse) -> str | None:
     """欄位值的顯示格式：工作表上設定的格式優先（Measure Values 的格式套用到其中每個量值），
-    其次是欄位的預設格式（百分比類的快速 Table Calculation 預設以百分比顯示）。"""
+    其次是欄位的預設格式（百分比類的快速 Table Calculation 預設以百分比顯示）；都沒有時，
+    離散維度的整數不加千分位。"""
     key = use_key(use)
     sheet_format = ws.formats.get(key)
     if sheet_format is None and any(use_key(u) == key for u in ws.measure_values):
         sheet_format = ws.formats.get(MEASURE_VALUES)
-    return sheet_format or display_format(data_field.format, _table_calc_type(ws, use))
+    found = sheet_format or display_format(data_field.format, _table_calc_type(ws, use))
+    if (
+        found is None
+        and data_field.datatype == "integer"
+        and use.agg is None
+        and use.date is None
+        and use.table_calc is None
+        and not use.continuous
+    ):
+        return DISCRETE_INTEGER_FORMAT
+    return found
 
 
 def compose_text(

@@ -168,6 +168,7 @@ def parse_parameters(ctx: ParseContext, ds_el: etree._Element) -> None:
         )
         ctx.parameters.append(param)
         ctx.params_by_name[name] = param
+        ctx.param_columns[param.id] = column
 
 
 def _parameter_aliases(
