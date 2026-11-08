@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -20,6 +21,7 @@ from tmig_service.app import create_app
 from tmig_service.auth import AuthSettings
 from tmig_service.credentials import MemoryCredentials, target_for
 from tmig_service.desktop import create_desktop_app
+from tmig_service.desktop_remote import bypass_proxy, http_client
 from tmig_service.store import ReportStore
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,7 +54,7 @@ def engine_app(
         settings_dir=tmp_path / "settings",
         credentials=credentials,
         opener=opened.append,
-        client_factory=lambda: TestClient(server),
+        client_factory=lambda url: TestClient(server),
     )
     return app, credentials
 
@@ -222,3 +224,15 @@ def test_server_without_authentication(tmp_path: Path) -> None:
     engine = TestClient(app, base_url=ENGINE, headers={"X-Tmig-Token": TOKEN})
     response = engine.post("/api/desktop/server/signin", json={"url": SERVER})
     assert response.status_code == 422 and "沒有設定身分驗證" in response.json()["detail"]
+
+
+def test_local_and_excepted_servers_bypass_the_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 上固定的代理伺服器不套用例外清單：本機與例外清單中的伺服器要直接連線。"""
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.setenv(name, "corp.local")
+    assert bypass_proxy("http://127.0.0.1:8000")
+    assert bypass_proxy("http://localhost:8000") and bypass_proxy("http://[::1]:8000")
+    assert bypass_proxy("https://bi.corp.local")
+    assert not bypass_proxy("https://bi.example.com")
+    assert http_client("http://127.0.0.1:8000").trust_env is False
+    assert http_client("https://bi.example.com").trust_env is True

@@ -13,6 +13,8 @@
 
 設定檔（desktop-server.json）只記伺服器網址與帳號，權杖存在認證管理員（見 tmig_service.credentials）。
 連線用作業系統的憑證存放區（truststore）：公司內部 CA 簽發的伺服器憑證不必另外設定。
+代理伺服器依系統設定（Windows 的網際網路選項或 HTTPS_PROXY 等環境變數），但本機的網址與例外清單
+（Windows 的 ProxyOverride，例如 ``*.corp.local;<local>``，或 NO_PROXY）中的伺服器直接連線。
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ import socket
 import ssl
 import threading
 import time
+import urllib.request
 import webbrowser
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -50,13 +53,32 @@ SIGN_IN_SECONDS = 600
 MEDIA_TYPE = "application/vnd.tmig.tmigx"
 
 
-def http_client() -> httpx.Client:
-    """連到伺服器的 HTTP 用戶端：作業系統的憑證存放區、代理伺服器依環境變數。"""
+LOOPBACK_HOSTS = frozenset({"localhost", "::1"})
+
+
+def bypass_proxy(url: str) -> bool:
+    """不經過代理伺服器：本機的網址，與系統的例外清單中的伺服器。
+
+    Python 在 Windows 上會讀網際網路選項中固定的代理伺服器，但不會套用它的例外清單；
+    不另外判斷時，連到本機或內部的伺服器也會送到公司的代理伺服器而失敗。
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    if host in LOOPBACK_HOSTS or host.startswith("127."):
+        return True
+    try:
+        return bool(urllib.request.proxy_bypass(host))
+    except (OSError, ValueError):
+        return False
+
+
+def http_client(url: str) -> httpx.Client:
+    """連到伺服器的 HTTP 用戶端：作業系統的憑證存放區；例外清單中的伺服器不經過代理伺服器。"""
     import truststore
 
     return httpx.Client(
         verify=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
         timeout=httpx.Timeout(600, connect=15),
+        trust_env=not bypass_proxy(url),
     )
 
 
@@ -96,7 +118,7 @@ class Remote:
         settings_path: Path,
         credentials: CredentialStore,
         opener: Callable[[str], object] = webbrowser.open,
-        client_factory: Callable[[], httpx.Client] = http_client,
+        client_factory: Callable[[str], httpx.Client] = http_client,
     ) -> None:
         self.settings_path = settings_path
         self.credentials = credentials
@@ -104,14 +126,16 @@ class Remote:
         self.client_factory = client_factory
         self.pending: dict[str, PendingSignIn] = {}
         self.error: str | None = None
-        self._client: httpx.Client | None = None
+        self._clients: dict[str, httpx.Client] = {}
         self._lock = threading.Lock()
 
-    def client(self) -> httpx.Client:
+    def client(self, url: str) -> httpx.Client:
+        """連到這台伺服器的用戶端（每台伺服器一個：是否經過代理伺服器依伺服器而定）。"""
         with self._lock:
-            if self._client is None:
-                self._client = self.client_factory()
-            return self._client
+            client = self._clients.get(url)
+            if client is None:
+                client = self._clients[url] = self.client_factory(url)
+            return client
 
     def load(self) -> ServerSettings:
         try:
@@ -136,15 +160,19 @@ class Remote:
             raise HTTPException(401, "還沒有登入伺服器")
         return settings, token
 
-    def call(self, method: str, path: str, **options: Any) -> httpx.Response:
+    def server(self) -> tuple[str, str, ServerSettings]:
+        """登入中的伺服器網址、權杖與設定；沒有登入時回應 401。"""
         settings, token = self.signed_in()
+        assert settings.url is not None
+        return settings.url, token, settings
+
+    def call(self, method: str, path: str, **options: Any) -> httpx.Response:
+        url, token, settings = self.server()
         headers = {**options.pop("headers", {}), "Authorization": f"Bearer {token}"}
         try:
-            response = self.client().request(
-                method, f"{settings.url}{path}", headers=headers, **options
-            )
+            response = self.client(url).request(method, f"{url}{path}", headers=headers, **options)
         except httpx.HTTPError as exc:
-            raise HTTPException(502, f"連不上伺服器 {settings.url}：{exc}") from exc
+            raise HTTPException(502, f"連不上伺服器 {url}：{exc}") from exc
         if response.status_code == 401:
             self.forget(settings, "伺服器的登入已失效，請重新登入")
             raise HTTPException(401, "伺服器的登入已失效，請重新登入")
@@ -152,10 +180,10 @@ class Remote:
 
     def download(self, path: str, target: Path) -> httpx.Headers:
         """下載到檔案（報表套件可能很大，不整個放在記憶體中）。"""
-        settings, token = self.signed_in()
+        url, token, settings = self.server()
         try:
-            with self.client().stream(
-                "GET", f"{settings.url}{path}", headers={"Authorization": f"Bearer {token}"}
+            with self.client(url).stream(
+                "GET", f"{url}{path}", headers={"Authorization": f"Bearer {token}"}
             ) as response:
                 if response.status_code == 401:
                     self.forget(settings, "伺服器的登入已失效，請重新登入")
@@ -169,7 +197,7 @@ class Remote:
                 return response.headers
         except httpx.HTTPError as exc:
             target.unlink(missing_ok=True)
-            raise HTTPException(502, f"連不上伺服器 {settings.url}：{exc}") from exc
+            raise HTTPException(502, f"連不上伺服器 {url}：{exc}") from exc
 
     def forget(self, settings: ServerSettings, error: str | None = None) -> None:
         if settings.url:
@@ -269,7 +297,7 @@ def remote_router(
     def sign_in(body: SignInRequest, request: Request) -> dict[str, Any]:
         url = normalize_url(body.url)
         try:
-            response = remote.client().get(f"{url}/api/me")
+            response = remote.client(url).get(f"{url}/api/me")
             me = response.json() if response.status_code == 200 else None
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(502, f"連不上伺服器 {url}：{exc}") from exc
@@ -308,7 +336,7 @@ def remote_router(
             remote.error = "在伺服器上按了「拒絕」，沒有登入"
             return _page("沒有登入", "已拒絕報表桌面版登入。可以關閉這個分頁。")
         try:
-            response = remote.client().post(
+            response = remote.client(pending.url).post(
                 f"{pending.url}/api/desktop-auth/token",
                 json={
                     "code": code,
@@ -338,7 +366,7 @@ def remote_router(
         if settings.url and token:
             # 連不上時伺服器上的權杖到期後自然失效
             with contextlib.suppress(httpx.HTTPError):
-                remote.client().delete(
+                remote.client(settings.url).delete(
                     f"{settings.url}/api/desktop-auth/tokens/current",
                     headers={"Authorization": f"Bearer {token}"},
                 )
@@ -479,4 +507,11 @@ def remote_router(
     return router
 
 
-__all__ = ["CALLBACK_PATH", "Remote", "ServerSettings", "normalize_url", "remote_router"]
+__all__ = [
+    "CALLBACK_PATH",
+    "Remote",
+    "ServerSettings",
+    "bypass_proxy",
+    "normalize_url",
+    "remote_router",
+]

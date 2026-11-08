@@ -367,7 +367,7 @@ def create_desktop_app(
     settings_dir: Path | None = None,
     credentials: CredentialStore | None = None,
     opener: Callable[[str], object] = webbrowser.open,
-    client_factory: Callable[[], Any] = http_client,
+    client_factory: Callable[[str], Any] = http_client,
 ) -> FastAPI:
     """settings_dir：伺服器設定（網址與帳號）的位置，預設為工作區的上一層；
     credentials：權杖存放處（預設為認證管理員）；opener：開啟系統瀏覽器（登入伺服器用）。"""
