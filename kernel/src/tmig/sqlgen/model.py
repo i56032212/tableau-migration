@@ -16,9 +16,17 @@
 （含這些欄位）彙總沒有問題；在不含這些欄位的層級彙總（FIXED LOD、排序、合計、Top N…）時，
 同一列會重複計算。這種情形查詢時附上檢查（Branch.guard_sql）：執行前確認分支的關聯值都只對應
 一組欄位值（星狀模型的維度表都是如此），否則列為不支援，不給出與 Tableau 不同的數字。
+不受重複影響的彙總（MIN、MAX、COUNTD、ATTR）不需要檢查。
 
-尚不支援（查詢時列為不支援）：量值來自多張資料表、同時用到量值表與其他資料表（或多個分支）欄位的
-篩選、含 LOD 且只能以半連接套用的篩選、邏輯資料表內含 join。
+量值來自多張資料表（例如一張表的 COUNTD 與另一張表的 FIXED LOD）：與 Tableau 相同，每張量值表
+各自是一部分（Part）——以它為量值表連接其他資料表、套用篩選（各部分的半連接不同）——各自在檢視的
+層級彙總，再依維度合併（完整外部連接：任一部分有的維度值都列出，沒有該部分的列時它的量值為 Null）。
+實作上 base 是各部分的 UNION ALL（PART_COL 標明每一列屬於哪一部分，其他部分的欄位為 Null），
+每個彙總只計算所屬部分的列（見 tmig.sqlgen.query 的 WorksheetQuery.owner_of）；
+一個彙總同時用到多張資料表的欄位時列為不支援。
+
+尚不支援（查詢時列為不支援）：同一個彙總用到多張資料表的欄位、同時用到量值表與其他資料表
+（或多個分支）欄位的篩選、含 LOD 且只能以半連接套用的篩選、邏輯資料表內含 join。
 """
 
 from __future__ import annotations
@@ -38,6 +46,10 @@ from tmig.ir.models import (
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
 from tmig.sqlgen.sql import ident
 
+PART_COL = "__part"
+"""量值來自多張資料表時，base 的每一列屬於哪一部分（量值表在 ModelPlan.parts 中的索引）。"""
+ONE_COL = "__one"
+"""沒有實體欄位的資料表以常數 1 代表一列。"""
 FLIP = {"=": "=", "!=": "!=", "<": ">", ">": "<", "<=": ">=", ">=": "<="}
 NULL_TYPES = {
     "string": "VARCHAR",
@@ -59,9 +71,17 @@ class Usage:
 
     fields: dict[str, bool] = field(default_factory=dict)
     tables: dict[str, bool] = field(default_factory=dict)
+    rows: set[str] = field(default_factory=set)
+    """在彙總之外（列層級：維度、LOD 的維度、集合的層級…）用到的欄位。"""
+    owned: dict[str, set[str]] = field(default_factory=dict)
+    """量值表 → 在它的彙總中用到的欄位。"""
 
-    def add_field(self, data_field: DataField, aggregated: bool) -> None:
+    def add_field(self, data_field: DataField, aggregated: bool, owner: str | None = None) -> None:
         self.fields[data_field.id] = self.fields.get(data_field.id, False) or aggregated
+        if not aggregated:
+            self.rows.add(data_field.id)
+        elif owner is not None:
+            self.owned.setdefault(owner, set()).add(data_field.id)
         if data_field.table is not None:
             self.add_table(data_field.table, aggregated)
 
@@ -73,6 +93,9 @@ class Usage:
             self.fields[fid] = self.fields.get(fid, False) or aggregated
         for table, aggregated in other.tables.items():
             self.add_table(table, aggregated)
+        self.rows |= other.rows
+        for owner, fields in other.owned.items():
+            self.owned.setdefault(owner, set()).update(fields)
 
 
 @dataclass
@@ -131,15 +154,23 @@ class Branch:
 
 
 @dataclass
-class ModelPlan:
-    from_sql: str
-    """base CTE 的完整 SELECT（以欄位 id 為別名）。"""
-    tables: list[str]
-    """查詢用到的邏輯資料表（量值表或第一張在前）。"""
-    measure_table: str | None
+class Part:
+    """一張量值表：以它為根連接其他資料表（分支）、套用篩選（半連接）。"""
+
+    table: str
     semi: dict[str, SemiJoin]
     """以半連接套用的篩選：篩選 id → 條件的外框。"""
     branches: list[Branch]
+
+
+@dataclass
+class ModelPlan:
+    from_sql: str
+    """base CTE 的完整 SELECT（以欄位 id 為別名）；量值來自多張資料表時為各部分的 UNION ALL。"""
+    tables: list[str]
+    """查詢用到的邏輯資料表（量值表或第一張在前）。"""
+    parts: list[Part]
+    """量值表（只有維度時沒有）；兩個以上時 base 有 PART_COL 欄。"""
     notes: list[str]
     domain: str | None = None
     """檢視的維度與篩選只用到量值表以外的同一個分支時，維度的所有成員（內部連接）：
@@ -178,11 +209,12 @@ class ModelPlanner:
         filters: list[RowFilter],
         dims: set[str] | None = None,
         others: set[str] | None = None,
+        view: set[str] | None = None,
     ) -> ModelPlan:
         """usage：檢視用到的欄位（不含只用在篩選的欄位）；filters：列層級的篩選。
 
         dims、others：檢視的維度用到的資料表，與篩選（含 Top N）用到的資料表，用來判斷是否要補上
-        沒有量值的維度成員（省略時不補）。
+        沒有量值的維度成員（省略時不補）。view：檢視層級的彙總所屬的量值表（省略或空集合時為全部）。
         """
         wanted = set(usage.tables) | {t for f in filters for t in f.tables}
         used = [t.id for t in self.model.tables if t.id in wanted]
@@ -193,22 +225,23 @@ class ModelPlanner:
             return ModelPlan(
                 from_sql=self._single(table),
                 tables=used,
-                measure_table=table if usage.tables.get(table) else None,
-                semi={},
-                branches=[],
+                parts=[Part(table, {}, [])] if usage.tables.get(table) else [],
                 notes=[f"Relationship 模型：只用到「{self.caption(table)}」"],
             )
         measures = [t for t in used if usage.tables.get(t)]
-        if len(measures) > 1:
-            raise ModelError(
-                f"Relationship 模型中量值來自多張資料表（{self.names(measures)}），尚不支援"
-            )
         if not measures:
             return self._dimensions(used)
-        plan = self._measure(measures[0], used, usage, filters)
+        plan = (
+            self._measure(measures[0], used, list(usage.fields), filters)
+            if len(measures) == 1
+            else self._parts(measures, used, usage, filters)
+        )
         if dims is not None:
-            plan.domain = self.domain(measures[0], dims, others or set())
-            if plan.domain is not None:
+            # 檢視的彙總所屬的每張量值表都在維度的分支之外，才補上沒有量值的成員
+            targets = [t for t in measures if view and t in view] or measures
+            domains = {self.domain(t, dims, others or set()) for t in targets}
+            if None not in domains:
+                (plan.domain,) = domains
                 plan.notes.append("維度的成員另以維度表查詢，沒有量值的成員也列出")
         return plan
 
@@ -304,12 +337,20 @@ class ModelPlanner:
             return f"{ident(placeholder)} AS {alias}"
         raise ModelError(f"邏輯資料表「{self.caption(table)}」內含 join，尚不支援")
 
-    def _projections(self, tables: list[str]) -> list[str]:
+    def _items(self, tables: list[str]) -> list[tuple[str, str]]:
+        """資料表的實體欄位：（欄位 id、SQL）。"""
         return [
-            f"{ident(self.alias[t])}.{ident(f.column or '')} AS {ident(f.id)}"
+            (f.id, f"{ident(self.alias[t])}.{ident(f.column or '')}")
             for t in tables
             for f in self.columns[t]
-        ] or [f"1 AS {ident('__one')}"]
+        ] or [(ONE_COL, "1")]
+
+    def _projections(self, tables: list[str]) -> list[str]:
+        return [f"{sql} AS {ident(alias)}" for alias, sql in self._items(tables)]
+
+    def _null(self, alias: str) -> str:
+        datatype = self.fields[alias].datatype if alias in self.fields else "integer"
+        return f"CAST(NULL AS {NULL_TYPES[datatype]})"
 
     def _single(self, table: str) -> str:
         return f"SELECT {', '.join(self._projections([table]))} FROM {self._relation(table)}"
@@ -341,26 +382,73 @@ class ModelPlanner:
             f"SELECT {', '.join(self._projections(order))} FROM {self._joined(root, tree, 'INNER')}"
         )
         notes = [f"Relationship 模型：{self.names(order)}以內部連接取存在的組合"]
-        return ModelPlan(sql, order, None, {}, [], notes)
+        return ModelPlan(sql, order, [], notes)
 
     def _measure(
-        self, measure: str, used: list[str], usage: Usage, filters: list[RowFilter]
+        self, measure: str, used: list[str], needed: list[str], filters: list[RowFilter]
     ) -> ModelPlan:
+        """量值只來自一張資料表。"""
+        built = self._part(measure, used, needed, filters)
+        selects = [f"{sql} AS {ident(alias)}" for alias, sql in built.items]
+        notes = [f"Relationship 模型：量值在「{self.caption(measure)}」彙總", *built.notes]
+        return ModelPlan(
+            f"SELECT {', '.join(selects)} FROM {built.from_clause}",
+            built.order,
+            [built.part],
+            notes,
+        )
+
+    def _parts(
+        self, measures: list[str], used: list[str], usage: Usage, filters: list[RowFilter]
+    ) -> ModelPlan:
+        """量值來自多張資料表：每張量值表一部分，以 UNION ALL 合成 base（其他部分的欄位為 Null）。
+        各部分要有列層級用到的欄位（維度、LOD 的維度…）與自己的彙總用到的欄位。"""
+        built: list[_Built] = []
+        tables: list[str] = []
+        notes = [
+            f"Relationship 模型：量值來自{self.names(measures)}，各自在所屬的資料表彙總，"
+            "再依檢視的維度合併（完整外部連接）"
+        ]
+        for measure in measures:
+            owned = usage.owned.get(measure, set())
+            needed = [fid for fid in usage.fields if fid in usage.rows or fid in owned]
+            part = self._part(measure, used, needed, filters)
+            built.append(part)
+            tables += [t for t in part.order if t not in tables]
+            notes += [f"「{self.caption(measure)}」：{text}" for text in part.notes]
+        columns: list[str] = []
+        for part in built:
+            columns += [alias for alias, _ in part.items if alias not in columns]
+        selects: list[str] = []
+        for index, part in enumerate(built):
+            items = dict(part.items)
+            picks = [f"{index} AS {ident(PART_COL)}"] + [
+                f"{items[alias] if alias in items else self._null(alias)} AS {ident(alias)}"
+                for alias in columns
+            ]
+            selects.append(f"SELECT {', '.join(picks)} FROM {part.from_clause}")
+        return ModelPlan(" UNION ALL ".join(selects), tables, [p.part for p in built], notes)
+
+    def _part(
+        self, measure: str, used: list[str], fields: list[str], filters: list[RowFilter]
+    ) -> _Built:
+        """以 measure 為量值表：其他資料表依關聯欄位與 fields 中的欄位去重後左外連接，
+        只用到其他資料表欄位的篩選以半連接套用。"""
         tree = self._tree(measure, used)
         order = self._order(measure, tree)
         children = [c for c in order[1:] if tree[c][0] == measure]
         subtrees = {c: self._subtree(c, tree) for c in children}
-        selects = self._projections([measure])
+        items = self._items([measure])
         in_base = {f.id for f in self.columns[measure]}
         joins: list[str] = []
         branches: list[Branch] = []
-        notes = [f"Relationship 模型：量值在「{self.caption(measure)}」彙總"]
+        notes: list[str] = []
         for child in children:
             subtree = subtrees[child]
             rel = tree[child][1]
             needed = [
                 self.fields[fid]
-                for fid in usage.fields
+                for fid in fields
                 if self.fields[fid].table in subtree and self.fields[fid].column is not None
             ]
             if not needed:
@@ -376,7 +464,7 @@ class ModelPlanner:
                 f"LEFT JOIN ({distinct}) AS {ident(alias)} "
                 f"ON {self._on(measure, child, rel, alias)}"
             )
-            selects += [f"{ident(alias)}.{ident(f.id)} AS {ident(f.id)}" for f in needed]
+            items += [(f.id, f"{ident(alias)}.{ident(f.id)}") for f in needed]
             in_base |= {f.id for f in needed}
             branches.append(
                 Branch(
@@ -409,7 +497,7 @@ class ModelPlanner:
                     for t in subtrees[owner]
                     for f in self.columns[t]
                 )
-                or f"NULL AS {ident('__one')}"
+                or f"NULL AS {ident(ONE_COL)}"
             )
             semi[flt.id] = SemiJoin(
                 f"({self._inner(owner, tree)}) AS {ident('s')}",
@@ -419,15 +507,29 @@ class ModelPlanner:
             notes.append(
                 f"篩選 {flt.id} 只用到{self.names(subtrees[owner])}：保留有關聯且符合條件的列"
             )
-        from_sql = " ".join([f"SELECT {', '.join(selects)} FROM {self._relation(measure)}", *joins])
-        return ModelPlan(from_sql, order, measure, semi, branches, notes)
+        from_clause = " ".join([self._relation(measure), *joins])
+        return _Built(Part(measure, semi, branches), items, from_clause, order, notes)
+
+
+@dataclass
+class _Built:
+    """一部分的 SQL 片段：選出的欄位（欄位 id、SQL）與 FROM 子句。"""
+
+    part: Part
+    items: list[tuple[str, str]]
+    from_clause: str
+    order: list[str]
+    notes: list[str]
 
 
 __all__ = [
+    "ONE_COL",
+    "PART_COL",
     "Branch",
     "ModelError",
     "ModelPlan",
     "ModelPlanner",
+    "Part",
     "RowFilter",
     "SemiJoin",
     "Usage",

@@ -231,8 +231,23 @@ class ExprCompiler:
         return self._row_function(node, args)
 
     def _aggregate(self, node: Call) -> str:
+        """彙總函式。環境有 part_condition 且回傳條件時（Relationship 模型中量值來自多張資料表），
+        參數只取所屬部分的列；COUNT、COUNTD 沒有這部分的列時為 Null（與 Tableau 合併各量值表的
+        結果時相同，其他彙總對全是 Null 的參數本來就是 Null）。"""
         name = node.name
-        x = self.row(node.args[0])
+        hook = getattr(self.env, "part_condition", None)
+        only: str | None = hook(node) if hook is not None else None
+
+        def arg(index: int) -> str:
+            sql = self.row(node.args[index])
+            return f"(CASE WHEN {only} THEN {sql} END)" if only else sql
+
+        def present(sql: str) -> str:
+            return (
+                f"(CASE WHEN max(CASE WHEN {only} THEN 1 END) = 1 THEN {sql} END)" if only else sql
+            )
+
+        x = arg(0)
         if name == "SUM":
             if self.datatype(node.args[0]) == "integer":
                 return f"CAST(sum({x}) AS BIGINT)"
@@ -244,9 +259,9 @@ class ExprCompiler:
         if name == "MAX":
             return f"max({x})"
         if name == "COUNT":
-            return f"count({x})"
+            return present(f"count({x})")
         if name == "COUNTD":
-            return f"count(DISTINCT {x})"
+            return present(f"count(DISTINCT {x})")
         if name == "MEDIAN":
             return f"median({x})"
         if name == "ATTR":
@@ -264,7 +279,7 @@ class ExprCompiler:
             assert isinstance(p, LiteralNode)
             return f"quantile_cont({x}, {float(p.value)!r})"
         if name in ("CORR", "COVAR", "COVARP"):
-            y = self.row(node.args[1])
+            y = arg(1)
             fn = {"CORR": "corr", "COVAR": "covar_samp", "COVARP": "covar_pop"}[name]
             return f"{fn}({x}, {y})"
         raise FormulaSemanticError(f"尚不支援彙總函式 {name}", node.pos, unsupported=True)

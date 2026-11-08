@@ -71,9 +71,20 @@ from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
 from tmig.planner.identity import Identity
 from tmig.planner.state import EffectiveState, QueryState, SetValue, apply_state, use_key
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
-from tmig.sqlgen.model import Branch, ModelError, ModelPlan, ModelPlanner, RowFilter, Usage
+from tmig.sqlgen.model import (
+    PART_COL,
+    Branch,
+    ModelError,
+    ModelPlan,
+    ModelPlanner,
+    RowFilter,
+    Usage,
+)
 from tmig.sqlgen.source import SourceError, datasource_source
 from tmig.sqlgen.sql import ident, literal
+
+DUPLICATE_SAFE = frozenset({"MIN", "MAX", "COUNTD", "ATTR"})
+"""同一列重複出現也不影響結果的彙總（Relationship 模型的一對多分支不需要檢查）。"""
 
 AGG_FUNCTIONS = {
     "sum": "SUM",
@@ -293,6 +304,10 @@ class _RowEnv:
             )
         return self._qualify(spec.col)
 
+    def part_condition(self, node: Call) -> str | None:
+        """Relationship 模型中量值來自多張資料表：彙總只計算所屬部分的列（不需要限定時為 None）。"""
+        return self.query.part_condition(node, self._qualify(PART_COL))
+
     def aggregate(self, node: Call) -> str:
         raise QueryError(f"{node.name} 不能出現在列層級的位置")
 
@@ -437,8 +452,12 @@ class WorksheetQuery:
         self._sort_ctes: dict[str, tuple[str, str]] = {}
         self.model_plan: ModelPlan | None = None
         """Relationship 模型的連接方式（build 時決定）。"""
-        self._guards: dict[int, list[str]] = {}
-        """需要檢查的分支（ModelPlan.branches 的索引）→ 在哪些層級彙總。"""
+        self._guards: dict[tuple[int, int], list[str]] = {}
+        """需要檢查的分支（ModelPlan.parts 與 Part.branches 的索引）→ 在哪些層級彙總。"""
+        self._owners: dict[Node, str | None] = {}
+        """彙總 → 所屬的量值表（見 owner_of）。"""
+        self._agg_parts: list[int] = []
+        """目前編譯的這組彙總用到哪些部分的列（量值來自多張資料表時，見 _parts_scope）。"""
         self._domain_conds: list[str] = []
         """列層級篩選的條件（直接套用）：補上維度成員時使用。"""
 
@@ -745,6 +764,7 @@ class WorksheetQuery:
         if self.source.model is not None:
             self.model_plan = self._plan_model(dims, measures, sorts, stage, top_nodes, member_set)
             base_sql = self.model_plan.from_sql
+            self._agg_parts = list(range(len(self.model_plan.parts)))
             for text in self.model_plan.notes:
                 self.note(1, text)
 
@@ -799,11 +819,11 @@ class WorksheetQuery:
         rows_cte = source
 
         # 6. 彙總與量值篩選
-        self._guard(self._covered([d.use for d in dims]), "檢視的彙總")
         level = [self.dim_sql(d.use) for d in dims]
         agg_nodes = list(
             {self.canon(a): a for m in measures for a in self.aggregates_in(m.node)}.values()
         )
+        self._guard(self._covered([d.use for d in dims]), "檢視的彙總", agg_nodes)
         agg_name, agg_cols, keys = self.aggregate("agg", agg_nodes, level, rows_cte, 6, dims)
         if self.model_plan is not None and self.model_plan.domain is not None and dims:
             agg_name = self._domain_marks(agg_name, agg_cols, keys, dims)
@@ -940,7 +960,13 @@ class WorksheetQuery:
             self.collect(node, dim_usage)
         if any(self.lods_in(node) for node in dim_nodes) or any(f.lod for f in filters):
             return self.plan_model(usage, filters)
-        return self.plan_model(usage, filters, set(dim_usage.tables), others)
+        view = {
+            owner
+            for m in measures
+            for a in self.aggregates_in(m.node)
+            if (owner := self.owner_of(a)) is not None
+        }
+        return self.plan_model(usage, filters, set(dim_usage.tables), others, view)
 
     def plan_model(
         self,
@@ -948,13 +974,100 @@ class WorksheetQuery:
         filters: list[RowFilter],
         dims: set[str] | None = None,
         others: set[str] | None = None,
+        view: set[str] | None = None,
     ) -> ModelPlan:
         model = self.source.model
         assert model is not None
         try:
-            return ModelPlanner(self.datasource, model).plan(usage, filters, dims, others)
+            return ModelPlanner(self.datasource, model).plan(usage, filters, dims, others, view)
         except ModelError as exc:
             raise QueryError(str(exc), unsupported=True) from exc
+
+    def owner_of(self, node: Call) -> str | None:
+        """Relationship 模型中彙總所屬的量值表：參數中實體欄位（與資料表的筆數欄位、集合的層級欄位）
+        所在的邏輯資料表。只含 LOD、參數與常值時為 None（LOD 已併到每一列）；用到多張資料表的欄位時
+        列為不支援（Tableau 以列層級連接這些資料表後再彙總）。"""
+        if self.source.model is None:
+            return None
+        key = self.canon(node)
+        if key in self._owners:
+            return self._owners[key]
+        tables: list[str] = []
+
+        def visit(item: Node) -> None:
+            if isinstance(item, FieldRef):
+                target = self._resolve(item)
+                if target.kind != "field":
+                    return
+                data_field = self.fields[target.id]
+                if data_field.set is not None and data_field.calc is None:
+                    for use in data_field.set.levels:
+                        visit(self.field_node(use.field))
+                    return
+                if data_field.table is not None and data_field.table not in tables:
+                    tables.append(data_field.table)
+                if target.formula is not None:
+                    visit(self.analyzer.calc_ast(target))
+                return
+            if isinstance(item, Lod):
+                return
+            for sub in children(item):
+                visit(sub)
+
+        for arg in node.args:
+            visit(arg)
+        if len(tables) > 1:
+            captions = {t.id: t.caption for t in self.source.model.tables}
+            names = "、".join(f"「{captions.get(t, t)}」" for t in tables)
+            raise QueryError(
+                f"Relationship 模型中 {node.name} 同時用到多張資料表（{names}）的欄位，尚不支援",
+                unsupported=True,
+            )
+        owner = tables[0] if tables else None
+        self._owners[key] = owner
+        return owner
+
+    def part_of(self, node: Call) -> int | None:
+        """彙總所屬的部分（ModelPlan.parts 的索引）；不屬於任何量值表時為 None。"""
+        plan = self.model_plan
+        if plan is None or not plan.parts:
+            return None
+        owner = self.owner_of(node)
+        if owner is None:
+            return None
+        for index, part in enumerate(plan.parts):
+            if part.table == owner:
+                return index
+        raise QueryError(f"{node.name} 所屬的資料表不在這次查詢的量值表中")
+
+    def part_condition(self, node: Call, column: str) -> str | None:
+        """這組彙總用到兩個以上部分的列時，node 只計算所屬部分的列：條件（column 為部分的欄）。"""
+        if len(self._agg_parts) < 2:
+            return None
+        index = self.part_of(node)
+        return None if index is None else f"{column} = {index}"
+
+    @contextmanager
+    def _parts_scope(self, nodes: list[Call]) -> Iterator[str]:
+        """量值來自多張資料表：一組彙總只用所屬各部分的列（與 Tableau 各量值表分別彙總再合併相同；
+        都不屬於任何量值表時用全部的列）。產生限定部分的條件（全部時為空字串）。"""
+        plan = self.model_plan
+        if plan is None or len(plan.parts) < 2:
+            yield ""
+            return
+        everything = list(range(len(plan.parts)))
+        scope = sorted({i for n in nodes if (i := self.part_of(n)) is not None}) or everything
+        saved = self._agg_parts
+        self._agg_parts = scope
+        try:
+            if scope == everything:
+                yield ""
+            elif len(scope) == 1:
+                yield f"{ident(PART_COL)} = {scope[0]}"
+            else:
+                yield f"{ident(PART_COL)} IN ({', '.join(str(i) for i in scope)})"
+        finally:
+            self._agg_parts = saved
 
     def _domain_marks(
         self, agg_name: str, agg_cols: dict[Call, str], keys: list[str], dims: list[Dim]
@@ -977,12 +1090,20 @@ class WorksheetQuery:
         )
 
     def _filter_condition(self, flt: Filter) -> str:
-        """列層級篩選的條件；Relationship 模型中只用到其他資料表欄位的篩選以半連接套用。"""
+        """列層級篩選的條件；Relationship 模型中只用到其他資料表欄位的篩選以半連接套用
+        （量值來自多張資料表時，各部分有自己的半連接）。"""
         condition = self._row_condition(flt)
-        semi = self.model_plan.semi.get(flt.id) if self.model_plan is not None else None
-        if semi is None or not condition:
+        plan = self.model_plan
+        if plan is None or not plan.parts or not condition:
             return condition
-        return semi.render(condition)
+        conds = [
+            part.semi[flt.id].render(condition) if flt.id in part.semi else condition
+            for part in plan.parts
+        ]
+        if len(set(conds)) == 1:
+            return conds[0]
+        column = ident(PART_COL)
+        return "(" + " OR ".join(f"({column} = {i} AND ({c}))" for i, c in enumerate(conds)) + ")"
 
     def _covered(self, uses: list[FieldUse], refs: tuple[Node, ...] = ()) -> set[str]:
         """彙總層級中直接以原值分組的實體欄位（不含日期衍生、計算欄位與 LOD 維度中的運算式）。"""
@@ -1002,24 +1123,35 @@ class WorksheetQuery:
                 covered.add(target.id)
         return covered
 
-    def _guard(self, covered: set[str], what: str) -> None:
-        """在某個層級彙總：層級沒有涵蓋某個分支用到的欄位時，量值表的列可能因一對多而重複計算，
-        執行前檢查該分支（見 tmig.sqlgen.model）。"""
+    def _guard(self, covered: set[str], what: str, nodes: list[Call]) -> None:
+        """在某個層級彙總 nodes：層級沒有涵蓋某個分支用到的欄位時，量值表的列可能因一對多而重複計算，
+        執行前檢查該分支（見 tmig.sqlgen.model）。不受重複影響的彙總（MIN、MAX、COUNTD、ATTR）、
+        只含 LOD 或常值的彙總（不屬於任何量值表），以及分支只用到關聯欄位本身時，不需要檢查。"""
         plan = self.model_plan
         if plan is None:
             return
-        for i, branch in enumerate(plan.branches):
-            if set(branch.needed) <= covered:
-                continue
-            if not branch.equality:
-                raise QueryError(
-                    f"Relationship 模型中「{self._branch_names(branch)}」的關聯條件不是等號，"
-                    f"{what}的層級不含它的欄位時尚不支援",
-                    unsupported=True,
-                )
-            whats = self._guards.setdefault(i, [])
-            if what not in whats:
-                whats.append(what)
+        parts = sorted(
+            {
+                i
+                for node in nodes
+                if node.name not in DUPLICATE_SAFE and (i := self.part_of(node)) is not None
+            }
+        )
+        for p in parts:
+            for i, branch in enumerate(plan.parts[p].branches):
+                if set(branch.needed) <= covered:
+                    continue
+                if branch.equality and set(branch.needed) <= set(branch.keys):
+                    continue  # 只用到關聯欄位本身：一個關聯值只對應一組欄位值
+                if not branch.equality:
+                    raise QueryError(
+                        f"Relationship 模型中「{self._branch_names(branch)}」的關聯條件不是等號，"
+                        f"{what}的層級不含它的欄位時尚不支援",
+                        unsupported=True,
+                    )
+                whats = self._guards.setdefault((p, i), [])
+                if what not in whats:
+                    whats.append(what)
 
     def _branch_names(self, branch: Branch) -> str:
         model = self.source.model
@@ -1033,10 +1165,12 @@ class WorksheetQuery:
             return []
         guards: list[Guard] = []
         model = self.source.model
-        assert model is not None and plan.measure_table is not None
-        measure = next(t.caption for t in model.tables if t.id == plan.measure_table)
-        for i, whats in sorted(self._guards.items()):
-            branch = plan.branches[i]
+        assert model is not None
+        captions = {t.id: t.caption for t in model.tables}
+        for (p, i), whats in sorted(self._guards.items()):
+            part = plan.parts[p]
+            measure = captions[part.table]
+            branch = part.branches[i]
             names = "、".join(self.fields[f].caption for f in branch.needed)
             guards.append(
                 Guard(
@@ -1050,17 +1184,21 @@ class WorksheetQuery:
             )
         return guards
 
-    def collect(self, node: Node, usage: Usage, inside: bool = False) -> None:
-        """公式用到的實體欄位與邏輯資料表；inside 為是否在彙總之中（量值所在的資料表）。"""
+    def collect(
+        self, node: Node, usage: Usage, inside: bool = False, owner: str | None = None
+    ) -> None:
+        """公式用到的實體欄位與邏輯資料表；inside 為是否在彙總之中（量值所在的資料表），
+        owner 為該彙總所屬的量值表（見 owner_of）。"""
         if isinstance(node, FieldRef):
             target = self._resolve(node)
             if target.kind != "field":
                 return
             data_field = self.fields[target.id]
             if data_field.set is not None and data_field.calc is None:
-                # Top N 與條件集合：層級與排名依據（條件）用到的欄位
+                # Top N 與條件集合：層級的欄位（用在彙總中時與直接用到層級的欄位相同）；
+                # 排名依據（條件）另外彙總
                 for use in data_field.set.levels:
-                    self.collect(self.field_node(use.field), usage, inside)
+                    self.collect(self.field_node(use.field), usage, inside, owner)
                 rule = data_field.set.rule
                 if rule.kind != "members":
                     self.collect(
@@ -1071,22 +1209,22 @@ class WorksheetQuery:
                 # 邏輯資料表的筆數欄位：SUM 即該資料表的列數
                 usage.add_table(data_field.table, inside)
             if target.formula is not None:
-                self.collect(self.analyzer.calc_ast(target), usage, inside)
+                self.collect(self.analyzer.calc_ast(target), usage, inside, owner)
             elif data_field.column is not None:
-                usage.add_field(data_field, inside)
+                usage.add_field(data_field, inside, owner)
             return
         if isinstance(node, Lod):
             # LOD 的維度在列層級；運算式自己含彙總
             for dim in node.dims:
-                self.collect(dim, usage, False)
-            self.collect(node.expr, usage, False)
+                self.collect(dim, usage)
+            self.collect(node.expr, usage)
             return
-        if isinstance(node, Call):
+        if isinstance(node, Call) and not inside:
             spec = lookup(node.name, len(node.args))
             if spec is not None and spec.kind == "aggregate":
-                inside = True
+                inside, owner = True, self.owner_of(node)
         for item in children(node):
-            self.collect(item, usage, inside)
+            self.collect(item, usage, inside, owner)
 
     # ------------------------------------------------------------ 檢視欄位
 
@@ -1309,12 +1447,11 @@ class WorksheetQuery:
         if isinstance(flt, TopNFilter):
             return self._top_n(flt, top_nodes[flt.id], source, stage)
         assert isinstance(flt, ConditionFilter)
-        self._guard(self._covered([flt.field]), "彙總條件篩選")
         node = self.cond_nodes[flt.id]
+        nodes = self.aggregates_in(node)
+        self._guard(self._covered([flt.field]), "彙總條件篩選", nodes)
         dim = self.dim_sql(flt.field)
-        agg_name, agg_cols, keys = self.aggregate(
-            "cond_agg", self.aggregates_in(node), [dim], source, stage, None
-        )
+        agg_name, agg_cols, keys = self.aggregate("cond_agg", nodes, [dim], source, stage, None)
         value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(node))
         name = self.name("cond")
         self.cte(
@@ -1381,7 +1518,8 @@ class WorksheetQuery:
             count = value
         if count < 0:
             raise QueryError(f"Top N 篩選 {flt.id} 的數量不能是負數")
-        self._guard(self._covered([flt.field]), "Top N 篩選")
+        nodes = self.aggregates_in(by)
+        self._guard(self._covered([flt.field]), "Top N 篩選", nodes)
         dim = self.dim_sql(flt.field)
         selected = _members(dim, flt.mode, flt.values, self.dim_datatype(flt.field))
         if selected:
@@ -1389,7 +1527,6 @@ class WorksheetQuery:
             source = self.cte(
                 stage, self.name("topn_src"), f"SELECT * FROM {source} WHERE {selected}"
             )
-        nodes = self.aggregates_in(by)
         agg_name, agg_cols, keys = self.aggregate("topn_agg", nodes, [dim], source, stage, None)
         value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(by))
         direction = "DESC" if flt.direction == "top" else "ASC"
@@ -1487,7 +1624,11 @@ class WorksheetQuery:
         row_r = self.compiler(_RowEnv(self, "r"))
         for spec in specs:
             kind = {"fixed": "FIXED", "include": "INCLUDE", "exclude": "EXCLUDE"}[spec.node.kind]
-            self._guard(self._lod_covered(spec, view_dims), f"{kind} LOD")
+            self._guard(
+                self._lod_covered(spec, view_dims),
+                f"{kind} LOD",
+                self.aggregates_in(spec.node.expr),
+            )
             dims = self._lod_dims(spec, view_dims, self.row)
             lod_name, keys = self._lod_values(spec, dims, source, stage, view_dims)
             alias = f"l{len(joins)}"
@@ -1518,12 +1659,14 @@ class WorksheetQuery:
         內層的值只含在彙總中時，每個（外層維度、內層維度）的組合算一次，不是每一列算一次。"""
         if not spec.inner:
             keys = [f"__d{i}" for i in range(len(dims))]
-            inner = self._compile(lambda: self.row.agg(spec.node.expr))
+            with self._parts_scope(self.aggregates_in(spec.node.expr)) as only:
+                inner = self._compile(lambda: self.row.agg(spec.node.expr))
             cols = [f"{sql} AS {ident(k)}" for sql, k in zip(dims, keys, strict=True)]
+            where = f" WHERE {only}" if only else ""
             group = f" GROUP BY {', '.join(str(i + 1) for i in range(len(dims)))}" if dims else ""
             cols.append(f"{inner} AS {ident(VALUE_COL)}")
             lod_name = self.name("lod")
-            self.cte(stage, lod_name, f"SELECT {', '.join(cols)} FROM {source}{group}")
+            self.cte(stage, lod_name, f"SELECT {', '.join(cols)} FROM {source}{where}{group}")
             return lod_name, keys
         with self._lod_scope(spec):
             nodes = self.aggregates_in(spec.node.expr)
@@ -1549,11 +1692,28 @@ class WorksheetQuery:
         view_dims: list[Dim] | None,
         pushdown: bool | None = None,
     ) -> tuple[str, dict[Call, str], list[str]]:
-        """在指定層級彙總。回傳 CTE 名稱、彙總節點 → 欄名、層級鍵欄名。"""
+        """在指定層級彙總。回傳 CTE 名稱、彙總節點 → 欄名、層級鍵欄名。
+
+        Relationship 模型中量值來自多張資料表時，只用這些彙總所屬各部分的列（見 _parts_scope）。"""
+        with self._parts_scope(nodes) as only:
+            return self._aggregate(prefix, nodes, level, source, stage, view_dims, pushdown, only)
+
+    def _aggregate(
+        self,
+        prefix: str,
+        nodes: list[Call],
+        level: list[str],
+        source: str,
+        stage: int,
+        view_dims: list[Dim] | None,
+        pushdown: bool | None,
+        only: str,
+    ) -> tuple[str, dict[Call, str], list[str]]:
         keys = [f"__k{i}" for i in range(len(level))]
         cols: dict[Call, str] = {}
         row_nodes = [n for n in nodes if not self._lod_only(n)]
         combo_nodes = [n for n in nodes if self._lod_only(n)]
+        where = f" WHERE {only}" if only else ""
         selects = [f"{sql} AS {ident(k)}" for sql, k in zip(level, keys, strict=True)]
         for node in row_nodes:
             col = f"__a{len(cols)}"
@@ -1565,7 +1725,7 @@ class WorksheetQuery:
         base = self.cte(
             stage,
             self.name(prefix),
-            f"SELECT {', '.join(selects)} FROM {source}{group}",
+            f"SELECT {', '.join(selects)} FROM {source}{where}{group}",
             pushdown,
         )
         if not combo_nodes:
@@ -1598,7 +1758,7 @@ class WorksheetQuery:
             combos = self.cte(
                 stage,
                 self.name("combos"),
-                f"SELECT DISTINCT {', '.join(combo_cols)} FROM {source}",
+                f"SELECT DISTINCT {', '.join(combo_cols)} FROM {source}{where}",
                 pushdown,
             )
             combo_selects = [
@@ -1655,7 +1815,7 @@ class WorksheetQuery:
                 continue
             node = self.measure_node(sort.by)
             nodes = self.aggregates_in(node)
-            self._guard(self._covered([d.use]), "依欄位排序")
+            self._guard(self._covered([d.use]), "依欄位排序", nodes)
             # 排序值依來源資料計算，不含 Table Calculation：可下推
             agg_name, agg_cols, keys = self.aggregate(
                 "sort_agg", nodes, [self.dim_sql(d.use)], rows_cte, 7, None, pushdown=True
@@ -1927,7 +2087,7 @@ class WorksheetQuery:
     def _total(self, node: Call, partition: list[Dim], rows: str, index: int) -> tuple[str, str]:
         expr = node.args[0]
         nodes = self.aggregates_in(expr)
-        self._guard(self._covered([d.use for d in partition]), "TOTAL")
+        self._guard(self._covered([d.use for d in partition]), "TOTAL", nodes)
         level = [self.dim_sql(d.use) for d in partition]
         # TOTAL 依來源資料計算（不是加總各標記），不含視窗函式：可下推
         agg_name, agg_cols, keys = self.aggregate(

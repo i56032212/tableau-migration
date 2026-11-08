@@ -13,7 +13,8 @@ CUSTOMERS.REGION_ID = REGIONS.REGION_ID。
 
 與 Tableau 相同的語意：量值不因一對多重複計算（每一組維度值只算一次）、沒有對應的量值列以 Null 呈現、
 維度表中沒有量值的成員也列出、只有維度時取內部連接、只用到其他資料表欄位的篩選以「有關聯且符合」
-（沒有關聯時以 Null 判斷）套用、FIXED LOD 在維度篩選之前計算。
+（沒有關聯時以 Null 判斷）套用、FIXED LOD 在維度篩選之前計算；量值來自多張資料表時各自彙總再依維度
+合併（完整外部連接）。
 
 在 DuckDB 檔（當作來源資料庫）、PostgreSQL、Spark 與模擬的 Oracle 上執行；另以 .hyper 萃取驗證匯入與查詢。
 """
@@ -124,6 +125,12 @@ ORACLE = (
     "schema='SALES' server='ora.example.com' service='ORCLPDB' />"
 )
 FCP = "_.fcp.ObjectModelEncapsulateLegacy.true..."
+BUYERS = (
+    "{FIXED [Prod ID], IF [Category] = 'Office' THEN 'Office' ELSE 'Other' END :"
+    " COUNTD([Cust ID (Customers)])}"
+)
+"""買過該產品的客戶數（依產品與是否為 Office 類別）：量值在 CUSTOMERS，維度在 ORDERS 與 PRODUCTS
+（與 Snow Sports 的 Available 相同的寫法；Snow 以布林值分組，Oracle 沒有布林值，這裡改用字串）。"""
 
 
 def records(extract: bool) -> str:
@@ -202,6 +209,9 @@ def datasource(extract: bool = False) -> str:
       <aliases enabled='yes' />
       {b.calc("Calculation_1", "Cust Total", "{FIXED [Cust ID]: SUM([Sales])}")}
       {b.calc("Calculation_2", "Name Category", "[Name] + [Category]", "string", "dimension")}
+      {b.calc("Calculation_3", "Ann Sales", "IF [Name] = 'Ann' THEN [Sales] END")}
+      {b.calc("Calculation_4", "Buyers", BUYERS, "integer")}
+      {b.calc("Calculation_5", "Open Buyers", "MAX([Buyers]) - COUNTD([Cust ID])", "integer")}
       {object_graph(extract)}
     </datasource>"""
 
@@ -599,16 +609,153 @@ def test_guard_blocks_one_to_many(model_ir: IR, engine: Engine) -> None:
     assert info.value.unsupported
 
 
+def test_guard_not_needed_for_duplicate_safe_aggregates(model_ir: IR, engine: Engine) -> None:
+    # 與上一個相同的檢視，但量值與排序都是 MAX：重複的列不影響結果，不需要檢查
+    sort = Sort(
+        field=ids(model_ir)["Cust ID"],
+        kind="by_field",
+        order="desc",
+        by=measure(model_ir, "Sales", "max"),
+    )
+    ir = view(
+        model_ir,
+        [dim(model_ir, "Cust ID"), dim(model_ir, "Category")],
+        [measure(model_ir, "Sales", "max")],
+        sorts=[sort],
+    )
+    assert worksheet_sql(ir, "Base").guards == []
+    assert [(r[0], r[1], _plain(r[2])) for r in run(ir, engine).rows] == [
+        ("C1", "Furniture", 100),
+        ("C1", "Office", 100),
+        ("C2", "Furniture", 70),
+        ("C2", "Office", 70),
+        ("C3", "Tech", 30),
+        (None, None, 20),
+        ("C9", "Office", 10),
+    ]
+
+
+def test_guard_not_needed_for_relationship_keys(model_ir: IR, engine: Engine) -> None:
+    # 分支只用到關聯欄位本身（Cust ID (Customers)）：一個關聯值只對應一個值，排序值不會重複計算
+    sort = Sort(
+        field=ids(model_ir)["Cust ID"], kind="by_field", order="desc", by=measure(model_ir, "Sales")
+    )
+    ir = view(
+        model_ir,
+        [dim(model_ir, "Cust ID"), dim(model_ir, "Cust ID (Customers)")],
+        [measure(model_ir, "Sales")],
+        sorts=[sort],
+    )
+    assert worksheet_sql(ir, "Base").guards == []
+    assert [(r[0], r[1], _plain(r[2])) for r in run(ir, engine).rows] == [
+        ("C1", "C1", 150),
+        ("C2", "C2", 70),
+        ("C3", "C3", 30),
+        (None, None, 20),
+        ("C9", None, 10),
+    ]
+
+
+# ---------------------------------------------------------------- 量值來自多張資料表
+
+
+def test_measures_from_two_tables(model_ir: IR, engine: Engine) -> None:
+    """各量值在自己的資料表彙總，再依維度合併（完整外部連接）：任一邊有的維度值都列出，沒有該資料表的
+    列時它的量值為 Null（COUNTD 與筆數也是 Null，不是 0）。"""
+    cols = [measure(model_ir, "Sales"), measure(model_ir, "Customers")]
+    # 維度在 CUSTOMERS：沒有訂單的 Dee 有客戶數、沒有銷售；沒有對應客戶的訂單（C9、Null）在 Null
+    by_name = view(model_ir, [dim(model_ir, "Name")], cols)
+    assert rows_of(run(by_name, engine)) == {
+        "Ann": (150, 1),
+        "Bob": (70, 1),
+        "Cid": (30, 1),
+        "Dee": (None, 1),
+        None: (30, None),
+    }
+    # 維度在兩邊共同的維度表 REGIONS：沒有客戶的 North 也列出（另以維度查詢）
+    by_region = view(model_ir, [dim(model_ir, "Region")], cols)
+    assert rows_of(run(by_region, engine)) == {
+        "East": (180, 2),
+        "West": (70, 1),
+        "South": (None, 1),
+        "North": (None, None),
+        None: (30, None),
+    }
+    # 維度在 ORDERS：C9 不在 CUSTOMERS；沒有訂單的 Dee 算在 Null（與沒有客戶的 O6 同一個標記）
+    by_cust = view(
+        model_ir,
+        [dim(model_ir, "Cust ID")],
+        [measure(model_ir, "Sales"), measure(model_ir, "Name", "countd")],
+    )
+    assert rows_of(run(by_cust, engine)) == {
+        "C1": (150, 1),
+        "C2": (70, 1),
+        "C3": (30, 1),
+        "C9": (10, None),
+        None: (20, 1),
+    }
+    query = worksheet_sql(by_name, "Base")
+    assert query.guards == []
+    notes = [d for n in query.plan for d in n.detail]
+    assert any("量值來自「Orders」、「Customers」" in n for n in notes)
+
+
+def test_fixed_lod_with_measure_from_another_table(model_ir: IR, engine: Engine) -> None:
+    """FIXED LOD 的量值在 CUSTOMERS（Buyers：買過該產品的客戶數），維度在 ORDERS 與 PRODUCTS；
+    檢視依 ORDERS 的 Prod ID，Open Buyers = MAX(Buyers) - COUNTD(訂單的 Cust ID)。
+
+    LOD 以 CUSTOMERS 為量值表：C1 →（P1 Furniture）（P1 Office）（P2 Office）、C2 →（P1 Furniture）
+    （P1 Office）、C3 →（P3 Tech）、C4 沒有訂單 →（Null、Null）；（P1、Other）2、（P1、Office）2、
+    （P2、Office）1、（P3、Other）1、（Null、Other）1。檢視的彙總都屬於 ORDERS，標記只來自 ORDERS 的列：
+    P4 沒有對應的產品（P4、Other），不在 LOD 的結果中，Buyers 為 Null。
+    """
+    cols = [
+        measure(model_ir, "Cust ID", "countd"),
+        measure(model_ir, "Buyers", "max"),
+        FieldUse(field=ids(model_ir)["Open Buyers"]),
+    ]
+    ir = view(model_ir, [dim(model_ir, "Prod ID")], cols)
+    assert rows_of(run(ir, engine)) == {
+        "P1": (2, 2, 0),
+        "P2": (2, 1, -1),
+        "P3": (1, 1, 0),
+        "P4": (0, None, None),
+    }
+    # 只用到 REGIONS 的維度篩選：兩部分各以自己的半連接套用；FIXED LOD 在維度篩選之前計算
+    east = categorical(model_ir, "Region", "include", ["East"])
+    filtered = view(model_ir, [dim(model_ir, "Prod ID")], cols, [east])
+    assert rows_of(run(filtered, engine)) == {"P1": (1, 2, 1), "P2": (1, 1, 0), "P3": (1, 1, 0)}
+    assert worksheet_sql(filtered, "Base").guards == []
+    # 改為內容篩選：LOD 只算 East 的客戶（C1、C3）
+    context = east.model_copy(update={"stage": "context"})
+    ir = view(model_ir, [dim(model_ir, "Prod ID")], cols, [context])
+    assert rows_of(run(ir, engine)) == {"P1": (1, 1, 0), "P2": (1, 1, 0), "P3": (1, 1, 0)}
+
+
+def test_top_n_with_measures_from_two_tables(model_ir: IR, engine: Engine) -> None:
+    # 依 SUM(Sales) 取前 2 名（只以 ORDERS 的列排名）；成員的篩選套用到兩部分的列
+    top = TopNFilter(
+        kind="top_n",
+        id="flt_top",
+        field=dim(model_ir, "Name"),
+        stage="top_n",
+        direction="top",
+        count=2,
+        by="SUM([Sales])",
+        source_ref="test",
+    )
+    cols = [measure(model_ir, "Sales"), measure(model_ir, "Customers")]
+    ir = view(model_ir, [dim(model_ir, "Name")], cols, [top])
+    assert rows_of(run(ir, engine)) == {"Ann": (150, 1), "Bob": (70, 1)}
+
+
 # ---------------------------------------------------------------- 不支援
 
 
-def test_measures_from_two_tables_unsupported(model_ir: IR) -> None:
-    ir = view(
-        model_ir,
-        [dim(model_ir, "Name")],
-        [measure(model_ir, "Sales"), measure(model_ir, "Customers")],
-    )
-    with pytest.raises(QueryError, match="量值來自多張資料表") as info:
+def test_aggregate_mixing_two_tables_unsupported(model_ir: IR) -> None:
+    # 同一個彙總用到 CUSTOMERS 與 ORDERS 的欄位（Tableau 以列層級連接後再彙總）
+    ir = view(model_ir, [dim(model_ir, "Region")], [measure(model_ir, "Ann Sales")])
+    with pytest.raises(QueryError, match="同時用到多張資料表（「Customers」、「Orders」）") as info:
         worksheet_sql(ir, "Base")
     assert info.value.unsupported
 
@@ -699,6 +846,15 @@ def test_extract_model(tmp_path: Path) -> None:
             "Tech": 30,
             "Toys": None,
             None: 20,
+        }
+        # 量值來自兩張資料表
+        two = [measure(ir, "Sales"), measure(ir, "Customers")]
+        assert query(view(ir, [dim(ir, "Name")], two)) == {
+            "Ann": (150, 1),
+            "Bob": (70, 1),
+            "Cid": (30, 1),
+            "Dee": (None, 1),
+            None: (30, None),
         }
         sort = Sort(
             field=ids(ir)["Cust ID"], kind="by_field", order="desc", by=measure(ir, "Sales")

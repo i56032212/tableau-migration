@@ -181,9 +181,14 @@ Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表
   篩選仍在自己的運算階段套用（例如維度篩選在 FIXED LOD 之後）
 - 在比檢視粗的層級彙總（FIXED／EXCLUDE LOD、Top N、依欄位排序、TOTAL）而其他資料表是一對多時，
   量值會重複計算：查詢附帶檢查，執行前確認關聯值都只對應一組欄位值（星狀模型的維度表都是如此），
-  否則列為不支援，不給出與 Tableau 不同的數字
+  否則列為不支援，不給出與 Tableau 不同的數字；不受重複影響的彙總（MIN、MAX、COUNTD、ATTR）不需要檢查
+- 量值來自多張資料表（例如一張表的 COUNTD 與另一張表的 FIXED LOD）：每張量值表各自連接其他資料表、
+  套用篩選、在檢視的層級彙總，再依維度合併（完整外部連接）：任一張表有的維度值都列出，
+  沒有該表的列時它的量值為 Null（COUNTD 與筆數也是 Null）；每個彙總只以所屬量值表的列計算，
+  例如 FIXED LOD 只以 LOD 中量值所在的資料表計算、檢視的標記只來自檢視的彙總所屬的資料表
 
-尚不支援（查詢時列為不支援）：同一張工作表的量值來自多張資料表、同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
+尚不支援（查詢時列為不支援）：同一個彙總用到多張資料表的欄位（例如 `SUM(IF [客戶].[區域] = 'East' THEN [訂單].[金額] END)`）、
+同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
 Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（解析時列入 unsupported）。
 
 ## Published Data Source
@@ -512,7 +517,9 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 - **Relationship 模型**：語意依 Tableau 文件（「How Analysis Works for Multi-table Data Sources」）與公開文章推定；
   維度表中沒有量值的成員何時列出、只用到其他資料表欄位的篩選對沒有關聯的列以 Null 判斷，這兩點待真實報表確認。
   維度是一對多資料表欄位的運算式（日期部分、計算欄位）時，Tableau 在原值還是運算式的值上去重不明，列為不支援
-  （查詢附帶的檢查）；關聯的效能選項（基數、參照完整性）不影響結果，一律以「多對多、部分相符」的語意查詢
+  （查詢附帶的檢查）；關聯的效能選項（基數、參照完整性）不影響結果，一律以「多對多、部分相符」的語意查詢。
+  量值來自多張資料表時，FIXED LOD 的值在檢視層級彙總（例如 MAX）依篩選後各列出現的 LOD 維度組合計算
+  （與單一資料表時相同）；維度表中沒有量值、另以維度查詢補上的成員，LOD 的值也是 Null，這點待真實報表確認
 - **使用者篩選與使用者函式**：Tableau「建立使用者篩選」產生的集合 XML 依公開資料推定（交集 level-members 與
   各使用者條件的成員聯集），工作表上以空的類別篩選表示「在集合中」；比對名稱不分大小寫、USERDOMAIN 對本機帳號的值
   （推定為 `local`）待真實報表確認；USERATTRIBUTE 系列只在 Tableau Cloud 與嵌入時有值，新平台取自 SSO 的宣告
@@ -540,7 +547,7 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
 合併集合與合併欄位（Combined Field）、趨勢線、地圖、LOD 的維度本身含 LOD、百分位數與百分比等其他快速
 Table Calculation、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
-Relationship 模型中量值來自多張資料表的工作表、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
+Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
 總計的 Total Using、總計中的 Table Calculation 或與量值篩選並用、標題中的 Table Calculation 值、
 故事點記下的其他狀態（參數、範圍篩選、排序等）、導覽到 Story 的按鈕。
