@@ -59,6 +59,8 @@ jobs:
           --distpath desktop/engine/dist --workpath desktop/engine/build --noconfirm
       - name: 本機引擎冒煙測試（開啟 .twbx、查詢、存成報表套件、關閉後重新開啟）
         run: python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine.exe fixtures/superstore_demo/superstore_demo.twbx
+      - name: Windows 認證管理員（存放伺服器權杖）
+        run: uv run --no-dev python -c "from tmig_service.credentials import WindowsCredentials, selftest; selftest(WindowsCredentials()); print('認證管理員：寫入、讀回、覆蓋、刪除都正常')"
       - name: 建置桌面版安裝檔（Tauri＋NSIS）
         working-directory: desktop
         run: |

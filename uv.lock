@@ -1225,6 +1225,7 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pypdf" },
     { name = "tmig" },
+    { name = "truststore" },
     { name = "uvicorn" },
 ]
 
@@ -1236,6 +1237,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8" },
     { name = "pypdf", specifier = ">=5" },
     { name = "tmig", editable = "kernel" },
+    { name = "truststore", specifier = ">=0.10" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 

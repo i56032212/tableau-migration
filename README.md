@@ -337,7 +337,7 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 | `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
 | `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2、Q3：`--mail`、`--auth`） |
 | `tmig usage summary <使用紀錄目錄> [--fixtures 目錄] [--days 90] [--csv 檔案]` | 每份報表的檢視次數、使用者數與最後一次檢視（R1） |
-| `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔] [--usage-dir 目錄]` | 查詢服務與檢視器（F2–F4；身分驗證與使用紀錄見各節） |
+| `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔] [--usage-dir 目錄] [--store 目錄]` | 查詢服務與檢視器（F2–F4；身分驗證、使用紀錄、發布與版本見各節） |
 | `tmig desktop serve [--workspace 目錄] [--port 0] [--clean] [--exit-with-parent]` | 桌面版的本機引擎：只接受本機、帶權杖的連線，由桌面版外殼啟動（D0，見「桌面版」） |
 | `tmig ir validate <IR 檔>`、`tmig ir schema --out <檔案>` | 驗證 IR、匯出 JSON Schema（A1） |
 
@@ -361,7 +361,7 @@ tableau-migration/
 │   ├── verify/             cases.yaml、欄位對照、正規化、比對、差異報告
 │   └── cli.py              tmig 命令列
 ├── kernel/schema/          IR 的 JSON Schema（由程式產生）
-├── service/                FastAPI 查詢服務（tmig_service：身分驗證、權限、訂閱、使用紀錄）
+├── service/                FastAPI 查詢服務（tmig_service：身分驗證、權限、訂閱、使用紀錄、報表庫與發布、桌面版）
 ├── web/                    React＋TypeScript 檢視器（建置結果在 web/dist）
 ├── desktop/                桌面版：Tauri 外殼、本機引擎的打包（PyInstaller）與冒煙測試
 ├── tools/                  連 Tableau Server 的工具：tableau_server（盤點、下載、匯出）、fetch_expected、compare_screens
@@ -375,10 +375,11 @@ tableau-migration/
 
 桌面版（規格見 Claude Docs 的「桌面版編輯器規格」）是裝在作者電腦上的應用程式，功能目標是公司使用的
 Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twbx、.twb 或報表套件 .tmigx，以平台的引擎
-檢視與查詢，另存成報表套件；編輯在之後的階段加入。
+檢視與查詢，另存成報表套件，登入伺服器、發布與從伺服器開啟；編輯在之後的階段加入。
 
 - **外殼**（`desktop/src-tauri`，Tauri 2）：啟動本機引擎、主視窗載入檢視器；檔案選單（開啟 Ctrl+O、儲存 Ctrl+S、
-  另存新檔 Ctrl+Shift+S、關閉報表 Ctrl+W）與選檔、存檔對話框
+  另存新檔 Ctrl+Shift+S、關閉報表 Ctrl+W）與選檔、存檔對話框；伺服器選單（登入、從伺服器開啟、發布、登出）；
+  只執行一份
 - **本機引擎**（`tmig desktop serve`，見 `tmig_service.desktop`）：與伺服器同一份程式；只綁 127.0.0.1，
   每次啟動產生權杖，檢視器第一次帶 `?token=` 進來時換成 cookie，Host 標頭不是本機的一律拒絕；
   身分為作業系統的帳號（沒有群組）；開啟的檔案複製到工作區，原始檔不動
@@ -388,6 +389,27 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
   查詢每張工作表、存成報表套件），再以 Tauri 產生 NSIS 安裝檔（安裝在使用者資料夾，不需要系統管理員權限）
 
 開發與打包的方式見 `desktop/README.md`。
+
+## 發布與版本
+
+伺服器（`tmig serve`）的報表庫（`--store`，或環境變數 `TMIG_STORE`；預設為報表目錄旁的 `store`）存放發布的報表：
+
+- **每一版都保留**：每次發布是一個新版本，存成不再改動的報表套件；回復舊版也是發布一個內容相同的新版本。
+  伺服器的檢視器在報表的「版本」中列出每一版，可以比較兩版（列出新增、刪除、修改的工作表、欄位等的名稱）、
+  回復與下載。報表庫用的資料庫還沒決定前（規格待確認事項第 12 項）存在資料夾中（`tmig_service.store`）
+- **發布前檢查兩次**：桌面版先查、伺服器再查一次（`tmig_service.checks`）：結構與參照完整、每張工作表都能查詢、
+  每個 Live 連線在伺服器上都有設定；不支援的寫法只列為提醒
+- **衝突**：從伺服器開啟或發布後，桌面版記下版本；再發布時伺服器上已有別人發布的新版本，列出兩邊的差異，
+  由作者決定覆蓋（合併兩邊的修改要等編輯功能）
+- **權限**（沿用 Tableau）：發布到 Project 要 Publish（站台角色要能發布），覆蓋要 Overwrite，從伺服器下載要
+  Download Workbook；第一次發布與 Tableau 上同名的 workbook 時要它的 Overwrite，之後沿用它的權限與擁有者；
+  新報表的權限取自 Project 的 workbook 預設權限。沒有權限檔時登入的人都可以發布；沒有身分驗證時不能發布
+- **桌面版登入**（`tmig_service.desktop_auth`）：桌面版開啟系統瀏覽器到伺服器的核准頁，使用者以平常的方式登入
+  （SSO 閘道、OIDC、開發模式）後按「允許」，伺服器導回桌面版的本機網址，桌面版以授權碼＋PKCE 換得權杖，
+  存在 Windows 的認證管理員。權杖預設 30 天到期（`TMIG_DESKTOP_TOKEN_DAYS`），伺服器只存雜湊值；
+  使用者可以在檢視器的「桌面版的登入」撤銷。proxy 模式下反向代理要放行帶 `Authorization: Bearer` 的請求
+
+API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載）；上傳的報表套件上限 2 GB（`TMIG_MAX_UPLOAD_MB`）。
 
 ## 已知限制與待驗證
 

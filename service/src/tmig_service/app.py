@@ -13,6 +13,8 @@ API：
 - ``GET  /api/me``：目前的登入者與身分驗證模式；``/auth/*``：登入、登出與開發模式的切換使用者
 - ``POST /api/workbooks/{wb}/views/{view}/visit``：檢視器開啟一個 dashboard、工作表或 Story（使用紀錄，R1）
 - ``GET  /api/usage?days=90``：每份報表與 view 的檢視次數、使用者數與最後一次檢視（有權限檔時限管理員）
+- 報表庫（D0，``tmig serve --store``）：發布與版本（見 tmig_service.publishing）、桌面版登入
+  （見 tmig_service.desktop_auth）；發布的報表與 fixtures 的報表一起列在 /api/workbooks
 
 其餘路徑提供檢視器（web/dist）。
 
@@ -69,8 +71,9 @@ from tmig.sqlgen.query import (
 )
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
-from tmig_service.access import Authorizer, Grant, viewer_ir
+from tmig_service.access import Authorizer, Grant, Rights, viewer_ir
 from tmig_service.auth import Authenticator, AuthSettings, auth_router, load_auth
+from tmig_service.store import STORE_ENV, ReportRecord, ReportStore
 from tmig_service.usage import UsageLog, Visit, summarize
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -90,18 +93,22 @@ class Loaded:
     directory: Path
     ir: IR
     stamp: float
+    published: ReportRecord | None = None
+    """報表庫的報表（發布到伺服器的）；fixtures 的報表為 None。"""
 
 
 class Workspace:
-    """fixtures 目錄：每個含 golden.ir.json（或 .twbx、.twb）的子目錄是一份報表。"""
+    """fixtures 目錄：每個含 golden.ir.json（或 .twbx、.twb）的子目錄是一份報表；
+    有報表庫時再加上發布的報表（目前的版本；與 fixtures 同名時以報表庫為準）。"""
 
-    def __init__(self, fixtures: Path) -> None:
+    def __init__(self, fixtures: Path, store: ReportStore | None = None) -> None:
         self.fixtures = fixtures
+        self.store = store
         self._cache: dict[str, Loaded] = {}
         self._lock = threading.Lock()
         self._data_ready: set[str] = set()
 
-    def names(self) -> list[str]:
+    def fixture_names(self) -> list[str]:
         if not self.fixtures.is_dir():
             return []
         return sorted(
@@ -111,16 +118,28 @@ class Workspace:
             and ((p / "golden.ir.json").is_file() or any(p.glob("*.twbx")) or any(p.glob("*.twb")))
         )
 
+    def names(self) -> list[str]:
+        found = set(self.fixture_names())
+        if self.store is not None:
+            found.update(self.store.ids())
+        return sorted(found)
+
     def get(self, name: str) -> Loaded:
-        if name not in self.names():
-            raise HTTPException(404, f"找不到報表「{name}」")
-        directory = self.fixtures / name
-        golden = directory / "golden.ir.json"
-        stamp = golden.stat().st_mtime if golden.is_file() else 0.0
+        record = self.store.get(name) if self.store is not None else None
+        if record is not None:
+            assert self.store is not None
+            directory = self.store.directory(record)
+            stamp = float(record.latest.version)
+        else:
+            if name not in self.fixture_names():
+                raise HTTPException(404, f"找不到報表「{name}」")
+            directory = self.fixtures / name
+            golden = directory / "golden.ir.json"
+            stamp = golden.stat().st_mtime if golden.is_file() else 0.0
         with self._lock:
             cached = self._cache.get(name)
-            if cached is None or cached.stamp != stamp:
-                cached = Loaded(directory, load_fixture_ir(directory), stamp)
+            if cached is None or cached.stamp != stamp or cached.directory != directory:
+                cached = Loaded(directory, load_fixture_ir(directory), stamp, record)
                 self._cache[name] = cached
                 self._data_ready.discard(name)
         return cached
@@ -166,11 +185,13 @@ def create_app(
     auth: AuthSettings | Authenticator | None = None,
     usage_dir: Path | None = None,
     routers: Sequence[APIRouter] = (),
+    store: ReportStore | None = None,
 ) -> FastAPI:
     """auth：身分驗證的設定；省略時依環境變數 TMIG_AUTH 讀取（沒有設定時不驗證）。
     usage_dir：使用紀錄的目錄；省略時依環境變數 TMIG_USAGE_DIR，都沒有時不記錄。
-    routers：額外的 API（例如桌面版的開啟與儲存），排在檢視器的頁面之前。"""
-    workspace = Workspace(fixtures or REPO_ROOT / "fixtures")
+    routers：額外的 API（例如桌面版的開啟與儲存），排在檢視器的頁面之前。
+    store：報表庫（發布、版本與桌面版登入）；沒有時不提供這些 API（例如桌面版的本機引擎）。"""
+    workspace = Workspace(fixtures or REPO_ROOT / "fixtures", store)
     usage_path = usage_dir or (
         Path(os.environ["TMIG_USAGE_DIR"]) if os.environ.get("TMIG_USAGE_DIR") else None
     )
@@ -179,11 +200,17 @@ def create_app(
     data = runtime or DataRuntime()
     authenticator = auth if isinstance(auth, Authenticator) else Authenticator(auth or load_auth())
     authorizer = Authorizer(authenticator.settings.permissions)
+    rights = Rights(authenticator.settings.permissions)
+
+    def grant_for(loaded: Loaded, user: Identity | None) -> Grant:
+        if loaded.published is not None:
+            return rights.read(user, loaded.published, loaded.directory, loaded.ir)
+        return authorizer.grant(user, loaded.directory, loaded.ir)
 
     def granted(wb: str, user: Identity | None) -> tuple[Loaded, Grant]:
         """報表與登入者的存取；沒有權限時與報表不存在相同，回應 404。"""
         loaded = workspace.get(wb)
-        grant = authorizer.grant(user, loaded.directory, loaded.ir)
+        grant = grant_for(loaded, user)
         if not grant.allowed:
             raise HTTPException(404, f"找不到報表「{wb}」")
         return loaded, grant
@@ -196,9 +223,26 @@ def create_app(
     app = FastAPI(title="Tableau 移轉查詢服務", version="0.1.0", lifespan=lifespan)
     app.state.authenticator = authenticator
     app.state.workspace = workspace
+    app.state.runtime = data
     app.include_router(auth_router(authenticator))
     for router in routers:
         app.include_router(router)
+    if store is not None:
+        from tmig_service.desktop_auth import TokenStore, desktop_auth_router
+        from tmig_service.publishing import publishing_router
+
+        authenticator.tokens = TokenStore(store.root / "desktop-tokens.json")
+        app.include_router(desktop_auth_router(authenticator, authenticator.tokens))
+
+        def loaded_ir(report_id: str) -> tuple[Path, IR]:
+            loaded = workspace.get(report_id)
+            return loaded.directory, loaded.ir
+
+        app.include_router(
+            publishing_router(
+                store, rights, data, loaded_ir, workspace.names, authenticator.identity
+            )
+        )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -261,12 +305,24 @@ def create_app(
         for name in workspace.names():
             loaded = workspace.get(name)
             ir = loaded.ir
-            grant = authorizer.grant(user, loaded.directory, ir)
+            grant = grant_for(loaded, user)
             if not grant.allowed:
                 continue
+            record = loaded.published
             result.append(
                 {
                     "id": name,
+                    "published": None
+                    if record is None
+                    else {
+                        "project": record.project,
+                        "project_name": rights.project_path(record.project),
+                        "version": record.latest.version,
+                        "published_at": record.latest.published_at,
+                        "publisher": record.latest.publisher,
+                        "can_download": rights.download(user, record).allowed,
+                        "can_overwrite": rights.overwrite(user, record).allowed,
+                    },
                     "workbook": ir.workbook.id,
                     "name": ir.workbook.name,
                     "dashboards": [
@@ -567,8 +623,10 @@ def serve(
     web_dist: Path | None = None,
     auth: Path | None = None,
     usage_dir: Path | None = None,
+    store: Path | None = None,
 ) -> None:
-    """auth：身分驗證設定檔；省略時讀環境變數 TMIG_AUTH。usage_dir：使用紀錄的目錄（預設為報表目錄旁的 usage）。"""
+    """auth：身分驗證設定檔；省略時讀環境變數 TMIG_AUTH。usage_dir：使用紀錄的目錄（預設為報表目錄旁的 usage）。
+    store：報表庫（發布的報表與每一版）；省略時讀環境變數 TMIG_STORE，都沒有時為報表目錄旁的 store。"""
     import sys
 
     import uvicorn
@@ -587,8 +645,15 @@ def serve(
         if os.environ.get("TMIG_USAGE_DIR")
         else fixtures.resolve().parent / "usage"
     )
+    store_root = store or (
+        Path(os.environ[STORE_ENV])
+        if os.environ.get(STORE_ENV)
+        else fixtures.resolve().parent / "store"
+    )
     uvicorn.run(
-        create_app(fixtures, web_dist, auth=settings, usage_dir=usage),
+        create_app(
+            fixtures, web_dist, auth=settings, usage_dir=usage, store=ReportStore(store_root)
+        ),
         host=host,
         port=port,
         proxy_headers=False,

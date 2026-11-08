@@ -9,18 +9,23 @@
   計算公式、資料源篩選與原始 XML（檢視器只需要版面、欄位名稱與篩選）
 - 報表對應到 Tableau 的 workbook：cases.yaml 的 tableau_views_url 中的網址名稱，其次是報表名稱；
   權限檔中找不到的報表只有管理員看得到
+- 發布到報表庫的報表（D0）以報表庫記下的 Project、擁有者與權限判斷（見 Rights）；發布要 Project 的
+  Publish，覆蓋要報表的 Overwrite（Write），從伺服器下載要 Download Workbook（ExportXml）
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from tmig.access.permissions import ADMIN_ROLES, Access, Permissions, WorkbookEntry
+from tmig.access.permissions import ADMIN_ROLES, Access, Permissions, ProjectEntry, WorkbookEntry
 from tmig.catalog import workbook_url_name
 from tmig.ir import IR, iter_zones
 from tmig.planner.identity import Identity
+
+if TYPE_CHECKING:
+    from tmig_service.store import ReportRecord
 
 
 @dataclass(frozen=True)
@@ -88,11 +93,14 @@ class Authorizer:
         assert self.permissions is not None
         return self.permissions.workbook(workbook_url_name(directory), ir.workbook.name)
 
-    def grant(self, user: Identity | None, directory: Path, ir: IR) -> Grant:
-        """沒有權限檔時不限制（只要求登入）；有權限檔時依 Tableau 的規則判斷。"""
+    def grant(
+        self, user: Identity | None, directory: Path, ir: IR, entry: WorkbookEntry | None = None
+    ) -> Grant:
+        """沒有權限檔時不限制（只要求登入）；有權限檔時依 Tableau 的規則判斷。
+        entry：報表庫的報表直接給它的權限，不依目錄名稱與報表名稱找。"""
         if self.permissions is None or user is None:
             return OPEN
-        entry = self.entry(directory, ir)
+        entry = entry or self.entry(directory, ir)
         if entry is None:
             admin = (user.site_role or "") in ADMIN_ROLES
             return Grant(allowed=admin, full_definition=admin)
@@ -101,6 +109,99 @@ class Authorizer:
             return Grant(allowed=False)
         download = self.permissions.access(user, entry, "ExportXml").allowed
         return Grant(allowed=True, views=access.views, full_definition=download)
+
+
+DEFAULT_PROJECT = ProjectEntry(id="default", name="預設")
+"""沒有權限檔時唯一的 Project（與 Tableau 站台的 Default 相同）。"""
+LOGIN_REQUIRED = Access(allowed=False, reason="發布需要登入：伺服器沒有設定身分驗證時不能發布")
+ALLOWED = Access(allowed=True)
+
+
+class Rights:
+    """報表庫的報表：誰能看、發布、覆蓋、下載。沒有權限檔時登入的人都可以；沒有身分驗證時不能發布。"""
+
+    def __init__(self, permissions: Permissions | None) -> None:
+        self.permissions = permissions
+        self.authorizer = Authorizer(permissions)
+
+    def projects(self) -> list[ProjectEntry]:
+        return self.permissions.projects if self.permissions is not None else [DEFAULT_PROJECT]
+
+    def project(self, project_id: str) -> ProjectEntry | None:
+        return next((p for p in self.projects() if p.id == project_id), None)
+
+    def project_path(self, project_id: str) -> str:
+        """Project 的完整名稱，例如「Sales / 華北」。"""
+        if self.permissions is None:
+            project = self.project(project_id)
+            return project.name if project is not None else project_id
+        chain = self.permissions.ancestors(project_id)
+        return " / ".join(p.name for p in reversed(chain)) if chain else project_id
+
+    def tableau_workbook(self, project_id: str, name: str) -> WorkbookEntry | None:
+        """同一個 Project 中同名的 Tableau workbook：第一次發布時對應過去，沿用它的權限。"""
+        if self.permissions is None:
+            return None
+        wanted = name.casefold()
+        found = [
+            w
+            for w in self.permissions.workbooks
+            if w.project == project_id and w.name.casefold() == wanted
+        ]
+        return found[0] if len(found) == 1 else None
+
+    def entry(self, record: ReportRecord) -> WorkbookEntry:
+        if self.permissions is not None and record.tableau_workbook:
+            found = next(
+                (w for w in self.permissions.workbooks if w.id == record.tableau_workbook), None
+            )
+            if found is not None:
+                return found.model_copy(update={"project": record.project})
+        return WorkbookEntry(
+            id=record.id,
+            name=record.name,
+            content_url=record.id,
+            project=record.project,
+            owner=record.owner,
+            rules=record.rules,
+        )
+
+    def read(self, user: Identity | None, record: ReportRecord, directory: Path, ir: IR) -> Grant:
+        if self.permissions is None:
+            return OPEN
+        return self.authorizer.grant(user, directory, ir, self.entry(record))
+
+    def publish(self, user: Identity | None, project_id: str) -> Access:
+        if user is None:
+            return LOGIN_REQUIRED
+        if self.permissions is None:
+            if self.project(project_id) is None:
+                return Access(allowed=False, reason="找不到 Project")
+            return ALLOWED
+        return self.permissions.publish_access(user, project_id)
+
+    def overwrite(self, user: Identity | None, record: ReportRecord) -> Access:
+        """覆蓋（發布新版本、回復舊版）：Project 的 Publish 加上報表的 Overwrite。"""
+        publish = self.publish(user, record.project)
+        if not publish.allowed or self.permissions is None or user is None:
+            return publish
+        access = self.permissions.access(user, self.entry(record), "Write")
+        return access if not access.allowed else ALLOWED
+
+    def takeover(self, user: Identity | None, workbook: WorkbookEntry, project_id: str) -> Access:
+        """第一次發布同名的 Tableau workbook（之後沿用它的權限）：與在 Tableau 上覆蓋相同，
+        要 Project 的 Publish 加上那份 workbook 的 Overwrite。"""
+        publish = self.publish(user, project_id)
+        if not publish.allowed or self.permissions is None or user is None:
+            return publish
+        entry = workbook.model_copy(update={"project": project_id})
+        access = self.permissions.access(user, entry, "Write")
+        return access if not access.allowed else ALLOWED
+
+    def download(self, user: Identity | None, record: ReportRecord) -> Access:
+        if self.permissions is None or user is None:
+            return ALLOWED if self.permissions is None else LOGIN_REQUIRED
+        return self.permissions.access(user, self.entry(record), "ExportXml")
 
 
 def viewer_ir(ir: IR, grant: Grant) -> dict[str, Any]:
@@ -129,4 +230,4 @@ def viewer_ir(ir: IR, grant: Grant) -> dict[str, Any]:
     return data
 
 
-__all__ = ["OPEN", "Authorizer", "Grant", "viewer_ir"]
+__all__ = ["DEFAULT_PROJECT", "OPEN", "Authorizer", "Grant", "Rights", "viewer_ir"]

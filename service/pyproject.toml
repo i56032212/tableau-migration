@@ -10,6 +10,8 @@ dependencies = [
     # 身分驗證（P2）：OIDC 的權杖交換與 ID Token 驗章
     "httpx>=0.27",
     "pyjwt[crypto]>=2.8",
+    # 桌面版連到伺服器：用作業系統的憑證存放區（公司內部 CA 簽發的伺服器憑證）
+    "truststore>=0.10",
     # 訂閱（Q3）：以檢視器產生 PNG、PDF，多個 view 的 PDF 合併成一份
     "playwright==1.63.0",
     "pypdf>=5",

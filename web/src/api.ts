@@ -3,16 +3,34 @@ import type {
   DesktopDocument,
   DesktopOpened,
   DesktopSaved,
+  DesktopToken,
   Domain,
   IR,
   Me,
+  PublishResult,
   QueryState,
   RenderResponse,
+  ReportChange,
+  ReportDetail,
+  ServerProject,
+  ServerReport,
+  ServerStatus,
   WorkbookSummary,
 } from "./types";
 
 /** 查詢服務回應 401（沒有登入或登入逾時）時發出，SessionGate 收到後重新確認登入者。 */
 export const UNAUTHORIZED_EVENT = "tmig:unauthorized";
+
+/** API 的錯誤：status 與 detail（文字，或發布失敗時的 {error, message, …}）。 */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: unknown,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -21,17 +39,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   if (!response.ok) {
-    let detail = response.statusText;
+    let detail: unknown = response.statusText;
+    let text = response.statusText;
     try {
       const body = await response.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      detail = body.detail;
+      text =
+        typeof body.detail === "string"
+          ? body.detail
+          : typeof body.detail?.message === "string"
+            ? body.detail.message
+            : JSON.stringify(body.detail);
     } catch {
       // 回應不是 JSON 時沿用狀態文字
     }
-    throw new Error(`${response.status} ${detail}`);
+    throw new ApiError(response.status, detail, `${response.status} ${text}`);
   }
   return (await response.json()) as T;
 }
+
+const report = (id: string) => `/api/reports/${encodeURIComponent(id)}`;
+
+/** 報表庫中某一版的報表套件（下載）。 */
+export const packageUrl = (id: string, version: number) => `${report(id)}/versions/${version}/package`;
 
 const wb = (id: string) => `/api/workbooks/${encodeURIComponent(id)}`;
 
@@ -68,4 +98,41 @@ export const api = {
     request<DesktopSaved>("/api/desktop/save", { method: "POST", body: JSON.stringify({ workbook, path }) }),
   desktopClose: (workbook: string) =>
     request<{ ok: boolean }>("/api/desktop/close", { method: "POST", body: JSON.stringify({ workbook }) }),
+  /** 桌面版連到伺服器：登入、Project 與報表、從伺服器開啟、發布 */
+  serverStatus: () => request<ServerStatus>("/api/desktop/server"),
+  serverSignIn: (url: string) =>
+    request<{ authorize_url: string }>("/api/desktop/server/signin", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+  serverSignOut: () => request<{ ok: boolean }>("/api/desktop/server/signout", { method: "POST" }),
+  serverProjects: () => request<ServerProject[]>("/api/desktop/server/projects"),
+  serverReports: () => request<ServerReport[]>("/api/desktop/server/reports"),
+  serverOpen: (report: string, version?: number) =>
+    request<DesktopOpened>("/api/desktop/server/open", {
+      method: "POST",
+      body: JSON.stringify(version === undefined ? { report } : { report, version }),
+    }),
+  serverPublish: (body: {
+    workbook: string;
+    name?: string;
+    project?: string | null;
+    comment?: string;
+    report?: string | null;
+    overwrite?: boolean;
+    force?: boolean;
+  }) => request<PublishResult>("/api/desktop/server/publish", { method: "POST", body: JSON.stringify(body) }),
+  serverBrowse: (path: string) =>
+    request<{ ok: boolean }>("/api/desktop/server/browse", { method: "POST", body: JSON.stringify({ path }) }),
+  /** 伺服器：報表庫的版本、比較、回復；桌面版的登入 */
+  report: (id: string) => request<ReportDetail>(report(id)),
+  compare: (id: string, base: number, target: number) =>
+    request<{ base: number; target: number; changes: ReportChange[] }>(
+      `${report(id)}/compare?base=${base}&target=${target}`,
+    ),
+  restore: (id: string, version: number) =>
+    request<PublishResult>(`${report(id)}/versions/${version}/restore`, { method: "POST", body: "{}" }),
+  desktopTokens: () => request<DesktopToken[]>("/api/desktop-auth/tokens"),
+  revokeDesktopToken: (id: string) =>
+    request<{ ok: boolean }>(`/api/desktop-auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };

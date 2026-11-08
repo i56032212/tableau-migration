@@ -1,7 +1,23 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { caseState, DashboardView } from "./Dashboard";
-import { closeDocument, installMenuCommands, openDocument, saveDocument } from "./desktop";
+import {
+  closeDocument,
+  DIALOG_EVENT,
+  type DesktopDialog,
+  installMenuCommands,
+  openDialog,
+  openDocument,
+  saveDocument,
+} from "./desktop";
+import {
+  DesktopTokensButton,
+  Modal,
+  OpenFromServerDialog,
+  PublishDialog,
+  ServerPanel,
+  VersionsButton,
+} from "./Server";
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
 import { StoryView } from "./Story";
@@ -75,10 +91,24 @@ export function App() {
   );
 }
 
-/** 桌面版：讓外殼的選單（開啟、儲存、另存新檔、關閉報表）呼叫檢視器。 */
+/** 桌面版：讓外殼的選單呼叫檢視器，並顯示伺服器的對話框（登入、從伺服器開啟、發布）。 */
 function DesktopCommands() {
+  const [dialog, setDialog] = useState<DesktopDialog | null>(null);
   useEffect(() => installMenuCommands(navigate), []);
-  return null;
+  useEffect(() => {
+    const show = (e: Event) => setDialog((e as CustomEvent<DesktopDialog>).detail);
+    window.addEventListener(DIALOG_EVENT, show);
+    return () => window.removeEventListener(DIALOG_EVENT, show);
+  }, []);
+  const close = () => setDialog(null);
+  if (!dialog) return null;
+  if (dialog.kind === "publish") return <PublishDialog workbook={dialog.workbook} onClose={close} />;
+  if (dialog.kind === "open-server") return <OpenFromServerDialog onClose={close} go={navigate} />;
+  return (
+    <Modal title="登入伺服器" onClose={close}>
+      <ServerPanel onOpenFromServer={() => setDialog({ kind: "open-server" })} />
+    </Modal>
+  );
 }
 
 function Home({ me }: { me: Me }) {
@@ -97,8 +127,10 @@ function Home({ me }: { me: Me }) {
             開啟檔案…
           </button>
         )}
+        {!desktop && me.user && me.mode !== "none" && <DesktopTokensButton />}
         <UserBar me={me} />
       </div>
+      {desktop && <ServerPanel onOpenFromServer={() => openDialog({ kind: "open-server" })} />}
       {error && <p className="error">無法連到查詢服務：{error}</p>}
       {workbooks?.length === 0 && (
         <p>
@@ -148,6 +180,9 @@ function DocumentActions({ workbook, onClosed }: { workbook: string; onClosed?: 
       </button>
       <button type="button" onClick={() => void saveDocument(workbook, true)}>
         另存新檔…
+      </button>
+      <button type="button" onClick={() => openDialog({ kind: "publish", workbook })}>
+        發布…
       </button>
       {onClosed && (
         <button
@@ -287,6 +322,7 @@ function WorkbookPage({
         </div>
         {ir.unsupported.length > 0 && <span className="error">不支援 {ir.unsupported.length} 筆</span>}
         {me.mode === "desktop" && <DocumentActions workbook={workbook} onClosed={() => undefined} />}
+        {me.mode !== "desktop" && <VersionsButton workbook={workbook} />}
         <UserBar me={me} />
       </header>
       {dashboard && (

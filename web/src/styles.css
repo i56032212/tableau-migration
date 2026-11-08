@@ -39,6 +39,47 @@ button.primary { background: var(--accent); color: #fff; border: 1px solid var(-
 .toast { position: fixed; right: 16px; bottom: 16px; max-width: min(520px, calc(100vw - 32px)); z-index: 1000; background: var(--ink); color: #fff; border-radius: 6px; padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 16px rgb(0 0 0 / 20%); overflow-wrap: anywhere; }
 .toast.error { background: var(--error); }
 
+/* 伺服器（D0）：桌面版的登入、發布、從伺服器開啟；伺服器的版本與桌面版的登入 */
+.server-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 4px 0 16px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
+.server-panel form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.server-panel label { display: inline-flex; align-items: center; gap: 6px; }
+.server-panel input { font: inherit; padding: 3px 6px; min-width: min(320px, 70vw); }
+.server-panel p { flex-basis: 100%; margin: 0; }
+.server-panel button, .dialog-actions button, .modal-body table button, .compare button, .toolbar > button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+.server-panel button.link, button.link { background: none; border: none; color: var(--accent); padding: 0 2px; cursor: pointer; font: inherit; font-size: 13px; }
+.hint { color: var(--muted); font-size: 13px; }
+.success { color: #166534; font-weight: 600; }
+button.danger, .dialog-actions button.danger, .modal-body table button.danger { background: var(--error); border-color: var(--error); color: #fff; }
+.dialog-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 900; background: rgb(0 0 0 / 35%); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; overflow-y: auto; }
+.modal { background: var(--panel); border-radius: 8px; width: min(560px, 100%); box-shadow: 0 12px 40px rgb(0 0 0 / 25%); }
+.modal.wide { width: min(900px, 100%); }
+.modal header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.modal header h2 { font-size: 16px; margin: 0; }
+.modal header .close { font-size: 22px; line-height: 1; color: var(--muted); }
+.modal-body { padding: 12px 16px 16px; font-size: 14px; overflow-x: auto; }
+.modal-body table.list { border-collapse: collapse; width: 100%; font-size: 13px; }
+.modal-body table.list th, .modal-body table.list td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.modal-body table.list td.actions { white-space: nowrap; }
+.modal-body table.list td.actions > * + * { margin-left: 6px; }
+.dialog-actions { display: flex; gap: 8px; margin-top: 16px; }
+.publish-form { display: flex; flex-direction: column; gap: 10px; }
+.publish-form label { display: flex; flex-direction: column; gap: 4px; }
+.publish-form fieldset { border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.publish-form fieldset label { flex-direction: row; align-items: center; gap: 6px; }
+.publish-form input:not([type]), .publish-form select, .publish-form textarea { font: inherit; padding: 4px 6px; }
+.problems { margin: 8px 0; padding-left: 20px; }
+.problems .error { color: var(--error); }
+.problems .warning { color: var(--warn); }
+.changes h3 { font-size: 14px; margin: 12px 0 4px; }
+.changes ul { margin: 0; padding-left: 20px; }
+.changes .added { color: #166534; }
+.changes .removed { color: var(--error); }
+.compare { margin-top: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.compare label { display: inline-flex; align-items: center; gap: 4px; }
+.compare .changes { flex-basis: 100%; }
+
 .page { padding: 12px 16px 32px; overflow-x: auto; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; font-size: 14px; }
 .toolbar .sep { color: var(--muted); }

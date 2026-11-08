@@ -1,5 +1,6 @@
 """打包後的本機引擎冒煙測試：啟動、開啟 .twbx（由 Hyper 匯入萃取）、查詢每張工作表、存成報表套件、
-關閉（工作區的複本要刪得掉：Windows 上檔案還開著時刪不掉）、重新開啟報表套件，查詢結果的列數要相同。
+關閉（工作區的複本要刪得掉：Windows 上檔案還開著時刪不掉）、重新開啟報表套件，查詢結果的列數要相同；
+最後確認連到伺服器的程式有打包進去（以作業系統憑證存放區的 HTTPS 用戶端連一個沒有服務的埠）。
 
     python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine fixtures/superstore_demo/superstore_demo.twbx
 
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -32,6 +34,14 @@ def call(port: int, token: str, method: str, path: str, body: Any = None) -> Any
     with urllib.request.urlopen(request, timeout=600) as response:
         content = response.read()
     return json.loads(content) if path.startswith("/api/") else content
+
+
+def call_status(port: int, token: str, method: str, path: str, body: Any = None) -> tuple[int, Any]:
+    """與 call 相同，但錯誤時回傳狀態碼與 detail，不拋出例外。"""
+    try:
+        return 200, call(port, token, method, path, body)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read() or b"{}").get("detail")
 
 
 def render_all(port: int, token: str, document: str) -> dict[str, int]:
@@ -99,6 +109,14 @@ def main(engine: str, workbook: str) -> int:
             again = render_all(port, token, reopened["document"]["id"])
             assert again == first, f"重新開啟報表套件後列數不同：{again} ≠ {first}"
             print(f"關閉後重新開啟報表套件：{len(again)} 張工作表的列數相同")
+
+            server = call(port, token, "GET", "/api/desktop/server")
+            assert server["signed_in"] is False
+            status, detail = call_status(
+                port, token, "POST", "/api/desktop/server/signin", {"url": "https://127.0.0.1:9"}
+            )
+            assert status == 502 and "連不上伺服器" in str(detail), (status, detail)
+            print("連到伺服器的程式：已打包（連不上時回應 502）")
         finally:
             process.stdin.close()
             try:

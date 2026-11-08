@@ -334,6 +334,16 @@ export interface WorkbookSummary {
   worksheets: { id: string; name: string }[];
   stories?: { id: string; name: string }[];
   unsupported: number;
+  /** 發布到報表庫的報表（fixtures 的報表為 null） */
+  published?: {
+    project: string;
+    project_name: string;
+    version: number;
+    published_at: string;
+    publisher: string;
+    can_download: boolean;
+    can_overwrite: boolean;
+  } | null;
 }
 
 export interface CaseInfo {
@@ -391,6 +401,15 @@ export interface DesktopDocument {
   kind: "twbx" | "twb" | "package";
   /** 最近一次存成的報表套件 */
   saved: string | null;
+  /** 從伺服器開啟或發布到伺服器的報表；version 為之後發布時的基準版本 */
+  server?: {
+    url: string;
+    report: string;
+    version: number;
+    project: string;
+    project_name: string;
+    name: string;
+  } | null;
 }
 
 export interface DesktopOpened {
@@ -407,4 +426,97 @@ export interface DesktopSaved {
   datasources: string[];
   files: string[];
   missing_files: string[];
+}
+
+/** 桌面版連到的伺服器 */
+export interface ServerStatus {
+  url: string | null;
+  username: string | null;
+  name: string | null;
+  signed_in: boolean;
+  /** 正在等使用者在瀏覽器中核准 */
+  pending: boolean;
+  error: string | null;
+}
+
+export interface ServerProject {
+  id: string;
+  name: string;
+  path: string;
+  can_publish: boolean;
+}
+
+export interface ServerReport {
+  id: string;
+  name: string;
+  project: string;
+  project_name: string;
+  owner: string;
+  version: number;
+  published_at: string;
+  publisher: string;
+  comment: string;
+  url: string;
+  can_download: boolean;
+  can_overwrite: boolean;
+}
+
+export interface VersionRecord {
+  version: number;
+  published_at: string;
+  publisher: string;
+  comment: string;
+  size: number;
+  sha256: string;
+  restored_from: number | null;
+}
+
+export interface ReportDetail extends ServerReport {
+  /** 由新到舊 */
+  versions: VersionRecord[];
+}
+
+export interface ReportChange {
+  kind: "datasource" | "field" | "parameter" | "worksheet" | "dashboard" | "action" | "story";
+  id: string;
+  name: string;
+  change: "added" | "removed" | "changed";
+  parent: string | null;
+  text: string;
+}
+
+export interface CheckProblem {
+  level: "error" | "warning";
+  message: string;
+  worksheet: string | null;
+}
+
+export interface PublishResult {
+  report: ServerReport;
+  version: VersionRecord;
+  problems: CheckProblem[];
+  /** 伺服器上的報表網址（桌面版） */
+  address?: string;
+}
+
+/** 發布或回復失敗時伺服器回應的 detail */
+export interface PublishFailure {
+  error: "exists" | "conflict" | "checks" | "package" | "name" | "project" | "comment" | "too_large";
+  message: string;
+  problems?: CheckProblem[];
+  report?: ServerReport | null;
+  latest?: VersionRecord;
+  base_version?: number | null;
+  server_changes?: ReportChange[];
+  local_changes?: ReportChange[];
+  overwrite_changes?: ReportChange[];
+}
+
+export interface DesktopToken {
+  id: string;
+  label: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  current: boolean;
 }

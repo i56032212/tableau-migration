@@ -50,6 +50,8 @@ ADMIN_ROLES = frozenset(
     }
 )
 NO_ACCESS_ROLES = frozenset({"Unlicensed"})
+PUBLISH_ROLES = frozenset({"Creator", "ExplorerCanPublish", "Publisher", *ADMIN_ROLES})
+"""可以發布的站台角色（Viewer、Explorer 即使有 Project 的發布權限也不能發布）；Publisher 為舊版的名稱。"""
 Capability = str
 """Tableau 的能力名稱，例如 Read（檢視）、ExportXml（下載 workbook）、ExportData（下載摘要資料）。"""
 Mode = Literal["Allow", "Deny"]
@@ -169,6 +171,34 @@ class Permissions(BaseModel):
                 return project.workbook_defaults
         return workbook.rules
 
+    def project_rules(self, project_id: str | None) -> list[Rule]:
+        """Project 本身實際適用的規則：上層 Project 鎖定權限並套用到巢狀的 Project 時為上層的規則。"""
+        chain = self.ancestors(project_id)
+        if not chain:
+            return []
+        for project in chain[1:]:
+            if project.content_permissions == "LockedToProject":
+                return project.rules
+        return chain[0].rules
+
+    def publish_access(self, user: Identity, project_id: str | None) -> Access:
+        """發布到 Project（Tableau 的 Publish 能力，REST API 的名稱為 Write）：站台角色要能發布，
+        且是管理員、Project（或上層）的擁有者與 Project Leader，或 Project 的規則允許。"""
+        role = user.site_role or ""
+        if role in NO_ACCESS_ROLES:
+            return Access(allowed=False, reason="未授權的使用者（Unlicensed）")
+        if user.site_role is not None and role not in PUBLISH_ROLES:
+            return Access(allowed=False, reason=f"站台角色 {role} 不能發布")
+        if role in ADMIN_ROLES:
+            return Access(allowed=True, reason="管理員")
+        if self.project(project_id) is None:
+            return Access(allowed=False, reason="找不到 Project")
+        if self._is_leader(user, project_id):
+            return Access(allowed=True, reason="Project 的擁有者或 Project Leader")
+        if decide(self.project_rules(project_id), user, "Write"):
+            return Access(allowed=True)
+        return Access(allowed=False, reason="沒有發布到這個 Project 的權限")
+
     def _is_leader(self, user: Identity, project_id: str | None) -> bool:
         for project in self.ancestors(project_id):
             if _matches_user(project.owner, user):
@@ -239,6 +269,7 @@ def load_permissions(path: str | Path) -> Permissions:
 
 __all__ = [
     "ADMIN_ROLES",
+    "PUBLISH_ROLES",
     "Access",
     "Grantee",
     "Permissions",

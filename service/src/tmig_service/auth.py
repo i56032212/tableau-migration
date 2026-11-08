@@ -30,6 +30,9 @@
 有目錄時，登入的帳號依名稱對應到目錄中的使用者（USERNAME() 與 ISMEMBEROF() 以目錄為準），
 不在目錄中的帳號拒絕（require_directory = false 時改用標頭或宣告中的群組）。
 密鑰（session_secret、client_secret）只能寫成 ${環境變數}，不寫進設定檔。
+
+桌面版（D0）：在瀏覽器中核准後拿到權杖（見 tmig_service.desktop_auth），請求帶 ``Authorization: Bearer``，
+dev、proxy、oidc 模式都接受；proxy 模式下反向代理要放行帶這個標頭的請求。
 """
 
 from __future__ import annotations
@@ -46,7 +49,7 @@ import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from urllib.parse import urlencode
 
 import httpx
@@ -404,6 +407,29 @@ class OidcClient:
 # ---------------------------------------------------------------- 驗證
 
 
+class TokenIdentity(Protocol):
+    """桌面版的權杖對應的登入者（tmig_service.desktop_auth.TokenEntry）。"""
+
+    @property
+    def id(self) -> str: ...
+    @property
+    def login(self) -> str: ...
+    @property
+    def groups(self) -> list[str]: ...
+    @property
+    def name(self) -> str | None: ...
+
+
+class BearerTokens(Protocol):
+    def verify(self, token: str) -> TokenIdentity | None: ...
+
+
+def bearer_token(request: Request) -> str | None:
+    value = request.headers.get("authorization", "")
+    scheme, _, token = value.partition(" ")
+    return token.strip() or None if scheme.lower() == "bearer" else None
+
+
 class SessionUser(BaseModel):
     """工作階段 cookie 的內容：登入的帳號，與標頭或宣告中的群組、名稱（沒有目錄時使用）。"""
 
@@ -428,6 +454,8 @@ class Authenticator:
             if settings.oidc is not None
             else None
         )
+        self.tokens: BearerTokens | None = None
+        """桌面版的權杖（有報表庫時由查詢服務設定）。"""
 
     @property
     def mode(self) -> Mode:
@@ -461,6 +489,14 @@ class Authenticator:
         mode = self.mode
         if mode == "none":
             return None
+        if self.tokens is not None and mode in MODES:
+            bearer = bearer_token(request)
+            if bearer is not None:
+                entry = self.tokens.verify(bearer)
+                if entry is None:
+                    raise HTTPException(401, "桌面版的登入已失效或已登出，請重新登入")
+                request.state.desktop_token = entry.id
+                return self.resolve(entry.login, entry.groups, entry.name)
         if mode == "proxy":
             return self._proxy(request)
         session = self.codec.loads(request.cookies.get(SESSION_COOKIE))
@@ -627,6 +663,7 @@ __all__ = [
     "AuthError",
     "AuthSettings",
     "Authenticator",
+    "BearerTokens",
     "OidcSettings",
     "ProxySettings",
     "SessionCodec",

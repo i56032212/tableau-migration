@@ -9,6 +9,14 @@ interface TauriGlobal {
 
 type Go = (to: string) => void;
 
+/** 伺服器的對話框（登入、從伺服器開啟、發布）：選單與按鈕發出事件，App 顯示對話框。 */
+export type DesktopDialog = { kind: "sign-in" } | { kind: "open-server" } | { kind: "publish"; workbook: string };
+export const DIALOG_EVENT = "tmig:desktop-dialog";
+
+export function openDialog(dialog: DesktopDialog): void {
+  window.dispatchEvent(new CustomEvent<DesktopDialog>(DIALOG_EVENT, { detail: dialog }));
+}
+
 function shell(): TauriGlobal | undefined {
   return (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
 }
@@ -109,7 +117,7 @@ export function currentWorkbook(): string | null {
   return parts[0] === "w" && parts[1] ? parts[1] : null;
 }
 
-/** 外殼的選單（開啟、儲存、另存新檔、關閉報表）呼叫的入口。 */
+/** 外殼的選單（開啟、儲存、另存新檔、關閉報表；伺服器的登入、從伺服器開啟、發布、登出）呼叫的入口。 */
 export function installMenuCommands(go: Go): void {
   const withWorkbook = (run: (workbook: string) => Promise<void>) => () => {
     const workbook = currentWorkbook();
@@ -122,5 +130,13 @@ export function installMenuCommands(go: Go): void {
     save: withWorkbook((wb) => saveDocument(wb, false)),
     saveAs: withWorkbook((wb) => saveDocument(wb, true)),
     close: withWorkbook((wb) => closeDocument(wb, go)),
+    signIn: async () => openDialog({ kind: "sign-in" }),
+    openFromServer: async () => openDialog({ kind: "open-server" }),
+    publish: withWorkbook(async (wb) => openDialog({ kind: "publish", workbook: wb })),
+    signOut: () =>
+      api
+        .serverSignOut()
+        .then(() => toast("已登出伺服器"))
+        .catch((e: Error) => toast(`無法登出：${e.message}`, "error")),
   };
 }

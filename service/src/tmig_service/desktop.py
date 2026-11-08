@@ -21,6 +21,7 @@ API（都在 /api/desktop 下）：
 - ``POST /open``：``{"path": "C:/…/銷售.twbx"}`` → 開啟，回傳文件與轉不過來的元素
 - ``POST /save``：``{"workbook": "<id>", "path": "C:/…/銷售.tmigx"}`` → 存成報表套件
 - ``POST /close``：``{"workbook": "<id>"}`` → 關閉並刪除工作區中的複本
+- 伺服器（登入、從伺服器開啟、發布）：見 tmig_service.desktop_remote
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ import shutil
 import socket
 import sys
 import threading
+import webbrowser
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -50,6 +53,14 @@ from tmig.planner.identity import Identity
 from tmig.verify.run import ensure_data
 from tmig_service.app import Workspace, create_app
 from tmig_service.auth import Authenticator, AuthSettings
+from tmig_service.credentials import CredentialStore, default_credentials
+from tmig_service.desktop_remote import (
+    CALLBACK_PATH,
+    SETTINGS_FILE,
+    Remote,
+    http_client,
+    remote_router,
+)
 
 TOKEN_COOKIE = "tmig_desktop"
 TOKEN_HEADER = "x-tmig-token"
@@ -89,6 +100,8 @@ class Document:
     kind: Kind
     saved: str | None = None
     """最近一次存成的報表套件；「儲存」直接寫到這裡。"""
+    server: dict[str, Any] | None = None
+    """從伺服器開啟或發布到伺服器的報表：url、report、version（基準版本）、project、name。"""
 
 
 class Documents:
@@ -117,16 +130,20 @@ class Documents:
 
     def create(self, source: Path, kind: Kind) -> tuple[Document, Path]:
         """在工作區建立新文件的目錄（名稱取自檔名，重複時加序號）。"""
+        return self.create_named(source.stem, str(source), kind)
+
+    def create_named(self, stem: str, source: str, kind: Kind) -> tuple[Document, Path]:
+        """stem：報表名稱（目錄名稱取自它）；source：開啟的檔案或伺服器上的網址。"""
         with self._lock:
             self.root.mkdir(parents=True, exist_ok=True)
-            base = slugify(source.stem)[:48].strip("_") or "report"
+            base = slugify(stem)[:48].strip("_") or "report"
             document_id, n = base, 1
             while (self.root / document_id).exists():
                 n += 1
                 document_id = f"{base}_{n}"
             directory = self.root / document_id
             directory.mkdir()
-            document = Document(document_id, source.stem, str(source), kind)
+            document = Document(document_id, stem, source, kind)
             self._write(directory, document)
         return document, directory
 
@@ -317,6 +334,10 @@ class DesktopGuard:
         response: Response
         if hostname not in LOCAL_HOSTS:
             response = PlainTextResponse("只接受本機的連線", 403)
+        elif scope["type"] == "http" and request.url.path == CALLBACK_PATH:
+            # 伺服器核准登入後由系統瀏覽器導回：沒有引擎的權杖，以 state 確認是這次的登入
+            await self.app(scope, receive, send)
+            return
         elif "token" in request.query_params:
             if self._valid(request.query_params.get("token")):
                 rest = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
@@ -342,13 +363,27 @@ def create_desktop_app(
     token: str,
     web_dist: Path | None = None,
     username: str | None = None,
+    *,
+    settings_dir: Path | None = None,
+    credentials: CredentialStore | None = None,
+    opener: Callable[[str], object] = webbrowser.open,
+    client_factory: Callable[[], Any] = http_client,
 ) -> FastAPI:
+    """settings_dir：伺服器設定（網址與帳號）的位置，預設為工作區的上一層；
+    credentials：權杖存放處（預設為認證管理員）；opener：開啟系統瀏覽器（登入伺服器用）。"""
     documents = Documents(workspace)
+    folder = settings_dir or workspace.parent
+    remote = Remote(
+        folder / SETTINGS_FILE,
+        credentials or default_credentials(folder),
+        opener,
+        client_factory,
+    )
     app = create_app(
         workspace,
         web_dist,
         auth=DesktopAuthenticator(username or local_username()),
-        routers=[desktop_router(documents)],
+        routers=[desktop_router(documents), remote_router(remote, documents, _opened)],
     )
     app.state.documents = documents
     app.add_middleware(DesktopGuard, token=token)

@@ -822,7 +822,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         return 1
     print(f"查詢服務：http://{args.host}:{args.port}（讀取 {args.fixtures}）")
     try:
-        serve(args.fixtures, args.host, args.port, args.web, args.auth, args.usage_dir)
+        serve(args.fixtures, args.host, args.port, args.web, args.auth, args.usage_dir, args.store)
     except AuthError as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
@@ -1105,6 +1105,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--usage-dir",
         type=Path,
         help="使用紀錄的目錄；預設讀環境變數 TMIG_USAGE_DIR，沒有時為報表目錄旁的 usage",
+    )
+    serve.add_argument(
+        "--store",
+        type=Path,
+        help="報表庫（發布的報表、每一版與桌面版的登入）；預設讀環境變數 TMIG_STORE，"
+        "沒有時為報表目錄旁的 store",
     )
     serve.set_defaults(handler=_cmd_serve)
 

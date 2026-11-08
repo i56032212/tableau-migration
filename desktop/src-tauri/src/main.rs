@@ -2,8 +2,8 @@
 //!
 //! - 啟動本機引擎（`tmig desktop serve`），從標準輸出讀第一行 JSON 取得埠號與權杖，
 //!   主視窗再載入引擎提供的檢視器；外殼結束時關閉引擎（引擎也會在標準輸入關閉時自行結束）
-//! - 檔案選單（開啟、儲存、另存新檔、關閉報表）呼叫檢視器的 `window.tmigDesktop`，
-//!   開啟與儲存的邏輯只在檢視器中寫一次
+//! - 檔案選單（開啟、儲存、另存新檔、關閉報表）與伺服器選單（登入、從伺服器開啟、發布、登出）
+//!   呼叫檢視器的 `window.tmigDesktop`，邏輯只在檢視器與本機引擎中寫一次
 //! - 選檔與存檔對話框由外殼提供（`pick_open_path`、`pick_save_path`）
 //! - 引擎的記錄寫到應用程式的記錄資料夾（engine.log）
 //! - 只執行一份：工作區只有一個，第二份的引擎啟動時會清掉第一份開啟中的報表；
@@ -160,6 +160,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         .separator()
         .item(&MenuItemBuilder::with_id("quit", "結束").build(app)?)
         .build()?;
+    let server = SubmenuBuilder::new(app, "伺服器")
+        .item(&MenuItemBuilder::with_id("sign_in", "登入…").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_server", "從伺服器開啟…").build(app)?)
+        .item(&MenuItemBuilder::with_id("publish", "發布到伺服器…").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("sign_out", "登出").build(app)?)
+        .build()?;
     let view = SubmenuBuilder::new(app, "檢視")
         .item(&MenuItemBuilder::with_id("home", "報表清單").build(app)?)
         .item(&MenuItemBuilder::with_id("reload", "重新整理").accelerator("F5").build(app)?)
@@ -167,7 +174,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     let help = SubmenuBuilder::new(app, "說明")
         .item(&MenuItemBuilder::with_id("about", "關於報表桌面版").build(app)?)
         .build()?;
-    let menu = MenuBuilder::new(app).items(&[&file, &view, &help]).build()?;
+    let menu = MenuBuilder::new(app).items(&[&file, &server, &view, &help]).build()?;
     app.set_menu(menu)?;
     Ok(())
 }
@@ -178,6 +185,10 @@ fn menu_action(app: &AppHandle, id: &str) {
         "save" => "window.tmigDesktop && window.tmigDesktop.save()",
         "save_as" => "window.tmigDesktop && window.tmigDesktop.saveAs()",
         "close" => "window.tmigDesktop && window.tmigDesktop.close()",
+        "sign_in" => "window.tmigDesktop && window.tmigDesktop.signIn()",
+        "open_server" => "window.tmigDesktop && window.tmigDesktop.openFromServer()",
+        "publish" => "window.tmigDesktop && window.tmigDesktop.publish()",
+        "sign_out" => "window.tmigDesktop && window.tmigDesktop.signOut()",
         "home" => "window.location.assign('/')",
         "reload" => "window.location.reload()",
         "about" => {
