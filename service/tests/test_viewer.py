@@ -280,6 +280,36 @@ def test_fit_modes_size_and_scroll(tmp_path: Path) -> None:
         browser.close()
 
 
+def test_datasource_page(server: str) -> None:
+    """資料源分頁：連線、資料源篩選、資料格（前 100 列，含總列數）與欄位（公式以顯示名稱呈現）。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(DEMO / "golden.ir.json")
+    ds = ir.datasources[0]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.goto(f"{server}/w/superstore_demo/d/{ir.dashboards[0].id}")
+        page.wait_for_selector(".dashboard")
+        # 工具列的切換清單中有資料源
+        option = page.locator("select[aria-label='切換檢視'] option", has_text="資料源：")
+        assert option.all_inner_texts() == [f"資料源：{ds.caption}"]
+        page.select_option("select[aria-label='切換檢視']", f"ds:{ds.id}")
+        page.wait_for_selector(".ds-data tbody tr")
+        assert page.locator(".ds-header h1").inner_text() == ds.caption
+        assert "Tableau 萃取（Hyper）" in page.locator(".ds-side").inner_text()
+        assert page.locator(".ds-data tbody tr").count() == 100
+        headers = page.locator(".ds-data thead th").all_inner_texts()
+        assert any(h.endswith("Order ID") for h in headers)
+        assert "共" in page.locator(".ds-count").inner_text()
+        page.get_by_role("tab", name="欄位").click()
+        rows = page.locator(".ds-fields tbody tr")
+        assert rows.count() == len(ds.fields)
+        share = rows.filter(has_text="區域占比").inner_text()
+        assert "SUM([區域總銷售])" in share and "Calculation_" not in share
+        browser.close()
+
+
 def test_cases_show_expected_numbers(server: str) -> None:
     from playwright.sync_api import sync_playwright
 

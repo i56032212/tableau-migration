@@ -29,12 +29,13 @@ API：
 from __future__ import annotations
 
 import datetime as dt
+import math
 import mimetypes
 import os
 import threading
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -51,6 +52,7 @@ from tmig.package import read_report_file
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
+from tmig.render.datasource import datasource_summary
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import (
     after_groups,
@@ -61,10 +63,12 @@ from tmig.render.vegalite import (
     worksheet_title,
 )
 from tmig.sqlgen.query import (
+    PREVIEW_LIMIT,
     QueryError,
     custom_sql_parameters,
     domain_sql,
     pane_sql,
+    preview_sql,
     title_sql,
     totals_sql,
     worksheet_sql,
@@ -545,6 +549,58 @@ def create_app(
             },
         }
 
+    @app.get("/api/workbooks/{wb}/datasources")
+    def datasources(wb: str, user: User) -> list[dict[str, Any]]:
+        """資料源分頁：連線、資料表與關聯、欄位與資料源篩選（與完整的報表定義相同要下載 workbook
+        的權限）。"""
+        loaded, grant = granted(wb, user)
+        if not grant.full_definition:
+            raise HTTPException(403, "沒有檢視資料源的權限（需要「下載 workbook」的權限）")
+        return [datasource_summary(ds, loaded.ir.parameters) for ds in loaded.ir.datasources]
+
+    @app.get("/api/workbooks/{wb}/datasources/{ds}/preview")
+    def datasource_preview(
+        wb: str, ds: str, user: User, table: str | None = None, limit: int = PREVIEW_LIMIT
+    ) -> dict[str, Any]:
+        """資料源分頁的資料預覽：前 limit 列原始資料（套用資料源篩選與列層級權限）；萃取另外回傳
+        篩選後的總列數。要下載 workbook 與檢視基礎資料的權限。"""
+        loaded, grant = granted(wb, user)
+        if not (grant.full_definition and grant.underlying_data):
+            raise HTTPException(
+                403, "沒有檢視資料源資料的權限（需要「下載 workbook」與「檢視基礎資料」的權限）"
+            )
+        ir = loaded.ir
+        datasource = next((d for d in ir.datasources if d.id == ds), None)
+        if datasource is None:
+            raise HTTPException(404, f"找不到資料源「{ds}」")
+        limit = max(1, min(limit, PREVIEW_LIMIT))
+
+        def database() -> Path:
+            return workspace.database(wb, ds)
+
+        try:
+            preview = preview_sql(ir, ds, table, limit, user)
+            parameters = custom_sql_parameters(ir)
+            result = data.run_sql(preview.sql, datasource, database, parameters)
+            total: int | None = None
+            if datasource.connection.kind == "extract":
+                counted = data.run_sql(preview.count_sql, datasource, database, parameters)
+                total = int(counted.rows[0][0]) if counted.rows else 0
+        except QueryError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except SourceConnectionError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ExecutionError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        return {
+            "datasource": ds,
+            "table": preview.table,
+            "columns": [asdict(c) for c in preview.columns],
+            "rows": [[_cell(v) for v in row] for row in result.rows],
+            "total": total,
+            "limit": limit,
+        }
+
     @app.post("/api/workbooks/{wb}/fields/{field}/domain")
     def domain(
         wb: str,
@@ -605,6 +661,13 @@ def create_app(
             return FileResponse(index_html)
 
     return app
+
+
+def _cell(value: Any) -> Any:
+    """預覽的一格：無限大與 NaN 不是合法的 JSON，以 Null 表示；其餘同 _json。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return _json(value)
 
 
 def _json(value: Any) -> Any:

@@ -20,18 +20,20 @@ import {
 } from "./Server";
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
+import { DatasourceView } from "./DatasourceView";
 import { StoryView } from "./Story";
-import type { CaseInfo, IR, Me, WorkbookSummary } from "./types";
+import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
-// 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>；
-// ?case=<篩選組合>
+// 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
+// /w/<報表>/ds/<資料源>；?case=<篩選組合>
 type Route =
   | { page: "home" }
   | { page: "workbook"; workbook: string }
   | { page: "dashboard"; workbook: string; dashboard: string }
   | { page: "sheet"; workbook: string; worksheet: string }
-  | { page: "story"; workbook: string; story: string };
+  | { page: "story"; workbook: string; story: string }
+  | { page: "datasource"; workbook: string; datasource: string };
 
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
@@ -39,13 +41,14 @@ function parseRoute(path: string): Route {
     if (parts[2] === "d" && parts[3]) return { page: "dashboard", workbook: parts[1], dashboard: parts[3] };
     if (parts[2] === "s" && parts[3]) return { page: "sheet", workbook: parts[1], worksheet: parts[3] };
     if (parts[2] === "story" && parts[3]) return { page: "story", workbook: parts[1], story: parts[3] };
+    if (parts[2] === "ds" && parts[3]) return { page: "datasource", workbook: parts[1], datasource: parts[3] };
     return { page: "workbook", workbook: parts[1] };
   }
   return { page: "home" };
 }
 
-/** 檢視（dashboard、工作表、Story）的網址。 */
-function viewPath(workbook: string, kind: "d" | "s" | "story", id: string): string {
+/** 檢視（dashboard、工作表、Story）與資料源分頁的網址。 */
+function viewPath(workbook: string, kind: "d" | "s" | "story" | "ds", id: string): string {
   return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
 }
 
@@ -213,6 +216,9 @@ function WorkbookPage({
   const workbook = route.workbook;
   const [ir, setIr] = useState<IR | null>(null);
   const [cases, setCases] = useState<CaseInfo[]>([]);
+  // 資料源分頁：沒有權限（403）時不顯示
+  const [datasources, setDatasources] = useState<DatasourceSummary[]>([]);
+  const [datasourceError, setDatasourceError] = useState<string | null>(null);
   // 篩選組合套用完成前不查詢，避免先以預設狀態查一次
   const [view, setView] = useState<ViewState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -224,6 +230,16 @@ function WorkbookPage({
         setCases(loadedCases);
       })
       .catch((e: Error) => setError(e.message));
+    api
+      .datasources(workbook)
+      .then((loaded) => {
+        setDatasources(loaded);
+        setDatasourceError(null);
+      })
+      .catch((e: Error) => {
+        setDatasources([]);
+        setDatasourceError(e.message);
+      });
   }, [workbook]);
 
   useEffect(() => {
@@ -254,6 +270,8 @@ function WorkbookPage({
   const dashboard = route.page === "dashboard" ? ir.dashboards.find((d) => d.id === route.dashboard) : undefined;
   const worksheet = route.page === "sheet" ? ir.worksheets.find((w) => w.id === route.worksheet) : undefined;
   const story = route.page === "story" ? stories.find((s) => s.id === route.story) : undefined;
+  const datasource =
+    route.page === "datasource" ? datasources.find((d) => d.id === route.datasource) : undefined;
   const base = window.location.pathname;
   // 報表本身：開啟第一個 dashboard，沒有時開啟第一個 Story 或工作表
   const target =
@@ -282,12 +300,28 @@ function WorkbookPage({
         <span className="sep">/</span>
         <span className="wb">{ir.workbook.name}</span>
         <select
-          value={dashboard ? `d:${dashboard.id}` : worksheet ? `s:${worksheet.id}` : story ? `story:${story.id}` : ""}
+          aria-label="切換檢視"
+          value={
+            dashboard
+              ? `d:${dashboard.id}`
+              : worksheet
+                ? `s:${worksheet.id}`
+                : story
+                  ? `story:${story.id}`
+                  : datasource
+                    ? `ds:${datasource.id}`
+                    : ""
+          }
           onChange={(e) => {
             const [kind, id] = e.target.value.split(":");
-            navigate(viewPath(workbook, kind as "d" | "s" | "story", id) + window.location.search);
+            navigate(viewPath(workbook, kind as "d" | "s" | "story" | "ds", id) + window.location.search);
           }}
         >
+          {datasources.map((d) => (
+            <option key={d.id} value={`ds:${d.id}`}>
+              資料源：{d.caption}
+            </option>
+          ))}
           {ir.dashboards.map((d) => (
             <option key={d.id} value={`d:${d.id}`}>
               dashboard：{d.name}
@@ -342,7 +376,13 @@ function WorkbookPage({
         </div>
       )}
       {story && <StoryView workbook={workbook} ir={ir} story={story} base={view} cases={cases} onNavigate={onNavigate} />}
-      {!dashboard && !worksheet && !story && <main className="error">找不到這個 dashboard、工作表或 Story</main>}
+      {datasource && <DatasourceView workbook={workbook} datasource={datasource} />}
+      {route.page === "datasource" && !datasource && (datasources.length > 0 || datasourceError) && (
+        <main className="error">{datasourceError ? `無法開啟資料源：${datasourceError}` : "找不到這個資料源"}</main>
+      )}
+      {!dashboard && !worksheet && !story && route.page !== "datasource" && (
+        <main className="error">找不到這個 dashboard、工作表或 Story</main>
+      )}
     </div>
   );
 }

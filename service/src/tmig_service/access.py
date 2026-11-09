@@ -7,6 +7,8 @@
   Story 的故事點顯示的 dashboard 與工作表跟著 Story）
 - 報表的定義（IR）只給有「下載 workbook」權限（ExportXml）的人完整版本；其他人拿到的版本不含連線、
   計算公式、資料源篩選與原始 XML（檢視器只需要版面、欄位名稱與篩選）
+- 資料源分頁（連線、資料表、欄位與資料源篩選）與完整版本的定義相同要「下載 workbook」；其中的
+  資料預覽（原始列）另外要「檢視基礎資料」（ViewUnderlyingData），一樣套用資料源篩選與列層級權限
 - 報表對應到 Tableau 的 workbook：cases.yaml 的 tableau_views_url 中的網址名稱，其次是報表名稱；
   權限檔中找不到的報表只有管理員看得到
 - 發布到報表庫的報表（D0）以報表庫記下的 Project、擁有者與權限判斷（見 Rights）；發布要 Project 的
@@ -37,6 +39,8 @@ class Grant:
     """可以看的 view 名稱；None 表示全部。"""
     full_definition: bool = True
     """可以取得完整的報表定義（下載 workbook 的權限）。"""
+    underlying_data: bool = True
+    """可以檢視資料源的原始列（檢視基礎資料的權限）。"""
 
     def dashboard_allowed(self, name: str) -> bool:
         return self.views is None or name in self.views
@@ -103,12 +107,18 @@ class Authorizer:
         entry = entry or self.entry(directory, ir)
         if entry is None:
             admin = (user.site_role or "") in ADMIN_ROLES
-            return Grant(allowed=admin, full_definition=admin)
+            return Grant(allowed=admin, full_definition=admin, underlying_data=admin)
         access: Access = self.permissions.access(user, entry, "Read")
         if not access.allowed:
             return Grant(allowed=False)
         download = self.permissions.access(user, entry, "ExportXml").allowed
-        return Grant(allowed=True, views=access.views, full_definition=download)
+        underlying = self.permissions.access(user, entry, "ViewUnderlyingData").allowed
+        return Grant(
+            allowed=True,
+            views=access.views,
+            full_definition=download,
+            underlying_data=underlying,
+        )
 
 
 DEFAULT_PROJECT = ProjectEntry(id="default", name="預設")

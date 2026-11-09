@@ -560,3 +560,73 @@ export interface DesktopToken {
   last_used_at: string | null;
   current: boolean;
 }
+
+/** 資料源分頁：連線、資料表與關聯、欄位與資料源篩選（與完整的報表定義相同要下載 workbook 的權限）。 */
+export interface DatasourceConnection {
+  kind: "extract" | "live";
+  /** 連線類型的顯示名稱，例如「Tableau 萃取（Hyper）」「PostgreSQL」 */
+  type: string;
+  file?: string;
+  table?: string;
+  /** 萃取的來源資料庫 */
+  source?: DatasourceConnection | null;
+  refresh?: string | null;
+  row_limit?: number | null;
+  dbclass?: string;
+  connection_id?: string;
+  server?: string | null;
+  port?: number | null;
+  database?: string | null;
+  schema?: string | null;
+  http_path?: string | null;
+  authentication?: string | null;
+  supported?: boolean;
+}
+
+export interface DatasourceTable {
+  /** Relationship 模型的邏輯資料表 id；單一資料表或 join 樹時為 null */
+  id: string | null;
+  caption: string;
+  physical: { name: string; source: string; sql: string | null }[];
+  joins: { type: string; label: string; left: string[]; right: string[]; on: string[] }[];
+}
+
+export interface DatasourceField {
+  id: string;
+  caption: string;
+  name: string;
+  role: "dimension" | "measure";
+  datatype: string;
+  kind: "column" | "calc" | "set";
+  table: string | null;
+  column: string | null;
+  formula: string | null;
+  default_agg: string | null;
+  format: string | null;
+  hidden: boolean;
+  aliases: number;
+}
+
+export interface DatasourceSummary {
+  id: string;
+  caption: string;
+  name: string;
+  connection: DatasourceConnection;
+  published: { content_url: string; site: string | null; revision: string | null } | null;
+  model: boolean;
+  tables: DatasourceTable[];
+  relationships: { left: string; right: string; on: string[] }[];
+  fields: DatasourceField[];
+  filters: { id: string; stage: "extract" | "datasource"; text: string }[];
+}
+
+/** 資料源分頁的資料預覽：前 limit 列原始資料（套用資料源篩選與列層級權限）。 */
+export interface DatasourcePreview {
+  datasource: string;
+  table: string | null;
+  columns: { field: string; caption: string; datatype: string; role: string; calculated: boolean }[];
+  rows: Scalar[][];
+  /** 資料源篩選後的總列數（萃取）；Live 連線為 null */
+  total: number | null;
+  limit: number;
+}

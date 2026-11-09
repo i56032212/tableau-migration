@@ -1,5 +1,7 @@
 import type {
   CaseInfo,
+  DatasourcePreview,
+  DatasourceSummary,
   DesktopDocument,
   DesktopOpened,
   DesktopSaved,
@@ -85,6 +87,15 @@ export const api = {
   /** 使用紀錄：開啟一個 dashboard 或工作表（R1）；失敗不影響檢視 */
   visit: (id: string, view: string) =>
     fetch(`${wb(id)}/views/${encodeURIComponent(view)}/visit`, { method: "POST" }).catch(() => undefined),
+  /** 資料源分頁：沒有權限時回應 403 */
+  datasources: (id: string) => request<DatasourceSummary[]>(`${wb(id)}/datasources`),
+  preview: (id: string, datasource: string, table: string | null, limit: number) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (table) query.set("table", table);
+    return request<DatasourcePreview>(
+      `${wb(id)}/datasources/${encodeURIComponent(datasource)}/preview?${query.toString()}`,
+    );
+  },
   domain: (id: string, fieldKey: string, kind?: "values" | "range") =>
     request<Domain>(`${wb(id)}/fields/${encodeURIComponent(fieldKey)}/domain`, {
       method: "POST",

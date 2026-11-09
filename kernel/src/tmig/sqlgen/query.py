@@ -2384,6 +2384,126 @@ def domain_sql(
     )
 
 
+PREVIEW_LIMIT = 1000
+"""資料源分頁預覽的列數上限（與 Tableau 資料源分頁的資料格預設相同）。"""
+
+
+@dataclass
+class PreviewColumn:
+    """資料源預覽的一欄：實體欄位或列層級的計算欄位。"""
+
+    field: str
+    caption: str
+    datatype: str
+    role: str
+    calculated: bool
+
+
+@dataclass
+class PreviewSql:
+    """資料源預覽的查詢：前 limit 列（count_sql 為資料源篩選後的總列數）。"""
+
+    sql: str
+    count_sql: str
+    columns: list[PreviewColumn]
+    table: str | None
+    """Relationship 模型中預覽的邏輯資料表 id；單一資料表或 join 樹時為 None。"""
+
+
+def preview_sql(
+    ir: IR,
+    datasource_id: str,
+    table: str | None = None,
+    limit: int = PREVIEW_LIMIT,
+    user: Identity | None = None,
+) -> PreviewSql:
+    """資料源分頁的資料預覽（Tableau 資料源分頁下方的資料格）：資料源的原始列與列層級的計算欄位，
+    與工作表相同套用資料源篩選與列層級權限（以登入者的身分）。
+
+    Relationship 模型一次預覽一張邏輯資料表（table；省略時為第一張），其他資料表的欄位不列出，
+    篩選用到其他資料表時以半連接套用。含 LOD、彙總、Table Calculation 的計算欄位與 Top N、
+    條件集合不在預覽中；隱藏的欄位不列出。"""
+    datasource = next((ds for ds in ir.datasources if ds.id == datasource_id), None)
+    if datasource is None:
+        raise QueryError(f"找不到資料源「{datasource_id}」")
+    holder = Worksheet(
+        id="preview",
+        name="preview",
+        datasource=datasource_id,
+        marks=Marks(type="automatic"),
+        source_ref="preview",
+    )
+    query = WorksheetQuery(ir.model_copy(update={"worksheets": [holder]}), "preview", user=user)
+    source = query.source
+    chosen: str | None = None
+    if source.model is not None:
+        ids = [t.id for t in source.model.tables]
+        chosen = table or ids[0]
+        if chosen not in ids:
+            raise QueryError(f"資料源「{datasource.caption}」沒有資料表「{table}」")
+    columns: list[PreviewColumn] = []
+    values: list[str] = []
+    usage = Usage()
+    for data_field in datasource.fields:
+        if data_field.hidden or (data_field.set is not None and data_field.calc is None):
+            continue
+        node = query.field_node(data_field.id)
+        if data_field.calc is not None:
+            try:
+                info = query.analyzer.analyze(node)
+                lods = query.lods_in(node)
+            except (FormulaSemanticError, QueryError):
+                continue  # 無法分析的公式：不列在預覽中
+            if info.level not in ("row", "const") or info.has_lod or lods:
+                continue
+        if source.model is not None:
+            found = Usage()
+            query.collect(node, found)
+            if set(found.tables) - {chosen}:
+                continue  # 其他資料表的欄位（或跨資料表的計算欄位）
+            query.collect(node, usage)
+        try:
+            value = query.dim_sql(FieldUse(field=data_field.id))
+        except QueryError:
+            continue  # 尚不支援的函式：不列在預覽中
+        values.append(f"{value} AS {ident(f'c{len(values)}')}")
+        columns.append(
+            PreviewColumn(
+                field=data_field.id,
+                caption=data_field.caption,
+                datatype=data_field.datatype,
+                role=data_field.role,
+                calculated=data_field.calc is not None,
+            )
+        )
+    if not values:
+        raise QueryError(f"資料源「{datasource.caption}」沒有可以預覽的欄位")
+    ds_filters = [f for f in datasource.filters if f.stage == "datasource"]
+    conds = query.row_conditions(ds_filters)
+    from_sql = source.from_sql
+    if source.model is not None:
+        assert chosen is not None
+        usage.tables.setdefault(chosen, False)
+        filters: list[RowFilter] = []
+        for flt, cond in zip(ds_filters, conds, strict=True):
+            found = Usage()
+            for item in flt.fields if isinstance(flt, TupleFilter) else [flt.field]:
+                query.collect(query.field_node(item.field), found)
+            if flt.id in query.cond_nodes:
+                query.collect(query.cond_nodes[flt.id], found)
+            if cond:
+                filters.append(RowFilter(flt.id, set(found.fields), set(found.tables)))
+        from_sql = query.plan_model(usage, filters).from_sql
+    rows = f"({from_sql}) AS base" if source.projected else from_sql
+    where = _where(conds)
+    return PreviewSql(
+        sql=f"SELECT {', '.join(values)} FROM {rows}{where} LIMIT {max(1, int(limit))}",
+        count_sql=f"SELECT count(*) AS {ident('rows')} FROM {rows}{where}",
+        columns=columns,
+        table=chosen,
+    )
+
+
 def custom_sql_parameters(
     ir: IR, values: dict[str, Scalar] | None = None
 ) -> dict[str, tuple[Scalar, str]]:
@@ -2642,12 +2762,15 @@ def title_sql(
 __all__ = [
     "COLUMN_ORDER",
     "GRAND_TOTAL",
+    "PREVIEW_LIMIT",
     "PUSHDOWN_BOUNDARY",
     "STAGES",
     "SUBTOTAL",
     "CteDef",
     "Guard",
     "OutputColumn",
+    "PreviewColumn",
+    "PreviewSql",
     "QueryError",
     "StageNote",
     "TitleQueries",
@@ -2657,6 +2780,7 @@ __all__ = [
     "custom_sql_parameters",
     "domain_sql",
     "pane_sql",
+    "preview_sql",
     "title_sql",
     "totals_sql",
     "worksheet_sql",
