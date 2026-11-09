@@ -125,7 +125,10 @@ def test_separate_axes_are_stacked(tmp_path: Path, db: Path) -> None:
 
 
 def layers(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {layer["name"]: layer for layer in spec["layer"] if "name" in layer}
+    """參考線的圖層（多層列標題等裝飾圖層以 __deco 為名，不列入）。"""
+    return {
+        layer["name"]: layer for layer in spec["layer"] if layer.get("name", "").startswith("__ref")
+    }
 
 
 def test_reference_lines_per_pane_and_constant() -> None:

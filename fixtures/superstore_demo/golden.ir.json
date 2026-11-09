@@ -805,7 +805,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "column_style": {
         "grid": true,
@@ -814,7 +823,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "background": null,
       "text_color": null,
@@ -927,7 +945,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "column_style": {
         "grid": true,
@@ -936,7 +963,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "background": null,
       "text_color": null,
@@ -1043,7 +1079,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "column_style": {
         "grid": true,
@@ -1052,7 +1097,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "background": null,
       "text_color": null,
@@ -1180,7 +1234,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "column_style": {
         "grid": true,
@@ -1189,7 +1252,16 @@
         "field_labels": true,
         "cell": null,
         "banding": null,
-        "divider": null
+        "divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        },
+        "header_divider": {
+          "color": "#d4d4d4",
+          "width": 1,
+          "level": null
+        }
       },
       "background": null,
       "text_color": null,

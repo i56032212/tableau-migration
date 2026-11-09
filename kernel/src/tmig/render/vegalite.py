@@ -4,7 +4,8 @@
 
 - 長條、折線、面積、圓點、方塊、形狀：量值在欄架為橫向、在列架為直向；兩邊都有量值時畫成散佈圖
 - 文字表（交叉表）：列架維度為 y、欄架維度為 x，標籤量值為文字
-- 同一架上有多個維度時，合併成「外層｜內層」的單一座標，不做分面
+- 同一架上有多個維度時，合併成「外層｜內層」的單一座標，不做分面；多層的列標題與 Tableau 相同每一層
+  一欄（外層的成員只寫在各組的第一列，欄位標籤寫在各欄上方），畫在座標軸的區域中
 - 同一架上有多個量值：每個量值一張圖上下（列架）或左右（欄架）排列；雙軸的第二個量值與前一個
   重疊，兩個軸各自的刻度；每個量值使用自己的標記卡
 - Measure Names／Values：查詢結果是寬表（每個量值一欄），這裡轉成長表（每個量值一列），
@@ -29,6 +30,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
+import re
 import statistics
 import unicodedata
 from collections.abc import Callable, Hashable, Sequence
@@ -139,7 +141,9 @@ COLUMN_WIDTH = (40, 320)
 BAR_BAND = 0.9
 """畫色帶時長條占列高（欄寬）的比例：與沒有色帶時 Vega-Lite 的預設相同。"""
 BAND = "__band_"
-"""色帶的資料欄（__band_rows、__band_columns）與圖層名稱前綴。"""
+"""色帶的資料欄（__band_rows、__band_columns）。"""
+DECO = "__deco"
+"""色帶、多層列標題等裝飾圖層的名稱前綴：檢視器的選取與醒目提示略過這些圖層（與參考線的 __ref 相同）。"""
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
 
@@ -993,7 +997,7 @@ def build_spec(
         record.pop(ORDER, None)
     if totals and not ws.totals_colored:
         _exclude_totals_from_color(spec, mark, builder.text_color(ws.marks, cell=True))
-    encoding = _main_encoding(spec)
+    encoding = main_encoding(spec)
     sized = (
         encoding is not None
         and not any(k in spec for k in ("vconcat", "hconcat"))
@@ -1010,18 +1014,33 @@ def build_spec(
             "rows": builder.shelf_size(encoding.get("y"), rows_dims, "rows", values, []),
             "columns": builder.shelf_size(encoding.get("x"), cols_dims, "columns", values, texts),
         }
+        y_type = encoding.get("y", {}).get("type") if isinstance(encoding.get("y"), dict) else None
+        if mark == "text" and "x" not in encoding and y_type in ("ordinal", "nominal"):
+            # 只有列標題的文字表是一欄：寬度依內容（與離散的欄相同），不填滿
+            width = ws.column_style.cell or _column_width(texts)
+            spec["usermeta"]["sizing"]["columns"] = {"size": width}
         shelves: list[tuple[Literal["rows", "columns"], str, list[FieldUse], ShelfStyle]] = [
             ("rows", "y", rows_dims, ws.row_style),
             ("columns", "x", cols_dims, ws.column_style),
         ]
+        headers: RowHeaders | None = None
+        y = encoding.get("y")
+        if isinstance(y, dict) and y.get("field") == "rows_dim" and len(rows_dims) > 1:
+            headers = _row_headers(builder, spec, y, rows_dims, values)
         for shelf, channel, dims, style in shelves:
             enc = encoding.get(channel)
             if not isinstance(enc, dict) or enc.get("type") not in ("ordinal", "nominal"):
                 continue
             if style.divider is not None:
-                _divider(enc, values, len(dims), style.divider)
+                _divider(spec, enc, channel, values, len(dims), style.divider)
+            if shelf == "rows" and headers is not None and style.header_divider is not None:
+                _header_divider(spec, enc, values, len(dims), style.header_divider, headers)
             if style.banding is not None and mark not in ("square", "pie"):
-                extent = builder.header_extent(dims, shelf) if dims else None
+                extent = (
+                    headers.total
+                    if shelf == "rows" and headers is not None
+                    else (builder.header_extent(dims, shelf) if dims else None)
+                )
                 _banding(spec, enc, channel, values, style.banding, extent)
     spec["usermeta"]["fit"] = ws.fit
     apply_fit(spec, ws.fit)
@@ -1055,13 +1074,160 @@ def apply_fit(spec: dict[str, Any], fit: str) -> None:
     spec["autosize"] = {"type": kind, "contains": "padding"}
 
 
-def _main_encoding(node: dict[str, Any]) -> dict[str, Any] | None:
-    """圖的主要 encoding：本身或第一個有 x、y 的圖層（參考線、甜甜圈中間的文字等圖層在後）。"""
+HEADER_WIDTH = (32, 200)
+"""列標題依內容估計寬度時的最小與最大值（像素）；Tableau 也會截斷過長的標題。"""
+HEADER_PADDING = 4
+"""列標題文字與欄左緣的距離（像素）。"""
+HEADER = "__header"
+"""多層列標題的資料欄（__header0、__header1…）與圖層名稱前綴。"""
+DIVIDER = "__divider_"
+"""標題區域的分隔線的資料欄（線的左端，像素）。"""
+
+
+@dataclass
+class RowHeaders:
+    """多層列標題的位置：總寬度與顯示的各層所在欄的左緣（相對於窗格的左緣，為負數）。"""
+
+    total: int
+    starts: dict[int, int]
+
+
+def _row_headers(
+    builder: _Builder,
+    spec: dict[str, Any],
+    encoding: dict[str, Any],
+    dims: list[FieldUse],
+    values: list[dict[str, Any]],
+) -> RowHeaders | None:
+    """多層的列標題：每一層一欄（設定了寬度時依設定，否則依內容估計），外層的成員只寫在各組的
+    第一列；有欄位標籤時寫在各欄上方。標題畫在縱軸的區域中（縱軸只留下座標軸線）。所有層都不
+    顯示時為 None。"""
+    shown, _, _ = builder.header(dims, "rows")
+    if not shown:
+        return None
+    style = builder.ws.row_style
+    order = list(dict.fromkeys(v.get("rows_dim") for v in values))
+    parts = {value: str(value if value is not None else "").split(SEPARATOR) for value in order}
+
+    def part(value: Any, level: int) -> str:
+        found = parts[value]
+        return found[level] if level < len(found) else ""
+
+    # 各組的第一列：這一層與外層的成員和上一列不同
+    first: dict[Any, set[int]] = {}
+    previous: list[str] | None = None
+    for value in order:
+        here = parts[value]
+        first[value] = {
+            level
+            for level in range(len(dims))
+            if previous is None or here[: level + 1] != previous[: level + 1]
+        }
+        previous = here
+    widths: list[int] = []
+    for level in shown:
+        setting = builder.axis_of(dims[level], "rows")
+        if setting is not None and setting.size is not None:
+            widths.append(setting.size)
+            continue
+        texts = [part(v, level) for v in order]
+        if style.field_labels:
+            texts.append(builder.ch(dims[level]).title)
+        low, high = HEADER_WIDTH
+        widths.append(min(max(_column_width(texts), low), high))
+    total = sum(widths)
+    innermost = len(dims) - 1
+    for record in values:
+        value = record.get("rows_dim")
+        for level in shown:
+            show = level == innermost or level in first.get(value, set())
+            record[f"{HEADER}{level}"] = part(value, level) if show else ""
+
+    position = {k: encoding[k] for k in ("field", "type", "sort", "scale") if k in encoding}
+    layers: list[dict[str, Any]] = []
+    starts: dict[int, int] = {}
+    offset = -total
+    for level, width in zip(shown, widths, strict=True):
+        starts[level] = offset
+        setting = builder.axis_of(dims[level], "rows")
+        color = (
+            _css_color(setting.label_color)
+            if setting is not None and setting.label_color is not None
+            else builder.text_color()
+        )
+        mark = {
+            "type": "text",
+            "align": "left",
+            "baseline": "middle",
+            "fontSize": 10,
+            "limit": max(width - 2 * HEADER_PADDING, 8),
+            "color": color,
+        }
+        layers.append(
+            {
+                "name": f"{DECO}{HEADER}{level}",
+                "transform": [{"calculate": "-1", "as": ROW}],
+                "mark": mark,
+                "encoding": {
+                    "y": position,
+                    "x": {"value": offset + HEADER_PADDING},
+                    "text": {"field": f"{HEADER}{level}"},
+                },
+            }
+        )
+        if style.field_labels:
+            layers.append(
+                {
+                    "name": f"{DECO}{HEADER}{level}_title",
+                    "data": {"values": [{}]},
+                    "mark": {
+                        "type": "text",
+                        "align": "left",
+                        "baseline": "bottom",
+                        "fontSize": 10,
+                        "fontWeight": 600,
+                        "limit": max(width - 2 * HEADER_PADDING, 8),
+                        "color": builder.text_color(),
+                        "x": offset + HEADER_PADDING,
+                        "y": -4,
+                    },
+                    "encoding": {"text": {"value": builder.ch(dims[level]).title}},
+                }
+            )
+        offset += width
+    axis = dict(encoding.get("axis") or {})
+    axis.update(labels=False, ticks=False, title=None, minExtent=total, maxExtent=total)
+    axis.pop("labelExpr", None)
+    axis.pop("labelLimit", None)
+    encoding["axis"] = axis
+    _add_layers(spec, layers)
+    return RowHeaders(total, starts)
+
+
+def _add_layers(spec: dict[str, Any], layers: list[dict[str, Any]]) -> None:
+    """在圖上加上裝飾的圖層（畫在主圖之上）。"""
+    if "layer" in spec and "encoding" not in spec and "resolve" not in spec:
+        spec["layer"] = [*spec["layer"], *layers]  # 例如參考線已把主圖包成圖層
+    else:
+        # 共用的 encoding（顏色、大小等）不套用到裝飾的圖層
+        body = {
+            k: spec.pop(k)
+            for k in ("mark", "encoding", "layer", "transform", "resolve")
+            if k in spec
+        }
+        spec["layer"] = [body, *layers]
+
+
+def main_encoding(node: dict[str, Any]) -> dict[str, Any] | None:
+    """圖的主要 encoding：本身或第一個有 x、y 的圖層（甜甜圈中間的文字等圖層在後；參考線、色帶與
+    多層列標題的圖層除外）。"""
     encoding = node.get("encoding")
     if isinstance(encoding, dict) and ("x" in encoding or "y" in encoding):
         return encoding
     for child in node.get("layer", []):
-        found = _main_encoding(child)
+        if str(child.get("name", "")).startswith((REF, DECO)):
+            continue
+        found = main_encoding(child)
         if found is not None:
             return found
     return encoding if isinstance(encoding, dict) else None
@@ -1072,7 +1238,7 @@ def _column_width(texts: Sequence[Any]) -> int:
     左右的空白，限制在 COLUMN_WIDTH 之間。"""
     widest = 0.0
     for text in texts:
-        for line in str(text if text is not None else "").split(SEPARATOR):
+        for line in re.split(f"{SEPARATOR}|\n", str(text if text is not None else "")):
             width = sum(11 if unicodedata.east_asian_width(c) in ("W", "F") else 6.6 for c in line)
             widest = max(widest, width)
     low, high = COLUMN_WIDTH
@@ -1091,11 +1257,25 @@ def _band_edges(values: list[dict[str, Any]], field: str, levels: int, level: in
     return [a for a, b in itertools.pairwise(order) if group(a) != group(b)]
 
 
+def _divider_level(divider: Divider, levels: int) -> int:
+    """分隔線分隔的層數：設定的層數，沒有設定時為最內層以外的每一層（Tableau 的預設）。"""
+    return divider.level if divider.level is not None else levels - 1
+
+
 def _divider(
-    encoding: dict[str, Any], values: list[dict[str, Any]], levels: int, divider: Divider
+    spec: dict[str, Any],
+    encoding: dict[str, Any],
+    channel: str,
+    values: list[dict[str, Any]],
+    levels: int,
+    divider: Divider,
 ) -> None:
-    """分隔線：以座標軸的格線畫在各列（欄）的邊界（tickBand extent），只顯示第 level 層成員改變處。"""
-    edges = _band_edges(values, encoding["field"], levels, divider.level)
+    """窗格的分隔線：以座標軸的格線畫在各列（欄）的邊界（tickBand extent），只顯示前 level 層的成員
+    改變處。"""
+    level = _divider_level(divider, levels)
+    edges = _band_edges(values, encoding["field"], levels, level) if level >= 1 else []
+    if not edges:
+        return
     axis = dict(encoding.get("axis") or {})
     test = f"indexof({json.dumps(edges, ensure_ascii=False)}, datum.value) >= 0"
     axis.update(
@@ -1106,9 +1286,69 @@ def _divider(
         gridOpacity={"condition": {"test": test, "value": 1}, "value": 0},
     )
     encoding["axis"] = axis
+    _flush_bands(spec, encoding, channel)
+
+
+def _header_divider(
+    spec: dict[str, Any],
+    encoding: dict[str, Any],
+    values: list[dict[str, Any]],
+    levels: int,
+    divider: Divider,
+    headers: RowHeaders,
+) -> None:
+    """標題區域的分隔線（多層的列標題）：畫在各組的邊界，從改變的那一層所在的欄畫到窗格（外層沒有
+    改變的欄不切開，與 Tableau 相同）。"""
+    level = _divider_level(divider, levels)
+    field_name = encoding["field"]
+    edges = set(_band_edges(values, field_name, levels, level)) if level >= 1 else set()
+    order = list(dict.fromkeys(v.get(field_name) for v in values))
+    starts: dict[Any, int] = {}
+    for a, b in itertools.pairwise(order):
+        if a not in edges:
+            continue
+        here, after = str(a).split(SEPARATOR), str(b).split(SEPARATOR)
+        changed = next((i for i, (x, y) in enumerate(zip(here, after, strict=False)) if x != y), 0)
+        start = next((x for lv, x in sorted(headers.starts.items()) if lv >= changed), None)
+        if start is not None:
+            starts[a] = start
+    if not starts:
+        return
+    flag = f"{DIVIDER}rows"
+    for record in values:
+        record[flag] = starts.get(record.get(field_name), 0)
+    _flush_bands(spec, encoding, "y")
+    position = {k: encoding[k] for k in ("field", "type", "sort", "scale") if k in encoding}
+    layer = {
+        "name": f"{DECO}{flag}_header",
+        "transform": [{"calculate": "-1", "as": ROW}],
+        "mark": {"type": "rule", "color": _css_color(divider.color), "strokeWidth": divider.width},
+        "encoding": {
+            # 線在這一列的尾端（band 的結束處）；不是邊界的列為長度 0 的線
+            "y": {**position, "bandPosition": 1},
+            "x": {"field": flag, "type": "quantitative", "scale": None},
+            "x2": {"value": 0},
+            "strokeOpacity": {
+                "condition": {"test": f"datum['{flag}'] < 0", "value": 1},
+                "value": 0,
+            },
+        },
+    }
+    _add_layers(spec, [layer])
+
+
+def _flush_bands(spec: dict[str, Any], encoding: dict[str, Any], channel: str) -> None:
+    """分隔線與色帶畫在列（欄）之間：band scale 的列（欄）之間沒有空隙，長條維持原本的粗細。"""
     scale = dict(encoding.get("scale") or {})
-    scale.update(type="band", paddingInner=0, paddingOuter=0)  # 邊界即兩列之間
+    scale.update(type="band", paddingInner=0, paddingOuter=0)
     encoding["scale"] = scale
+    size = "height" if channel == "y" else "width"
+
+    def keep_bar_size(mark: dict[str, Any]) -> None:
+        if mark.get("type") == "bar":
+            mark.setdefault(size, {"band": BAR_BAND})
+
+    _visit_marks(spec, keep_bar_size)
 
 
 def _banding(
@@ -1127,9 +1367,7 @@ def _banding(
     order = {value: i for i, value in enumerate(dict.fromkeys(v.get(field_name) for v in values))}
     for record in values:
         record[flag] = (order[record.get(field_name)] // banding.size) % 2 == 1
-    scale = dict(encoding.get("scale") or {})
-    scale.update(type="band", paddingInner=0, paddingOuter=0)  # 色帶連成一片
-    encoding["scale"] = scale
+    _flush_bands(spec, encoding, channel)  # 色帶連成一片
     position = {k: encoding[k] for k in ("field", "type", "sort", "scale") if k in encoding}
     test = f"datum['{flag}'] === true"
 
@@ -1144,7 +1382,7 @@ def _banding(
         if span is not None:
             layer_encoding.update(x={"value": -span}, x2={"value": 0})
         return {
-            "name": f"{REF}{flag}_{part}",
+            "name": f"{DECO}{flag}_{part}",
             "transform": [{"calculate": "-1", "as": ROW}],
             "mark": {"type": "rect"},
             "encoding": layer_encoding,
@@ -1158,14 +1396,6 @@ def _banding(
         layers.append(band(banding.header, extent, "header"))
     if not layers:
         return
-    size = "height" if channel == "y" else "width"
-
-    def keep_bar_size(mark: dict[str, Any]) -> None:
-        # 長條在色帶上維持原本的粗細（色帶的列之間沒有空隙）
-        if mark.get("type") == "bar":
-            mark.setdefault(size, {"band": BAR_BAND})
-
-    _visit_marks(spec, keep_bar_size)
     body = {
         k: spec.pop(k) for k in ("mark", "encoding", "layer", "transform", "resolve") if k in spec
     }

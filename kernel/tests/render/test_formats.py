@@ -13,6 +13,7 @@ from typing import Any
 
 from tmig.ir import Axis, FieldUse, ShelfStyle, ZoneStyle, iter_zones
 from tmig.parser.workbook import parse_workbook
+from tmig.render.vegalite import main_encoding
 
 from ..parser import builder as b
 from ..parser.builder import instance, ref, worksheet
@@ -223,9 +224,28 @@ def test_hidden_header_levels(tmp_path: Path, db: Path) -> None:
     assert [(a.use.field, a.shelf, a.show) for a in ir.worksheets[0].axes] == [
         ("f_category", "rows", False)
     ]
-    y = render(ir, db).spec["encoding"]["y"]
+    spec = render(ir, db).spec
+    y = main_encoding(spec)["y"]  # type: ignore[index]
     assert y["field"] == "rows_dim"  # 位置仍依兩層區分
-    assert y["axis"] == {"labelExpr": "(split(datum.label, '｜')[0] || '')", "title": "Region"}
+    # 只畫 Region 一欄（各組的第一列），欄位標籤寫在欄的上方
+    headers = {
+        layer["name"]: layer
+        for layer in spec["layer"]
+        if layer.get("name", "").startswith("__deco__header")
+    }
+    assert set(headers) == {"__deco__header0", "__deco__header0_title"}
+    assert [v["__header0"] for v in spec["data"]["values"]] == [
+        "East",
+        "",
+        "North",
+        "South",
+        "",
+        "West",
+        "",
+    ]
+    assert headers["__deco__header0_title"]["encoding"]["text"] == {"value": "Region"}
+    assert "__header1" not in spec["data"]["values"][0]
+    assert (y["axis"]["labels"], y["axis"]["title"]) == (False, None)
 
     both = rule(
         "label",
@@ -233,7 +253,9 @@ def test_hidden_header_levels(tmp_path: Path, db: Path) -> None:
         fmt("display", "false", "none:Category:nk"),
     )
     y = render(parse(tmp_path, nested("rows", both)), db).spec["encoding"]["y"]
-    assert y["axis"] == {"labels": False, "ticks": False, "domain": False, "title": None}
+    shown = {k: y["axis"][k] for k in ("labels", "ticks", "domain", "title")}
+    assert shown == {"labels": False, "ticks": False, "domain": False, "title": None}
+    assert y["axis"]["grid"] is True  # 窗格的分隔線照畫（Tableau 的預設）
 
 
 def test_hidden_header_levels_in_text_tables(tmp_path: Path, db: Path) -> None:

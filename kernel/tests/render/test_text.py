@@ -14,7 +14,7 @@ import pytest
 from tmig.data.executor import execute
 from tmig.ir import IR, TextRun
 from tmig.parser.workbook import parse_workbook
-from tmig.render.vegalite import build_spec, worksheet_title
+from tmig.render.vegalite import build_spec, main_encoding, worksheet_title
 from tmig.sqlgen.query import GRAND_TOTAL, totals_sql, worksheet_sql
 
 from ..parser import builder as b
@@ -324,12 +324,14 @@ def test_measure_names_without_values_does_not_fail(tmp_path: Path, db: Path) ->
     )
     rendered = render(parse(tmp_path, sheet), db)
     assert rendered.notes == ["Measure Names 沒有對應的量值（Measure Values 卡是空的），不顯示"]
-    assert "x" not in rendered.spec["encoding"]
+    encoding = main_encoding(rendered.spec)
+    assert encoding is not None and "x" not in encoding
     # 列架上離散的量值是標題（表格的一欄），不是座標軸
     assert rendered.mark == "text"
-    assert rendered.spec["encoding"]["y"]["field"] == "rows_dim"
+    assert encoding["y"]["field"] == "rows_dim"
     west = next(v for v in rendered.spec["data"]["values"] if v["c0"] == "West")
     assert west["rows_dim"] == "West｜800"
+    assert (west["__header0"], west["__header1"]) == ("West", "800")
 
 
 def test_highlight_table_and_scrolling_text_table(tmp_path: Path, db: Path) -> None:

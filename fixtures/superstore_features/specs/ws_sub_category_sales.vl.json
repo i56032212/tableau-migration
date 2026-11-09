@@ -23,6 +23,9 @@
   "data": {
     "values": "17 列",
     "fields": [
+      "__divider_rows",
+      "__header0",
+      "__header1",
       "__ref0_0",
       "__ref1_0",
       "__row",
@@ -56,7 +59,10 @@
       "mark": {
         "type": "bar",
         "tooltip": true,
-        "color": "#4e79a7"
+        "color": "#4e79a7",
+        "height": {
+          "band": 0.9
+        }
       },
       "encoding": {
         "x": {
@@ -68,7 +74,30 @@
           "field": "rows_dim",
           "type": "ordinal",
           "sort": null,
-          "title": "Category｜Sub-Category"
+          "title": "Category｜Sub-Category",
+          "axis": {
+            "labels": false,
+            "ticks": false,
+            "title": null,
+            "minExtent": 210,
+            "maxExtent": 210,
+            "grid": true,
+            "tickBand": "extent",
+            "gridColor": "#d4d4d4",
+            "gridWidth": 1,
+            "gridOpacity": {
+              "condition": {
+                "test": "indexof([\"Furniture｜Tables\", \"Office Supplies｜Supplies\"], datum.value) >= 0",
+                "value": 1
+              },
+              "value": 0
+            }
+          },
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          }
         },
         "tooltip": [
           {
@@ -109,7 +138,30 @@
           "field": "rows_dim",
           "type": "ordinal",
           "sort": null,
-          "title": "Category｜Sub-Category"
+          "title": "Category｜Sub-Category",
+          "axis": {
+            "labels": false,
+            "ticks": false,
+            "title": null,
+            "minExtent": 210,
+            "maxExtent": 210,
+            "grid": true,
+            "tickBand": "extent",
+            "gridColor": "#d4d4d4",
+            "gridWidth": 1,
+            "gridOpacity": {
+              "condition": {
+                "test": "indexof([\"Furniture｜Tables\", \"Office Supplies｜Supplies\"], datum.value) >= 0",
+                "value": 1
+              },
+              "value": 0
+            }
+          },
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          }
         }
       }
     },
@@ -154,6 +206,154 @@
         },
         "text": {
           "value": "目標 100,000"
+        }
+      }
+    },
+    {
+      "name": "__deco__header0",
+      "transform": [
+        {
+          "calculate": "-1",
+          "as": "__row"
+        }
+      ],
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "middle",
+        "fontSize": 10,
+        "limit": 107,
+        "color": "#1f2328"
+      },
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null
+        },
+        "x": {
+          "value": -206
+        },
+        "text": {
+          "field": "__header0"
+        }
+      }
+    },
+    {
+      "name": "__deco__header0_title",
+      "data": {
+        "values": "1 列",
+        "fields": []
+      },
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "bottom",
+        "fontSize": 10,
+        "fontWeight": 600,
+        "limit": 107,
+        "color": "#1f2328",
+        "x": -206,
+        "y": -4
+      },
+      "encoding": {
+        "text": {
+          "value": "Category"
+        }
+      }
+    },
+    {
+      "name": "__deco__header1",
+      "transform": [
+        {
+          "calculate": "-1",
+          "as": "__row"
+        }
+      ],
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "middle",
+        "fontSize": 10,
+        "limit": 87,
+        "color": "#1f2328"
+      },
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null
+        },
+        "x": {
+          "value": -91
+        },
+        "text": {
+          "field": "__header1"
+        }
+      }
+    },
+    {
+      "name": "__deco__header1_title",
+      "data": {
+        "values": "1 列",
+        "fields": []
+      },
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "bottom",
+        "fontSize": 10,
+        "fontWeight": 600,
+        "limit": 87,
+        "color": "#1f2328",
+        "x": -91,
+        "y": -4
+      },
+      "encoding": {
+        "text": {
+          "value": "Sub-Category"
+        }
+      }
+    },
+    {
+      "name": "__deco__divider_rows_header",
+      "transform": [
+        {
+          "calculate": "-1",
+          "as": "__row"
+        }
+      ],
+      "mark": {
+        "type": "rule",
+        "color": "#d4d4d4",
+        "strokeWidth": 1
+      },
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null,
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          },
+          "bandPosition": 1
+        },
+        "x": {
+          "field": "__divider_rows",
+          "type": "quantitative",
+          "scale": null
+        },
+        "x2": {
+          "value": 0
+        },
+        "strokeOpacity": {
+          "condition": {
+            "test": "datum['__divider_rows'] < 0",
+            "value": 1
+          },
+          "value": 0
         }
       }
     }

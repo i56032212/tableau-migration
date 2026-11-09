@@ -499,11 +499,11 @@ function DashboardButton({
 
 function Legend({ response, kind }: { response: RenderResponse | undefined; kind: string | null }) {
   const spec = response?.spec as Record<string, any> | undefined;
-  // 參考線等圖層包住主圖時，顏色在第一個有顏色的圖層
+  // 參考線、色帶等圖層包住主圖時，顏色在第一個依欄位著色的圖層（色帶的顏色是固定值）
   let color: Record<string, any> | undefined;
   if (spec)
     visitSpecs(spec, (node) => {
-      color ??= node.encoding?.color;
+      if (node.encoding?.color?.field) color ??= node.encoding.color;
     });
   if (!spec || !color) return <div className="legend" />;
   const scale = color.scale as ColorScale | undefined;

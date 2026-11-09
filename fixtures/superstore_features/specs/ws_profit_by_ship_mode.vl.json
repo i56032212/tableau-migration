@@ -15,7 +15,9 @@
       "rows": {
         "step": 20
       },
-      "columns": {}
+      "columns": {
+        "size": 62
+      }
     },
     "fit": "standard"
   },
@@ -29,12 +31,12 @@
       "c1_label"
     ]
   },
-  "width": "container",
+  "width": 62,
   "height": {
     "step": 20
   },
   "autosize": {
-    "type": "fit-x",
+    "type": "pad",
     "contains": "padding"
   },
   "config": {

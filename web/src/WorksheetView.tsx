@@ -41,8 +41,9 @@ export function visitSpecs(spec: Spec, visit: (node: Spec) => void) {
   if (spec.spec) visitSpecs(spec.spec, visit);
 }
 
-/** 參考線的圖層（後端以 __ref 為名稱前綴），不參與選取與醒目提示。 */
-const isReferenceLayer = (node: Spec) => typeof node.name === "string" && node.name.startsWith("__ref");
+/** 參考線（後端以 __ref 為名稱前綴）與色帶、多層列標題等裝飾（__deco）的圖層，不參與選取與醒目提示。 */
+const isReferenceLayer = (node: Spec) =>
+  typeof node.name === "string" && (node.name.startsWith("__ref") || node.name.startsWith("__deco"));
 
 function highlight(spec: Spec, rows: number[]) {
   const test = `indexof([${rows.join(",")}], datum.__row) >= 0`;

@@ -922,12 +922,17 @@ class Banding(IRModel):
 
 
 class Divider(IRModel):
-    """列或欄的分隔線（格式設定的「框線＞列分隔線、欄分隔線」）：畫在第 level 層（1 為最外層）
-    標題的成員之間；level 大於標題的層數時為每一列（欄）之間。"""
+    """列或欄的分隔線（格式設定的「框線＞列分隔線、欄分隔線」）：畫在前 level 層（1 為最外層）標題
+    的成員改變處；level 為 None 時依 Tableau 的預設，即最內層以外的每一層（只有一層標題時不畫）；
+    level 大於標題的層數時為每一列（欄）之間。"""
 
     color: HexColor = "#d4d4d4"
     width: int = Field(default=1, ge=1, description="線寬（像素）")
-    level: int = Field(default=1, ge=1)
+    level: int | None = Field(
+        default=None,
+        ge=1,
+        description="分隔第幾層的標題；None 為最內層以外的每一層（Tableau 的預設）",
+    )
 
 
 class ShelfStyle(IRModel):
@@ -945,7 +950,12 @@ class ShelfStyle(IRModel):
         "設定時依預設，連續的座標軸沒有設定時填滿",
     )
     banding: Banding | None = None
-    divider: Divider | None = None
+    divider: Divider | None = Field(
+        default_factory=Divider, description="窗格的分隔線（Tableau 預設畫；None 為不畫）"
+    )
+    header_divider: Divider | None = Field(
+        default_factory=Divider, description="標題的分隔線（Tableau 預設畫；None 為不畫）"
+    )
 
 
 FitMode = Literal["standard", "fit_width", "fit_height", "entire_view"]

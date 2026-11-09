@@ -16,13 +16,18 @@
       "rows": {
         "step": 20
       },
-      "columns": {}
+      "columns": {
+        "size": 56
+      }
     },
     "fit": "standard"
   },
   "data": {
     "values": "9 列",
     "fields": [
+      "__divider_rows",
+      "__header0",
+      "__header1",
       "__row",
       "c0",
       "c0_label",
@@ -33,12 +38,12 @@
       "rows_dim"
     ]
   },
-  "width": "container",
+  "width": 56,
   "height": {
     "step": 20
   },
   "autosize": {
-    "type": "fit-x",
+    "type": "pad",
     "contains": "padding"
   },
   "config": {
@@ -49,40 +54,212 @@
       "labelLimit": 160
     }
   },
-  "mark": {
-    "type": "text",
-    "tooltip": true,
-    "lineBreak": "\n",
-    "color": "#1f2328"
-  },
-  "encoding": {
-    "y": {
-      "field": "rows_dim",
-      "type": "ordinal",
-      "sort": null,
-      "title": "Region｜Category",
-      "axis": {
-        "orient": "left",
-        "title": "Region｜Category"
+  "layer": [
+    {
+      "mark": {
+        "type": "text",
+        "tooltip": true,
+        "lineBreak": "\n",
+        "color": "#1f2328"
+      },
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null,
+          "title": "Region｜Category",
+          "axis": {
+            "orient": "left",
+            "title": null,
+            "labels": false,
+            "ticks": false,
+            "minExtent": 171,
+            "maxExtent": 171,
+            "grid": true,
+            "tickBand": "extent",
+            "gridColor": "#d4d4d4",
+            "gridWidth": 1,
+            "gridOpacity": {
+              "condition": {
+                "test": "indexof([\"East｜Technology\", \"South｜Technology\"], datum.value) >= 0",
+                "value": 1
+              },
+              "value": 0
+            }
+          },
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          }
+        },
+        "text": {
+          "field": "c2_label",
+          "type": "nominal"
+        },
+        "tooltip": [
+          {
+            "field": "c0_label",
+            "title": "Region"
+          },
+          {
+            "field": "c1_label",
+            "title": "Category"
+          },
+          {
+            "field": "c2_label",
+            "title": "Top Order Sales"
+          }
+        ]
       }
     },
-    "text": {
-      "field": "c2_label",
-      "type": "nominal"
-    },
-    "tooltip": [
-      {
-        "field": "c0_label",
-        "title": "Region"
+    {
+      "name": "__deco__header0",
+      "transform": [
+        {
+          "calculate": "-1",
+          "as": "__row"
+        }
+      ],
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "middle",
+        "fontSize": 10,
+        "limit": 48,
+        "color": "#1f2328"
       },
-      {
-        "field": "c1_label",
-        "title": "Category"
-      },
-      {
-        "field": "c2_label",
-        "title": "Top Order Sales"
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null
+        },
+        "x": {
+          "value": -167
+        },
+        "text": {
+          "field": "__header0"
+        }
       }
-    ]
-  }
+    },
+    {
+      "name": "__deco__header0_title",
+      "data": {
+        "values": "1 列",
+        "fields": []
+      },
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "bottom",
+        "fontSize": 10,
+        "fontWeight": 600,
+        "limit": 48,
+        "color": "#1f2328",
+        "x": -167,
+        "y": -4
+      },
+      "encoding": {
+        "text": {
+          "value": "Region"
+        }
+      }
+    },
+    {
+      "name": "__deco__header1",
+      "transform": [
+        {
+          "calculate": "-1",
+          "as": "__row"
+        }
+      ],
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "middle",
+        "fontSize": 10,
+        "limit": 107,
+        "color": "#1f2328"
+      },
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null
+        },
+        "x": {
+          "value": -111
+        },
+        "text": {
+          "field": "__header1"
+        }
+      }
+    },
+    {
+      "name": "__deco__header1_title",
+      "data": {
+        "values": "1 列",
+        "fields": []
+      },
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "baseline": "bottom",
+        "fontSize": 10,
+        "fontWeight": 600,
+        "limit": 107,
+        "color": "#1f2328",
+        "x": -111,
+        "y": -4
+      },
+      "encoding": {
+        "text": {
+          "value": "Category"
+        }
+      }
+    },
+    {
+      "name": "__deco__divider_rows_header",
+      "transform": [
+        {
+          "calculate": "-1",
+          "as": "__row"
+        }
+      ],
+      "mark": {
+        "type": "rule",
+        "color": "#d4d4d4",
+        "strokeWidth": 1
+      },
+      "encoding": {
+        "y": {
+          "field": "rows_dim",
+          "type": "ordinal",
+          "sort": null,
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          },
+          "bandPosition": 1
+        },
+        "x": {
+          "field": "__divider_rows",
+          "type": "quantitative",
+          "scale": null
+        },
+        "x2": {
+          "value": 0
+        },
+        "strokeOpacity": {
+          "condition": {
+            "test": "datum['__divider_rows'] < 0",
+            "value": 1
+          },
+          "value": 0
+        }
+      }
+    }
+  ]
 }

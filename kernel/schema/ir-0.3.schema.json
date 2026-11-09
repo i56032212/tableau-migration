@@ -1485,7 +1485,7 @@
     },
     "Divider": {
       "additionalProperties": false,
-      "description": "列或欄的分隔線（格式設定的「框線＞列分隔線、欄分隔線」）：畫在第 level 層（1 為最外層）\n標題的成員之間；level 大於標題的層數時為每一列（欄）之間。",
+      "description": "列或欄的分隔線（格式設定的「框線＞列分隔線、欄分隔線」）：畫在前 level 層（1 為最外層）標題\n的成員改變處；level 為 None 時依 Tableau 的預設，即最內層以外的每一層（只有一層標題時不畫）；\nlevel 大於標題的層數時為每一列（欄）之間。",
       "properties": {
         "color": {
           "default": "#d4d4d4",
@@ -1501,10 +1501,18 @@
           "type": "integer"
         },
         "level": {
-          "default": 1,
-          "minimum": 1,
-          "title": "Level",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "分隔第幾層的標題；None 為最內層以外的每一層（Tableau 的預設）",
+          "title": "Level"
         }
       },
       "title": "Divider",
@@ -3479,7 +3487,18 @@
               "type": "null"
             }
           ],
-          "default": null
+          "description": "窗格的分隔線（Tableau 預設畫；None 為不畫）"
+        },
+        "header_divider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Divider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "標題的分隔線（Tableau 預設畫；None 為不畫）"
         }
       },
       "title": "ShelfStyle",

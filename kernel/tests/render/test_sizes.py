@@ -9,17 +9,18 @@ East｜Technology、North｜Office、South｜Furniture、South｜Office、West�
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
 from tmig.ir import Banding, Divider, iter_zones
 from tmig.parser.workbook import parse_workbook
-from tmig.render.vegalite import ROW_HEIGHT, apply_fit
+from tmig.render.vegalite import ROW_HEIGHT, apply_fit, main_encoding
 
 from ..parser import builder as b
-from ..parser.builder import ref, worksheet
+from ..parser.builder import instance, ref, worksheet
 from .test_formats import bars, fmt, nested, rule, styled
-from .test_text import REGION, SALES, db, parse, render
+from .test_text import CATEGORY, REGION, SALES, db, parse, render
 
 __all__ = ["db"]  # pytest fixture
 
@@ -155,15 +156,21 @@ def test_header_width(tmp_path: Path, db: Path) -> None:
     axis = render(ir, db).spec["encoding"]["y"]["axis"]
     assert (axis["minExtent"], axis["maxExtent"], axis["labelLimit"]) == (108, 108, 100)
 
-    # 多層的標題：每一層都有設定時合計；連續座標軸的寬度
+    # 多層的標題：每一層一欄、依設定的寬度，合計為標題區域的寬度；連續座標軸的寬度
     both = nested(
         "rows",
         rule(
             "header", fmt("width", "60", "none:Region:nk"), fmt("width", "80", "none:Category:nk")
         ),
     )
-    axis = render(parse(tmp_path, both), db).spec["encoding"]["y"]["axis"]
+    spec = render(parse(tmp_path, both), db).spec
+    axis = main_encoding(spec)["y"]["axis"]  # type: ignore[index]
     assert (axis["minExtent"], axis["maxExtent"]) == (140, 140)
+    headers = header_layers(spec)
+    assert [(h["encoding"]["x"], h["mark"]["limit"]) for h in headers.values()] == [
+        ({"value": -136}, 52),
+        ({"value": -76}, 72),
+    ]
     axis_width = bars(rule("axis", fmt("height", "36", "sum:Sales:qk")))
     x = render(parse(tmp_path, axis_width), db).spec["encoding"]["x"]["axis"]
     assert (x["minExtent"], x["maxExtent"]) == (36, 36)
@@ -171,6 +178,44 @@ def test_header_width(tmp_path: Path, db: Path) -> None:
 
 def banded(*rules: str) -> str:
     return nested("rows", *rules)
+
+
+def header_layers(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """多層列標題的圖層（不含欄位標籤），依層的順序。"""
+    found: dict[str, dict[str, Any]] = {}
+
+    def visit(node: dict[str, Any]) -> None:
+        name = node.get("name", "")
+        if name.startswith("__deco__header") and not name.endswith("_title"):
+            found[name] = node
+        for child in node.get("layer", []):
+            visit(child)
+
+    visit(spec)
+    return found
+
+
+def test_multi_level_row_headers(tmp_path: Path, db: Path) -> None:
+    """多層的列標題每一層一欄：外層的成員只寫在各組的第一列，寬度依內容估計；縱軸不再畫標籤。"""
+    spec = render(parse(tmp_path, banded()), db).spec
+    values = spec["data"]["values"]
+    assert [v["__header0"] for v in values] == ["East", "", "North", "South", "", "West", ""]
+    assert [v["__header1"] for v in values] == [n.split("｜")[1] for n in NESTED]
+    headers = header_layers(spec)
+    assert list(headers) == ["__deco__header0", "__deco__header1"]
+    for level, layer in enumerate(headers.values()):
+        assert layer["encoding"]["text"] == {"field": f"__header{level}"}
+        assert layer["encoding"]["y"]["field"] == "rows_dim"
+        assert layer["transform"] == [{"calculate": "-1", "as": "__row"}]  # 不能選取
+        assert (layer["mark"]["type"], layer["mark"]["align"]) == ("text", "left")
+    y = main_encoding(spec)["y"]  # type: ignore[index]
+    total = y["axis"]["minExtent"]
+    first = headers["__deco__header0"]["encoding"]["x"]["value"]
+    second = headers["__deco__header1"]["encoding"]["x"]["value"]
+    assert first == -total + 4 and first < second < 0
+    assert (y["axis"]["labels"], y["axis"]["ticks"], y["axis"]["title"]) == (False, False, None)
+    titles = [layer for layer in spec["layer"] if layer.get("name", "").endswith("_title")]
+    assert [t["encoding"]["text"]["value"] for t in titles] == ["Region", "Category"]
 
 
 DIVIDER_RULES = rule(
@@ -222,10 +267,41 @@ def test_banding_and_dividers_are_parsed(tmp_path: Path) -> None:
     assert parse(tmp_path, banded(clear)).worksheets[0].row_style.banding is None
 
 
+def test_default_dividers_are_parsed(tmp_path: Path) -> None:
+    """沒有寫分隔線時與 Tableau 相同：窗格（table-div）與標題（header-div）都畫，淺灰、最內層以外的
+    每一層；兩者可以分開關閉，標題的線沒有寫顏色時與窗格相同，層數共用窗格的 div-level。"""
+    style = parse(tmp_path, banded()).worksheets[0].row_style
+    assert (style.divider, style.header_divider) == (Divider(), Divider())
+    assert Divider().level is None
+
+    header_off = rule("header-div", fmt("line-visibility", "off", scope="rows"))
+    style = parse(tmp_path, banded(header_off)).worksheets[0].row_style
+    assert (style.divider, style.header_divider) == (Divider(), None)
+
+    colored = (
+        rule(
+            "table-div",
+            fmt("stroke-color", "#BD8459", scope="rows"),
+            fmt("div-level", "2", scope="rows"),
+            fmt("line-visibility", "off", scope="cols"),
+        ),
+        rule("header-div", fmt("stroke-size", "2", scope="rows")),
+    )
+    ws = parse(tmp_path, banded(*colored)).worksheets[0]
+    assert ws.row_style.divider == Divider(color="#bd8459", level=2)
+    assert ws.row_style.header_divider == Divider(color="#bd8459", width=2, level=2)
+    # 欄：只關掉窗格的線
+    assert (ws.column_style.divider, ws.column_style.header_divider) == (None, Divider())
+
+    zero = rule("table-div", fmt("div-level", "0", scope="rows"))
+    style = parse(tmp_path, banded(zero)).worksheets[0].row_style
+    assert (style.divider, style.header_divider) == (None, None)
+
+
 def test_dividers_are_rendered(tmp_path: Path, db: Path) -> None:
     """分隔線畫在第 level 層成員改變處（Region 的各組之間）；level 大於層數時每一列之間。"""
     spec = render(parse(tmp_path, banded(DIVIDER_RULES)), db).spec
-    y = spec["encoding"]["y"]
+    y = main_encoding(spec)["y"]  # type: ignore[index]
     assert [v["rows_dim"] for v in spec["data"]["values"]] == NESTED
     axis = y["axis"]
     assert (axis["grid"], axis["tickBand"], axis["gridColor"], axis["gridWidth"]) == (
@@ -242,8 +318,77 @@ def test_dividers_are_rendered(tmp_path: Path, db: Path) -> None:
     assert y["scale"] == {"type": "band", "paddingInner": 0, "paddingOuter": 0}
 
     every = DIVIDER_RULES.replace("value='1' scope='rows'", "value='5' scope='rows'")
-    axis = render(parse(tmp_path, banded(every)), db).spec["encoding"]["y"]["axis"]
+    axis = main_encoding(render(parse(tmp_path, banded(every)), db).spec)["y"]["axis"]  # type: ignore[index]
     assert axis["gridOpacity"]["condition"]["test"].count("｜") == len(NESTED) - 1
+
+
+ORDER = instance("[Order ID]", "None", "[none:Order ID:nk]")
+
+
+def three_levels(*rules: str) -> str:
+    """Region、Category、Order ID 三層的列標題，欄為 SUM(Sales)。"""
+    dims = " / ".join(ref(f"none:{name}:nk") for name in ("Region", "Category", "Order ID"))
+    sheet = worksheet(
+        "Three", [REGION, CATEGORY, ORDER, SALES], rows=dims, cols=ref("sum:Sales:qk")
+    )
+    return styled(sheet, *rules)
+
+
+def test_default_dividers_are_rendered(tmp_path: Path, db: Path) -> None:
+    """預設的分隔線（最內層以外的每一層）：窗格的線畫在 Region 或 Category 改變處；標題區域的線從
+    改變的那一層所在的欄畫起（同一個 Region 中只切開 Category 以內的欄）；長條維持原本的粗細。"""
+    spec = render(parse(tmp_path, three_levels()), db).spec
+    values = spec["data"]["values"]
+    assert [v["rows_dim"] for v in values] == [
+        "East｜Furniture｜O1",
+        "East｜Technology｜O2",
+        "North｜Office｜O7",
+        "South｜Furniture｜O5",
+        "South｜Office｜O6",
+        "West｜Furniture｜O3",
+        "West｜Technology｜O4",
+    ]
+    main = spec["layer"][0]
+    axis = main["encoding"]["y"]["axis"]
+    assert axis["gridColor"] == "#d4d4d4"
+    # 每一列都有不同的 Region｜Category：最後一列以外都是邊界
+    edges = json.dumps([v["rows_dim"] for v in values][:-1], ensure_ascii=False)
+    assert axis["gridOpacity"]["condition"]["test"] == f"indexof({edges}, datum.value) >= 0"
+    assert main["mark"]["height"] == {"band": 0.9}
+
+    headers = header_layers(spec)
+    region, category = (headers[f"__deco__header{i}"]["encoding"]["x"]["value"] - 4 for i in (0, 1))
+    assert region < category < 0
+    assert [v["__divider_rows"] for v in values] == [
+        category,  # East｜Furniture → East｜Technology：Region 的欄不切開
+        region,
+        region,
+        category,
+        region,
+        category,
+        0,  # 最後一列不是邊界
+    ]
+    [line] = [
+        layer for layer in spec["layer"] if layer.get("name") == "__deco__divider_rows_header"
+    ]
+    assert line["mark"] == {"type": "rule", "color": "#d4d4d4", "strokeWidth": 1}
+    assert line["encoding"]["y"]["bandPosition"] == 1  # 線在這一列的尾端
+    assert line["encoding"]["x2"] == {"value": 0}
+
+    # 兩層：分隔 Region；只有一層時預設不畫
+    spec = render(parse(tmp_path, banded()), db).spec
+    test = main_encoding(spec)["y"]["axis"]["gridOpacity"]["condition"]["test"]  # type: ignore[index]
+    assert test == (
+        'indexof(["East｜Technology", "North｜Office", "South｜Office"], datum.value) >= 0'
+    )
+    single = main_encoding(render(parse(tmp_path, bars()), db).spec)
+    assert single is not None and "gridOpacity" not in single["y"].get("axis", {})
+
+    # 關掉標題的線：只畫窗格的線
+    off = rule("header-div", fmt("line-visibility", "off", scope="rows"))
+    spec = render(parse(tmp_path, three_levels(off)), db).spec
+    assert not any(layer.get("name", "").startswith("__deco__divider") for layer in spec["layer"])
+    assert "gridOpacity" in main_encoding(spec)["y"]["axis"]  # type: ignore[index]
 
 
 def test_banding_is_rendered(tmp_path: Path, db: Path) -> None:
@@ -254,11 +399,13 @@ def test_banding_is_rendered(tmp_path: Path, db: Path) -> None:
     assert [v["__band_rows"] for v in values] == [False, True, False, True, False, True, False]
     pane, header, body = spec["layer"]
     for layer in (pane, header):
-        assert layer["name"].startswith("__ref")  # 檢視器的選取與醒目提示略過
+        assert layer["name"].startswith("__deco")  # 檢視器的選取與醒目提示略過
         assert layer["mark"] == {"type": "rect"}
         assert layer["encoding"]["y"]["field"] == "rows_dim"
     assert pane["encoding"]["color"]["condition"]["value"] == "#f4eee8"
     assert header["encoding"]["color"]["condition"]["value"] == "#f3ede7"
+    # 標題的色帶橫跨各層標題的欄（60 + 80）
     assert (header["encoding"]["x"], header["encoding"]["x2"]) == ({"value": -140}, {"value": 0})
-    assert body["mark"]["height"] == {"band": 0.9}
-    assert body["encoding"]["y"]["scale"] == {"type": "band", "paddingInner": 0, "paddingOuter": 0}
+    main = body["layer"][0]  # 主圖之後是多層列標題的圖層
+    assert main["mark"]["height"] == {"band": 0.9}
+    assert main["encoding"]["y"]["scale"] == {"type": "band", "paddingInner": 0, "paddingOuter": 0}

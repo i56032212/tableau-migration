@@ -23,8 +23,9 @@
     field 的 width（列的標題、座標軸寬度）與 height（欄的標題、座標軸高度）
   - 色帶：element='table' 的 band-size（每段的列數，0 為不上色），element='pane'／'header' 的
     band-color，以 scope（rows／cols）區分列與欄
-  - 分隔線：element='table-div' 的 line-visibility、stroke-size、stroke-color、div-level（第幾層標題
-    之間，0 為不畫），以 scope 區分列與欄
+  - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
+    stroke-color，table-div 的 div-level（第幾層標題之間，0 為不畫），以 scope 區分列與欄；沒有寫時
+    Tableau 預設畫（使用者常關掉：公開報表中最常見的寫法是 line-visibility='off'）
 - dashboard 的 <style>：<style-rule element='table'> 的 background-color（dashboard 的背景）
 - dashboard 區塊的 <zone-style>：background-color、border-style／border-width／border-color、
   margin（外距，可依 margin-top 等各邊覆寫）、padding（內距）；沒有寫的為 0
@@ -168,9 +169,9 @@ def worksheet_formats(
                 sizes(element, name or "", value, ref)
             elif tag == "format" and scope in SHELVES and _banding_format(element, name, item):
                 bands[SHELVES[scope]][f"{element}:{name}"] = value or ""
-            elif tag == "format" and scope in SHELVES and element == "table-div":
+            elif tag == "format" and scope in SHELVES and element in ("table-div", "header-div"):
                 if item.get("data-class") is None:
-                    dividers[SHELVES[scope]][name or ""] = value or ""
+                    dividers[SHELVES[scope]][f"{element}:{name}"] = value or ""
             elif element == "axis" and tag == "format" and name in ("display", "title"):
                 for target in targets(ref, scope or ""):
                     if name == "display":
@@ -183,8 +184,9 @@ def worksheet_formats(
     # 只留下有設定的座標軸（例如只寫了雙軸的 fold）
     result.axes = [a for a in axes.values() if a != Axis(use=a.use, shelf=a.shelf)]
     for shelf in shelves:
+        pane, header = _dividers(dividers[shelf])
         shelves[shelf] = shelves[shelf].model_copy(
-            update={"banding": _banding(bands[shelf]), "divider": _divider(dividers[shelf])}
+            update={"banding": _banding(bands[shelf]), "divider": pane, "header_divider": header}
         )
     result.row_style, result.column_style = shelves["rows"], shelves["columns"]
     return result
@@ -209,20 +211,25 @@ def _banding(raw: dict[str, str]) -> Banding | None:
     return Banding(pane=pane, header=header, size=size or 1)
 
 
-def _divider(raw: dict[str, str]) -> Divider | None:
-    """分隔線：明確設定要畫（line-visibility='on' 或指定了顏色）才畫；Tableau 沒有寫時的預設分隔線
-    尚未呈現。"""
-    visibility = raw.get("line-visibility")
-    width = _int(raw.get("stroke-size"))
-    level = _int(raw.get("div-level"))
-    color = hex_color(raw.get("stroke-color"))
-    if visibility == "off" or width == 0 or level == 0:
-        return None
-    if visibility != "on" and color is None:
-        return None
-    if color is not None and _transparent(color):
-        return None
-    return Divider(color=color or Divider().color, width=width or 1, level=level or 1)
+def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
+    """窗格（table-div）與標題（header-div）的分隔線。沒有寫時與 Tableau 相同都畫（淺灰、1 像素、
+    最內層以外的每一層之間）；line-visibility='off'、stroke-size='0' 或透明時不畫，div-level='0' 時
+    兩者都不畫。標題的線沒有寫顏色時與窗格相同，層數依窗格的 div-level（兩者共用）。"""
+    level = _int(raw.get("table-div:div-level"))
+    if level is not None and level <= 0:
+        return None, None
+
+    def line(element: str, inherit: str | None) -> Divider | None:
+        width = _int(raw.get(f"{element}:stroke-size"))
+        color = hex_color(raw.get(f"{element}:stroke-color")) or inherit
+        if raw.get(f"{element}:line-visibility") == "off" or (width is not None and width <= 0):
+            return None
+        if color is not None and _transparent(color):
+            return None
+        return Divider(color=color or Divider().color, width=width or 1, level=level)
+
+    pane = line("table-div", None)
+    return pane, line("header-div", hex_color(raw.get("table-div:stroke-color")))
 
 
 def _opaque(value: str | None) -> str | None:
