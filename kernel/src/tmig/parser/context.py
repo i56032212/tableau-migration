@@ -14,6 +14,7 @@ from tmig.ir.models import (
     DataField,
     FieldUse,
     Filter,
+    FitMode,
     Parameter,
     PublishedSource,
     Unsupported,
@@ -134,6 +135,10 @@ class ParseContext:
     """已記在 ignored 的整份報表說明，避免重複。"""
     windows: dict[str, tuple[str, str]] = field(default_factory=dict)
     """<windows> 中各視窗的 simple-id（大寫、不含大括號）→（類型、名稱），導覽按鈕以它找目標。"""
+    sheet_fits: dict[str, FitMode] = field(default_factory=dict)
+    """工作表名稱 → 工作表視窗的顯示大小（IR 的 FitMode）；沒有視窗的為 standard。"""
+    dashboard_fits: dict[str, dict[str, FitMode]] = field(default_factory=dict)
+    """dashboard 名稱 → 工作表名稱 → 這個 dashboard 中的顯示大小（<viewpoint> 的 <zoom>）。"""
     dashboard_ids: dict[str, str] = field(default_factory=dict)
     """dashboard 名稱 → IR id；導覽按鈕可能先參照之後才解析的 dashboard，所以第一次用到時配發。"""
     navigations: list[tuple[etree._Element, Zone]] = field(default_factory=list)

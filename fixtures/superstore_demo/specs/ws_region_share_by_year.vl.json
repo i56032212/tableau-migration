@@ -12,7 +12,18 @@
     "measures": {
       "c2": "f_calc_2049003526124994561",
       "c3": "sum(f_sales)"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {
+        "step": 49,
+        "count": 4,
+        "fixed": false
+      }
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "16 列",
@@ -30,7 +41,7 @@
   },
   "width": "container",
   "height": {
-    "step": 22
+    "step": 20
   },
   "autosize": {
     "type": "fit-x",

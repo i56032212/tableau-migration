@@ -205,6 +205,9 @@ export interface ZoneTextRun {
   style?: TextStyle | null;
 }
 
+/** 工作表的顯示大小（Tableau 的「調整」）。 */
+export type FitMode = "standard" | "fit_width" | "fit_height" | "entire_view";
+
 /** 區塊的格式：外距（框線之外）、框線、背景與內距（框線之內），單位為像素；依序為上、右、下、左。 */
 export interface ZoneStyle {
   background: string | null;
@@ -243,6 +246,8 @@ export interface Zone {
   show_title?: boolean;
   /** 沒有時表示沒有外距、內距、框線與背景 */
   style?: ZoneStyle | null;
+  /** 工作表區塊中的顯示大小；沒有時依工作表本身 */
+  fit?: FitMode | null;
   source_ref: string;
 }
 

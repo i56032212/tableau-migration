@@ -11,7 +11,12 @@
     "measures": {
       "c1": "f_zero",
       "c2": "sum(f_sales)"
-    }
+    },
+    "sizing": {
+      "rows": {},
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "3 列",

@@ -11,7 +11,14 @@
     },
     "measures": {
       "c2": "sum(f_top_order_sales)"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "9 列",
@@ -28,7 +35,7 @@
   },
   "width": "container",
   "height": {
-    "step": 22
+    "step": 20
   },
   "autosize": {
     "type": "fit-x",

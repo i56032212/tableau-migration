@@ -802,17 +802,24 @@
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "column_style": {
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -917,17 +924,24 @@
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "column_style": {
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -1026,17 +1040,24 @@
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "column_style": {
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1156,17 +1177,24 @@
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "column_style": {
         "grid": true,
         "axis": true,
         "ticks": true,
-        "field_labels": true
+        "field_labels": true,
+        "cell": null,
+        "banding": null,
+        "divider": null
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[4]"
     }
   ],
@@ -1260,6 +1288,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[1]"
                     },
                     {
@@ -1285,6 +1314,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[2]"
                     },
                     {
@@ -1310,6 +1340,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[3]"
                     },
                     {
@@ -1335,6 +1366,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[4]"
                     },
                     {
@@ -1360,6 +1392,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[5]"
                     }
                   ],
@@ -1368,6 +1401,7 @@
                   "hidden": false,
                   "show_title": true,
                   "style": null,
+                  "fit": null,
                   "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]"
                 },
                 {
@@ -1417,6 +1451,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[1]"
                     },
                     {
@@ -1442,6 +1477,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[2]"
                     },
                     {
@@ -1473,6 +1509,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[3]"
                     },
                     {
@@ -1498,6 +1535,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[4]"
                     },
                     {
@@ -1523,6 +1561,7 @@
                       "hidden": false,
                       "show_title": true,
                       "style": null,
+                      "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[5]"
                     }
                   ],
@@ -1531,6 +1570,7 @@
                   "hidden": false,
                   "show_title": true,
                   "style": null,
+                  "fit": null,
                   "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]"
                 }
               ],
@@ -1539,6 +1579,7 @@
               "hidden": false,
               "show_title": true,
               "style": null,
+              "fit": null,
               "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone"
             }
           ],
@@ -1547,6 +1588,7 @@
           "hidden": false,
           "show_title": true,
           "style": null,
+          "fit": null,
           "source_ref": "/workbook/dashboards/dashboard/zones/zone"
         }
       ],

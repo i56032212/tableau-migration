@@ -366,6 +366,7 @@ class SheetParser:
             background=sheet_formats.background,
             text_color=sheet_formats.text_color,
             cell_color=sheet_formats.cell_color,
+            fit=ctx.sheet_fits.get(self.name, "standard"),
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(

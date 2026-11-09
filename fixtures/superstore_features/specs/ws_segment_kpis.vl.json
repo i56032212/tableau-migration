@@ -13,7 +13,18 @@
       "c2": "sum(f_profit)",
       "c3": "countd(f_order_id)",
       "c4": "f_calc_1368249927221915648"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {
+        "step": 75,
+        "count": 4,
+        "fixed": false
+      }
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "12 列",
@@ -37,7 +48,7 @@
   },
   "width": "container",
   "height": {
-    "step": 22
+    "step": 20
   },
   "autosize": {
     "type": "fit-x",

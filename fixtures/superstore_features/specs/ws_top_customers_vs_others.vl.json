@@ -11,7 +11,14 @@
     "measures": {
       "c1": "sum(f_sales)",
       "c2": "countd(f_customer_name)"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "2 列",
@@ -26,9 +33,11 @@
     ]
   },
   "width": "container",
-  "height": "container",
+  "height": {
+    "step": 20
+  },
   "autosize": {
-    "type": "fit",
+    "type": "fit-x",
     "contains": "padding"
   },
   "config": {

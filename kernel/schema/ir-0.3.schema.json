@@ -413,6 +413,34 @@
           "default": null,
           "description": "座標軸刻度或標題（離散欄位的成員）文字的顏色；None 依工作表",
           "title": "Label Color"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標題或座標軸區域的寬度（列）或高度（欄），像素（拖曳標題邊界調整的大小）；None 依內容",
+          "title": "Size"
+        },
+        "cell": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "離散欄位每個成員的高度（列）或寬度（欄），像素（Format > Cell Size）；None 依預設",
+          "title": "Cell"
         }
       },
       "required": [
@@ -420,6 +448,47 @@
         "shelf"
       ],
       "title": "Axis",
+      "type": "object"
+    },
+    "Banding": {
+      "additionalProperties": false,
+      "description": "列或欄的色帶（格式設定的「網底＞列色帶、欄色帶」）：每 size 列（欄）為一段、隔段上色，\n窗格與標題可以不同顏色（None 為不上色）。",
+      "properties": {
+        "pane": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pane"
+        },
+        "header": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Header"
+        },
+        "size": {
+          "default": 1,
+          "description": "每一段的列（欄）數",
+          "minimum": 1,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "title": "Banding",
       "type": "object"
     },
     "Button": {
@@ -1412,6 +1481,33 @@
         "unit"
       ],
       "title": "DateDerivation",
+      "type": "object"
+    },
+    "Divider": {
+      "additionalProperties": false,
+      "description": "列或欄的分隔線（格式設定的「框線＞列分隔線、欄分隔線」）：畫在第 level 層（1 為最外層）\n標題的成員之間；level 大於標題的層數時為每一列（欄）之間。",
+      "properties": {
+        "color": {
+          "default": "#d4d4d4",
+          "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+          "title": "Color",
+          "type": "string"
+        },
+        "width": {
+          "default": 1,
+          "description": "線寬（像素）",
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        },
+        "level": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Level",
+          "type": "integer"
+        }
+      },
+      "title": "Divider",
       "type": "object"
     },
     "ExtractConnection": {
@@ -3326,7 +3422,7 @@
     },
     "ShelfStyle": {
       "additionalProperties": false,
-      "description": "一個方向（列＝縱軸、欄＝橫軸）的格式：格線、座標軸線與刻度是否顯示（Tableau 的格式設定），\n與離散欄位的欄位標籤（標題上方或左側的欄位名稱）是否顯示。",
+      "description": "一個方向（列＝縱軸、欄＝橫軸）的格式：格線、座標軸線與刻度是否顯示（Tableau 的格式設定），\n離散欄位的欄位標籤（標題上方或左側的欄位名稱）是否顯示，以及大小、色帶與分隔線。",
       "properties": {
         "grid": {
           "default": true,
@@ -3348,6 +3444,42 @@
           "description": "顯示欄位標籤（Show Field Labels）",
           "title": "Field Labels",
           "type": "boolean"
+        },
+        "cell": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "每一列的高度（列）或每一欄的寬度（欄），像素（Format > Cell Size）；離散的標題沒有設定時依預設，連續的座標軸沒有設定時填滿",
+          "title": "Cell"
+        },
+        "banding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Banding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "divider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Divider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "ShelfStyle",
@@ -4719,6 +4851,18 @@
           "description": "文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color",
           "title": "Cell Color"
         },
+        "fit": {
+          "default": "standard",
+          "description": "工作表本身（工作表分頁）的顯示大小",
+          "enum": [
+            "standard",
+            "fit_width",
+            "fit_height",
+            "entire_view"
+          ],
+          "title": "Fit",
+          "type": "string"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -4986,6 +5130,25 @@
           ],
           "default": null,
           "description": "區塊的格式（背景、框線、外距與內距）；None 表示都沒有"
+        },
+        "fit": {
+          "anyOf": [
+            {
+              "enum": [
+                "standard",
+                "fit_width",
+                "fit_height",
+                "entire_view"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工作表區塊中的顯示大小；None 依工作表本身的設定",
+          "title": "Fit"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

@@ -42,6 +42,7 @@
 from __future__ import annotations
 
 import io
+import re
 import struct
 import sys
 import tempfile
@@ -102,16 +103,25 @@ WINDOWS = {
 """<windows> 中的視窗（simple-id）：導覽按鈕以它指定目標。"""
 
 
-def windows() -> str:
+def windows(dashboards: str) -> str:
+    """每個 dashboard 一個視窗（含其中各工作表的 <viewpoint>，顯示大小為「整個檢視」，與 Tableau 中
+    把工作表拖到 dashboard 後常見的設定相同）；導覽按鈕的目標另有 simple-id。"""
+    boards = re.findall(
+        r"<dashboard name='([^']*)'(?! type='storyboard')(.*?)</dashboard>", dashboards, re.S
+    )
+    names = [name for name, _ in boards]
     lines = []
-    for name, uuid in WINDOWS.items():
+    for name in dict.fromkeys([*WINDOWS, *names]):
         kind = "worksheet" if name == "Region Sales Bands" else "dashboard"
         maximized = " maximized='true'" if name == "功能總覽" else ""
+        body = next((b for n, b in boards if n == name), None)
+        points = demo.viewpoints(body) if body is not None else "      <viewpoints />"
+        uuid = WINDOWS.get(name)
+        simple = f"\n      <simple-id uuid='{{{uuid}}}' />" if uuid else ""
         lines.append(
             f"""    <window class='{kind}'{maximized} name={attr(name)}>
-      <viewpoints />
-      <active id='-1' />
-      <simple-id uuid='{{{uuid}}}' />
+{points}
+      <active id='-1' />{simple}
     </window>"""
         )
     return "\n".join(lines)
@@ -1855,6 +1865,25 @@ def charts_dashboard() -> str:
     </dashboard>"""
 
 
+def all_dashboards() -> str:
+    return "\n".join(
+        [
+            dashboard(),
+            charts_dashboard(),
+            actions_dashboard(),
+            groups_dashboard(),
+            conditions_dashboard(),
+            growth_dashboard(),
+            parameter_dashboard(),
+            reference_dashboard(),
+            home_dashboard(),
+            donut_dashboard(),
+            sets_dashboard(),
+            story(),
+        ]
+    )
+
+
 def twb(rows: int) -> str:
     return f"""<?xml version='1.0' encoding='utf-8' ?>
 
@@ -1880,21 +1909,10 @@ def twb(rows: int) -> str:
 {worksheets()}
   </worksheets>
   <dashboards>
-{dashboard()}
-{charts_dashboard()}
-{actions_dashboard()}
-{groups_dashboard()}
-{conditions_dashboard()}
-{growth_dashboard()}
-{parameter_dashboard()}
-{reference_dashboard()}
-{home_dashboard()}
-{donut_dashboard()}
-{sets_dashboard()}
-{story()}
+{all_dashboards()}
   </dashboards>
   <windows source-height='30'>
-{windows()}
+{windows(all_dashboards())}
   </windows>
 </workbook>
 """

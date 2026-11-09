@@ -17,6 +17,7 @@ import csv
 import datetime as dt
 import gzip
 import io
+import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -548,6 +549,25 @@ def zone_box(x: int, y: int, w: int, h: int) -> str:
     )
 
 
+def viewpoints(board: str) -> str:
+    """dashboard 視窗中各工作表的 <viewpoint>：與 Tableau 中把工作表拖到 dashboard 後常見的設定相同，
+    顯示大小為「整個檢視」。"""
+    names = re.findall(r"<zone [^>]*\bname='([^']+)'[^>]*/>", board)
+    sheets = list(dict.fromkeys(names))
+    items = "".join(
+        f"\n        <viewpoint name='{name}'>\n          <zoom type='entire-view' />\n        </viewpoint>"
+        for name in sheets
+        if _is_sheet_zone(board, name)
+    )
+    return f"      <viewpoints>{items}\n      </viewpoints>"
+
+
+def _is_sheet_zone(board: str, name: str) -> bool:
+    """有沒有工作表區塊（沒有 type-v2）以 name 為名；篩選、圖例等區塊的 name 也是工作表名稱。"""
+    plain = re.search(rf"<zone (?![^>]*type-v2)[^>]*\bname='{re.escape(name)}'", board)
+    return plain is not None
+
+
 def dashboard() -> str:
     return f"""    <dashboard name='銷售總覽'>
       <style />
@@ -605,7 +625,7 @@ def twb(rows: int) -> str:
   </dashboards>
   <windows source-height='30'>
     <window class='dashboard' maximized='true' name='銷售總覽'>
-      <viewpoints />
+{viewpoints(dashboard())}
       <active id='-1' />
       <simple-id uuid='{{6C5B1F0E-1A2B-4C3D-8E9F-000000000020}}' />
     </window>

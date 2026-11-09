@@ -171,7 +171,11 @@ class DashboardParser:
             if sheet is None:
                 return Zone(kind="blank", **base)
             show_title = element.get("show-title") != "false"
-            return Zone(kind="worksheet", worksheet=sheet.id, show_title=show_title, **base)
+            # 這個 dashboard 中的顯示大小；沒有 <viewpoint> 時依工作表本身
+            fit = self.ctx.dashboard_fits.get(self.name, {}).get(name)
+            return Zone(
+                kind="worksheet", worksheet=sheet.id, show_title=show_title, fit=fit, **base
+            )
         if kind_attr == "title":
             text, content = self._text(element)
             return Zone(kind="title", text=text or self.name, content=content, **base)

@@ -10,7 +10,14 @@
     },
     "measures": {
       "c1": "countd(f_order_id)"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "3 列",
@@ -24,7 +31,7 @@
   },
   "width": "container",
   "height": {
-    "step": 22
+    "step": 20
   },
   "autosize": {
     "type": "fit-x",

@@ -349,8 +349,8 @@ def test_highlight_table_and_scrolling_text_table(tmp_path: Path, db: Path) -> N
     assert spec["encoding"]["color"]["type"] == "quantitative"
     assert text["encoding"]["text"]["field"].endswith("_label")
     assert text["encoding"]["color"] == {"value": "#1f2328"}
-    # 固定列高：列數多時由檢視器在區塊內捲動
-    assert spec["height"] == {"step": 22}
+    # 標準大小的固定列高（20 像素）：列數多時由檢視器在區塊內捲動
+    assert spec["height"] == {"step": 20}
     assert spec["autosize"] == {"type": "fit-x", "contains": "padding"}
 
     colored_text = sheet.replace("<mark class='Square' />", "<mark class='Text' />")

@@ -18,6 +18,13 @@
     方向的欄位標籤）、attr='color'（工作表文字的預設顏色）
   - <style-rule element='cell'>：format attr='color'（文字表儲存格的文字）
   - 工作表沒有寫文字顏色時依活頁簿的 <style>（element='worksheet'，其次 'all'）
+  - 大小（像素，拖曳邊界或 Format > Cell Size 調整後才寫）：element='cell' 的 height／width（沒有 field 為
+    整張表每一列的高度、每一欄的寬度；有 field 為該離散欄位成員的大小），element='header'／'axis' 加上
+    field 的 width（列的標題、座標軸寬度）與 height（欄的標題、座標軸高度）
+  - 色帶：element='table' 的 band-size（每段的列數，0 為不上色），element='pane'／'header' 的
+    band-color，以 scope（rows／cols）區分列與欄
+  - 分隔線：element='table-div' 的 line-visibility、stroke-size、stroke-color、div-level（第幾層標題
+    之間，0 為不畫），以 scope 區分列與欄
 - dashboard 的 <style>：<style-rule element='table'> 的 background-color（dashboard 的背景）
 - dashboard 區塊的 <zone-style>：background-color、border-style／border-width／border-color、
   margin（外距，可依 margin-top 等各邊覆寫）、padding（內距）；沒有寫的為 0
@@ -31,7 +38,7 @@ from dataclasses import dataclass, field
 
 from lxml import etree
 
-from tmig.ir.models import Axis, FieldUse, Scalar, ShelfStyle, ZoneStyle
+from tmig.ir.models import Axis, Banding, Divider, FieldUse, Scalar, ShelfStyle, ZoneStyle
 from tmig.parser.colors import hex_color
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import child, children
@@ -39,6 +46,7 @@ from tmig.planner.state import use_key
 
 DATE = re.compile(r"^#(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}:\d{2}))?#$")
 SHELVES = {"rows": "rows", "cols": "columns"}
+SIZES = ("width", "height")
 BORDERS = ("none", "solid", "dashed", "dotted")
 SIDES = ("top", "right", "bottom", "left")
 
@@ -103,6 +111,26 @@ def worksheet_formats(
         elif element == "axis":
             turn(scope, "axis", _line(name, value))
 
+    def sizes(element: str, name: str, value: str | None, ref: str | None) -> None:
+        size = _int(value)
+        if size is None or size <= 0:
+            return
+        if ref is None:
+            if element == "cell":
+                shelf = "rows" if name == "height" else "columns"
+                shelves[shelf] = shelves[shelf].model_copy(update={"cell": size})
+            return
+        for target in targets(ref, None):
+            # 沿著這個方向的大小（列的高度、欄的寬度）是成員的大小，另一個方向是標題或座標軸的大小
+            along = (target.shelf == "rows") == (name == "height")
+            if element == "cell" and along:
+                target.cell = size
+            elif element in ("header", "axis") and not along:
+                target.size = size
+
+    bands: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
+    dividers: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
+
     # 活頁簿的格式（Format > Workbook）是每張工作表的預設
     for rule in children(workbook_style, "style-rule"):
         for item in children(rule, "format"):
@@ -136,6 +164,13 @@ def worksheet_formats(
                 turn(scope, "field_labels", {"false": False, "true": True}.get(value or ""))
             elif tag == "format" and element in ("gridline", "axis") and ref is None:
                 lines(element, item)
+            elif tag == "format" and element in ("cell", "header", "axis") and name in SIZES:
+                sizes(element, name or "", value, ref)
+            elif tag == "format" and scope in SHELVES and _banding_format(element, name, item):
+                bands[SHELVES[scope]][f"{element}:{name}"] = value or ""
+            elif tag == "format" and scope in SHELVES and element == "table-div":
+                if item.get("data-class") is None:
+                    dividers[SHELVES[scope]][name or ""] = value or ""
             elif element == "axis" and tag == "format" and name in ("display", "title"):
                 for target in targets(ref, scope or ""):
                     if name == "display":
@@ -147,8 +182,52 @@ def worksheet_formats(
                     _range(target, item)
     # 只留下有設定的座標軸（例如只寫了雙軸的 fold）
     result.axes = [a for a in axes.values() if a != Axis(use=a.use, shelf=a.shelf)]
+    for shelf in shelves:
+        shelves[shelf] = shelves[shelf].model_copy(
+            update={"banding": _banding(bands[shelf]), "divider": _divider(dividers[shelf])}
+        )
     result.row_style, result.column_style = shelves["rows"], shelves["columns"]
     return result
+
+
+def _banding_format(element: str | None, name: str | None, item: etree._Element) -> bool:
+    """色帶的格式：表的 band-size，窗格與標題的 band-color（總計等 data-class 的不算）。"""
+    if item.get("data-class") is not None:
+        return False
+    return (element == "table" and name == "band-size") or (
+        element in ("pane", "header") and name == "band-color"
+    )
+
+
+def _banding(raw: dict[str, str]) -> Banding | None:
+    """色帶：至少窗格或標題有（不透明的）顏色，且每段的列數不是 0。"""
+    size = _int(raw.get("table:band-size"))
+    pane = _opaque(raw.get("pane:band-color"))
+    header = _opaque(raw.get("header:band-color"))
+    if size == 0 or (pane is None and header is None):
+        return None
+    return Banding(pane=pane, header=header, size=size or 1)
+
+
+def _divider(raw: dict[str, str]) -> Divider | None:
+    """分隔線：明確設定要畫（line-visibility='on' 或指定了顏色）才畫；Tableau 沒有寫時的預設分隔線
+    尚未呈現。"""
+    visibility = raw.get("line-visibility")
+    width = _int(raw.get("stroke-size"))
+    level = _int(raw.get("div-level"))
+    color = hex_color(raw.get("stroke-color"))
+    if visibility == "off" or width == 0 or level == 0:
+        return None
+    if visibility != "on" and color is None:
+        return None
+    if color is not None and _transparent(color):
+        return None
+    return Divider(color=color or Divider().color, width=width or 1, level=level or 1)
+
+
+def _opaque(value: str | None) -> str | None:
+    color = hex_color(value)
+    return None if color is None or _transparent(color) else color
 
 
 def default_text_color(workbook_style: etree._Element | None) -> str | None:

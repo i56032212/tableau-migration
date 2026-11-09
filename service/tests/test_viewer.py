@@ -212,6 +212,74 @@ def test_zone_styles_and_backgrounds(tmp_path: Path) -> None:
         browser.close()
 
 
+def test_fit_modes_size_and_scroll(tmp_path: Path) -> None:
+    """工作表區塊的顯示大小：標準大小的長條圖每一列 20 像素，不拉長填滿區塊、放不下時在區塊內捲動；
+    整個檢視填滿區塊。"""
+    from playwright.sync_api import sync_playwright
+
+    target = tmp_path / "fits"
+    target.mkdir()
+    shutil.copy(DEMO / "superstore_demo.twbx", target / "superstore_demo.twbx")
+    shutil.copytree(DEMO / "data", target / "data")
+    ir = load_ir(DEMO / "golden.ir.json")
+    changes: dict[str, dict[str, Any]] = {
+        "z9": {"fit": "standard"},
+        "z10": {"fit": "standard", "h": 150},  # 比各列的高度合計矮：捲動
+        "z7": {"fit": "entire_view"},
+    }
+
+    def refit(zones: list[Any]) -> list[Any]:
+        return [
+            z.model_copy(update={"children": refit(z.children), **changes.get(z.id, {})})
+            for z in zones
+        ]
+
+    board = ir.dashboards[0]
+    board = board.model_copy(update={"zones": refit(board.zones)})
+    ir = ir.model_copy(update={"dashboards": [board]})
+    (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+    with running_server(tmp_path, DIST) as url, sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.goto(f"{url}/w/fits/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(500)
+
+        def rows(zone: str) -> list[float]:
+            # 縱軸（列標題）的標籤：Vega-Lite 的座標軸群組以 aria-label 標示 X-axis／Y-axis
+            tops = page.eval_on_selector_all(
+                f"[data-zone='{zone}'] .role-axis[aria-label^='Y-axis'] .role-axis-label text",
+                "els => els.map(e => e.getBoundingClientRect().top)",
+            )
+            return sorted(tops)
+
+        def sizes(zone: str) -> tuple[float, float, float]:
+            return page.locator(f"[data-zone='{zone}'] .chart").evaluate(
+                "e => [e.querySelector('svg').getBoundingClientRect().height, e.clientHeight,"
+                " e.scrollHeight]"
+            )
+
+        # 標準大小：每一列 20 像素（文字表與長條圖相同），不拉長填滿區塊
+        for zone in ("z9", "z10"):
+            assert page.locator(f"[data-zone='{zone}'] .chart").get_attribute("data-scroll") == "y"
+            tops = rows(zone)
+            assert tops[1] - tops[0] == pytest.approx(20, abs=0.5), zone
+        svg, client, _ = sizes("z9")
+        assert svg < client - 40
+        # 區塊放不下時捲動
+        svg, client, scroll = sizes("z10")
+        assert scroll > client
+        # 整個檢視：4 個區的長條填滿區塊的高度、不捲動
+        assert page.locator("[data-zone='z7'] .chart").get_attribute("data-scroll") == "false"
+        tops = rows("z7")
+        assert tops[1] - tops[0] > 40
+        svg, client, _ = sizes("z7")
+        assert svg == pytest.approx(client, abs=2)
+        browser.close()
+
+
 def test_cases_show_expected_numbers(server: str) -> None:
     from playwright.sync_api import sync_playwright
 

@@ -11,7 +11,16 @@
     "measures": {
       "c1": "sum(f_sales)",
       "c2": "sum(f_profit)"
-    }
+    },
+    "sizing": {
+      "rows": {},
+      "columns": {
+        "step": 42,
+        "count": 4,
+        "fixed": false
+      }
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "4 列",

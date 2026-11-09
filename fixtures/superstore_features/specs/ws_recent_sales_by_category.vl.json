@@ -10,16 +10,25 @@
     },
     "measures": {
       "c1": "sum(f_sales)"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "0 列",
     "fields": []
   },
   "width": "container",
-  "height": "container",
+  "height": {
+    "step": 20
+  },
   "autosize": {
-    "type": "fit",
+    "type": "fit-x",
     "contains": "padding"
   },
   "config": {

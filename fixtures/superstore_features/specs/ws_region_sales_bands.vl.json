@@ -10,7 +10,16 @@
     },
     "measures": {
       "c1": "sum(f_sales)"
-    }
+    },
+    "sizing": {
+      "rows": {},
+      "columns": {
+        "step": 62,
+        "count": 4,
+        "fixed": false
+      }
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "4 列",

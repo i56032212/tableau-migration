@@ -12,7 +12,16 @@
     "measures": {
       "c2": "sum(f_sales)",
       "c3": "sum(f_profit)"
-    }
+    },
+    "sizing": {
+      "rows": {},
+      "columns": {
+        "step": 62,
+        "count": 4,
+        "fixed": false
+      }
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "12 列",

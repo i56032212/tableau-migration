@@ -12,7 +12,12 @@
       "c1": "sum(f_sales)#tc_moving_sales",
       "c2": "sum(f_sales)",
       "c3": "sum(f_sales)#tc_moving_sales_2"
-    }
+    },
+    "sizing": {
+      "rows": {},
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "48 列",

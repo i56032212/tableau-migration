@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
-import type { Mark, QueryState, RenderResponse, Scalar } from "./types";
+import type { FitMode, Mark, QueryState, RenderResponse, Scalar } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
 export interface MarkEvent {
@@ -20,6 +20,8 @@ interface Props {
   state: QueryState;
   hideLegend?: boolean;
   showTitle?: boolean;
+  /** dashboard 區塊中的顯示大小；沒有時依工作表本身的設定（usermeta.fit） */
+  fit?: FitMode | null;
   onRendered?: (response: RenderResponse) => void;
   /** 有篩選動作以這張工作表為來源時才傳入 */
   onMarks?: (event: MarkEvent) => void;
@@ -76,6 +78,40 @@ function sizeFacets(spec: Record<string, any>, width: number, height: number) {
   });
 }
 
+/** 區塊放不下離散的欄時，預留給列標題與座標軸的寬度（像素）。 */
+const AXIS_ALLOWANCE = 100;
+
+/**
+ * 依顯示大小設定圖的寬高（與 kernel 的 tmig.render.vegalite.apply_fit 相同的規則）：fit_width／
+ * entire_view 時寬度填滿，fit_height／entire_view 時高度填滿；否則離散的列固定每一列的高度、
+ * 設定了大小的欄與連續座標軸固定大小，離散的欄在區塊放不下時固定為依內容估計的寬度。
+ * 回傳可以捲動的方向。
+ */
+export function applyFit(spec: Spec, fit: FitMode | null | undefined, availableWidth: number): { x: boolean; y: boolean } {
+  const sizing = spec.usermeta?.sizing;
+  if (!sizing) return { x: false, y: typeof spec.height === "object" };
+  const mode: FitMode = fit ?? spec.usermeta?.fit ?? "standard";
+  const rows = sizing.rows ?? {};
+  const columns = sizing.columns ?? {};
+  let width: unknown = "container";
+  let height: unknown = "container";
+  if (mode !== "fit_height" && mode !== "entire_view") {
+    if (rows.step) height = { step: rows.step };
+    else if (rows.size) height = rows.size;
+  }
+  if (mode !== "fit_width" && mode !== "entire_view") {
+    if (columns.size) width = columns.size;
+    else if (columns.step && (columns.fixed || columns.step * (columns.count ?? 0) > availableWidth - AXIS_ALLOWANCE))
+      width = { step: columns.step };
+  }
+  spec.width = width;
+  spec.height = height;
+  const fillX = width === "container";
+  const fillY = height === "container";
+  spec.autosize = { type: fillX && fillY ? "fit" : fillX ? "fit-x" : fillY ? "fit-y" : "pad", contains: "padding" };
+  return { x: !fillX, y: !fillY };
+}
+
 /** 多張圖（同一架上有多個量值）無法自動填滿容器：依區塊大小平分每張圖的寬高。 */
 function sizeConcat(spec: Record<string, any>, width: number, height: number) {
   const AXIS = 110; // 座標軸標籤與標題約占的寬度
@@ -99,6 +135,7 @@ export function WorksheetView({
   state,
   hideLegend,
   showTitle = true,
+  fit,
   onRendered,
   onMarks,
   selected,
@@ -166,8 +203,9 @@ export function WorksheetView({
     }
     sizeConcat(spec, element.clientWidth, element.clientHeight);
     sizeFacets(spec, element.clientWidth, element.clientHeight);
-    // 文字表固定列高（height 為 step）：列數多時在區塊內捲動
-    element.dataset.scroll = typeof spec.height === "object" ? "true" : "false";
+    // 固定大小的方向（例如標準大小下每一列固定高度）：放不下時在區塊內捲動
+    const scroll = applyFit(spec, fit, element.clientWidth);
+    element.dataset.scroll = scroll.x && scroll.y ? "both" : scroll.y ? "y" : scroll.x ? "x" : "false";
     embed(element, spec as any, { actions: false, renderer: "svg" })
       .then((result) => {
         if (disposed) {
@@ -218,7 +256,7 @@ export function WorksheetView({
       window.clearTimeout(leaveTimer);
       view?.finalize();
     };
-  }, [response, hideLegend, showTable, interactive, selectedKey]);
+  }, [response, hideLegend, showTable, interactive, selectedKey, fit]);
 
   const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;

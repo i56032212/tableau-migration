@@ -11,7 +11,14 @@
     },
     "measures": {
       "c2": "sum(f_profit)"
-    }
+    },
+    "sizing": {
+      "rows": {
+        "step": 20
+      },
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "17 列",
@@ -26,9 +33,11 @@
     ]
   },
   "width": "container",
-  "height": "container",
+  "height": {
+    "step": 20
+  },
   "autosize": {
-    "type": "fit",
+    "type": "fit-x",
     "contains": "padding"
   },
   "config": {

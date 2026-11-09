@@ -21,6 +21,7 @@ from tmig.ir.models import (
     Datasource,
     DatasourceSettings,
     FieldUse,
+    FitMode,
     ParameterAction,
     Scalar,
     SetAction,
@@ -49,6 +50,19 @@ from tmig.parser.twbx import (
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.parser.worksheet import SheetParser
 from tmig.planner.state import use_key
+
+FITS: dict[str, FitMode] = {
+    "entire-view": "entire_view",
+    "fit-width": "fit_width",
+    "fit-height": "fit_height",
+}
+
+
+def fit_mode(viewpoint: etree._Element | None) -> FitMode:
+    """<viewpoint> 的 <zoom type> → IR 的 FitMode；沒有 zoom（或自訂的縮放百分比）為標準。"""
+    zoom = child(viewpoint, "zoom")
+    return FITS.get(zoom.get("type", "") if zoom is not None else "", "standard")
+
 
 WORKBOOK_CHILDREN = frozenset(
     {
@@ -201,6 +215,7 @@ class WorkbookParser:
                 name = action.get("name", "")
                 ctx.action_ids[name] = ctx.ids.make("act", action.get("caption") or name, name)
 
+        self._fits(child(root, "windows"))
         worksheets = []
         for ws_el in children(child(root, "worksheets"), "worksheet"):
             sheet = SheetParser(ctx, ws_el).parse()
@@ -271,6 +286,19 @@ class WorkbookParser:
             )
         except ValidationError as exc:
             raise WorkbookParseError(f"解析結果不是合法的 IR：{exc}") from exc
+
+    def _fits(self, windows: etree._Element | None) -> None:
+        """工作表的顯示大小：工作表視窗的 <viewpoint>，與 dashboard 視窗中各工作表的 <viewpoint>
+        （<zoom type='entire-view'>、'fit-width'、'fit-height'；沒有 zoom 為標準）。"""
+        for window in children(windows, "window"):
+            name = window.get("name", "")
+            if window.get("class") == "worksheet":
+                self.ctx.sheet_fits[name] = fit_mode(child(window, "viewpoint"))
+            elif window.get("class") == "dashboard":
+                self.ctx.dashboard_fits[name] = {
+                    vp.get("name", ""): fit_mode(vp)
+                    for vp in children(child(window, "viewpoints"), "viewpoint")
+                }
 
     def _actions(
         self,

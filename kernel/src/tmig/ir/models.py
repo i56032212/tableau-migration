@@ -900,16 +900,57 @@ class Axis(IRModel):
     label_color: HexColor | None = Field(
         default=None, description="座標軸刻度或標題（離散欄位的成員）文字的顏色；None 依工作表"
     )
+    size: int | None = Field(
+        default=None,
+        ge=0,
+        description="標題或座標軸區域的寬度（列）或高度（欄），像素（拖曳標題邊界調整的大小）；None 依內容",
+    )
+    cell: int | None = Field(
+        default=None,
+        ge=1,
+        description="離散欄位每個成員的高度（列）或寬度（欄），像素（Format > Cell Size）；None 依預設",
+    )
+
+
+class Banding(IRModel):
+    """列或欄的色帶（格式設定的「網底＞列色帶、欄色帶」）：每 size 列（欄）為一段、隔段上色，
+    窗格與標題可以不同顏色（None 為不上色）。"""
+
+    pane: HexColor | None = None
+    header: HexColor | None = None
+    size: int = Field(default=1, ge=1, description="每一段的列（欄）數")
+
+
+class Divider(IRModel):
+    """列或欄的分隔線（格式設定的「框線＞列分隔線、欄分隔線」）：畫在第 level 層（1 為最外層）
+    標題的成員之間；level 大於標題的層數時為每一列（欄）之間。"""
+
+    color: HexColor = "#d4d4d4"
+    width: int = Field(default=1, ge=1, description="線寬（像素）")
+    level: int = Field(default=1, ge=1)
 
 
 class ShelfStyle(IRModel):
     """一個方向（列＝縱軸、欄＝橫軸）的格式：格線、座標軸線與刻度是否顯示（Tableau 的格式設定），
-    與離散欄位的欄位標籤（標題上方或左側的欄位名稱）是否顯示。"""
+    離散欄位的欄位標籤（標題上方或左側的欄位名稱）是否顯示，以及大小、色帶與分隔線。"""
 
     grid: bool = True
     axis: bool = True
     ticks: bool = True
     field_labels: bool = Field(default=True, description="顯示欄位標籤（Show Field Labels）")
+    cell: int | None = Field(
+        default=None,
+        ge=1,
+        description="每一列的高度（列）或每一欄的寬度（欄），像素（Format > Cell Size）；離散的標題沒有"
+        "設定時依預設，連續的座標軸沒有設定時填滿",
+    )
+    banding: Banding | None = None
+    divider: Divider | None = None
+
+
+FitMode = Literal["standard", "fit_width", "fit_height", "entire_view"]
+"""工作表的顯示大小（Tableau 工具列的「調整」）：standard＝離散的列與欄維持固定的大小（超出時捲動），
+連續的座標軸填滿；fit_width／fit_height 另外讓寬度／高度符合區塊；entire_view 兩者都符合。"""
 
 
 class Worksheet(IRModel):
@@ -975,6 +1016,7 @@ class Worksheet(IRModel):
     cell_color: HexColor | None = Field(
         default=None, description="文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color"
     )
+    fit: FitMode = Field(default="standard", description="工作表本身（工作表分頁）的顯示大小")
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -1134,6 +1176,9 @@ class Zone(IRModel):
     show_title: bool = Field(default=True, description="工作表區塊是否顯示標題")
     style: ZoneStyle | None = Field(
         default=None, description="區塊的格式（背景、框線、外距與內距）；None 表示都沒有"
+    )
+    fit: FitMode | None = Field(
+        default=None, description="工作表區塊中的顯示大小；None 依工作表本身的設定"
     )
     source_ref: SourceRef
 

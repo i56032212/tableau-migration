@@ -11,7 +11,12 @@
     "measures": {
       "c1": "sum(f_profit)",
       "c2": "f_calc_1368249927221915648"
-    }
+    },
+    "sizing": {
+      "rows": {},
+      "columns": {}
+    },
+    "fit": "standard"
   },
   "data": {
     "values": "23 列",
