@@ -58,7 +58,17 @@
       "field": "c1_label",
       "type": "nominal",
       "title": "Category",
-      "sort": null
+      "sort": null,
+      "scale": {
+        "domain": [
+          "Furniture",
+          "Technology"
+        ],
+        "range": [
+          "#4e79a7",
+          "#f28e2b"
+        ]
+      }
     },
     "tooltip": [
       {

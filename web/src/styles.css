@@ -142,6 +142,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .legend-title { font-weight: 600; margin-bottom: 2px; }
 .legend-item { display: flex; align-items: center; gap: 6px; }
 .swatch { width: 12px; height: 12px; border-radius: 2px; flex: none; }
+.legend-ramp { height: 10px; border-radius: 2px; flex: none; }
+.legend-range { display: flex; justify-content: space-between; gap: 8px; color: #57606a; }
 
 /* 篩選動作：可點選的標記、選取的標記數、選單動作 */
 .worksheet[data-interactive="true"] .chart svg path,

@@ -71,7 +71,8 @@
         {
           "mark": {
             "type": "bar",
-            "tooltip": true
+            "tooltip": true,
+            "color": "#4e79a7"
           }
         },
         {
@@ -107,7 +108,7 @@
       "mark": {
         "type": "line",
         "tooltip": true,
-        "point": true
+        "point": "transparent"
       },
       "encoding": {
         "y": {
@@ -125,7 +126,19 @@
           "field": "c1_label",
           "type": "nominal",
           "title": "Segment",
-          "sort": null
+          "sort": null,
+          "scale": {
+            "domain": [
+              "Consumer",
+              "Corporate",
+              "Home Office"
+            ],
+            "range": [
+              "#4e79a7",
+              "#f28e2b",
+              "#e15759"
+            ]
+          }
         },
         "tooltip": [
           {

@@ -43,7 +43,8 @@
     {
       "mark": {
         "type": "bar",
-        "tooltip": true
+        "tooltip": true,
+        "color": "#4e79a7"
       },
       "encoding": {
         "y": {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fileUrl } from "./api";
+import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
 import { FilterControl, ParameterControl } from "./Controls";
 import { displaySize, layoutDashboard } from "./layout";
 import {
@@ -33,7 +34,6 @@ import type {
 import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
 
 // Vega 預設的類別色（與 Vega-Lite 的 nominal 顏色相同）
-const TABLEAU10 = ["#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b", "#eeca3b", "#b279a2", "#ff9da6", "#9d755d", "#bab0ac"];
 
 const isFieldFilter = (f: { kind: string }): f is FieldFilter => f.kind !== "top_n" && f.kind !== "tuple";
 const NO_SETS: Record<string, SetValue> = {};
@@ -506,12 +506,40 @@ function Legend({ response, kind }: { response: RenderResponse | undefined; kind
       color ??= node.encoding?.color;
     });
   if (!spec || !color) return <div className="legend" />;
+  const scale = color.scale as ColorScale | undefined;
+  const field = String(color.field);
+  const rows = spec.data.values as Record<string, unknown>[];
+  if (kind === "color" && color.type === "quantitative" && scale?.range?.length) {
+    // 連續色彩：色帶與資料的最小值、最大值（總計不計入，與色階的範圍相同）
+    const numbers = rows
+      .filter((row) => !row.__total && typeof row[field] === "number")
+      .map((row) => row[field] as number);
+    if (numbers.length > 0) {
+      const low = Math.min(...numbers);
+      const high = Math.max(...numbers);
+      const text = (value: number) => {
+        const row = rows.find((r) => r[field] === value);
+        const label = row?.[`${field}_label`];
+        return label === undefined || label === null ? String(value) : String(label);
+      };
+      return (
+        <div className="legend">
+          <div className="legend-title">{color.title}</div>
+          <div className="legend-ramp" style={{ background: rampBackground(scale, low, high) }} />
+          <div className="legend-range">
+            <span>{text(low)}</span>
+            <span>{text(high)}</span>
+          </div>
+        </div>
+      );
+    }
+  }
   if (kind !== "color" || color.type !== "nominal") {
     return <div className="legend"><div className="legend-title">{color.title}</div></div>;
   }
   const values: string[] = [];
-  for (const row of spec.data.values as Record<string, unknown>[]) {
-    const label = String(row[color.field]);
+  for (const row of rows) {
+    const label = String(row[field]);
     if (!values.includes(label)) values.push(label);
   }
   return (
@@ -519,7 +547,7 @@ function Legend({ response, kind }: { response: RenderResponse | undefined; kind
       <div className="legend-title">{color.title}</div>
       {values.map((v, i) => (
         <div className="legend-item" key={v}>
-          <span className="swatch" style={{ background: TABLEAU10[i % TABLEAU10.length] }} />
+          <span className="swatch" style={{ background: discreteColor(scale, v, i) }} />
           {v}
         </div>
       ))}

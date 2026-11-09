@@ -27,6 +27,7 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    ColorPalette,
     FieldUse,
     Filter,
     Marks,
@@ -44,6 +45,7 @@ from tmig.ir.models import (
     TupleFilter,
     Worksheet,
 )
+from tmig.parser.colors import color_encodings, mark_style, parse_color
 from tmig.parser.context import DsState, FilterKind, ParseContext, SheetState
 from tmig.parser.datasource import add_calc_field, analyze_calcs
 from tmig.parser.fields import (
@@ -268,6 +270,8 @@ class SheetParser:
         self.instances: dict[str, etree._Element] = {}
         self.uses: dict[str, FieldUse] = {}
         self.ds: DsState | None = None
+        self._colors: dict[str, etree._Element] | None = None
+        """色彩編碼（工作表與資料源的 <style>）：欄位實例鍵 → <encoding>。"""
 
     # ------------------------------------------------------------ 入口
 
@@ -637,6 +641,7 @@ class SheetParser:
         marks = Marks(type=mark_type)
         dims: list[FieldUse] = []
         singles = {"color": "color", "size": "size", "shape": "shape", "wedge-size": "angle"}
+        color_ref: str | None = None
         for enc in children(child(pane, "encodings")):
             tag = local_name(enc)
             if tag not in ENCODINGS:
@@ -651,6 +656,8 @@ class SheetParser:
                     self.ctx.flag(enc, f"標記編碼 {tag} 重複設定")
                     continue
                 setattr(marks, attr_name, use)
+                if tag == "color":
+                    color_ref = enc.get("column")
             elif tag == "path":
                 marks.path = use
             elif tag == "text":
@@ -665,7 +672,30 @@ class SheetParser:
         label = child(child(pane, "customized-label"), "formatted-text")
         if label is not None:
             marks.label_text = self._text_runs(label, f"工作表「{self.name}」的自訂標籤")
+        if marks.color is not None and color_ref is not None:
+            marks.color_palette = self._color_palette(color_ref, marks.color)
+        marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
         return marks, dims
+
+    def _color_palette(self, ref: str, use: FieldUse) -> ColorPalette | None:
+        """顏色欄位的色彩設定：工作表的 <style> 優先，其次是資料源的 <style>（同一個欄位實例）。"""
+        assert self.ds is not None
+        if self._colors is None:
+            source = color_encodings(child(self.ds.element, "style"))
+            sheet = color_encodings(child(child(self.el, "table"), "style"))
+            self._colors = {**source, **sheet}
+        enc = self._colors.get(instance_key(ref))
+        if enc is None:
+            return None
+        return parse_color(enc, self._measure_key if use.field == MEASURE_NAMES else None)
+
+    def _measure_key(self, ref: str) -> str | None:
+        """Measure Names 的值（量值的欄位實例）→ 量值的欄位鍵；不在這張工作表的量值回傳 None。"""
+        parts = qualified_parts(ref)
+        if not parts or parts[0] == "Parameters":
+            return None
+        resolved = self.resolve(ref)
+        return None if isinstance(resolved, str) else use_key(resolved)
 
     # ------------------------------------------------------------ 自訂文字、數字格式與標題
 

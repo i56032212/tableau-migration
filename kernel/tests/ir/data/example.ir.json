@@ -198,6 +198,10 @@
           "continuous": false,
           "table_calc": null
         },
+        "color_palette": null,
+        "mark_color": null,
+        "opacity": null,
+        "stroke": null,
         "size": null,
         "label": [
           {
@@ -334,6 +338,10 @@
       "marks": {
         "type": "line",
         "color": null,
+        "color_palette": null,
+        "mark_color": null,
+        "opacity": null,
+        "stroke": null,
         "size": null,
         "label": [],
         "label_text": [],

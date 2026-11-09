@@ -208,6 +208,17 @@ def test_twbx_hyper_must_be_packaged(tmp_path: Path) -> None:
         parse_workbook(b.write_twbx(tmp_path, xml, {}, "c.twbx"))
 
 
+def test_twbx_ignores_macos_metadata(tmp_path: Path) -> None:
+    """macOS 壓縮時附帶的中繼資料（__MACOSX/、._ 開頭的檔案）不是第二份報表。"""
+    files = {
+        "Data/Extracts/test.hyper": b"x",
+        "__MACOSX/._report.twb": b"\x00\x05\x16\x07",
+        "._report.twb": b"\x00\x05\x16\x07",
+    }
+    ir = parse_workbook(b.write_twbx(tmp_path, b.workbook(), files))
+    assert hyper(ir.datasources[0]) == "Data/Extracts/test.hyper"
+
+
 def test_week_start_option(tmp_path: Path) -> None:
     ds = b.extract_datasource(extra="<date-options start-of-week='monday' />")
     assert parse(tmp_path, b.workbook(ds)).datasources[0].settings.week_start == "monday"

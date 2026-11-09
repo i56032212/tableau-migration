@@ -172,6 +172,8 @@ class DashboardParser:
             return Zone(kind="title", text=text or self.name, content=content, **base)
         if kind_attr == "text":
             text, content = self._text(element)
+            if text is None and not content:
+                return Zone(kind="blank", **base)  # 空白的文字物件：Tableau 顯示空的區塊
             return Zone(kind="text", text=text, content=content, **base)
         if kind_attr == "bitmap":
             image = element.get("param")

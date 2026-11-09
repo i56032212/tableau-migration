@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tmig.data.executor import QueryResult
-from tmig.ir import iter_zones, load_ir
+from tmig.ir import ColorPalette, FieldUse, iter_zones, load_ir
 from tmig.planner.state import QueryState
 from tmig.sqlgen.query import OutputColumn, worksheet_sql
 from tmig.verify.cases import load_cases
@@ -81,6 +82,58 @@ def test_dashboard_zones_match_ir(server: str) -> None:
             assert box is not None, zone.id
             actual = (box["x"] - origin["x"], box["y"] - origin["y"], box["width"], box["height"])
             assert actual == pytest.approx((zone.x, zone.y, zone.w, zone.h), abs=1.5), zone.id
+        # 色彩圖例與圖表的顏色相同：沒有指定顏色時依 Tableau 10（#4e79a7、#f28e2b）的順序
+        legend = page.locator("[data-zone='z15'] .legend-item")
+        legend.first.wait_for()
+        assert legend.all_inner_texts() == ["Furniture", "Technology"]
+        swatches = page.locator("[data-zone='z15'] .swatch")
+        colors = [s.evaluate("e => getComputedStyle(e).backgroundColor") for s in swatches.all()]
+        assert colors == ["rgb(78, 121, 167)", "rgb(242, 142, 43)"]
+        browser.close()
+
+
+def test_continuous_color_legend(tmp_path: Path) -> None:
+    """依量值著色時，dashboard 的色彩圖例是色帶與最小值、最大值（分段色彩以實色的區塊呈現）。
+
+    以示範報表為底，「Sales by Region」改為依 SUM(Sales) 著色、以 Red 分成 4 段。"""
+    from playwright.sync_api import sync_playwright
+
+    target = tmp_path / "colors"
+    target.mkdir()
+    shutil.copy(DEMO / "superstore_demo.twbx", target / "superstore_demo.twbx")
+    shutil.copytree(DEMO / "data", target / "data")
+    ir = load_ir(DEMO / "golden.ir.json")
+    sheets = []
+    for ws in ir.worksheets:
+        if ws.id == "ws_sales_by_region":
+            palette = ColorPalette(kind="continuous", palette="red_10_0", steps=4)
+            marks = ws.marks.model_copy(
+                update={"color": FieldUse(field="f_sales", agg="sum"), "color_palette": palette}
+            )
+            ws = ws.model_copy(update={"marks": marks})
+        sheets.append(ws)
+    ir = ir.model_copy(update={"worksheets": sheets})
+    (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+    board = ir.dashboards[0]
+    with running_server(tmp_path, DIST) as url, sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.goto(f"{url}/w/colors/d/{board.id}")
+        ramp = page.locator("[data-zone='z15'] .legend-ramp")
+        ramp.wait_for()
+        background = ramp.evaluate("e => getComputedStyle(e).backgroundImage")
+        # Red 由淺到深：第一段 #ffbeb2、最後一段 #ae123a，分段處是實色的邊界
+        assert background.startswith("linear-gradient")
+        assert "rgb(255, 190, 178)" in background and "rgb(174, 18, 58)" in background
+        low, high = page.locator("[data-zone='z15'] .legend-range span").all_inner_texts()
+        response = page.request.post(
+            f"{url}/api/workbooks/colors/worksheets/ws_sales_by_region/render"
+        )
+        values = response.json()["spec"]["data"]["values"]
+        field = response.json()["spec"]["encoding"]["color"]["field"]
+        smallest = min(values, key=lambda v: v[field])
+        largest = max(values, key=lambda v: v[field])
+        assert (low, high) == (smallest[f"{field}_label"], largest[f"{field}_label"])
         browser.close()
 
 

@@ -684,6 +684,10 @@
           "continuous": false,
           "table_calc": null
         },
+        "color_palette": null,
+        "mark_color": null,
+        "opacity": null,
+        "stroke": null,
         "size": null,
         "label": [
           {
@@ -822,6 +826,10 @@
       "marks": {
         "type": "line",
         "color": null,
+        "color_palette": null,
+        "mark_color": null,
+        "opacity": null,
+        "stroke": null,
         "size": null,
         "label": [],
         "label_text": [],
@@ -916,6 +924,10 @@
       "marks": {
         "type": "text",
         "color": null,
+        "color_palette": null,
+        "mark_color": null,
+        "opacity": null,
+        "stroke": null,
         "size": null,
         "label": [
           {
@@ -1001,6 +1013,10 @@
       "marks": {
         "type": "bar",
         "color": null,
+        "color_palette": null,
+        "mark_color": null,
+        "opacity": null,
+        "stroke": null,
         "size": null,
         "label": [
           {

@@ -31,6 +31,7 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    ColorPalette,
     DataField,
     FieldUse,
     Marks,
@@ -43,6 +44,7 @@ from tmig.ir.models import (
 )
 from tmig.planner.state import use_key
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
+from tmig.render.colors import continuous_scale, discrete_scale
 from tmig.render.format import (
     PERCENT_TABLE_CALCS,
     axis_format,
@@ -50,6 +52,7 @@ from tmig.render.format import (
     format_value,
     parse_format,
 )
+from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
 from tmig.sqlgen.query import (
     COLUMN_ORDER,
     GRAND_TOTAL,
@@ -112,7 +115,6 @@ ORDER = "__order"
 """總計列的標記（資料中為 True）。"""
 TEXT_ROW_HEIGHT = 22
 """文字表每一列的高度（像素）：與 Tableau 相同固定列高，列數多時在區塊內捲動。"""
-TEXT_COLOR_RANGE = ["#6baed6", "#08306b"]
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
 
@@ -179,6 +181,10 @@ class _Builder:
         """畫出的欄列架（見 build_spec：沒有對應量值的 Measure Names 不畫）。"""
         self.label_fields: dict[int, str] = {}
         """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
+        self.values: list[dict[str, Any]] = []
+        """工作表的資料列（色彩的範圍與各值的顏色依它決定）。"""
+        self.measure_names: dict[Scalar, Any] = {}
+        """Measure Names：量值的欄位鍵 → 顯示名稱（指定給量值的顏色依它對應）。"""
 
     def label_field(self, marks: Marks) -> str | None:
         """標記的標籤欄：自訂的標籤文字，或標籤上第一個欄位的顯示文字。"""
@@ -203,6 +209,13 @@ class _Builder:
 
     def ch(self, use: FieldUse) -> Channel:
         return self.channels[use.field if use.field in SPECIAL_FIELDS else use_key(use)]
+
+    def records_of(self, marks: Marks) -> list[dict[str, Any]]:
+        """標記卡的資料列：詳細程度較粗的標記卡有自己的資料。"""
+        index = next((i for i, p in enumerate(self.ws.panes) if p.marks is marks), None)
+        if index is not None and index in self.pane_values:
+            return self.pane_values[index]
+        return self.values
 
     def is_measure(self, use: FieldUse) -> bool:
         return self.ch(use).role == "measure"
@@ -308,7 +321,8 @@ class _Builder:
                     )
             vl_mark = {"type": vl_type, "tooltip": True}
             if vl_type in ("line", "area"):
-                vl_mark["point"] = True
+                # 與 Tableau 的預設相同不畫出點；透明的點讓每個標記都能停留顯示工具提示、點選
+                vl_mark["point"] = "transparent"
             if mark == "shape":
                 vl_mark["filled"] = True
             if marks.label or id(marks) in self.label_fields:
@@ -321,13 +335,9 @@ class _Builder:
                 "mark": vl_mark,
                 "encoding": {"text": encoding.pop("text"), "color": {"value": "#1f2328"}},
             }
-            return {
-                "encoding": encoding,
-                "layer": [{"mark": {"type": "rect", "tooltip": True}}, text],
-            }, mark
-        if vl_mark["type"] == "text" and encoding.get("color", {}).get("type") == "quantitative":
-            # 文字依量值著色：用較深的色階，淺色的值才看得清楚
-            encoding["color"]["scale"] = {"range": TEXT_COLOR_RANGE}
+            rect = _mark_style({"type": "rect", "tooltip": True}, marks)
+            return {"encoding": encoding, "layer": [{"mark": rect}, text]}, mark
+        _mark_style(vl_mark, marks)
         if marks.path is not None and vl_mark["type"] in ("line", "area"):
             encoding["order"] = {"field": self.ch(marks.path).name}
         if label_field is not None:
@@ -344,9 +354,21 @@ class _Builder:
         """顏色、大小、形狀、詳細資料與工具提示。"""
         if marks.color is not None:
             ch = self.ch(marks.color)
+            records = self.records_of(marks)
             # 量值以連續色彩呈現；彙總後是布林或文字（例如 ATTR([是否本週])）時與 Tableau 相同為離散色彩
             if ch.role == "measure" and ch.datatype not in ("boolean", "string"):
-                encoding["color"] = {"field": ch.name, "type": "quantitative", "title": ch.title}
+                # 預設與 Tableau 相同，總計不影響色階的範圍（見 _exclude_totals_from_color）
+                numbers = [
+                    float(r[ch.name])
+                    for r in records
+                    if _is_number(r.get(ch.name)) and (self.ws.totals_colored or not r.get(TOTAL))
+                ]
+                encoding["color"] = {
+                    "field": ch.name,
+                    "type": "quantitative",
+                    "title": ch.title,
+                    "scale": continuous_scale(marks.color_palette, numbers),
+                }
             else:
                 encoding["color"] = {
                     "field": ch.label,
@@ -354,6 +376,16 @@ class _Builder:
                     "title": ch.title,
                     "sort": None,
                 }
+                setting = marks.color_palette
+                if setting is None or setting.kind != "discrete":
+                    setting = AUTOMATIC_DISCRETE
+                scale = discrete_scale(
+                    setting,
+                    ((r.get(ch.label), r.get(ch.name)) for r in records),
+                    self.measure_names if ch.use.field == MEASURE_NAMES else None,
+                )
+                if scale is not None:
+                    encoding["color"]["scale"] = scale
         if marks.size is not None:
             ch = self.ch(marks.size)
             encoding["size"] = {"field": ch.name, "type": "quantitative", "title": ch.title}
@@ -449,7 +481,7 @@ class _Builder:
             encoding["row"] = self._facet(rows_dims, "rows_dim")
         if cols_dims:
             encoding["column"] = self._facet(cols_dims, "cols_dim")
-        mark: dict[str, Any] = {"type": "arc", "tooltip": True}
+        mark = _mark_style({"type": "arc", "tooltip": True}, marks)
         has_label = bool(marks.label) or id(marks) in self.label_fields
         if not has_label or rows_dims or cols_dims:
             return {"mark": mark, "encoding": encoding}
@@ -602,6 +634,9 @@ def build_spec(
     builder.pane_values = pane_values
     if long:
         names = {use_key(a.use): a.label for a in ws.measure_aliases}
+        builder.measure_names = {
+            use_key(u): names.get(use_key(u), builder.ch(u).title) for u in ws.measure_values
+        }
         values = _fold(values, [builder.ch(u) for u in ws.measure_values], names)
         channels[MEASURE_NAMES] = Channel(
             "__mn",
@@ -669,6 +704,7 @@ def build_spec(
                     str(record.get(builder.ch(u).label, "")) for u in members
                 )
 
+    builder.values = values
     mark = ws.marks.type
     if pie_marks is not None:
         body = builder.pie(pie_marks, rows_dims, cols_dims)
@@ -747,7 +783,7 @@ def build_spec(
     for record in values:
         record.pop(ORDER, None)
     if totals and not ws.totals_colored:
-        _exclude_totals_from_color(spec, values, mark)
+        _exclude_totals_from_color(spec, mark)
     return RenderResult(spec, marks_count, mark, None, builder.notes)
 
 
@@ -958,18 +994,12 @@ def after_groups[RowT](
     return result + tail
 
 
-def _exclude_totals_from_color(
-    spec: dict[str, Any], values: list[dict[str, Any]], mark: str
-) -> None:
-    """與 Tableau 的預設相同，依量值著色時總計不上色、也不影響色階的範圍（醒目提示表最明顯）。"""
+def _exclude_totals_from_color(spec: dict[str, Any], mark: str) -> None:
+    """與 Tableau 的預設相同，依量值著色時總計不上色（醒目提示表最明顯）；總計也不影響色階的範圍，
+    見 _Builder.common。"""
     color = spec.get("encoding", {}).get("color")
     if not isinstance(color, dict) or color.get("type") != "quantitative":
         return
-    numbers = [
-        v[color["field"]] for v in values if not v.get(TOTAL) and _is_number(v.get(color["field"]))
-    ]
-    if numbers:
-        color["scale"] = {**color.get("scale", {}), "domain": [min(numbers), max(numbers)]}
     color["condition"] = {
         "test": f"datum['{TOTAL}'] === true",
         "value": "transparent" if mark == "square" else "#1f2328",
@@ -1256,6 +1286,31 @@ def _fold(
             item["__mv_label"] = record[ch.label]
             long.append(item)
     return long
+
+
+DEFAULT_MARK_COLOR = PALETTES[DEFAULT_REGULAR].colors[0]
+"""沒有顏色欄位時標記的預設顏色（Tableau 10 的第一個顏色）。"""
+AUTOMATIC_DISCRETE = ColorPalette(kind="discrete")
+"""離散欄位沒有設定顏色時：依 Tableau 10 的順序。"""
+BORDERED = frozenset({"bar", "rect", "arc", "circle", "square", "point", "tick"})
+"""可以畫框線的標記（Vega-Lite 的類型）；面積的框線另以折線疊在上緣。"""
+
+
+def _mark_style(mark: dict[str, Any], marks: Marks) -> dict[str, Any]:
+    """標記卡上設定的顏色（沒有顏色欄位時；沒有設定時為 Tableau 的預設色，文字除外）、不透明度與框線。"""
+    if marks.color is None and marks.mark_color is not None:
+        mark["color"] = marks.mark_color
+    elif marks.color is None and mark["type"] != "text":
+        mark["color"] = DEFAULT_MARK_COLOR
+    if marks.opacity is not None:
+        mark["opacity"] = marks.opacity
+    if marks.stroke is not None:
+        if mark["type"] == "area":
+            mark["line"] = {"color": marks.stroke}
+        elif mark["type"] in BORDERED:
+            mark["stroke"] = marks.stroke
+            mark["strokeWidth"] = 1
+    return mark
 
 
 def _take_pane(remaining: list[Pane], use: FieldUse, axis: str) -> Pane | None:

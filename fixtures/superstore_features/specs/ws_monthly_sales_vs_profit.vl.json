@@ -46,7 +46,7 @@
   "mark": {
     "type": "line",
     "tooltip": true,
-    "point": true
+    "point": "transparent"
   },
   "encoding": {
     "y": {
@@ -64,7 +64,17 @@
       "field": "__mn",
       "type": "nominal",
       "title": "Measure Names",
-      "sort": null
+      "sort": null,
+      "scale": {
+        "domain": [
+          "Sales",
+          "Profit"
+        ],
+        "range": [
+          "#4e79a7",
+          "#f28e2b"
+        ]
+      }
     },
     "tooltip": [
       {

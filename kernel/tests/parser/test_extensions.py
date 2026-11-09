@@ -952,6 +952,9 @@ def test_dashboard_text_with_parameters_and_formatting(tmp_path: Path) -> None:
           <zone h='10000' id='4' type-v2='text' w='50000' x='0' y='20000'>
             <formatted-text><run>Plain note</run></formatted-text>
           </zone>
+          <zone h='10000' id='6' type-v2='text' w='50000' x='50000' y='20000'>
+            <formatted-text><run>Æ&#10;</run></formatted-text>
+          </zone>
           <zone h='70000' id='5' name='Source' w='100000' x='0' y='30000' />
         </zone>
       </zones>
@@ -982,6 +985,10 @@ def test_dashboard_text_with_parameters_and_formatting(tmp_path: Path) -> None:
     assert title.content == [] and title.text == "Board"
     plain = [z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "text" and not z.content]
     assert [z.text for z in plain] == ["Plain note"]
+    # 空白的文字物件（只有換行）：空的區塊，與 Tableau 相同
+    assert [z.kind for z in iter_zones(ir.dashboards[0].zones) if z.x == 400 and z.y == 120] == [
+        "blank"
+    ]
     assert zones
 
 

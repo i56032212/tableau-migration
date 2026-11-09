@@ -49,7 +49,19 @@
       "field": "c0_label",
       "type": "nominal",
       "title": "Category",
-      "sort": null
+      "sort": null,
+      "scale": {
+        "domain": [
+          "Furniture",
+          "Office Supplies",
+          "Technology"
+        ],
+        "range": [
+          "#4e79a7",
+          "#f28e2b",
+          "#e15759"
+        ]
+      }
     },
     "tooltip": [
       {

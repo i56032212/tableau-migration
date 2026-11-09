@@ -58,7 +58,14 @@ def load_workbook_package(path: str | Path) -> WorkbookPackage:
     except zipfile.BadZipFile as exc:
         raise WorkbookFormatError(f"{source.name} 不是有效的 .twbx（zip）檔") from exc
     with archive:
-        members = [info for info in archive.infolist() if not info.is_dir()]
+        # macOS 壓縮時附帶的中繼資料（__MACOSX/、._ 開頭）不是報表的檔案
+        members = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir()
+            and not info.filename.startswith("__MACOSX/")
+            and not Path(info.filename).name.startswith("._")
+        ]
         twbs = [info for info in members if info.filename.lower().endswith(".twb")]
         if not twbs:
             raise WorkbookFormatError(f"{source.name} 內找不到 .twb")

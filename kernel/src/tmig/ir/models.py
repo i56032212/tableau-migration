@@ -763,9 +763,61 @@ class TextRun(IRModel):
         return self
 
 
+HexColor = Annotated[str, Field(pattern=r"^#[0-9a-f]{6}([0-9a-f]{2})?$")]
+"""色彩：#rrggbb，可加上不透明度 #rrggbbaa（小寫）。"""
+
+
+class ColorAssignment(IRModel):
+    """離散色彩中指定給一個值的顏色。"""
+
+    value: Scalar = Field(
+        description="欄位的值（Null 為 None，日期為 ISO 8601 字串）；Measure Names 時為量值的欄位鍵"
+    )
+    color: HexColor
+
+
+class ColorPalette(IRModel):
+    """顏色欄位的色彩設定（Tableau 的「編輯色彩」）。
+
+    離散：指定給各值的顏色，其餘的值依 palette 的順序。連續：內建色盤（palette）或自訂的顏色（colors），
+    可以反轉、分段，並指定範圍的起訖與發散色盤的中心。"""
+
+    kind: Literal["discrete", "continuous"]
+    palette: str | None = Field(
+        default=None, description="Tableau 內建色盤的內部名稱，例如 tableau10_10_0、blue_10_0"
+    )
+    assignments: list[ColorAssignment] = Field(default_factory=list)
+    colors: list[HexColor] = Field(
+        default_factory=list, description="自訂的連續色盤，由小到大；空的表示用 palette"
+    )
+    diverging: bool = Field(default=False, description="自訂的連續色盤是發散型（有中心）")
+    reverse: bool = False
+    steps: int | None = Field(default=None, ge=2, description="分段色彩的段數；None 為連續")
+    start: float | None = Field(default=None, description="範圍的起點；None 依資料的最小值")
+    end: float | None = Field(default=None, description="範圍的終點；None 依資料的最大值")
+    center: float | None = Field(default=None, description="發散色盤的中心；None 為 0")
+    full_range: bool = Field(
+        default=False,
+        description="發散色盤兩端都用到最深的顏色（Use Full Color Range）；"
+        "預設離中心較近的一端只用到相同比例的深淺",
+    )
+
+
 class Marks(IRModel):
     type: MarkType
     color: FieldUse | None = None
+    color_palette: ColorPalette | None = Field(
+        default=None, description="顏色欄位的色彩設定；None 依 Tableau 的自動色彩"
+    )
+    mark_color: HexColor | None = Field(
+        default=None, description="沒有顏色欄位時標記的顏色（標記卡上的「色彩」）"
+    )
+    opacity: float | None = Field(
+        default=None, ge=0, le=1, description="標記的不透明度；None 為不透明"
+    )
+    stroke: HexColor | None = Field(
+        default=None, description="標記的框線顏色（色彩的「效果＞框線」）；None 為沒有框線"
+    )
     size: FieldUse | None = None
     label: list[FieldUse] = Field(default_factory=list)
     label_text: list[TextRun] = Field(

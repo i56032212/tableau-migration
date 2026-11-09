@@ -72,7 +72,8 @@
         {
           "mark": {
             "type": "bar",
-            "tooltip": true
+            "tooltip": true,
+            "color": "#4e79a7"
           }
         },
         {
@@ -98,7 +99,8 @@
       "mark": {
         "type": "line",
         "tooltip": true,
-        "point": true
+        "point": "transparent",
+        "color": "#4e79a7"
       },
       "encoding": {
         "y": {

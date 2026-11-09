@@ -356,7 +356,11 @@ def test_highlight_table_and_scrolling_text_table(tmp_path: Path, db: Path) -> N
     colored_text = sheet.replace("<mark class='Square' />", "<mark class='Text' />")
     spec = render(parse(tmp_path, colored_text), db).spec
     assert spec["mark"]["type"] == "text"
-    assert spec["encoding"]["color"]["scale"] == {"range": ["#6baed6", "#08306b"]}
+    # 與 Tableau 相同，文字也依自動色盤（Blue）著色，範圍為最小值到最大值
+    scale = spec["encoding"]["color"]["scale"]
+    assert (scale["range"][0], scale["range"][-1]) == ("#b9ddf1", "#2a5783")
+    numbers = [v["c2"] for v in spec["data"]["values"]]
+    assert (scale["domain"][0], scale["domain"][-1]) == (min(numbers), max(numbers))
 
 
 def test_title_uses_current_parameter_value(tmp_path: Path) -> None:
@@ -418,7 +422,7 @@ def test_grand_totals_are_not_colored_by_default(tmp_path: Path, db: Path) -> No
     encodings = f"<color column='{ref('sum:Sales:qk')}' /><text column='{ref('sum:Sales:qk')}' />"
     sheet = with_totals(matrix("Square", encodings), "rows", "cols")
     color = render_with_totals(parse(tmp_path, sheet), db).spec["encoding"]["color"]
-    assert color["scale"]["domain"] == [20, 500]
+    assert (color["scale"]["domain"][0], color["scale"]["domain"][-1]) == (20, 500)
     assert color["condition"] == {"test": "datum['__total'] === true", "value": "transparent"}
     colored = sheet.replace(
         "<style />",
@@ -427,7 +431,9 @@ def test_grand_totals_are_not_colored_by_default(tmp_path: Path, db: Path) -> No
         "</style-rule></style>",
     )
     color = render_with_totals(parse(tmp_path, colored), db).spec["encoding"]["color"]
-    assert "condition" not in color and "domain" not in color.get("scale", {})
+    # 包含總計：總計也上色，色階的範圍到總計的 1,310
+    assert "condition" not in color
+    assert (color["scale"]["domain"][0], color["scale"]["domain"][-1]) == (20, 1310)
 
 
 def test_grand_totals_with_nested_headers_and_bars(tmp_path: Path, db: Path) -> None:

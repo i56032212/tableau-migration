@@ -59,7 +59,17 @@
       "field": "c1_label",
       "type": "nominal",
       "title": "IN/OUT(Profitable Sub-Categories)",
-      "sort": null
+      "sort": null,
+      "scale": {
+        "domain": [
+          "獲利",
+          "虧損"
+        ],
+        "range": [
+          "#4e79a7",
+          "#f28e2b"
+        ]
+      }
     },
     "tooltip": [
       {
