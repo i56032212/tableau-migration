@@ -60,7 +60,10 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "Quantity (bin)"
+      "title": "Quantity (bin)",
+      "axis": {
+        "ticks": false
+      }
     },
     "tooltip": [
       {

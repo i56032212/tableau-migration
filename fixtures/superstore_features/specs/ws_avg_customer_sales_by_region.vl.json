@@ -55,7 +55,25 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "Region"
+      "title": "Region",
+      "axis": {
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 52,
+        "labelLimit": 48,
+        "minExtent": 56,
+        "maxExtent": 56,
+        "title": "Region",
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -52,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 48
+      }
     },
     "tooltip": [
       {

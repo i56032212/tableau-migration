@@ -76,8 +76,8 @@
           "sort": null,
           "title": "Category｜Sub-Category",
           "axis": {
-            "labels": false,
             "ticks": false,
+            "labels": false,
             "title": null,
             "minExtent": 210,
             "maxExtent": 210,
@@ -140,8 +140,8 @@
           "sort": null,
           "title": "Category｜Sub-Category",
           "axis": {
-            "labels": false,
             "ticks": false,
+            "labels": false,
             "title": null,
             "minExtent": 210,
             "maxExtent": 210,

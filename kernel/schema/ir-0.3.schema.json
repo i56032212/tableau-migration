@@ -441,6 +441,24 @@
           "default": null,
           "description": "離散欄位每個成員的高度（列）或寬度（欄），像素（Format > Cell Size）；None 依預設",
           "title": "Cell"
+        },
+        "align": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "列標題成員的水平對齊；None 依預設（靠左）",
+          "title": "Align"
         }
       },
       "required": [
@@ -2258,6 +2276,24 @@
           "default": null,
           "description": "標記標籤的文字顏色；None 依工作表的文字顏色",
           "title": "Label Color"
+        },
+        "cell_align": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字表儲存格中文字的水平對齊（Format > 窗格的對齊）；None 依工作表的設定或預設",
+          "title": "Cell Align"
         },
         "detail": {
           "items": {
@@ -4869,6 +4905,38 @@
           "default": null,
           "description": "文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color",
           "title": "Cell Color"
+        },
+        "cell_align": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字表儲存格中文字的水平對齊（工作表 <style> 中的設定，標記卡的 cell_align 優先）；None 依 Tableau 的預設（有標題的文字表數字靠右、文字靠左，只有一格時置中）",
+          "title": "Cell Align"
+        },
+        "field_label_background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "欄位標籤的背景顏色（列標題上方的欄位名稱）；None 為不上色",
+          "title": "Field Label Background"
         },
         "fit": {
           "default": "standard",

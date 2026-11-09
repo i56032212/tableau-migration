@@ -65,7 +65,10 @@
           "field": "c0_label",
           "type": "ordinal",
           "sort": null,
-          "title": "Region"
+          "title": "Region",
+          "axis": {
+            "ticks": false
+          }
         },
         "tooltip": [
           {

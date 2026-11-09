@@ -64,7 +64,25 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "YEAR(Order Date)"
+      "title": "YEAR(Order Date)",
+      "axis": {
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 118,
+        "labelLimit": 114,
+        "minExtent": 122,
+        "maxExtent": 122,
+        "title": "YEAR(Order Date)",
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -118,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 114
+      }
     },
     "tooltip": [
       {

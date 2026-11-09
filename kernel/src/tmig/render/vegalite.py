@@ -276,9 +276,9 @@ class _Builder:
                 return self.axis_settings(encoding, uses[0], shelf)
         shown, title, color = self.header(uses, shelf)
         encoding["title"] = SEPARATOR.join(self.ch(u).title for u in uses)
-        axis: dict[str, Any] = {}
+        axis: dict[str, Any] = {"ticks": False}  # Tableau 的標題沒有刻度
         if not shown:
-            axis.update(labels=False, ticks=False, domain=False)
+            axis.update(labels=False, domain=False)
         expr = _header_expr(shown, len(uses), multiline and len(uses) > 1)
         if shown and expr is not None:
             axis["labelExpr"] = expr
@@ -312,7 +312,8 @@ class _Builder:
         texts: list[str],
     ) -> dict[str, Any]:
         """一個方向的大小（usermeta.sizing）：離散的為每一列（欄）的大小 step，欄另有成員數 count
-        與是否為設定的大小 fixed；連續的座標軸設定了大小時為 size，否則為空（填滿）。"""
+        與是否固定寬度 fixed（設定了大小；文字表在 build_spec 中也設為固定）；連續的座標軸設定了
+        大小時為 size，否則為空（填滿）。"""
         style = self.ws.row_style if shelf == "rows" else self.ws.column_style
         if encoding is None:
             return {}
@@ -400,6 +401,46 @@ class _Builder:
             encoding["axis"] = axis
         return encoding
 
+    def align_cells(
+        self,
+        vl_mark: dict[str, Any],
+        encoding: dict[str, Any],
+        marks: Marks,
+        text_field: str | None,
+    ) -> None:
+        """文字表儲存格中文字的水平對齊：標記卡或工作表設定的對齊（Format > 窗格），沒有設定時與
+        Tableau 相同數字靠右、文字靠左（只有一格、沒有標題時置中）。有離散的欄時對齊各欄的邊緣
+        （band 的起點或終點），否則對齊整張圖的邊緣。"""
+        explicit = marks.cell_align or self.ws.cell_align
+        if explicit is None and "x" not in encoding and "y" not in encoding:
+            return
+        if any(
+            isinstance(encoding.get(c), dict)
+            and encoding[c].get("type") not in ("ordinal", "nominal")
+            for c in ("x", "y")
+        ):
+            return  # 連續座標軸上的文字（例如依日期擺放的註記）置中在標記的位置
+        numeric = text_field is not None and (
+            any(self.is_measure(u) for u in marks.label)
+            if marks.label
+            else any(c.label == text_field and c.role == "measure" for c in self.channels.values())
+        )
+        align = explicit or ("right" if numeric else "left")
+        if align == "center":
+            return
+        vl_mark["align"] = align
+        vl_mark["dx"] = -CELL_PADDING if align == "right" else CELL_PADDING
+        x = encoding.get("x")
+        if isinstance(x, dict) and x.get("type") in ("ordinal", "nominal"):
+            scale = dict(x.get("scale") or {})
+            scale.setdefault("type", "band")
+            scale.setdefault("paddingInner", 0)
+            scale.setdefault("paddingOuter", 0)
+            x["scale"] = scale
+            x["bandPosition"] = 1 if align == "right" else 0
+        elif x is None:
+            vl_mark["x"] = {"expr": "width"} if align == "right" else 0
+
     def text_color(self, marks: Marks | None = None, cell: bool = False) -> str:
         """標記上的文字顏色：標籤的顏色、文字表儲存格的顏色（cell）、工作表的文字顏色，都沒有時為
         預設的深灰色。"""
@@ -463,6 +504,8 @@ class _Builder:
                 encoding["text"] = {"field": text_field, "type": "nominal"}
             else:
                 encoding["text"] = {"value": "Abc"}
+            if mark == "text":
+                self.align_cells(vl_mark, encoding, marks, text_field)
         else:
             vl_type = VL_MARKS.get(mark, "point")
             if rows_meas and cols_meas:
@@ -1015,18 +1058,26 @@ def build_spec(
             "columns": builder.shelf_size(encoding.get("x"), cols_dims, "columns", values, texts),
         }
         y_type = encoding.get("y", {}).get("type") if isinstance(encoding.get("y"), dict) else None
+        sizing: dict[str, dict[str, Any]] = spec["usermeta"]["sizing"]
         if mark == "text" and "x" not in encoding and y_type in ("ordinal", "nominal"):
             # 只有列標題的文字表是一欄：寬度依內容（與離散的欄相同），不填滿
-            width = ws.column_style.cell or _column_width(texts)
-            spec["usermeta"]["sizing"]["columns"] = {"size": width}
+            sizing["columns"] = {"size": ws.column_style.cell or _column_width(texts)}
+        elif mark == "text" and "step" in sizing["columns"]:
+            # 文字表的欄與 Tableau 相同依內容的寬度，標準大小時不拉寬填滿區塊
+            sizing["columns"]["fixed"] = True
         shelves: list[tuple[Literal["rows", "columns"], str, list[FieldUse], ShelfStyle]] = [
             ("rows", "y", rows_dims, ws.row_style),
             ("columns", "x", cols_dims, ws.column_style),
         ]
         headers: RowHeaders | None = None
         y = encoding.get("y")
-        if isinstance(y, dict) and y.get("field") == "rows_dim" and len(rows_dims) > 1:
-            headers = _row_headers(builder, spec, y, rows_dims, values)
+        if isinstance(y, dict) and y.get("type") in ("ordinal", "nominal"):
+            if y.get("field") == "rows_dim" and len(rows_dims) > 1:
+                headers = _row_headers(builder, spec, y, rows_dims, values)
+            elif len(rows_dims) == 1 and y.get("field") == builder.ch(rows_dims[0]).label:
+                headers = _row_header_axis(builder, y, rows_dims[0], values)
+        if headers is not None and ws.row_style.field_labels and ws.field_label_background:
+            _field_label_background(spec, headers, ws.field_label_background)
         for shelf, channel, dims, style in shelves:
             enc = encoding.get(channel)
             if not isinstance(enc, dict) or enc.get("type") not in ("ordinal", "nominal"):
@@ -1078,6 +1129,8 @@ HEADER_WIDTH = (32, 200)
 """列標題依內容估計寬度時的最小與最大值（像素）；Tableau 也會截斷過長的標題。"""
 HEADER_PADDING = 4
 """列標題文字與欄左緣的距離（像素）。"""
+CELL_PADDING = 4
+"""文字表中靠左或靠右的文字與儲存格邊緣的距離（像素）。"""
 HEADER = "__header"
 """多層列標題的資料欄（__header0、__header1…）與圖層名稱前綴。"""
 DIVIDER = "__divider_"
@@ -1090,6 +1143,63 @@ class RowHeaders:
 
     total: int
     starts: dict[int, int]
+
+
+def _header_width(builder: _Builder, use: FieldUse, texts: list[str]) -> int:
+    """一層列標題的欄寬：拖曳調整過的依設定，否則依成員（與欄位標籤）的內容估計，限制在
+    HEADER_WIDTH 之間（較長的成員截斷）。"""
+    setting = builder.axis_of(use, "rows")
+    if setting is not None and setting.size is not None:
+        return setting.size
+    if builder.ws.row_style.field_labels:
+        texts = [*texts, builder.ch(use).title]
+    low, high = HEADER_WIDTH
+    return min(max(_column_width(texts), low), high)
+
+
+def _header_align(builder: _Builder, use: FieldUse) -> Literal["left", "center", "right"]:
+    setting = builder.axis_of(use, "rows")
+    return (setting.align if setting is not None else None) or "left"
+
+
+def _row_header_axis(
+    builder: _Builder, encoding: dict[str, Any], use: FieldUse, values: list[dict[str, Any]]
+) -> RowHeaders | None:
+    """單層的列標題：與 Tableau 相同畫成一欄（寬度依設定或內容），成員靠左（或依設定的對齊）、不畫
+    刻度，欄位標籤橫寫在欄的上方。以縱軸本身的標籤與標題畫出。不顯示標題時為 None。"""
+    shown, title, _ = builder.header([use], "rows")
+    if not shown:
+        return None
+    texts = [str(v.get(encoding["field"]) or "") for v in values]
+    width = _header_width(builder, use, texts)
+    align = _header_align(builder, use)
+    padding = {"left": width - HEADER_PADDING, "center": width / 2, "right": HEADER_PADDING}
+    axis = dict(encoding.get("axis") or {})
+    axis.update(
+        zindex=1,  # 畫在色帶與欄位標籤的背景之上
+        ticks=False,
+        labelAlign=align,
+        labelPadding=padding[align],
+        labelLimit=max(width - 2 * HEADER_PADDING, 8),
+        minExtent=width,
+        maxExtent=width,
+    )
+    if title is None:
+        axis["title"] = None
+    else:
+        axis.update(
+            title=title,
+            titleAngle=0,
+            titleAlign="left",
+            titleBaseline="bottom",
+            titleX=-width + HEADER_PADDING,
+            titleY=-4,
+            titleFontSize=10,
+            titleFontWeight=600,
+            titleLimit=max(width - 2 * HEADER_PADDING, 8),
+        )
+    encoding["axis"] = axis
+    return RowHeaders(width, {0: -width})
 
 
 def _row_headers(
@@ -1124,17 +1234,9 @@ def _row_headers(
             if previous is None or here[: level + 1] != previous[: level + 1]
         }
         previous = here
-    widths: list[int] = []
-    for level in shown:
-        setting = builder.axis_of(dims[level], "rows")
-        if setting is not None and setting.size is not None:
-            widths.append(setting.size)
-            continue
-        texts = [part(v, level) for v in order]
-        if style.field_labels:
-            texts.append(builder.ch(dims[level]).title)
-        low, high = HEADER_WIDTH
-        widths.append(min(max(_column_width(texts), low), high))
+    widths = [
+        _header_width(builder, dims[level], [part(v, level) for v in order]) for level in shown
+    ]
     total = sum(widths)
     innermost = len(dims) - 1
     for record in values:
@@ -1155,14 +1257,20 @@ def _row_headers(
             if setting is not None and setting.label_color is not None
             else builder.text_color()
         )
+        align = _header_align(builder, dims[level])
         mark = {
             "type": "text",
-            "align": "left",
+            "align": align,
             "baseline": "middle",
             "fontSize": 10,
             "limit": max(width - 2 * HEADER_PADDING, 8),
             "color": color,
         }
+        x = {
+            "left": offset + HEADER_PADDING,
+            "center": offset + width / 2,
+            "right": offset + width - HEADER_PADDING,
+        }[align]
         layers.append(
             {
                 "name": f"{DECO}{HEADER}{level}",
@@ -1170,7 +1278,7 @@ def _row_headers(
                 "mark": mark,
                 "encoding": {
                     "y": position,
-                    "x": {"value": offset + HEADER_PADDING},
+                    "x": {"value": x},
                     "text": {"field": f"{HEADER}{level}"},
                 },
             }
@@ -1202,6 +1310,30 @@ def _row_headers(
     encoding["axis"] = axis
     _add_layers(spec, layers)
     return RowHeaders(total, starts)
+
+
+FIELD_LABEL_HEIGHT = 20
+"""欄位標籤那一列的高度（像素，與標準的列高相同）。"""
+
+
+def _field_label_background(spec: dict[str, Any], headers: RowHeaders, color: str) -> None:
+    """欄位標籤的背景：列標題上方一列、橫跨各層標題的欄，畫在最下層。"""
+    layer = {
+        "name": f"{DECO}_field_labels",
+        "data": {"values": [{}]},
+        "mark": {
+            "type": "rect",
+            "color": _css_color(color),
+            "x": -headers.total,
+            "x2": 0,
+            "y": -FIELD_LABEL_HEIGHT,
+            "y2": 0,
+        },
+    }
+    body = {
+        k: spec.pop(k) for k in ("mark", "encoding", "layer", "transform", "resolve") if k in spec
+    }
+    spec["layer"] = [layer, body]
 
 
 def _add_layers(spec: dict[str, Any], layers: list[dict[str, Any]]) -> None:
@@ -1307,7 +1439,7 @@ def _header_divider(
     for a, b in itertools.pairwise(order):
         if a not in edges:
             continue
-        here, after = str(a).split(SEPARATOR), str(b).split(SEPARATOR)
+        here, after = _levels(a, levels), _levels(b, levels)
         changed = next((i for i, (x, y) in enumerate(zip(here, after, strict=False)) if x != y), 0)
         start = next((x for lv, x in sorted(headers.starts.items()) if lv >= changed), None)
         if start is not None:
@@ -1335,6 +1467,12 @@ def _header_divider(
         },
     }
     _add_layers(spec, [layer])
+
+
+def _levels(value: Any, levels: int) -> list[str]:
+    """列（欄）的值中各層的成員（多層的合併成「外層｜內層」）。"""
+    text = str(value if value is not None else "")
+    return text.split(SEPARATOR) if levels > 1 else [text]
 
 
 def _flush_bands(spec: dict[str, Any], encoding: dict[str, Any], channel: str) -> None:

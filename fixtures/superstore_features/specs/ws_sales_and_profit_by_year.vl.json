@@ -60,7 +60,10 @@
           "field": "c0_label",
           "type": "ordinal",
           "sort": null,
-          "title": "YEAR(Order Date)"
+          "title": "YEAR(Order Date)",
+          "axis": {
+            "ticks": false
+          }
         },
         "tooltip": [
           {
@@ -121,7 +124,10 @@
           "field": "c0_label",
           "type": "ordinal",
           "sort": null,
-          "title": "YEAR(Order Date)"
+          "title": "YEAR(Order Date)",
+          "axis": {
+            "ticks": false
+          }
         },
         "tooltip": [
           {

@@ -13,10 +13,13 @@
   - <style-rule element='gridline'>：line-visibility='off'、stroke-size='0'（不畫格線）
   - <style-rule element='table'>：format attr='background-color'（工作表的背景，可以透明）
   - <style-rule element='label'> 加上 field：format attr='display'（value='false' 不顯示離散欄位的標題）、
-    attr='color'（標題成員或座標軸刻度文字的顏色）
+    attr='color'（標題成員或座標軸刻度文字的顏色）、attr='text-align'（標題成員的水平對齊：left、center、
+    right，auto 為預設）
   - <style-rule element='worksheet'>：format attr='display-field-labels'（value='false' 不顯示 scope 那一
     方向的欄位標籤）、attr='color'（工作表文字的預設顏色）
-  - <style-rule element='cell'>：format attr='color'（文字表儲存格的文字）
+  - <style-rule element='cell'>：format attr='color'（文字表儲存格的文字）、attr='text-align'（儲存格文字的
+    水平對齊，auto 為預設；Format > 窗格的對齊通常寫在標記卡 <pane> 的 <style> 中）
+  - <style-rule element='field-labels'>：format attr='background-color'（欄位標籤的背景）
   - 工作表沒有寫文字顏色時依活頁簿的 <style>（element='worksheet'，其次 'all'）
   - 大小（像素，拖曳邊界或 Format > Cell Size 調整後才寫）：element='cell' 的 height／width（沒有 field 為
     整張表每一列的高度、每一欄的寬度；有 field 為該離散欄位成員的大小），element='header'／'axis' 加上
@@ -36,6 +39,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Literal
 
 from lxml import etree
 
@@ -62,6 +66,8 @@ class SheetFormats:
     background: str | None = None
     text_color: str | None = None
     cell_color: str | None = None
+    cell_align: Literal["left", "center", "right"] | None = None
+    field_label_background: str | None = None
 
 
 def worksheet_formats(
@@ -146,6 +152,11 @@ def worksheet_formats(
             ref = item.get("field")
             if tag == "format" and name == "background-color" and element == "table":
                 result.background = hex_color(value) or result.background
+            elif tag == "format" and name == "background-color" and element == "field-labels":
+                result.field_label_background = _opaque(value)
+            elif tag == "format" and element == "cell" and name == "text-align" and ref is None:
+                if item.get("data-class") is None and scope is None:
+                    result.cell_align = _align(value)
             elif tag == "format" and name == "color" and item.get("data-class") is None:
                 color = hex_color(value)
                 if color is None:
@@ -161,6 +172,11 @@ def worksheet_formats(
                 # 離散欄位的「顯示標題」
                 for target in targets(ref, scope):
                     target.show = value != "false"
+            elif (
+                tag == "format" and element == "label" and name == "text-align" and ref is not None
+            ):
+                for target in targets(ref, scope):
+                    target.align = _align(value)
             elif tag == "format" and element == "worksheet" and name == "display-field-labels":
                 turn(scope, "field_labels", {"false": False, "true": True}.get(value or ""))
             elif tag == "format" and element in ("gridline", "axis") and ref is None:
@@ -230,6 +246,25 @@ def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
 
     pane = line("table-div", None)
     return pane, line("header-div", hex_color(raw.get("table-div:stroke-color")))
+
+
+def pane_cell_align(pane: etree._Element) -> Literal["left", "center", "right"] | None:
+    """標記卡（<pane>）的 <style-rule element='cell'> 的 text-align：Format > 窗格的對齊。"""
+    found: Literal["left", "center", "right"] | None = None
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "cell":
+            continue
+        for item in children(rule, "format"):
+            if item.get("attr") == "text-align" and item.get("field") is None:
+                found = _align(item.get("value"))
+    return found
+
+
+def _align(value: str | None) -> Literal["left", "center", "right"] | None:
+    """水平對齊：left、center、right；auto（預設）與其他值為 None。"""
+    if value == "left" or value == "center" or value == "right":
+        return value
+    return None
 
 
 def _opaque(value: str | None) -> str | None:

@@ -55,7 +55,25 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "Ship Speed"
+      "title": "Ship Speed",
+      "axis": {
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 78,
+        "labelLimit": 74,
+        "minExtent": 82,
+        "maxExtent": 82,
+        "title": "Ship Speed",
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -78,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 74
+      }
     },
     "tooltip": [
       {

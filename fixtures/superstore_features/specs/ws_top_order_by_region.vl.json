@@ -60,7 +60,12 @@
         "type": "text",
         "tooltip": true,
         "lineBreak": "\n",
-        "color": "#1f2328"
+        "color": "#1f2328",
+        "align": "right",
+        "dx": -4,
+        "x": {
+          "expr": "width"
+        }
       },
       "encoding": {
         "y": {
@@ -71,8 +76,8 @@
           "axis": {
             "orient": "left",
             "title": null,
-            "labels": false,
             "ticks": false,
+            "labels": false,
             "minExtent": 171,
             "maxExtent": 171,
             "grid": true,

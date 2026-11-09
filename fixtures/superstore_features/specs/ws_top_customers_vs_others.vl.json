@@ -58,7 +58,25 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "IN/OUT(Top Customers)"
+      "title": "IN/OUT(Top Customers)",
+      "axis": {
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 151,
+        "labelLimit": 147,
+        "minExtent": 155,
+        "maxExtent": 155,
+        "title": "IN/OUT(Top Customers)",
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -151,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 147
+      }
     },
     "tooltip": [
       {

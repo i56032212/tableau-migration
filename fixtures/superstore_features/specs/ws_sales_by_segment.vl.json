@@ -55,7 +55,25 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "Segment"
+      "title": "Segment",
+      "axis": {
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 71,
+        "labelLimit": 67,
+        "minExtent": 75,
+        "maxExtent": 75,
+        "title": "Segment",
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -71,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 67
+      }
     },
     "tooltip": [
       {

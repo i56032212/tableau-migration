@@ -19,7 +19,7 @@
       "columns": {
         "step": 115,
         "count": 3,
-        "fixed": false
+        "fixed": true
       }
     },
     "fit": "standard"
@@ -36,12 +36,14 @@
       "c2_label"
     ]
   },
-  "width": "container",
+  "width": {
+    "step": 115
+  },
   "height": {
     "step": 20
   },
   "autosize": {
-    "type": "fit-x",
+    "type": "pad",
     "contains": "padding"
   },
   "config": {
@@ -56,7 +58,9 @@
     "type": "text",
     "tooltip": true,
     "lineBreak": "\n",
-    "color": "#1f2328"
+    "color": "#1f2328",
+    "align": "right",
+    "dx": -4
   },
   "encoding": {
     "y": {
@@ -66,7 +70,22 @@
       "title": "Region",
       "axis": {
         "orient": "left",
-        "title": "Region"
+        "title": "Region",
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 58,
+        "labelLimit": 54,
+        "minExtent": 62,
+        "maxExtent": 62,
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -58,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 54
       }
     },
     "x": {
@@ -81,8 +100,15 @@
       "axis": {
         "orient": "top",
         "labelAngle": 0,
-        "title": "Category"
-      }
+        "title": "Category",
+        "ticks": false
+      },
+      "scale": {
+        "type": "band",
+        "paddingInner": 0,
+        "paddingOuter": 0
+      },
+      "bandPosition": 1
     },
     "text": {
       "field": "c2_label",

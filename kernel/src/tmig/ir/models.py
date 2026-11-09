@@ -827,6 +827,10 @@ class Marks(IRModel):
     label_color: HexColor | None = Field(
         default=None, description="標記標籤的文字顏色；None 依工作表的文字顏色"
     )
+    cell_align: Literal["left", "center", "right"] | None = Field(
+        default=None,
+        description="文字表儲存格中文字的水平對齊（Format > 窗格的對齊）；None 依工作表的設定或預設",
+    )
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
     shape: FieldUse | None = None
@@ -909,6 +913,9 @@ class Axis(IRModel):
         default=None,
         ge=1,
         description="離散欄位每個成員的高度（列）或寬度（欄），像素（Format > Cell Size）；None 依預設",
+    )
+    align: Literal["left", "center", "right"] | None = Field(
+        default=None, description="列標題成員的水平對齊；None 依預設（靠左）"
     )
 
 
@@ -1025,6 +1032,14 @@ class Worksheet(IRModel):
     )
     cell_color: HexColor | None = Field(
         default=None, description="文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color"
+    )
+    cell_align: Literal["left", "center", "right"] | None = Field(
+        default=None,
+        description="文字表儲存格中文字的水平對齊（工作表 <style> 中的設定，標記卡的 cell_align 優先）；"
+        "None 依 Tableau 的預設（有標題的文字表數字靠右、文字靠左，只有一格時置中）",
+    )
+    field_label_background: HexColor | None = Field(
+        default=None, description="欄位標籤的背景顏色（列標題上方的欄位名稱）；None 為不上色"
     )
     fit: FitMode = Field(default="standard", description="工作表本身（工作表分頁）的顯示大小")
     source_ref: SourceRef

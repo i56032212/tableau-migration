@@ -700,6 +700,7 @@
         ],
         "label_text": [],
         "label_color": null,
+        "cell_align": null,
         "detail": [],
         "tooltip": [
           {
@@ -837,6 +838,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "cell_align": null,
+      "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
@@ -876,6 +879,7 @@
         "label": [],
         "label_text": [],
         "label_color": null,
+        "cell_align": null,
         "detail": [],
         "tooltip": [
           {
@@ -977,6 +981,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "cell_align": null,
+      "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
@@ -1024,6 +1030,7 @@
         ],
         "label_text": [],
         "label_color": null,
+        "cell_align": null,
         "detail": [],
         "tooltip": [
           {
@@ -1111,6 +1118,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "cell_align": null,
+      "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
@@ -1155,6 +1164,7 @@
         ],
         "label_text": [],
         "label_color": null,
+        "cell_align": null,
         "detail": [],
         "tooltip": [
           {
@@ -1266,6 +1276,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "cell_align": null,
+      "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[4]"
     }

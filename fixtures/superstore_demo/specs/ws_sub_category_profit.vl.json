@@ -61,7 +61,25 @@
       "field": "c0_label",
       "type": "ordinal",
       "sort": null,
-      "title": "Sub-Category"
+      "title": "Sub-Category",
+      "axis": {
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 91,
+        "labelLimit": 87,
+        "minExtent": 95,
+        "maxExtent": 95,
+        "title": "Sub-Category",
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -91,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 87
+      }
     },
     "tooltip": [
       {

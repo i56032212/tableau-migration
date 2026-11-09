@@ -108,8 +108,11 @@ def test_axis_lines_and_colors_are_rendered(tmp_path: Path, db: Path) -> None:
     assert x["axis"]["title"] == "Revenue"
     assert (x["axis"]["domain"], x["axis"]["ticks"]) == (False, False)
     assert "grid" not in x["axis"]
-    # 離散的列標題：欄位標籤不顯示、成員的文字顏色
-    assert y["axis"] == {"title": None, "labelColor": "#ffcc00"}
+    # 離散的列標題：欄位標籤不顯示、成員的文字顏色（與 Tableau 相同畫成一欄、靠左、不畫刻度）
+    axis = y["axis"]
+    assert (axis["title"], axis["labelColor"]) == (None, "#ffcc00")
+    assert (axis["labelAlign"], axis["ticks"]) == ("left", False)
+    assert axis["minExtent"] == axis["maxExtent"] == axis["labelPadding"] + 4
     assert spec["background"] == "#1b1b1b"
     assert spec["config"]["axis"]["labelColor"] == "#f5f5f5"
     assert spec["config"]["legend"]["titleColor"] == "#f5f5f5"
@@ -258,6 +261,28 @@ def test_hidden_header_levels(tmp_path: Path, db: Path) -> None:
     assert y["axis"]["grid"] is True  # 窗格的分隔線照畫（Tableau 的預設）
 
 
+def test_single_row_header(tmp_path: Path, db: Path) -> None:
+    """單層的列標題與 Tableau 相同畫成一欄：成員靠左、不畫刻度，欄位標籤橫寫在欄的上方；寬度依內容
+    （含欄位標籤）估計；成員的對齊（text-align）照設定。"""
+    y = render(parse(tmp_path, bars()), db).spec["encoding"]["y"]
+    axis = y["axis"]
+    width = axis["minExtent"]
+    assert axis["maxExtent"] == width and 32 <= width <= 80
+    assert (axis["labelAlign"], axis["labelPadding"], axis["ticks"]) == ("left", width - 4, False)
+    assert axis["labelLimit"] == width - 8
+    assert (axis["title"], axis["titleAngle"], axis["titleAlign"]) == ("Region", 0, "left")
+    assert (axis["titleX"], axis["titleY"], axis["titleBaseline"]) == (-width + 4, -4, "bottom")
+
+    for align, padding in (("center", width / 2), ("right", 4)):
+        aligned = bars(rule("label", fmt("text-align", align, "none:Region:nk")))
+        ir = parse(tmp_path, aligned)
+        assert [a.align for a in ir.worksheets[0].axes] == [align]
+        axis = render(ir, db).spec["encoding"]["y"]["axis"]
+        assert (axis["labelAlign"], axis["labelPadding"]) == (align, padding)
+    auto = parse(tmp_path, bars(rule("label", fmt("text-align", "auto", "none:Region:nk"))))
+    assert auto.worksheets[0].axes == []  # 預設（靠左）
+
+
 def test_hidden_header_levels_in_text_tables(tmp_path: Path, db: Path) -> None:
     """文字表的多層欄標題分行顯示：隱藏的層不佔一行。"""
     hide = rule("label", fmt("display", "false", "none:Category:nk"))
@@ -269,6 +294,97 @@ def test_hidden_header_levels_in_text_tables(tmp_path: Path, db: Path) -> None:
     shown = render(parse(tmp_path, nested("cols", mark="Text")), db).spec["encoding"]["x"]["axis"]
     assert shown["labelExpr"] == "split(datum.label, '｜')"
     assert shown["labelPadding"] == 2 + 12
+
+
+# ---------------------------------------------------------------- 文字表的對齊與欄位標籤
+
+
+def crosstab(*rules: str, cols: bool = True, rows: bool = True, pane: str = "") -> str:
+    """Region 為列、Category 為欄（cols／rows=False 時沒有）、SUM(Sales) 為文字的文字表。"""
+    sheet = worksheet(
+        "Crosstab",
+        [REGION, CATEGORY, SALES],
+        rows=ref("none:Region:nk") if rows else "",
+        cols=ref("none:Category:nk") if cols else "",
+        mark="Text",
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        pane_extra=pane,
+    )
+    return styled(sheet, *rules)
+
+
+def pane_align(value: str) -> str:
+    """標記卡的 Format > 窗格的對齊（寫在 <pane> 的 <style> 中）。"""
+    return (
+        "<style><style-rule element='cell'>"
+        f"<format attr='text-align' value='{value}' /></style-rule></style>"
+    )
+
+
+def test_cell_alignment(tmp_path: Path, db: Path) -> None:
+    """文字表的儲存格與 Tableau 相同數字靠右（對齊各欄的右緣）；設定的對齊（Format > 窗格）優先；
+    沒有欄時對齊整張圖的右緣。標題沒有刻度。"""
+    ir = parse(tmp_path, crosstab())
+    assert ir.worksheets[0].cell_align is None
+    spec = render(ir, db).spec
+    x = spec["encoding"]["x"]
+    assert (spec["mark"]["align"], spec["mark"]["dx"]) == ("right", -4)
+    assert x["bandPosition"] == 1
+    assert x["scale"] == {"type": "band", "paddingInner": 0, "paddingOuter": 0}
+    assert x["axis"]["ticks"] is False and spec["encoding"]["y"]["axis"]["ticks"] is False
+
+    left = parse(tmp_path, crosstab(rule("cell", fmt("text-align", "left"))))
+    assert left.worksheets[0].cell_align == "left"
+    spec = render(left, db).spec
+    assert (spec["mark"]["align"], spec["mark"]["dx"]) == ("left", 4)
+    assert spec["encoding"]["x"]["bandPosition"] == 0
+
+    center = render(parse(tmp_path, crosstab(rule("cell", fmt("text-align", "center")))), db).spec
+    assert "align" not in center["mark"] and "bandPosition" not in center["encoding"]["x"]
+
+    single = render(parse(tmp_path, crosstab(cols=False)), db).spec
+    assert single["mark"]["x"] == {"expr": "width"}
+    assert single["mark"]["align"] == "right"
+
+    # 標記卡的對齊（Snow Sports 報表的寫法）優先於工作表的
+    ir = parse(
+        tmp_path, crosstab(rule("cell", fmt("text-align", "left")), pane=pane_align("center"))
+    )
+    assert ir.worksheets[0].marks.cell_align == "center"
+    assert "align" not in render(ir, db).spec["mark"]
+    # 只有一格（KPI）：沒有設定時置中，設定了靠左時對齊左緣
+    kpi = render(parse(tmp_path, crosstab(cols=False, rows=False)), db).spec
+    assert "align" not in kpi["mark"] and "x" not in kpi["mark"]
+    kpi = render(
+        parse(tmp_path, crosstab(cols=False, rows=False, pane=pane_align("left"))), db
+    ).spec
+    assert (kpi["mark"]["align"], kpi["mark"]["x"], kpi["mark"]["dx"]) == ("left", 0, 4)
+
+
+def test_field_label_background(tmp_path: Path, db: Path) -> None:
+    """欄位標籤的背景（Snow Sports 報表的表格）：列標題上方一列、橫跨標題的欄，畫在最下層。"""
+    ir = parse(tmp_path, crosstab(rule("field-labels", fmt("background-color", "#F3EDE7"))))
+    assert ir.worksheets[0].field_label_background == "#f3ede7"
+    spec = render(ir, db).spec
+    background, body = spec["layer"]
+    width = body["encoding"]["y"]["axis"]["minExtent"]
+    assert background["mark"] == {
+        "type": "rect",
+        "color": "#f3ede7",
+        "x": -width,
+        "x2": 0,
+        "y": -20,
+        "y2": 0,
+    }
+    assert body["encoding"]["y"]["axis"]["zindex"] == 1  # 欄位標籤畫在背景之上
+    # 不顯示欄位標籤時不畫；透明的背景不算
+    hidden = crosstab(
+        rule("field-labels", fmt("background-color", "#F3EDE7")),
+        rule("worksheet", fmt("display-field-labels", "false", scope="rows")),
+    )
+    assert "layer" not in render(parse(tmp_path, hidden), db).spec
+    clear = crosstab(rule("field-labels", fmt("background-color", "#00000000")))
+    assert parse(tmp_path, clear).worksheets[0].field_label_background is None
 
 
 # ---------------------------------------------------------------- 文字顏色

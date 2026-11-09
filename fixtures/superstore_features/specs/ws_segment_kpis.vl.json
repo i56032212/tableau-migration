@@ -21,7 +21,7 @@
       "columns": {
         "step": 75,
         "count": 4,
-        "fixed": false
+        "fixed": true
       }
     },
     "fit": "standard"
@@ -46,12 +46,14 @@
       "c4_label"
     ]
   },
-  "width": "container",
+  "width": {
+    "step": 75
+  },
   "height": {
     "step": 20
   },
   "autosize": {
-    "type": "fit-x",
+    "type": "pad",
     "contains": "padding"
   },
   "config": {
@@ -66,7 +68,9 @@
     "type": "text",
     "tooltip": true,
     "lineBreak": "\n",
-    "color": "#1f2328"
+    "color": "#1f2328",
+    "align": "right",
+    "dx": -4
   },
   "encoding": {
     "y": {
@@ -76,7 +80,22 @@
       "title": "Segment",
       "axis": {
         "orient": "left",
-        "title": "Segment"
+        "title": "Segment",
+        "ticks": false,
+        "zindex": 1,
+        "labelAlign": "left",
+        "labelPadding": 85,
+        "labelLimit": 81,
+        "minExtent": 89,
+        "maxExtent": 89,
+        "titleAngle": 0,
+        "titleAlign": "left",
+        "titleBaseline": "bottom",
+        "titleX": -85,
+        "titleY": -4,
+        "titleFontSize": 10,
+        "titleFontWeight": 600,
+        "titleLimit": 81
       }
     },
     "x": {
@@ -87,8 +106,15 @@
       "axis": {
         "orient": "top",
         "labelAngle": 0,
-        "title": "Measure Names"
-      }
+        "title": "Measure Names",
+        "ticks": false
+      },
+      "scale": {
+        "type": "band",
+        "paddingInner": 0,
+        "paddingOuter": 0
+      },
+      "bandPosition": 1
     },
     "text": {
       "field": "__mv_label",

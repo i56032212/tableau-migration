@@ -261,9 +261,11 @@ def test_fit_modes_size_and_scroll(tmp_path: Path) -> None:
                 " e.scrollHeight]"
             )
 
-        # 標準大小：每一列 20 像素（文字表與長條圖相同），不拉長填滿區塊
-        for zone in ("z9", "z10"):
-            assert page.locator(f"[data-zone='{zone}'] .chart").get_attribute("data-scroll") == "y"
+        # 標準大小：每一列 20 像素（文字表與長條圖相同），不拉長填滿區塊；文字表的欄依內容固定寬度
+        # （放不下時也可以左右捲動）
+        for zone, scroll in (("z9", "both"), ("z10", "y")):
+            chart = page.locator(f"[data-zone='{zone}'] .chart")
+            assert chart.get_attribute("data-scroll") == scroll, zone
             tops = rows(zone)
             assert tops[1] - tops[0] == pytest.approx(20, abs=0.5), zone
         svg, client, _ = sizes("z9")

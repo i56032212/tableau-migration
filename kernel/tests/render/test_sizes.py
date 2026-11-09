@@ -128,7 +128,8 @@ def test_cell_sizes(tmp_path: Path, db: Path) -> None:
 
 
 def test_discrete_columns_have_a_natural_width(tmp_path: Path, db: Path) -> None:
-    """離散的欄依內容估計寬度（檢視器在區塊放不下時才固定、可以捲動）；設定了寬度時一律固定。"""
+    """離散的欄依內容估計寬度：文字表與 Tableau 相同固定這個寬度（標準大小時不拉寬填滿）；其他圖在
+    區塊放不下時才固定、可以捲動（檢視器）；設定了寬度時一律固定。"""
     table = worksheet(
         "Table",
         [REGION, SALES],
@@ -138,8 +139,16 @@ def test_discrete_columns_have_a_natural_width(tmp_path: Path, db: Path) -> None
     )
     spec = render(parse(tmp_path, table), db).spec
     columns = spec["usermeta"]["sizing"]["columns"]
-    assert (columns["count"], columns["fixed"]) == (4, False)
+    assert (columns["count"], columns["fixed"]) == (4, True)
     assert 40 <= columns["step"] <= 80
+    assert spec["width"] == {"step": columns["step"]}
+
+    vertical = worksheet(
+        "Bars", [REGION, SALES], cols=ref("none:Region:nk"), rows=ref("sum:Sales:qk")
+    )
+    spec = render(parse(tmp_path, vertical), db).spec
+    columns = spec["usermeta"]["sizing"]["columns"]
+    assert (columns["count"], columns["fixed"]) == (4, False)
     assert spec["width"] == "container"
 
     sized = styled(table, rule("cell", fmt("width", "120", "none:Region:nk")))
@@ -216,6 +225,14 @@ def test_multi_level_row_headers(tmp_path: Path, db: Path) -> None:
     assert (y["axis"]["labels"], y["axis"]["ticks"], y["axis"]["title"]) == (False, False, None)
     titles = [layer for layer in spec["layer"] if layer.get("name", "").endswith("_title")]
     assert [t["encoding"]["text"]["value"] for t in titles] == ["Region", "Category"]
+
+    # 成員的對齊（Snow Sports 報表的 Insight Date、Resort 置中）
+    centered = banded(rule("label", fmt("text-align", "center", "none:Region:nk")))
+    spec = render(parse(tmp_path, centered), db).spec
+    region = header_layers(spec)["__deco__header0"]
+    assert region["mark"]["align"] == "center"
+    assert region["encoding"]["x"] == {"value": -total + (second - first) / 2}  # 欄的中間
+    assert header_layers(spec)["__deco__header1"]["mark"]["align"] == "left"
 
 
 DIVIDER_RULES = rule(
