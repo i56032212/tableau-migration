@@ -28,6 +28,7 @@ from tmig.ir.models import (
 )
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.fields import instance_key
+from tmig.parser.formats import dashboard_background, zone_style
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 
@@ -114,6 +115,7 @@ class DashboardParser:
             sizing=sizing.mode,
             min_size=sizing.min_size,
             max_size=sizing.max_size,
+            background=dashboard_background(el),
             zones=zones,
             source_ref=xpath(el),
         )
@@ -144,6 +146,9 @@ class DashboardParser:
             base["fixed"] = int(element.get("fixed-size", "0"))
         if element.get("hidden-by-user") == "true":
             base["hidden"] = True
+        style = zone_style(child(element, "zone-style"))
+        if style is not None:
+            base["style"] = style
         child_zones = children(element, "zone")
         self._check(element)
 

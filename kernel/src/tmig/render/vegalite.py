@@ -12,6 +12,10 @@
 - 圓餅：角度為 wedge-size 的量值；欄列架上的量值只是撐出版面（例如 MIN(0)），不畫成軸
 - 離散維度依查詢結果的順序排列（查詢已套用工作表的排序）
 - 標籤與工具提示的文字依 IR 的 Tableau 格式字串在後端先格式化
+- 多邊形：依路徑（沒有時依資料的順序）連接各點並填滿，每個多邊形由詳細資料的維度區分
+- 座標軸：隱藏（保留格線）、自訂標題、固定範圍（超出的部分裁切）、反轉、不包含 0；雙軸同步時
+  共用刻度。格線、座標軸線與刻度依列（縱軸）與欄（橫軸）的設定
+- 工作表的背景（可以透明）與文字顏色：座標軸、圖例、標籤與文字表的文字
 - 甘特、地圖等尚未支援的標記回傳 None，由檢視器顯示「未支援」
 - 參考線（J4）：值在後端依範圍（整張表、窗格、儲存格）以標記的值計算；離散軸上以每個標記位置的
   短線（tick）連成參考線，連續軸或沒有另一軸時畫成橫跨整張圖的線；只有一條時加上標籤
@@ -23,6 +27,7 @@ import math
 import statistics
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal, TypeGuard
 
 from tmig.data.executor import QueryResult
@@ -31,6 +36,7 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    Axis,
     ColorPalette,
     DataField,
     FieldUse,
@@ -64,7 +70,7 @@ from tmig.sqlgen.query import (
 
 SCHEMA = "https://vega.github.io/schema/vega-lite/v6.json"
 SEPARATOR = "｜"
-UNSUPPORTED_MARKS = {"gantt", "map", "polygon"}
+UNSUPPORTED_MARKS = {"gantt", "map"}
 TIME_UNITS = {
     "year": "utcyear",
     "quarter": "utcyearquarter",
@@ -105,6 +111,7 @@ VL_MARKS = {
     "circle": "circle",
     "square": "square",
     "shape": "point",
+    "polygon": "line",
 }
 ROW = "__row"
 TOTAL = "__total"
@@ -113,6 +120,8 @@ HEADER_LINE_HEIGHT = 12
 ORDER = "__order"
 """欄標題的名次（查詢的 __order(columns)），只在產生規格時使用、不留在資料中。"""
 """總計列的標記（資料中為 True）。"""
+TEXT_COLOR = "#1f2328"
+"""標籤與文字沒有設定顏色時的顏色。"""
 TEXT_ROW_HEIGHT = 22
 """文字表每一列的高度（像素）：與 Tableau 相同固定列高，列數多時在區塊內捲動。"""
 MEASURE_NAMES_TITLE = "Measure Names"
@@ -231,15 +240,52 @@ class _Builder:
 
     # ------------------------------------------------------------ 座標
 
-    def axis_dim(self, uses: list[FieldUse], composite: str) -> dict[str, Any] | None:
+    def axis_dim(
+        self, uses: list[FieldUse], composite: str, multiline: bool = False
+    ) -> dict[str, Any] | None:
+        """維度的座標：連續的為座標軸，離散的為標題（多個維度合併成「外層｜內層」，multiline 時
+        分行顯示）。"""
         if not uses:
             return None
+        shelf: Literal["rows", "columns"] = "rows" if composite == "rows_dim" else "columns"
         if len(uses) > 1:
-            title = SEPARATOR.join(self.ch(u).title for u in uses)
-            return {"field": composite, "type": "ordinal", "sort": None, "title": title}
-        return _dimension(self.ch(uses[0]))
+            encoding = {"field": composite, "type": "ordinal", "sort": None}
+        else:
+            encoding = _dimension(self.ch(uses[0]))
+            if encoding["type"] in ("quantitative", "temporal"):
+                return self.axis_settings(encoding, uses[0], shelf)
+        shown, title, color = self.header(uses, shelf)
+        encoding["title"] = SEPARATOR.join(self.ch(u).title for u in uses)
+        axis: dict[str, Any] = {}
+        if not shown:
+            axis.update(labels=False, ticks=False, domain=False)
+        expr = _header_expr(shown, len(uses), multiline and len(uses) > 1)
+        if shown and expr is not None:
+            axis["labelExpr"] = expr
+        if title != encoding["title"]:
+            axis["title"] = title
+        if color is not None:
+            axis["labelColor"] = color
+        if axis:
+            encoding["axis"] = axis
+        return encoding
 
-    def axis_measure(self, use: FieldUse) -> dict[str, Any]:
+    def header(
+        self, uses: list[FieldUse], shelf: Literal["rows", "columns"]
+    ) -> tuple[list[int], str | None, str | None]:
+        """離散欄位的標題：顯示的層級（Show Header）、欄位標籤（不顯示時為 None）與文字顏色。"""
+        style = self.ws.row_style if shelf == "rows" else self.ws.column_style
+        settings = [self.axis_of(u, shelf) for u in uses]
+        shown = [i for i, s in enumerate(settings) if s is None or s.show]
+        title = (
+            SEPARATOR.join(self.ch(uses[i]).title for i in shown)
+            if style.field_labels and shown
+            else None
+        )
+        colors = [s.label_color for s in settings if s is not None and s.label_color is not None]
+        return shown, title, _css_color(colors[-1]) if colors else None
+
+    def axis_measure(self, use: FieldUse, shelf: Literal["rows", "columns"]) -> dict[str, Any]:
         ch = self.ch(use)
         encoding: dict[str, Any] = {"field": ch.name, "type": "quantitative", "title": ch.title}
         # Table Calculation 的軸只在百分比類時套用格式（累計、排名等沿用自動刻度）
@@ -247,7 +293,66 @@ class _Builder:
         axis = axis_format(parse_format(ch.format)) if formatted else None
         if axis:
             encoding["axis"] = axis
+        return self.axis_settings(encoding, use, shelf)
+
+    def axis_of(self, use: FieldUse, shelf: str) -> Axis | None:
+        key = use_key(use)
+        return next((a for a in self.ws.axes if a.shelf == shelf and use_key(a.use) == key), None)
+
+    def axis_settings(
+        self, encoding: dict[str, Any], use: FieldUse, shelf: Literal["rows", "columns"]
+    ) -> dict[str, Any]:
+        """連續座標軸的設定（隱藏、標題、固定範圍、反轉、包含 0、文字顏色）與這個方向的格線、
+        座標軸線與刻度。隱藏的座標軸與 Tableau 相同保留格線。"""
+        axis: dict[str, Any] = dict(encoding.get("axis") or {})
+        lines = self.ws.row_style if shelf == "rows" else self.ws.column_style
+        if not lines.grid:
+            axis["grid"] = False
+        if not lines.axis:
+            axis["domain"] = False
+        if not lines.ticks:
+            axis["ticks"] = False
+        setting = self.axis_of(use, shelf)
+        if setting is not None:
+            temporal = encoding.get("type") == "temporal"
+            if setting.label_color is not None:
+                axis["labelColor"] = _css_color(setting.label_color)
+            if setting.title is not None:
+                axis["title"] = setting.title or None
+            if not setting.show:
+                axis.update(labels=False, ticks=False, domain=False, title=None)
+            scale: dict[str, Any] = dict(encoding.get("scale") or {})
+            start = _axis_value(setting.start, temporal)
+            end = _axis_value(setting.end, temporal)
+            if start is not None and end is not None:
+                scale["domain"] = [start, end]
+            elif start is not None:
+                scale["domainMin"] = start
+            elif end is not None:
+                scale["domainMax"] = end
+            if start is not None or end is not None:
+                scale["nice"] = False  # 固定的範圍不再延伸到整數刻度
+            if setting.reverse:
+                scale["reverse"] = True
+            if not temporal and (not setting.include_zero or start is not None):
+                scale["zero"] = False
+            if scale:
+                encoding["scale"] = scale
+        if axis:
+            encoding["axis"] = axis
         return encoding
+
+    def text_color(self, marks: Marks | None = None, cell: bool = False) -> str:
+        """標記上的文字顏色：標籤的顏色、文字表儲存格的顏色（cell）、工作表的文字顏色，都沒有時為
+        預設的深灰色。"""
+        for color in (
+            marks.label_color if marks is not None else None,
+            self.ws.cell_color if cell else None,
+            self.ws.text_color,
+        ):
+            if color is not None:
+                return _css_color(color)
+        return TEXT_COLOR
 
     # ------------------------------------------------------------ 單一圖
 
@@ -270,22 +375,32 @@ class _Builder:
             highlight = mark == "square" and marks.color is not None
             mark = "square" if highlight else "text"
             y = self.axis_dim(rows_dims, "rows_dim")
-            x = self.axis_dim(cols_dims, "cols_dim")
+            x = self.axis_dim(cols_dims, "cols_dim", multiline=True)
             if y is not None:
-                encoding["y"] = {**y, "axis": {"orient": "left", "title": y.get("title")}}
+                encoding["y"] = {
+                    **y,
+                    "axis": {"orient": "left", "title": y.get("title"), **y.get("axis", {})},
+                }
             if x is not None:
-                axis: dict[str, Any] = {"orient": "top", "labelAngle": 0, "title": x.get("title")}
+                axis: dict[str, Any] = {
+                    "orient": "top",
+                    "labelAngle": 0,
+                    "title": x.get("title"),
+                    **x.get("axis", {}),
+                }
                 if x["field"] == "cols_dim":
                     # 多層的欄標題分行顯示（外層在上），欄窄時不會疊在一起；多出的行往上排
-                    axis["labelExpr"] = f"split(datum.label, '{SEPARATOR}')"
+                    levels = max(len(self.header(cols_dims, "columns")[0]), 1)
                     axis["labelLineHeight"] = HEADER_LINE_HEIGHT
-                    axis["labelPadding"] = 2 + HEADER_LINE_HEIGHT * (len(cols_dims) - 1)
+                    axis["labelPadding"] = 2 + HEADER_LINE_HEIGHT * (levels - 1)
                 encoding["x"] = {**x, "axis": axis}
             text_field = self.label_field(marks)
             if text_field is None:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
                 text_field = measures[0].label if measures else None
             vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
+            if marks.color is None and marks.mark_color is None:
+                vl_mark["color"] = self.text_color(marks, cell=True)
             if text_field is not None:
                 encoding["text"] = {"field": text_field, "type": "nominal"}
             else:
@@ -293,16 +408,17 @@ class _Builder:
         else:
             vl_type = VL_MARKS.get(mark, "point")
             if rows_meas and cols_meas:
-                encoding["x"] = self.axis_measure(cols_meas[0])
-                encoding["y"] = self.axis_measure(rows_meas[0])
-                vl_type = "point" if vl_type in ("bar", "line", "area") else vl_type
+                encoding["x"] = self.axis_measure(cols_meas[0], "columns")
+                encoding["y"] = self.axis_measure(rows_meas[0], "rows")
+                if mark != "polygon":
+                    vl_type = "point" if vl_type in ("bar", "line", "area") else vl_type
                 for dims in (rows_dims, cols_dims):
                     for use in dims:
                         encoding.setdefault("detail", []).append(
                             {"field": self.ch(use).name, "type": "nominal"}
                         )
             elif cols_meas:
-                encoding["x"] = self.axis_measure(cols_meas[0])
+                encoding["x"] = self.axis_measure(cols_meas[0], "columns")
                 y = self.axis_dim(rows_dims, "rows_dim")
                 if y is not None:
                     encoding["y"] = y
@@ -311,7 +427,7 @@ class _Builder:
                         {"field": self.ch(use).name, "type": "nominal"}
                     )
             else:
-                encoding["y"] = self.axis_measure(rows_meas[0])
+                encoding["y"] = self.axis_measure(rows_meas[0], "rows")
                 x = self.axis_dim(cols_dims, "cols_dim")
                 if x is not None:
                     encoding["x"] = x
@@ -320,32 +436,51 @@ class _Builder:
                         {"field": self.ch(use).name, "type": "nominal"}
                     )
             vl_mark = {"type": vl_type, "tooltip": True}
-            if vl_type in ("line", "area"):
+            if mark == "polygon":
+                # 多邊形：以填滿的折線依序連接各點
+                vl_mark["filled"] = True
+            elif vl_type in ("line", "area"):
                 # 與 Tableau 的預設相同不畫出點；透明的點讓每個標記都能停留顯示工具提示、點選
                 vl_mark["point"] = "transparent"
             if mark == "shape":
                 vl_mark["filled"] = True
-            if marks.label or id(marks) in self.label_fields:
+            if any(_fixed_range(encoding.get(c)) for c in ("x", "y")):
+                vl_mark["clip"] = True  # 與 Tableau 相同，固定範圍之外的標記不畫
+            if mark == "polygon" and (marks.label or id(marks) in self.label_fields):
+                self.notes.append("多邊形的標籤尚未畫出")
+            elif marks.label or id(marks) in self.label_fields:
                 label_field = self.label_field(marks)
                 label_type = vl_type
 
         self.common(encoding, marks)
         if mark == "square":
+            vl_mark.pop("color", None)
             text = {
                 "mark": vl_mark,
-                "encoding": {"text": encoding.pop("text"), "color": {"value": "#1f2328"}},
+                "encoding": {
+                    "text": encoding.pop("text"),
+                    "color": {"value": self.text_color(marks, cell=True)},
+                },
             }
             rect = _mark_style({"type": "rect", "tooltip": True}, marks)
             return {"encoding": encoding, "layer": [{"mark": rect}, text]}, mark
         _mark_style(vl_mark, marks)
         if marks.path is not None and vl_mark["type"] in ("line", "area"):
             encoding["order"] = {"field": self.ch(marks.path).name}
+        elif mark == "polygon":
+            vl_mark["order"] = None  # 沒有路徑時依資料的順序連接（而不是依 x 排序）
         if label_field is not None:
             return {
                 "encoding": encoding,
                 "layer": [
                     {"mark": vl_mark},
-                    _label_layer(encoding, label_type, label_field, marks.color is not None),
+                    _label_layer(
+                        encoding,
+                        label_type,
+                        label_field,
+                        marks.color is not None,
+                        self.text_color(marks),
+                    ),
                 ],
             }, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
@@ -447,10 +582,15 @@ class _Builder:
                     if "layer" in previous and "resolve" in previous
                     else [previous]
                 )
+                setting = self.axis_of(use, axis)
+                synchronized = setting is not None and setting.synchronized
                 charts.append(
                     {
                         "layer": [*layers, body],
-                        "resolve": {"scale": {channel: "independent"}},
+                        # 同步的雙軸共用刻度，否則兩個軸各自的刻度
+                        "resolve": {
+                            "scale": {channel: "shared" if synchronized else "independent"}
+                        },
                     }
                 )
             else:
@@ -498,7 +638,7 @@ class _Builder:
             },
             "encoding": {
                 "text": {"field": "__pie_label"},
-                "color": {"value": "#1f2328"},
+                "color": {"value": self.text_color(marks)},
                 "theta": encoding["theta"],
                 **({"order": encoding["order"]} if "order" in encoding else {}),
             },
@@ -551,18 +691,29 @@ class _Builder:
                 "lineBreak": "\n",
                 "fontSize": 14,
                 "fontWeight": "bold",
-                "color": "#1f2328",
+                "color": self.text_color(holes[0][1].marks),
             },
             "encoding": {"text": {"value": "\n".join(lines)}},
         }
         return {"layer": [body, center]}
 
     def _facet(self, uses: list[FieldUse], composite: str) -> dict[str, Any]:
-        if len(uses) > 1:
-            title = SEPARATOR.join(self.ch(u).title for u in uses)
-            return {"field": composite, "type": "ordinal", "sort": None, "title": title}
-        ch = self.ch(uses[0])
-        return {"field": ch.label, "type": "ordinal", "sort": None, "title": ch.title}
+        """分面（圓餅的欄列架維度）：標題的顯示、欄位標籤與文字顏色與座標軸相同。"""
+        field_name = composite if len(uses) > 1 else self.ch(uses[0]).label
+        facet: dict[str, Any] = {"field": field_name, "type": "ordinal", "sort": None}
+        shown, title, color = self.header(uses, "rows" if composite == "rows_dim" else "columns")
+        facet["title"] = title
+        header: dict[str, Any] = {}
+        if not shown:
+            header["labels"] = False
+        expr = _header_expr(shown, len(uses), False)
+        if shown and expr is not None:
+            header["labelExpr"] = expr
+        if color is not None:
+            header["labelColor"] = color
+        if header:
+            facet["header"] = header
+        return facet
 
 
 def build_spec(
@@ -767,8 +918,16 @@ def build_spec(
         "width": "container",
         "height": "container",
         "autosize": {"type": "fit", "contains": "padding"},
-        "config": {"view": {"stroke": None}, "axis": {"labelLimit": 160}},
+        "config": _config(ws),
     }
+    if ws.background is not None:
+        spec["background"] = _css_color(ws.background)
+        spec["usermeta"]["background"] = spec["background"]
+    if ws.text_color is not None:
+        spec["usermeta"]["text_color"] = _css_color(ws.text_color)
+    title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
+    if title_color is not None or ws.text_color is not None:
+        spec["usermeta"]["title_color"] = title_color or _css_color(ws.text_color or TEXT_COLOR)
     if "vconcat" in body or "hconcat" in body:
         # 多張圖無法自動填滿容器，由檢視器依區塊大小設定每張圖的寬高
         del spec["width"], spec["height"]
@@ -783,7 +942,7 @@ def build_spec(
     for record in values:
         record.pop(ORDER, None)
     if totals and not ws.totals_colored:
-        _exclude_totals_from_color(spec, mark)
+        _exclude_totals_from_color(spec, mark, builder.text_color(ws.marks, cell=True))
     return RenderResult(spec, marks_count, mark, None, builder.notes)
 
 
@@ -994,7 +1153,7 @@ def after_groups[RowT](
     return result + tail
 
 
-def _exclude_totals_from_color(spec: dict[str, Any], mark: str) -> None:
+def _exclude_totals_from_color(spec: dict[str, Any], mark: str, text: str) -> None:
     """與 Tableau 的預設相同，依量值著色時總計不上色（醒目提示表最明顯）；總計也不影響色階的範圍，
     見 _Builder.common。"""
     color = spec.get("encoding", {}).get("color")
@@ -1002,7 +1161,7 @@ def _exclude_totals_from_color(spec: dict[str, Any], mark: str) -> None:
         return
     color["condition"] = {
         "test": f"datum['{TOTAL}'] === true",
-        "value": "transparent" if mark == "square" else "#1f2328",
+        "value": "transparent" if mark == "square" else text,
     }
 
 
@@ -1307,10 +1466,59 @@ def _mark_style(mark: dict[str, Any], marks: Marks) -> dict[str, Any]:
     if marks.stroke is not None:
         if mark["type"] == "area":
             mark["line"] = {"color": marks.stroke}
-        elif mark["type"] in BORDERED:
+        elif mark["type"] in BORDERED or (mark["type"] == "line" and mark.get("filled")):
             mark["stroke"] = marks.stroke
             mark["strokeWidth"] = 1
     return mark
+
+
+def _header_expr(shown: list[int], levels: int, multiline: bool) -> str | None:
+    """離散標題的文字：只顯示 shown 的層級（多層時資料中的值為「外層｜內層」）；multiline 時分行。
+    全部顯示且不分行時為 None（直接顯示值）。"""
+    if len(shown) == levels and not multiline:
+        return None
+    if len(shown) == levels:
+        return f"split(datum.label, '{SEPARATOR}')"
+    parts = [f"(split(datum.label, '{SEPARATOR}')[{i}] || '')" for i in shown]
+    if multiline:
+        return "[" + ", ".join(parts) + "]"
+    return f" + '{SEPARATOR}' + ".join(parts)
+
+
+def _config(ws: Worksheet) -> dict[str, Any]:
+    """Vega-Lite 的 config：工作表的文字顏色套用到座標軸、圖例與分面的標題。"""
+    config: dict[str, Any] = {"view": {"stroke": None}, "axis": {"labelLimit": 160}}
+    if ws.text_color is not None:
+        color = _css_color(ws.text_color)
+        config["axis"].update(labelColor=color, titleColor=color)
+        config["legend"] = {"labelColor": color, "titleColor": color}
+        config["header"] = {"labelColor": color, "titleColor": color}
+    return config
+
+
+def _css_color(color: str) -> str:
+    """IR 的顏色（#rrggbb 或 #rrggbbaa）→ CSS；完全透明時為 transparent。"""
+    return "transparent" if len(color) == 9 and color.endswith("00") else color
+
+
+def _fixed_range(encoding: Any) -> bool:
+    scale = encoding.get("scale") if isinstance(encoding, dict) else None
+    return isinstance(scale, dict) and any(k in scale for k in ("domain", "domainMin", "domainMax"))
+
+
+def _axis_value(value: Scalar, temporal: bool) -> float | None:
+    """固定範圍的值：數值；時間軸為 UTC 的毫秒數（日期的 ISO 8601 字串）。"""
+    if temporal and isinstance(value, str):
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp() * 1000
+    if not temporal and _is_number(value):
+        return float(value)
+    return None
 
 
 def _take_pane(remaining: list[Pane], use: FieldUse, axis: str) -> Pane | None:
@@ -1349,13 +1557,17 @@ def _template(text: str) -> str:
 
 
 def _label_layer(
-    encoding: dict[str, Any], vl_type: str, field_name: str, colored: bool
+    encoding: dict[str, Any],
+    vl_type: str,
+    field_name: str,
+    colored: bool,
+    color: str = TEXT_COLOR,
 ) -> dict[str, Any]:
     """標籤：長條在尾端（堆疊時在各段內側），其他標記在點的上方。"""
     stacked = vl_type == "bar" and colored
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
     mark: dict[str, Any] = {"type": "text", "fontSize": 10, "lineBreak": "\n"}
-    layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": "#1f2328"}}
+    layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
     if vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
         if stacked:

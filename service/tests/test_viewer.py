@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from tmig.data.executor import QueryResult
-from tmig.ir import ColorPalette, FieldUse, iter_zones, load_ir
+from tmig.ir import ColorPalette, FieldUse, ZoneStyle, iter_zones, load_ir
 from tmig.planner.state import QueryState
 from tmig.sqlgen.query import OutputColumn, worksheet_sql
 from tmig.verify.cases import load_cases
@@ -134,6 +134,81 @@ def test_continuous_color_legend(tmp_path: Path) -> None:
         smallest = min(values, key=lambda v: v[field])
         largest = max(values, key=lambda v: v[field])
         assert (low, high) == (smallest[f"{field}_label"], largest[f"{field}_label"])
+        browser.close()
+
+
+def test_zone_styles_and_backgrounds(tmp_path: Path) -> None:
+    """dashboard 與區塊的格式：背景、框線、外距與內距；有框線的容器畫在子區塊之下；透明背景的工作表；
+    不顯示標題時列數與資料切換只在滑過時顯示；dashboard 上的工作表不畫圖例（圖例是另外的區塊）。"""
+    from playwright.sync_api import sync_playwright
+
+    target = tmp_path / "styles"
+    target.mkdir()
+    shutil.copy(DEMO / "superstore_demo.twbx", target / "superstore_demo.twbx")
+    shutil.copytree(DEMO / "data", target / "data")
+    ir = load_ir(DEMO / "golden.ir.json")
+    styles = {
+        "z5": ZoneStyle(
+            border="solid", border_width=2, border_color="#bd8459", margin=(2, 2, 2, 2)
+        ),
+        "z7": ZoneStyle(background="#ffffff", margin=(4, 4, 4, 4), padding=(0, 0, 0, 15)),
+    }
+
+    def restyle(zones: list[Any]) -> list[Any]:
+        updated = []
+        for zone in zones:
+            changes: dict[str, Any] = {"children": restyle(zone.children)}
+            if zone.id in styles:
+                changes["style"] = styles[zone.id]
+            if zone.id == "z8":
+                changes["show_title"] = False
+            updated.append(zone.model_copy(update=changes))
+        return updated
+
+    board = ir.dashboards[0]
+    board = board.model_copy(update={"background": "#f3ede7", "zones": restyle(board.zones)})
+    sheets = [
+        ws.model_copy(update={"background": "#00000000"}) if ws.id == "ws_sales_by_region" else ws
+        for ws in ir.worksheets
+    ]
+    ir = ir.model_copy(update={"dashboards": [board], "worksheets": sheets})
+    (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+    with running_server(tmp_path, DIST) as url, sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        page.goto(f"{url}/w/styles/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+
+        def css(selector: str, name: str) -> str:
+            return page.locator(selector).first.evaluate(f"e => getComputedStyle(e).{name}")
+
+        assert css(".dashboard", "backgroundColor") == "rgb(243, 237, 231)"
+        # 沒有背景與框線的容器不畫；有框線的容器畫出、不攔截滑鼠
+        assert page.locator("[data-zone='z3'], [data-zone='z4'], [data-zone='z11']").count() == 0
+        assert css("[data-zone='z5']", "pointerEvents") == "none"
+        assert css("[data-zone='z5'] > .zone-box", "border") == "2px solid rgb(189, 132, 89)"
+        # 外距在區塊之內、框線與背景之外；內容再往內縮內距
+        zone = next(z for z in iter_zones(board.zones) if z.id == "z7")
+        origin = page.locator(".dashboard").bounding_box()
+        box = page.locator("[data-zone='z7'] > .zone-box").bounding_box()
+        assert origin is not None and box is not None
+        actual = (box["x"] - origin["x"], box["y"] - origin["y"], box["width"], box["height"])
+        assert actual == pytest.approx((zone.x + 4, zone.y + 4, zone.w - 8, zone.h - 8), abs=1.5)
+        assert css("[data-zone='z7'] > .zone-box", "paddingLeft") == "15px"
+        assert css("[data-zone='z7'] > .zone-box", "backgroundColor") == "rgb(255, 255, 255)"
+        assert css("[data-zone='z7'] .worksheet", "backgroundColor") == "rgba(0, 0, 0, 0)"
+        # 不顯示標題：列數與資料切換只在滑過時顯示
+        overlay = "[data-zone='z8'] .worksheet-overlay"
+        assert css(overlay, "opacity") == "0"
+        page.hover("[data-zone='z8'] .worksheet-body")
+        page.wait_for_function(
+            f"getComputedStyle(document.querySelector(\"{overlay}\")).opacity === '0.85'"
+        )
+        # 圖例只畫在圖例區塊（z15）
+        assert page.locator(".dashboard .chart .role-legend").count() == 0
+        assert page.locator("[data-zone='z15'] .legend-item").count() > 0
         browser.close()
 
 

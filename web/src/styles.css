@@ -90,12 +90,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .cases button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 .dashboard { position: relative; background: var(--panel); border: 1px solid var(--line); }
-.zone { position: absolute; overflow: hidden; padding: 4px; }
-.zone-worksheet { border: 1px solid #eef0f3; }
+.zone { position: absolute; overflow: hidden; }
+.zone-box { position: absolute; inset: 0; box-sizing: border-box; overflow: hidden; }
+.zone-container { pointer-events: none; }
 .single-sheet { width: min(1100px, 100%); height: 640px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
 
 .worksheet { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; }
-.worksheet-overlay { position: absolute; top: 0; right: 2px; z-index: 1; font-size: 11px; opacity: 0.55; }
+.worksheet-overlay { position: absolute; top: 0; right: 2px; z-index: 1; font-size: 11px; opacity: 0; transition: opacity 0.15s; }
+.worksheet:hover .worksheet-overlay, .worksheet-overlay:focus-within, .worksheet-overlay[data-selected="true"] { opacity: 0.85; }
 .worksheet-overlay:hover { opacity: 1; }
 .worksheet-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; padding: 0 2px 4px; }
 .worksheet-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

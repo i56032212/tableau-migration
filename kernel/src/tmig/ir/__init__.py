@@ -11,6 +11,7 @@ from tmig.ir.models import (
     AllowedAll,
     AllowedList,
     AllowedRange,
+    Axis,
     Button,
     Calc,
     CategoricalFilter,
@@ -56,6 +57,7 @@ from tmig.ir.models import (
     SetCondition,
     SetMembers,
     SetTop,
+    ShelfStyle,
     Size,
     Sort,
     SourceColumn,
@@ -78,6 +80,7 @@ from tmig.ir.models import (
     Workbook,
     Worksheet,
     Zone,
+    ZoneStyle,
 )
 from tmig.ir.serialize import dumps_ir, ir_json_schema, ir_json_schema_text, load_ir, save_ir
 
@@ -91,6 +94,7 @@ __all__ = [
     "AllowedAll",
     "AllowedList",
     "AllowedRange",
+    "Axis",
     "Button",
     "Calc",
     "CategoricalFilter",
@@ -136,6 +140,7 @@ __all__ = [
     "SetCondition",
     "SetMembers",
     "SetTop",
+    "ShelfStyle",
     "Size",
     "Sort",
     "SourceColumn",
@@ -158,6 +163,7 @@ __all__ = [
     "Workbook",
     "Worksheet",
     "Zone",
+    "ZoneStyle",
     "check_references",
     "dumps_ir",
     "ir_json_schema",

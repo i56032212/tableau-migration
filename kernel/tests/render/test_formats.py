@@ -1,0 +1,421 @@
+"""工作表與 dashboard 的格式：座標軸（顯示、標題、範圍、反轉、同步）、格線與座標軸線、離散欄位的
+標題與欄位標籤、背景與文字顏色、多邊形，以及 dashboard 區塊的框線、外距與內距。
+
+寫法取自公開報表（HR Dashboards、TabMon、Snow Sports 等）。測試資料見 tests/sqlgen/test_query.py：
+各區的 SUM(Sales) East 350、North 60、South 100、West 800。
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from tmig.ir import Axis, FieldUse, ShelfStyle, ZoneStyle, iter_zones
+from tmig.parser.workbook import parse_workbook
+
+from ..parser import builder as b
+from ..parser.builder import instance, ref, worksheet
+from ..parser.test_extensions import measure_names_filter
+from .test_text import CATEGORY, PROFIT, REGION, SALES, db, parse, render
+
+__all__ = ["db"]  # pytest fixture
+
+MONTH = instance("[Order Date]", "Month-Trunc", "[tmn:Order Date:qk]", "quantitative")
+SALES_USE = FieldUse(field="f_sales", agg="sum", continuous=True)
+
+
+def styled(sheet: str, *rules: str) -> str:
+    """工作表的 <style> 換成這些 <style-rule>。"""
+    return sheet.replace("<style />", "<style>" + "".join(rules) + "</style>", 1)
+
+
+def rule(element: str, *items: str) -> str:
+    return f"<style-rule element='{element}'>{''.join(items)}</style-rule>"
+
+
+def fmt(attr: str, value: str, field: str | None = None, scope: str | None = None) -> str:
+    extra = (f" field='{ref(field)}'" if field else "") + (f" scope='{scope}'" if scope else "")
+    return f"<format attr='{attr}' value='{value}'{extra} />"
+
+
+def space(field: str, scope: str, **attrs: str) -> str:
+    extra = "".join(f" {k.replace('_', '-')}='{v}'" for k, v in attrs.items())
+    return (
+        f"<encoding attr='space' class='0' field='{ref(field)}' field-type='quantitative' "
+        f"scope='{scope}' type='space'{extra} />"
+    )
+
+
+def bars(*rules: str) -> str:
+    sheet = worksheet(
+        "Bars", [REGION, SALES, PROFIT], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+    )
+    return styled(sheet, *rules)
+
+
+# ---------------------------------------------------------------- 座標軸
+
+DARK_BARS = bars(
+    rule(
+        "axis",
+        fmt("title", "Revenue", "sum:Sales:qk", "cols"),
+        space(
+            "sum:Sales:qk", "cols", range_type="fixed", min="-100", max="900", domain_expand="false"
+        ),
+        # 不在欄列架上的欄位（移除前留下的設定）與參數不算
+        space("sum:Profit:qk", "rows", range_type="fixedmin", min="0"),
+        "<format attr='display' class='0' field='[Parameters].[Parameter 1]' scope='cols' value='false' />",
+        fmt("stroke-size", "0", scope="cols"),
+        fmt("tick-color", "#00000000"),
+    ),
+    rule("gridline", fmt("line-visibility", "off", scope="rows")),
+    rule("table", fmt("background-color", "#1B1B1B")),
+    rule("worksheet", fmt("color", "#F5F5F5"), fmt("display-field-labels", "false", scope="rows")),
+    rule("label", fmt("color", "#ffcc00", "none:Region:nk")),
+)
+
+
+def test_axis_lines_and_colors_are_parsed(tmp_path: Path) -> None:
+    ir = parse(tmp_path, DARK_BARS)
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    region = FieldUse(field="f_region")
+    assert ws.axes == [
+        Axis(
+            use=SALES_USE,
+            shelf="columns",
+            title="Revenue",
+            start=-100.0,
+            end=900.0,
+            include_zero=False,
+        ),
+        Axis(use=region, shelf="rows", label_color="#ffcc00"),
+    ]
+    # 座標軸線只有欄的不畫；刻度兩個方向都不畫（沒有 scope）；格線只有列的不畫
+    assert ws.column_style == ShelfStyle(axis=False, ticks=False)
+    assert ws.row_style == ShelfStyle(grid=False, ticks=False, field_labels=False)
+    assert (ws.background, ws.text_color) == ("#1b1b1b", "#f5f5f5")
+
+
+def test_axis_lines_and_colors_are_rendered(tmp_path: Path, db: Path) -> None:
+    spec = render(parse(tmp_path, DARK_BARS), db).spec
+    x, y = spec["encoding"]["x"], spec["encoding"]["y"]
+    # 固定範圍：不延伸到整數刻度、不必包含 0；範圍外的標記裁切
+    assert x["scale"] == {"domain": [-100.0, 900.0], "nice": False, "zero": False}
+    assert spec["mark"]["clip"] is True
+    assert x["axis"]["title"] == "Revenue"
+    assert (x["axis"]["domain"], x["axis"]["ticks"]) == (False, False)
+    assert "grid" not in x["axis"]
+    # 離散的列標題：欄位標籤不顯示、成員的文字顏色
+    assert y["axis"] == {"title": None, "labelColor": "#ffcc00"}
+    assert spec["background"] == "#1b1b1b"
+    assert spec["config"]["axis"]["labelColor"] == "#f5f5f5"
+    assert spec["config"]["legend"]["titleColor"] == "#f5f5f5"
+    assert spec["usermeta"]["background"] == "#1b1b1b"
+    assert spec["usermeta"]["title_color"] == "#f5f5f5"
+
+
+def test_hidden_reversed_and_date_range_axes(tmp_path: Path, db: Path) -> None:
+    sheet = worksheet(
+        "Trend",
+        [MONTH, SALES],
+        rows=ref("sum:Sales:qk"),
+        cols=ref("tmn:Order Date:qk"),
+        mark="Line",
+    )
+    sheet = styled(
+        sheet,
+        rule(
+            "axis",
+            fmt("display", "false", "sum:Sales:qk", "rows"),
+            space("sum:Sales:qk", "rows", reverse="true"),
+            space("tmn:Order Date:qk", "cols", range_type="fixedmin", min="#2023-02-01#"),
+        ),
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    spec = render(ir, db).spec
+    x, y = spec["encoding"]["x"], spec["encoding"]["y"]
+    # 隱藏的座標軸與 Tableau 相同保留格線
+    assert y["axis"] == {"labels": False, "ticks": False, "domain": False, "title": None}
+    assert y["scale"] == {"reverse": True}
+    start = datetime(2023, 2, 1, tzinfo=UTC).timestamp() * 1000
+    assert x["type"] == "temporal"
+    assert x["scale"] == {"domainMin": start, "nice": False}  # 時間軸沒有 zero
+
+
+def test_axis_on_measure_values(tmp_path: Path, db: Path) -> None:
+    """Measure Values 的座標軸寫成 [Multiple Values]；空的標題表示不顯示標題。"""
+    sheet = worksheet(
+        "Values",
+        [REGION, SALES, PROFIT],
+        rows=ref("Multiple Values"),
+        cols=ref("none:Region:nk"),
+        encodings=f"<color column='{ref(':Measure Names')}' />",
+        view_extra=measure_names_filter("sum:Sales:qk", "sum:Profit:qk"),
+    )
+    sheet = styled(sheet, rule("axis", fmt("title", "", "Multiple Values", "rows")))
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    assert [(a.use.field, a.shelf, a.title) for a in ir.worksheets[0].axes] == [
+        ("measure_values", "rows", "")
+    ]
+    y = render(ir, db).spec["encoding"]["y"]
+    assert y["axis"]["title"] is None
+
+
+# ---------------------------------------------------------------- 雙軸
+
+PANE = (
+    "<pane id='{id}' y-axis-name='{axis}'{extra}><view><breakdown value='auto' /></view>"
+    "<mark class='{mark}' /><encodings /></pane>"
+)
+
+
+def dual(synchronized: bool) -> str:
+    panes = PANE.format(id=1, axis=ref("sum:Sales:qk"), extra="", mark="Bar") + PANE.format(
+        id=2, axis=ref("sum:Profit:qk"), extra=" y-index='1'", mark="Line"
+    )
+    sheet = worksheet(
+        "Dual",
+        [CATEGORY, SALES, PROFIT],
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("none:Category:nk"),
+        mark="Automatic",
+        panes_extra=panes,
+    )
+    sync = {"synchronized": "true"} if synchronized else {}
+    return styled(sheet, rule("axis", space("sum:Profit:qk", "rows", fold="true", **sync)))
+
+
+def test_synchronized_dual_axis_shares_the_scale(tmp_path: Path, db: Path) -> None:
+    for synchronized, resolve in ((True, "shared"), (False, "independent")):
+        ir = parse(tmp_path, dual(synchronized))
+        assert ir.unsupported == []
+        assert [a.synchronized for a in ir.worksheets[0].axes] == [synchronized][
+            : int(synchronized)
+        ]
+        spec = render(ir, db).spec
+        assert spec["resolve"] == {"scale": {"y": resolve}}
+
+
+# ---------------------------------------------------------------- 離散欄位的標題
+
+
+def nested(shelf: str, *rules: str, mark: str = "Bar") -> str:
+    """Region、Category 兩層的離散標題在 shelf（rows／cols）上，另一架為 SUM(Sales)（或文字表）。"""
+    dims = f"{ref('none:Region:nk')} / {ref('none:Category:nk')}"
+    other = ref("sum:Sales:qk") if mark != "Text" else ""
+    shelves = {"rows": dims, "cols": other} if shelf == "rows" else {"rows": other, "cols": dims}
+    encodings = f"<text column='{ref('sum:Sales:qk')}' />" if mark == "Text" else ""
+    sheet = worksheet(
+        "Nested", [REGION, CATEGORY, SALES], mark=mark, encodings=encodings, **shelves
+    )
+    return styled(sheet, *rules)
+
+
+def test_hidden_header_levels(tmp_path: Path, db: Path) -> None:
+    """「顯示標題」關閉：只顯示其他層的成員與欄位標籤；全部關閉時不顯示標題。"""
+    hide = rule("label", fmt("display", "false", "none:Category:nk"))
+    ir = parse(tmp_path, nested("rows", hide))
+    assert ir.unsupported == []
+    assert [(a.use.field, a.shelf, a.show) for a in ir.worksheets[0].axes] == [
+        ("f_category", "rows", False)
+    ]
+    y = render(ir, db).spec["encoding"]["y"]
+    assert y["field"] == "rows_dim"  # 位置仍依兩層區分
+    assert y["axis"] == {"labelExpr": "(split(datum.label, '｜')[0] || '')", "title": "Region"}
+
+    both = rule(
+        "label",
+        fmt("display", "false", "none:Region:nk"),
+        fmt("display", "false", "none:Category:nk"),
+    )
+    y = render(parse(tmp_path, nested("rows", both)), db).spec["encoding"]["y"]
+    assert y["axis"] == {"labels": False, "ticks": False, "domain": False, "title": None}
+
+
+def test_hidden_header_levels_in_text_tables(tmp_path: Path, db: Path) -> None:
+    """文字表的多層欄標題分行顯示：隱藏的層不佔一行。"""
+    hide = rule("label", fmt("display", "false", "none:Category:nk"))
+    spec = render(parse(tmp_path, nested("cols", hide, mark="Text")), db).spec
+    axis = spec["encoding"]["x"]["axis"]
+    assert axis["labelExpr"] == "[(split(datum.label, '｜')[0] || '')]"
+    assert axis["labelPadding"] == 2
+    assert axis["title"] == "Region"
+    shown = render(parse(tmp_path, nested("cols", mark="Text")), db).spec["encoding"]["x"]["axis"]
+    assert shown["labelExpr"] == "split(datum.label, '｜')"
+    assert shown["labelPadding"] == 2 + 12
+
+
+# ---------------------------------------------------------------- 文字顏色
+
+
+def test_text_colors(tmp_path: Path, db: Path) -> None:
+    """文字表的儲存格（cell）、標記標籤（標記卡的 datalabel）與活頁簿的預設文字顏色。"""
+    table = worksheet(
+        "Table",
+        [REGION, SALES],
+        rows=ref("none:Region:nk"),
+        mark="Text",
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+    )
+    spec = render(parse(tmp_path, styled(table, rule("cell", fmt("color", "#123456")))), db).spec
+    assert spec["mark"]["color"] == "#123456"
+
+    labelled = worksheet(
+        "Labels",
+        [REGION, SALES],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        pane_extra=(
+            "<style><style-rule element='datalabel'>"
+            "<format attr='color' value='#AA0000' /></style-rule></style>"
+        ),
+    )
+    xml = b.workbook(
+        b.extract_datasource(),
+        worksheets=labelled,
+        extra=(
+            "<style><style-rule element='all'><format attr='color' value='#333333' />"
+            "</style-rule></style>"
+        ),
+    )
+    ir = parse_workbook(b.write_twb(tmp_path, xml))
+    ws = ir.worksheets[0]
+    assert (ws.marks.label_color, ws.text_color) == ("#aa0000", "#333333")
+    spec = render(ir, db).spec
+    _, label = spec["layer"]
+    assert label["encoding"]["color"] == {"value": "#aa0000"}
+    assert spec["config"]["axis"]["labelColor"] == "#333333"
+
+
+def test_workbook_line_defaults(tmp_path: Path) -> None:
+    """活頁簿的格式（Format > Workbook）不畫格線：每張工作表的預設，工作表可以再打開。"""
+    workbook_style = (
+        "<style><style-rule element='gridline'><format attr='line-visibility' value='off' />"
+        "</style-rule><style-rule element='zeroline'><format attr='line-visibility' value='off' />"
+        "</style-rule></style>"
+    )
+    plain = bars()
+    reopened = bars(rule("gridline", fmt("line-visibility", "on", scope="cols")))
+    xml = b.workbook(
+        b.extract_datasource(),
+        worksheets=plain + reopened.replace("name='Bars'", "name='Bars 2'"),
+        extra=workbook_style,
+    )
+    first, second = parse_workbook(b.write_twb(tmp_path, xml)).worksheets
+    assert (first.row_style.grid, first.column_style.grid) == (False, False)
+    assert (second.row_style.grid, second.column_style.grid) == (False, True)
+
+
+# ---------------------------------------------------------------- 多邊形
+
+
+def polygon(path: bool = True, stroke: bool = False) -> str:
+    encodings = f"<lod column='{ref('none:Region:nk')}' />"
+    if path:
+        encodings += f"<path column='{ref('none:Category:nk')}' />"
+    style = (
+        "<style><style-rule element='mark'><format attr='mark-color' value='#FFFFFF' />"
+        "<format attr='mark-transparency' value='65' />"
+        f"<format attr='has-stroke' value='{'true' if stroke else 'false'}' />"
+        "<format attr='stroke-color' value='#101E47' /></style-rule></style>"
+    )
+    return worksheet(
+        "Poly",
+        [REGION, CATEGORY, SALES, PROFIT],
+        rows=ref("sum:Profit:qk"),
+        cols=ref("sum:Sales:qk"),
+        mark="Polygon",
+        encodings=encodings,
+        pane_extra=style,
+    )
+
+
+def test_polygons(tmp_path: Path, db: Path) -> None:
+    """多邊形：依路徑的順序連接各點並填滿，每個區（詳細資料）一個多邊形；沒有路徑時依資料的順序。"""
+    ir = parse(tmp_path, polygon())
+    assert ir.unsupported == []
+    assert ir.worksheets[0].marks.type == "polygon"
+    rendered = render(ir, db)
+    assert rendered.mark == "polygon"
+    spec = rendered.spec
+    mark: dict[str, Any] = spec["mark"]
+    assert mark == {
+        "type": "line",
+        "tooltip": True,
+        "filled": True,
+        "color": "#ffffff",
+        "opacity": round(65 / 255, 4),
+    }
+    encoding = spec["encoding"]
+    names = {c["title"]: c["field"] for c in encoding["tooltip"]}
+    assert encoding["order"] == {"field": names["Category"].removesuffix("_label")}
+    assert {"field": names["Region"].removesuffix("_label"), "type": "nominal"} in encoding[
+        "detail"
+    ]
+    # 各區的頂點：East 有 Furniture、Technology 兩點
+    east = [v for v in spec["data"]["values"] if v[names["Region"]] == "East"]
+    assert len(east) == 2
+
+    spec = render(parse(tmp_path, polygon(path=False, stroke=True)), db).spec
+    assert spec["mark"]["order"] is None and "order" not in spec["encoding"]
+    assert (spec["mark"]["stroke"], spec["mark"]["strokeWidth"]) == ("#101e47", 1)
+
+
+# ---------------------------------------------------------------- dashboard
+
+
+def test_dashboard_background_and_zone_styles(tmp_path: Path) -> None:
+    sheet = worksheet("S", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+
+    def style(**formats: str) -> str:
+        items = "".join(
+            f"<format attr='{k.replace('_', '-')}' value='{v}' />" for k, v in formats.items()
+        )
+        return f"<zone-style>{items}</zone-style>"
+
+    defaults = style(border_color="#000000", border_style="none", border_width="0", margin="4")
+    board = f"""
+    <dashboard name='Board'>
+      <style><style-rule element='table'><format attr='background-color' value='#F3EDE7' />
+      </style-rule></style>
+      <size maxheight='800' maxwidth='1000' minheight='800' minwidth='1000' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>
+          {style(border_color="#000000", border_style="none", border_width="0", margin="0")}
+          <zone h='50000' id='2' param='vert' type-v2='layout-flow' w='50000' x='0' y='0'>
+            {style(border_color="#BD8459", border_style="solid", border_width="2", margin="8", padding="10")}
+            <zone h='40000' id='3' name='S' w='40000' x='1250' y='2500'>{defaults}</zone>
+          </zone>
+          <zone h='10000' id='4' type-v2='text' w='10000' x='60000' y='0'>
+            {style(margin="0", margin_top="6", padding_left="15", background_color="#FFFFFF")}
+          </zone>
+          <zone h='10000' id='5' type-v2='empty' w='10000' x='60000' y='20000'>
+            {style(border_style="solid", border_width="0", border_color="#FF0000")}
+          </zone>
+        </zone>
+        <zone h='10000' id='6' type-v2='empty' w='10000' x='80000' y='80000' />
+      </zones>
+    </dashboard>"""
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet, dashboards=board)))
+    dashboard = ir.dashboards[0]
+    assert dashboard.background == "#f3ede7"
+    zones = {z.id: z.style for z in iter_zones(dashboard.zones)}
+    assert zones["z1"] is None  # 外距 0、沒有框線：與沒有寫相同
+    assert zones["z2"] == ZoneStyle(
+        border="solid",
+        border_width=2,
+        border_color="#bd8459",
+        margin=(8, 8, 8, 8),
+        padding=(10, 10, 10, 10),
+    )
+    assert zones["z3"] == ZoneStyle(margin=(4, 4, 4, 4))
+    assert zones["z4"] == ZoneStyle(
+        background="#ffffff", margin=(6, 0, 0, 0), padding=(0, 0, 0, 15)
+    )
+    assert zones["z5"] is None  # 寬度 0 的框線不畫
+    assert zones["z6"] is None  # 浮動的區塊沒有寫：沒有外距

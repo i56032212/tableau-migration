@@ -4,7 +4,8 @@
 // - 自動與範圍尺寸：最外層與 tiled 容器依比例縮放；horizontal／vertical 容器沿排列方向分配，
 //   固定大小的區塊維持像素大小、間距不變、其餘依比例；另一個方向依比例縮放；隱藏的區塊不占空間
 
-import type { Dashboard, Zone } from "./types";
+import type { CSSProperties } from "react";
+import type { Dashboard, Zone, ZoneStyle } from "./types";
 
 export interface Box {
   x: number;
@@ -111,4 +112,28 @@ function flow(zone: Zone, box: Box, result: Map<string, Box>) {
     place(child, childBox, result);
     cursor += length;
   });
+}
+
+/** 顏色（#rrggbb 或 #rrggbbaa）→ CSS；完全透明時為 transparent。 */
+export function cssColor(color: string | null | undefined): string | undefined {
+  if (!color) return undefined;
+  return color.length === 9 && color.endsWith("00") ? "transparent" : color;
+}
+
+/** 區塊中畫背景與框線的方框：外距之內；內容再往內縮內距。 */
+export function zoneBoxStyle(style: ZoneStyle | null | undefined): CSSProperties {
+  if (!style) return {};
+  const [mt, mr, mb, ml] = style.margin;
+  const [pt, pr, pb, pl] = style.padding;
+  const css: CSSProperties = { top: mt, right: mr, bottom: mb, left: ml, padding: `${pt}px ${pr}px ${pb}px ${pl}px` };
+  const background = cssColor(style.background);
+  if (background) css.background = background;
+  if (style.border !== "none" && style.border_width > 0)
+    css.border = `${style.border_width}px ${style.border} ${cssColor(style.border_color) ?? "#000000"}`;
+  return css;
+}
+
+/** 容器只在有背景或框線時畫出（畫在子區塊之下）。 */
+export function hasZoneBox(style: ZoneStyle | null | undefined): boolean {
+  return !!style && (!!cssColor(style.background) || (style.border !== "none" && style.border_width > 0));
 }

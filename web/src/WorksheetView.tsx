@@ -152,7 +152,8 @@ export function WorksheetView({
     const spec = structuredClone(original) as Spec;
     if (hideLegend)
       visitSpecs(spec, (node) => {
-        if (node.encoding?.color) node.encoding.color.legend = null;
+        for (const channel of ["color", "size", "shape", "opacity"])
+          if (node.encoding?.[channel]?.field) node.encoding[channel].legend = null;
       });
     const marks = JSON.parse(selectedKey) as Mark[];
     if (marks.length) {
@@ -221,6 +222,8 @@ export function WorksheetView({
 
   const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;
+  // 工作表的背景（含標題，可以透明）與標題的顏色
+  const usermeta = (response?.spec as Spec | null | undefined)?.usermeta ?? {};
   const meta = (
     <span className="worksheet-meta">
       {count > 0 && (
@@ -247,15 +250,21 @@ export function WorksheetView({
       data-worksheet={worksheet}
       data-loading={loading ? "true" : "false"}
       data-interactive={interactive ? "true" : undefined}
+      style={{ background: usermeta.background }}
     >
       {showTitle ? (
         <div className="worksheet-header">
-          <span className="worksheet-title">{title}</span>
+          <span className="worksheet-title" style={{ color: usermeta.title_color }}>
+            {title}
+          </span>
           {meta}
         </div>
       ) : (
-        // Tableau 不顯示標題時，列數與資料切換浮在右上角，不占圖表空間
-        <div className="worksheet-overlay">{meta}</div>
+        // Tableau 不顯示標題時，列數與資料切換浮在右上角、滑過時才顯示，不占圖表空間；
+        // 有選取的標記時一直顯示（可清除選取）
+        <div className="worksheet-overlay" data-selected={count > 0 ? "true" : undefined}>
+          {meta}
+        </div>
       )}
       <div className="worksheet-body">
         {error && <div className="placeholder error">查詢失敗：{error}</div>}

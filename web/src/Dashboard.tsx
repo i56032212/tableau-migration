@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { fileUrl } from "./api";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
 import { FilterControl, ParameterControl } from "./Controls";
-import { displaySize, layoutDashboard } from "./layout";
+import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
 import {
   actionUrl,
   applySetActions,
@@ -103,16 +103,6 @@ interface ActionMenu {
 export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigate }: Props) {
   const [renders, setRenders] = useState<Record<string, RenderResponse>>({});
   const unsupported = useMemo(() => new Map(ir.unsupported.map((u) => [u.source_ref, u.reason])), [ir]);
-  const legendSheets = useMemo(() => {
-    const sheets = new Set<string>();
-    const walk = (zones: Zone[]) =>
-      zones.forEach((z) => {
-        if (z.kind === "legend" && z.legend === "color" && z.worksheet) sheets.add(z.worksheet);
-        walk(z.children);
-      });
-    walk(dashboard.zones);
-    return sheets;
-  }, [dashboard]);
 
   const onRendered = useCallback((response: RenderResponse) => {
     setRenders((current) => ({ ...current, [response.worksheet]: response }));
@@ -283,9 +273,15 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
 
   return (
     <div className="dashboard-wrapper" ref={wrapperRef}>
-      <div className="dashboard" data-sizing={dashboard.sizing ?? "fixed"} style={{ width, height }} ref={dashboardRef}>
+      <div
+        className="dashboard"
+        data-sizing={dashboard.sizing ?? "fixed"}
+        style={{ width, height, background: cssColor(dashboard.background) }}
+        ref={dashboardRef}
+      >
       {ready && flat
-        .filter((z) => z.kind !== "container")
+        // 容器只畫背景與框線（在子區塊之下）；沒有的不畫
+        .filter((z) => z.kind !== "container" || hasZoneBox(z.style))
         .map((zone) => {
           const box = boxes.get(zone.id) ?? { x: zone.x, y: zone.y, w: zone.w, h: zone.h };
           return (
@@ -295,7 +291,8 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
             data-zone={zone.id}
             style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
           >
-            {unsupported.has(zone.source_ref) ? (
+            <div className="zone-box" style={zoneBoxStyle(zone.style)}>
+            {zone.kind === "container" ? null : unsupported.has(zone.source_ref) ? (
               <div className="placeholder unsupported">未支援：{unsupported.get(zone.source_ref)}</div>
             ) : (
               <ZoneContent
@@ -305,7 +302,8 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
                 dashboard={dashboard}
                 view={view}
                 renders={renders}
-                hideLegend={zone.worksheet !== null && legendSheets.has(zone.worksheet)}
+                // 與 Tableau 相同，dashboard 上的工作表不畫圖例（圖例是另外的區塊）
+                hideLegend
                 onRendered={onRendered}
                 onMarks={zone.worksheet && hasActions(zone.worksheet) ? (e) => onMarks(zone.worksheet!, e) : undefined}
                 setFilter={setFilter}
@@ -321,6 +319,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
                 }
               />
             )}
+            </div>
           </div>
           );
         })}

@@ -824,6 +824,9 @@ class Marks(IRModel):
         default_factory=list,
         description="自訂的標籤文字（Tableau 的「標籤＞文字」）；空的表示依 label 的欄位顯示",
     )
+    label_color: HexColor | None = Field(
+        default=None, description="標記標籤的文字顏色；None 依工作表的文字顏色"
+    )
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
     shape: FieldUse | None = None
@@ -875,6 +878,40 @@ class ReferenceLine(IRModel):
     source_ref: SourceRef
 
 
+class Axis(IRModel):
+    """一個欄位在欄架或列架上的座標軸（連續欄位）或標題（離散欄位的成員）設定：Tableau 的
+    「編輯座標軸」與「顯示標題」。沒有寫的依預設（顯示、以欄位名稱為標題、範圍依資料）。"""
+
+    use: FieldUse
+    shelf: Literal["rows", "columns"]
+    show: bool = Field(default=True, description="顯示座標軸或標題（Show Header）")
+    title: str | None = Field(
+        default=None, description="自訂的座標軸標題；空字串表示不顯示標題，None 依欄位名稱"
+    )
+    start: Scalar = Field(
+        default=None, description="固定範圍的起點（數值，或日期的 ISO 8601 字串）；None 依資料"
+    )
+    end: Scalar = Field(default=None, description="固定範圍的終點；None 依資料")
+    reverse: bool = Field(default=False, description="反轉座標軸")
+    include_zero: bool = Field(default=True, description="自動範圍包含 0（Tableau 的預設）")
+    synchronized: bool = Field(
+        default=False, description="雙軸與前一個軸同步（Synchronize Axis）：兩個量值使用相同的刻度"
+    )
+    label_color: HexColor | None = Field(
+        default=None, description="座標軸刻度或標題（離散欄位的成員）文字的顏色；None 依工作表"
+    )
+
+
+class ShelfStyle(IRModel):
+    """一個方向（列＝縱軸、欄＝橫軸）的格式：格線、座標軸線與刻度是否顯示（Tableau 的格式設定），
+    與離散欄位的欄位標籤（標題上方或左側的欄位名稱）是否顯示。"""
+
+    grid: bool = True
+    axis: bool = True
+    ticks: bool = True
+    field_labels: bool = Field(default=True, description="顯示欄位標籤（Show Field Labels）")
+
+
 class Worksheet(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -917,6 +954,26 @@ class Worksheet(IRModel):
         default_factory=list,
         description="小計：欄列架上這些離散維度的每個值之後加一列（或一欄）合計，在去掉同一架上"
         "之後維度的詳細程度重新彙總（Tableau 的「自動」）",
+    )
+    axes: list[Axis] = Field(
+        default_factory=list, description="座標軸與標題的設定（沒有設定的欄位依預設）"
+    )
+    row_style: ShelfStyle = Field(
+        default_factory=ShelfStyle, description="列（縱軸）的格線、座標軸線、刻度與欄位標籤"
+    )
+    column_style: ShelfStyle = Field(
+        default_factory=ShelfStyle, description="欄（橫軸）的格線、座標軸線、刻度與欄位標籤"
+    )
+    background: HexColor | None = Field(
+        default=None, description="工作表的背景顏色；可以透明（#rrggbb00），None 為白色"
+    )
+    text_color: HexColor | None = Field(
+        default=None,
+        description="工作表文字的預設顏色（格式設定的「工作表」字型，或活頁簿的預設）：座標軸、"
+        "標題、圖例與標記上的文字；None 為 Tableau 的預設",
+    )
+    cell_color: HexColor | None = Field(
+        default=None, description="文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color"
     )
     source_ref: SourceRef
 
@@ -1023,6 +1080,25 @@ class Button(IRModel):
 _ZONE_OPTIONAL: dict[str, tuple[str, ...]] = {"title": ("text",)}
 
 
+class ZoneStyle(IRModel):
+    """dashboard 區塊的格式：背景、框線、外距（框線之外）與內距（框線之內），單位為像素。
+
+    區塊的座標是含外距的範圍：背景與框線畫在外距之內，內容再往內縮內距（容器中的子區塊已依此
+    定位）。沒有寫的部分為 0、沒有框線、透明的背景；Tableau 為並排的區塊寫出外距 4，浮動的區塊與
+    容器通常不寫（沒有外距）。"""
+
+    background: HexColor | None = None
+    border: Literal["none", "solid", "dashed", "dotted"] = "none"
+    border_width: int = Field(default=0, ge=0)
+    border_color: HexColor | None = None
+    margin: tuple[int, int, int, int] = Field(
+        default=(0, 0, 0, 0), description="外距：上、右、下、左"
+    )
+    padding: tuple[int, int, int, int] = Field(
+        default=(0, 0, 0, 0), description="內距：上、右、下、左"
+    )
+
+
 class Zone(IRModel):
     """dashboard 上的一個區塊；座標為換算後的像素值。"""
 
@@ -1056,6 +1132,9 @@ class Zone(IRModel):
     )
     hidden: bool = Field(default=False, description="使用者隱藏的區塊（例如以按鈕切換顯示的容器）")
     show_title: bool = Field(default=True, description="工作表區塊是否顯示標題")
+    style: ZoneStyle | None = Field(
+        default=None, description="區塊的格式（背景、框線、外距與內距）；None 表示都沒有"
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -1091,6 +1170,9 @@ class Dashboard(IRModel):
     )
     min_size: Size | None = None
     max_size: Size | None = None
+    background: HexColor | None = Field(
+        default=None, description="dashboard 的背景顏色；None 為白色"
+    )
     zones: list[Zone] = Field(default_factory=list)
     source_ref: SourceRef
 

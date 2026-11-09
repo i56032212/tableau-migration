@@ -205,6 +205,16 @@ export interface ZoneTextRun {
   style?: TextStyle | null;
 }
 
+/** 區塊的格式：外距（框線之外）、框線、背景與內距（框線之內），單位為像素；依序為上、右、下、左。 */
+export interface ZoneStyle {
+  background: string | null;
+  border: "none" | "solid" | "dashed" | "dotted";
+  border_width: number;
+  border_color: string | null;
+  margin: [number, number, number, number];
+  padding: [number, number, number, number];
+}
+
 export interface Zone {
   id: string;
   kind: ZoneKind;
@@ -231,6 +241,8 @@ export interface Zone {
   fixed?: number | null;
   hidden?: boolean;
   show_title?: boolean;
+  /** 沒有時表示沒有外距、內距、框線與背景 */
+  style?: ZoneStyle | null;
   source_ref: string;
 }
 
@@ -246,6 +258,8 @@ export interface Dashboard {
   sizing?: "fixed" | "automatic" | "range";
   min_size?: Size | null;
   max_size?: Size | null;
+  /** dashboard 的背景顏色；沒有時為白色 */
+  background?: string | null;
   zones: Zone[];
 }
 

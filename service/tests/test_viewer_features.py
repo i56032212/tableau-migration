@@ -371,7 +371,10 @@ def test_sets_render(server: str) -> None:
             )
 
         assert {"In", "Out"} <= set(texts("ws_top_customers_vs_others"))
-        assert {"獲利", "虧損"} <= set(texts("ws_profitable_sub_categories"))
+        # 依集合著色：dashboard 上的工作表與 Tableau 相同不畫圖例，別名顯示在資料表（與工具提示）中
+        sheet = page.locator("[data-worksheet='ws_profitable_sub_categories']")
+        sheet.get_by_role("button", name="資料").click()
+        assert {"獲利", "虧損"} <= set(sheet.locator(".data-table td").all_inner_texts())
         rows = oracle.load_rows()
         default = oracle.Case("default", {})
         latest = {w: data for w, _, data in renders.items}

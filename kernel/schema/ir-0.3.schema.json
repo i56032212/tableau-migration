@@ -304,6 +304,124 @@
       "title": "AllowedRange",
       "type": "object"
     },
+    "Axis": {
+      "additionalProperties": false,
+      "description": "一個欄位在欄架或列架上的座標軸（連續欄位）或標題（離散欄位的成員）設定：Tableau 的\n「編輯座標軸」與「顯示標題」。沒有寫的依預設（顯示、以欄位名稱為標題、範圍依資料）。",
+      "properties": {
+        "use": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "shelf": {
+          "enum": [
+            "rows",
+            "columns"
+          ],
+          "title": "Shelf",
+          "type": "string"
+        },
+        "show": {
+          "default": true,
+          "description": "顯示座標軸或標題（Show Header）",
+          "title": "Show",
+          "type": "boolean"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "自訂的座標軸標題；空字串表示不顯示標題，None 依欄位名稱",
+          "title": "Title"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "固定範圍的起點（數值，或日期的 ISO 8601 字串）；None 依資料",
+          "title": "Start"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "固定範圍的終點；None 依資料",
+          "title": "End"
+        },
+        "reverse": {
+          "default": false,
+          "description": "反轉座標軸",
+          "title": "Reverse",
+          "type": "boolean"
+        },
+        "include_zero": {
+          "default": true,
+          "description": "自動範圍包含 0（Tableau 的預設）",
+          "title": "Include Zero",
+          "type": "boolean"
+        },
+        "synchronized": {
+          "default": false,
+          "description": "雙軸與前一個軸同步（Synchronize Axis）：兩個量值使用相同的刻度",
+          "title": "Synchronized",
+          "type": "boolean"
+        },
+        "label_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "座標軸刻度或標題（離散欄位的成員）文字的顏色；None 依工作表",
+          "title": "Label Color"
+        }
+      },
+      "required": [
+        "use",
+        "shelf"
+      ],
+      "title": "Axis",
+      "type": "object"
+    },
     "Button": {
       "additionalProperties": false,
       "description": "dashboard 按鈕（I2）：切換到 dashboard 或工作表、顯示或隱藏區塊、匯出。",
@@ -919,6 +1037,20 @@
             }
           ],
           "default": null
+        },
+        "background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "dashboard 的背景顏色；None 為白色",
+          "title": "Background"
         },
         "zones": {
           "items": {
@@ -2008,6 +2140,20 @@
           },
           "title": "Label Text",
           "type": "array"
+        },
+        "label_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標記標籤的文字顏色；None 依工作表的文字顏色",
+          "title": "Label Color"
         },
         "detail": {
           "items": {
@@ -3176,6 +3322,35 @@
         "by"
       ],
       "title": "SetTop",
+      "type": "object"
+    },
+    "ShelfStyle": {
+      "additionalProperties": false,
+      "description": "一個方向（列＝縱軸、欄＝橫軸）的格式：格線、座標軸線與刻度是否顯示（Tableau 的格式設定），\n與離散欄位的欄位標籤（標題上方或左側的欄位名稱）是否顯示。",
+      "properties": {
+        "grid": {
+          "default": true,
+          "title": "Grid",
+          "type": "boolean"
+        },
+        "axis": {
+          "default": true,
+          "title": "Axis",
+          "type": "boolean"
+        },
+        "ticks": {
+          "default": true,
+          "title": "Ticks",
+          "type": "boolean"
+        },
+        "field_labels": {
+          "default": true,
+          "description": "顯示欄位標籤（Show Field Labels）",
+          "title": "Field Labels",
+          "type": "boolean"
+        }
+      },
+      "title": "ShelfStyle",
       "type": "object"
     },
     "Size": {
@@ -4486,6 +4661,64 @@
           "title": "Subtotals",
           "type": "array"
         },
+        "axes": {
+          "description": "座標軸與標題的設定（沒有設定的欄位依預設）",
+          "items": {
+            "$ref": "#/$defs/Axis"
+          },
+          "title": "Axes",
+          "type": "array"
+        },
+        "row_style": {
+          "$ref": "#/$defs/ShelfStyle",
+          "description": "列（縱軸）的格線、座標軸線、刻度與欄位標籤"
+        },
+        "column_style": {
+          "$ref": "#/$defs/ShelfStyle",
+          "description": "欄（橫軸）的格線、座標軸線、刻度與欄位標籤"
+        },
+        "background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工作表的背景顏色；可以透明（#rrggbb00），None 為白色",
+          "title": "Background"
+        },
+        "text_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工作表文字的預設顏色（格式設定的「工作表」字型，或活頁簿的預設）：座標軸、標題、圖例與標記上的文字；None 為 Tableau 的預設",
+          "title": "Text Color"
+        },
+        "cell_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color",
+          "title": "Cell Color"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -4742,6 +4975,18 @@
           "title": "Show Title",
           "type": "boolean"
         },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ZoneStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "區塊的格式（背景、框線、外距與內距）；None 表示都沒有"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -4759,6 +5004,111 @@
         "source_ref"
       ],
       "title": "Zone",
+      "type": "object"
+    },
+    "ZoneStyle": {
+      "additionalProperties": false,
+      "description": "dashboard 區塊的格式：背景、框線、外距（框線之外）與內距（框線之內），單位為像素。\n\n區塊的座標是含外距的範圍：背景與框線畫在外距之內，內容再往內縮內距（容器中的子區塊已依此\n定位）。沒有寫的部分為 0、沒有框線、透明的背景；Tableau 為並排的區塊寫出外距 4，浮動的區塊與\n容器通常不寫（沒有外距）。",
+      "properties": {
+        "background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Background"
+        },
+        "border": {
+          "default": "none",
+          "enum": [
+            "none",
+            "solid",
+            "dashed",
+            "dotted"
+          ],
+          "title": "Border",
+          "type": "string"
+        },
+        "border_width": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Border Width",
+          "type": "integer"
+        },
+        "border_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Border Color"
+        },
+        "margin": {
+          "default": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "description": "外距：上、右、下、左",
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Margin",
+          "type": "array"
+        },
+        "padding": {
+          "default": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "description": "內距：上、右、下、左",
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Padding",
+          "type": "array"
+        }
+      },
+      "title": "ZoneStyle",
       "type": "object"
     }
   },

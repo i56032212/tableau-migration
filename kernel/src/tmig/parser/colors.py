@@ -133,6 +133,24 @@ def mark_style(pane: etree._Element) -> tuple[str | None, float | None, str | No
     return color, opacity, stroke if has_stroke else None
 
 
+def label_color(pane: etree._Element) -> str | None:
+    """標記標籤的文字顏色：標記卡的 <style-rule element='datalabel'> 的 color；勾選「與標記顏色相符」
+    （color-mode='match'）時不用它（尚未支援依標記著色，沿用預設的文字顏色）。"""
+    color: str | None = None
+    match = False
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "datalabel":
+            continue
+        for item in children(rule, "format"):
+            if item.get("field") is not None:
+                continue
+            if item.get("attr") == "color":
+                color = hex_color(item.get("value")) or color
+            elif item.get("attr") == "color-mode":
+                match = item.get("value") == "match"
+    return None if match else color
+
+
 def _bucket(text: str, measure: Callable[[str], str | None] | None) -> tuple[Scalar] | None:
     """色彩對應中的一個值；Tableau 的特殊值（%all%、%many-values%）與找不到的量值回傳 None。"""
     if text == "%null%":
@@ -170,4 +188,4 @@ def _float(value: str | None) -> float | None:
         return None
 
 
-__all__ = ["color_encodings", "hex_color", "mark_style", "parse_color"]
+__all__ = ["color_encodings", "hex_color", "label_color", "mark_style", "parse_color"]

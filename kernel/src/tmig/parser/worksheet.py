@@ -45,7 +45,7 @@ from tmig.ir.models import (
     TupleFilter,
     Worksheet,
 )
-from tmig.parser.colors import color_encodings, mark_style, parse_color
+from tmig.parser.colors import color_encodings, label_color, mark_style, parse_color
 from tmig.parser.context import DsState, FilterKind, ParseContext, SheetState
 from tmig.parser.datasource import add_calc_field, analyze_calcs
 from tmig.parser.fields import (
@@ -57,6 +57,7 @@ from tmig.parser.fields import (
     use_from_name,
     value_type,
 )
+from tmig.parser.formats import worksheet_formats
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -78,6 +79,7 @@ MARKS: dict[str, MarkType] = {
     "Text": "text",
     "Pie": "pie",
     "GanttBar": "gantt",
+    "Polygon": "polygon",
 }
 SPECIAL_KEYS = {"[:Measure Names]": MEASURE_NAMES, "[Multiple Values]": MEASURE_VALUES}
 TUPLE_PREFIXES = {
@@ -334,6 +336,9 @@ class SheetParser:
         sorts = self._sorts(view)
         reference_lines = self._reference_lines(child(table, "panes"))
         formats = self._formats(child(table, "style"), [*rows, *cols])
+        sheet_formats = worksheet_formats(
+            child(table, "style"), self.resolve, rows, cols, child(ctx.package.root, "style")
+        )
         title = self._title(child(el, "layout-options"))
         self._check_label_text(card_uses, [marks, *(p.marks for p in panes)])
         worksheet = Worksheet(
@@ -355,6 +360,12 @@ class SheetParser:
             totals=totals,
             totals_colored=totals_colored,
             subtotals=subtotals,
+            axes=sheet_formats.axes,
+            row_style=sheet_formats.row_style,
+            column_style=sheet_formats.column_style,
+            background=sheet_formats.background,
+            text_color=sheet_formats.text_color,
+            cell_color=sheet_formats.cell_color,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -675,6 +686,7 @@ class SheetParser:
         if marks.color is not None and color_ref is not None:
             marks.color_palette = self._color_palette(color_ref, marks.color)
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
+        marks.label_color = label_color(pane)
         return marks, dims
 
     def _color_palette(self, ref: str, use: FieldUse) -> ColorPalette | None:
