@@ -77,6 +77,7 @@ DRIVERS = (
     "presto",
     "athena",
     "bigquery",
+    "teradata",
     "duckdb",
 )
 DRIVER_DIALECTS = {
@@ -91,6 +92,7 @@ DRIVER_DIALECTS = {
     "presto": "trino",
     "athena": "athena",
     "bigquery": "bigquery",
+    "teradata": "teradata",
     "duckdb": "duckdb",
 }
 SECRET_KEYS = frozenset(
@@ -215,6 +217,8 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return AthenaExecutor.open(connection, params)
     if config.driver == "bigquery":
         return BigQueryExecutor.open(connection, params)
+    if config.driver == "teradata":
+        return TeradataExecutor.open(connection, params)
     return DatabricksExecutor.open(connection, params)
 
 
@@ -792,14 +796,16 @@ class BigQueryExecutor:
 
     dialect = "bigquery"
 
-    def __init__(self, client: Any, job_config: Any) -> None:
+    def __init__(self, client: Any, job_config: Any, retry: Any = None) -> None:
         self.client = client
         self.job_config = job_config
+        self.retry = retry
+        """重試的方式（google.api_core 的 Retry）；None 時用用戶端的預設（最多重試 10 分鐘）。"""
 
     @classmethod
     def open(cls, connection: LiveConnection, params: dict[str, Any]) -> BigQueryExecutor:
         try:
-            from google.cloud import bigquery  # pyright: ignore[reportMissingImports]
+            from google.cloud import bigquery  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
         except ImportError as exc:  # pragma: no cover
             raise SourceConnectionError("未安裝 BigQuery 驅動：uv sync --extra bigquery") from exc
         project = params.get("project") or connection.database
@@ -808,17 +814,17 @@ class BigQueryExecutor:
         kwargs: dict[str, Any] = {"project": project}
         try:
             if params.get("endpoint"):
-                from google.api_core.client_options import (  # pyright: ignore[reportMissingImports]
+                from google.api_core.client_options import (  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
                     ClientOptions,
                 )
-                from google.auth.credentials import (  # pyright: ignore[reportMissingImports]
+                from google.auth.credentials import (  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
                     AnonymousCredentials,
                 )
 
                 kwargs["client_options"] = ClientOptions(api_endpoint=params["endpoint"])
                 kwargs["credentials"] = AnonymousCredentials()
             elif params.get("credentials_path"):
-                from google.oauth2 import service_account  # pyright: ignore[reportMissingImports]
+                from google.oauth2 import service_account  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
 
                 kwargs["credentials"] = service_account.Credentials.from_service_account_file(
                     params["credentials_path"]
@@ -840,11 +846,80 @@ class BigQueryExecutor:
         return cls(client, job_config)
 
     def fetch(self, sql: str) -> pa.Table:
-        job = self.client.query(sql, job_config=self.job_config)
+        if self.retry is None:
+            job = self.client.query(sql, job_config=self.job_config)
+        else:
+            job = self.client.query(
+                sql, job_config=self.job_config, retry=self.retry, job_retry=None
+            )
+            job.result(retry=self.retry)
         return normalize_arrow(job.to_arrow(create_bqstorage_client=False))
 
     def close(self) -> None:
         self.client.close()
+
+
+TERADATA_SESSION = (
+    "SET TIME ZONE INTERVAL '00:00' HOUR TO MINUTE",
+    "SET SESSION DATEFORM = ANSIDATE",
+)
+"""Teradata 的工作階段：時區為 UTC、日期格式為 YYYY-MM-DD（文字與日期的轉換）。"""
+
+
+class TeradataExecutor:
+    """Teradata Vantage（teradatasql）：工作階段的時區設為 UTC、日期格式為 ANSIDATE。尚未實機驗證。
+
+    logmech 可選 TD2（預設）、LDAP、KRB5、JWT 等登入方式；encryptdata = "true" 加密傳輸。
+    Teradata 沒有唯讀的工作階段設定：請使用只有 SELECT 權限的服務帳號。
+    """
+
+    dialect = "teradata"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> TeradataExecutor:
+        try:
+            import teradatasql  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 Teradata 驅動：uv sync --extra teradata") from exc
+        host = params.get("host") or connection.server
+        if not host:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少主機")
+        kwargs: dict[str, Any] = {
+            "host": host,
+            "user": params.get("user"),
+            "password": params.get("password"),
+            "database": params.get("database") or connection.database,
+            "dbs_port": str(params.get("port") or connection.port or ""),
+        }
+        for key in ("logmech", "logdata", "encryptdata", "sslmode", "tmode"):
+            if key in params:
+                kwargs[key] = str(params[key])
+        kwargs = {k: v for k, v in kwargs.items() if v not in (None, "")}
+        try:  # pragma: no cover - 需要 Teradata
+            con = teradatasql.connect(**kwargs)
+            with con.cursor() as cursor:
+                for statement in TERADATA_SESSION:
+                    cursor.execute(statement)
+        except Exception as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                f"無法連上 Teradata（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:  # pragma: no cover - 需要 Teradata
+        with self.con.cursor() as cursor:
+            cursor.execute(sql)
+            description = cursor.description or []
+            rows = cursor.fetchall()
+        names = [d[0] for d in description]
+        scales = [d[5] if len(d) > 5 and isinstance(d[5], int) else None for d in description]
+        return rows_to_arrow(names, rows, scales)
+
+    def close(self) -> None:  # pragma: no cover
+        self.con.close()
 
 
 def _athena_region(server: str | None) -> str | None:
@@ -915,6 +990,7 @@ __all__ = [
     "SnowflakeExecutor",
     "SourceConnectionError",
     "SqlServerExecutor",
+    "TeradataExecutor",
     "TrinoExecutor",
     "config_path",
     "executor_for",

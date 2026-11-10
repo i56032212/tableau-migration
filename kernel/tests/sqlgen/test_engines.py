@@ -40,12 +40,14 @@ from ..engines import (
     RedshiftEmulator,
     SnowflakeEmulator,
     SparkExecutor,
+    TeradataEmulator,
     TrinoEmulator,
     TSqlEmulator,
     as_live,
     bigquery_address,
     bigquery_client,
     bigquery_load,
+    bigquery_retry,
     extract_tables,
     mysql_connect,
     mysql_executor,
@@ -76,8 +78,9 @@ ENGINES = [
     "trino",
     "athena",
     "bigquery",
+    "teradata",
 ]
-EMULATED = {"oracle", "tsql", "snowflake", "redshift"}
+EMULATED = {"oracle", "tsql", "snowflake", "redshift", "teradata"}
 """沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。Trino 在 CI 以 Docker 實跑（本機模擬）；
 Athena 的 SQL 也在同一台 Trino 執行（Athena engine 3 以 Trino 為基礎）；BigQuery 在 CI 以 BigQuery 模擬器
 （goccy/bigquery-emulator，ZetaSQL）實跑（本機以 DuckDB 模擬）。"""
@@ -147,7 +150,9 @@ ORACLE_UNSUPPORTED_SHEETS = {
     "ws_top_customers_vs_others",
     "ws_profitable_sub_categories",
 }
-"""Oracle 尚不支援的工作表：轉譯時列為不支援。"""
+"""Oracle、Teradata 尚不支援的工作表：轉譯時列為不支援。"""
+NO_BOOLEANS = {"oracle", "teradata"}
+"""沒有布林型別的方言：結果是布林值的公式與上面的工作表列為不支援。"""
 EMULATOR_GAPS = {
     # 模擬時 EXTRACT(SECOND FROM 時間間隔) 以 DuckDB 執行，只取整數秒；Oracle 實機含小數秒
     "DATETIME(FLOAT(#2024-01-01 12:34:56.5#))",
@@ -223,8 +228,10 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         finally:
             con.close()
         return
-    if request.param in ("tsql", "snowflake", "redshift"):
-        schema = {"tsql": "dbo", "snowflake": "PUBLIC", "redshift": "public"}[request.param]
+    if request.param in ("tsql", "snowflake", "redshift", "teradata"):
+        schema = {"tsql": "dbo", "snowflake": "PUBLIC", "redshift": "public", "teradata": "sales"}[
+            request.param
+        ]
         con = duckdb.connect()
         con.execute(f'CREATE SCHEMA "{schema}"')
         con.register("expression_rows", _expression_table())
@@ -236,6 +243,7 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
             "tsql": TSqlEmulator,
             "snowflake": SnowflakeEmulator,
             "redshift": RedshiftEmulator,
+            "teradata": TeradataEmulator,
         }[request.param](con)
         try:
             yield Engine(request.param, emulator, live(request.param, [schema]))
@@ -292,7 +300,7 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
             finally:
                 con.close()
             return
-        from google.cloud import bigquery
+        from google.cloud import bigquery  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
 
         from tmig.data.sources import BigQueryExecutor
 
@@ -301,8 +309,9 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         for name, table in tables.items():
             bigquery_load(client, name, table)
         config = bigquery.QueryJobConfig(default_dataset="tmig.tmig")
+        executor = BigQueryExecutor(client, config, retry=bigquery_retry())
         try:
-            yield Engine("bigquery", BigQueryExecutor(client, config), live("bigquery", schema))
+            yield Engine("bigquery", executor, live("bigquery", schema))
         finally:
             client.close()
         return
@@ -355,7 +364,7 @@ def _matches(actual: Any, expected: Any) -> bool:
 
 
 def _expect_unsupported(engine: Engine, formula: str) -> bool:
-    if engine.name != "oracle":
+    if engine.name not in NO_BOOLEANS:
         return formula in UNSUPPORTED.get(engine.name, set())
     return (
         formula in ORACLE_UNSUPPORTED
@@ -413,8 +422,8 @@ def test_fixture_checks(engine: Engine, directory: Path) -> None:
     for sheet in cases.sheets:
         for case in cases.cases:
             query = worksheet_sql(ir, sheet.worksheet, case_state(ir, case, cases.as_of()))
-            if engine.name == "oracle" and sheet.worksheet in ORACLE_UNSUPPORTED_SHEETS:
-                with pytest.raises(DialectError, match="Oracle 沒有布林值"):
+            if engine.name in NO_BOOLEANS and sheet.worksheet in ORACLE_UNSUPPORTED_SHEETS:
+                with pytest.raises(DialectError, match="沒有布林值"):
                     execute_live(query, engine.executor)
                 continue
             result = execute_live(query, engine.executor)

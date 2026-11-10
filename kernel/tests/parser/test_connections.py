@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tmig.ir import IR, ExtractConnection, JoinRelation, LiveConnection, SqlRelation, TableRelation
 from tmig.parser.connections import connection_id
 from tmig.parser.workbook import parse_workbook
@@ -199,7 +201,7 @@ def test_extract_records_its_source(tmp_path: Path) -> None:
     assert (conn.source.dialect, conn.source.schema_name) == ("oracle", "SALES")
 
 
-def test_unsupported_connections(tmp_path: Path) -> None:
+def test_unsupported_connections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     table = "<relation connection='db.1' name='ORDERS' table='[SALES].[ORDERS]' type='table' />"
     # 沒有萃取的 Excel：檔案型資料源（匯入時讀進 DuckDB，見 tests/data/test_file_sources.py）
     excel = "<connection class='excel-direct' filename='orders.xlsx' />"
@@ -214,15 +216,24 @@ def test_unsupported_connections(tmp_path: Path) -> None:
     ir = parse(tmp_path, live_datasource(unknown, table), lenient=True)
     assert any("連線類型 exasol 尚不支援" in r for r in reasons(ir))
 
-    # 認得的連線類型，但還沒有方言轉譯與執行器
+    # 認得的連線類型，但還沒有方言轉譯與執行器（以去掉 Teradata 的清單模擬）
+    from tmig.parser import connections
+
+    monkeypatch.setattr(connections, "EXECUTABLE", connections.EXECUTABLE - {"teradata"})
     teradata = "<connection class='teradata' server='crm.example.com' dbname='crm' />"
     ir = parse(tmp_path, live_datasource(teradata, table), lenient=True)
     assert any("連線類型 teradata 尚無 SQL 轉譯與執行器" in r for r in reasons(ir))
     conn = ir.datasources[0].connection
     assert isinstance(conn, LiveConnection) and conn.dialect == "teradata"
+    monkeypatch.undo()
 
-    # SQL Server、MySQL、Snowflake 已有轉譯與執行器
-    for dbclass, dialect in (("sqlserver", "tsql"), ("mysql", "mysql"), ("snowflake", "snowflake")):
+    # SQL Server、MySQL、Snowflake、Teradata 已有轉譯與執行器
+    for dbclass, dialect in (
+        ("sqlserver", "tsql"),
+        ("mysql", "mysql"),
+        ("snowflake", "snowflake"),
+        ("teradata", "teradata"),
+    ):
         named = f"<connection class='{dbclass}' server='db.example.com' dbname='crm' />"
         ir = parse(tmp_path, live_datasource(named, table), lenient=True)
         assert not any("尚無 SQL 轉譯與執行器" in r for r in reasons(ir))

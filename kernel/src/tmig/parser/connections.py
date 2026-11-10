@@ -67,6 +67,7 @@ EXECUTABLE: frozenset[str] = frozenset(
         "trino",
         "athena",
         "bigquery",
+        "teradata",
     }
 )
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""

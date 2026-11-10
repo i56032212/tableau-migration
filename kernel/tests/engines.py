@@ -1131,9 +1131,9 @@ def bigquery_address() -> str | None:
 
 def bigquery_client(address: str) -> Any:
     """連上 BigQuery 模擬器（專案與資料集都是 tmig）；剛啟動時最多等 3 分鐘。"""
-    from google.api_core.client_options import ClientOptions
-    from google.auth.credentials import AnonymousCredentials
-    from google.cloud import bigquery
+    from google.api_core.client_options import ClientOptions  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
+    from google.auth.credentials import AnonymousCredentials  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
+    from google.cloud import bigquery  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
 
     client = bigquery.Client(
         "tmig",
@@ -1143,12 +1143,21 @@ def bigquery_client(address: str) -> Any:
     deadline = time.monotonic() + 180
     while True:
         try:
-            client.create_dataset("tmig", exists_ok=True)
+            # 資料集由模擬器的 --dataset 建立；不重試（模擬器的錯誤是 500，用戶端預設會重試 10 分鐘）
+            client.get_dataset("tmig", retry=None, timeout=10)
             return client
         except Exception as exc:
             if time.monotonic() > deadline:
                 raise RuntimeError(f"BigQuery 模擬器（{address}）沒有回應：{exc}") from exc
             time.sleep(2)
+
+
+def bigquery_retry() -> Any:
+    """測試用的重試：最多 20 秒（模擬器不支援的寫法回 500，預設的重試會等 10 分鐘）。"""
+    from google.cloud import bigquery  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
+
+    retry = bigquery.DEFAULT_RETRY
+    return retry.with_timeout(20) if hasattr(retry, "with_timeout") else retry.with_deadline(20)
 
 
 BIGQUERY_TYPES = {
@@ -1174,20 +1183,21 @@ def _bigquery_json(value: Any) -> Any:
 
 def bigquery_load(client: Any, name: str, table: pa.Table, batch: int = 500) -> None:
     """Arrow 資料表 → BigQuery 的 tmig.tmig（沒有時區的時間為 DATETIME）。"""
-    from google.cloud import bigquery
+    from google.cloud import bigquery  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
 
     ref = f"tmig.tmig.{name}"
-    client.delete_table(ref, not_found_ok=True)
+    with contextlib.suppress(Exception):
+        client.delete_table(ref, not_found_ok=True, retry=None)
     schema = [
         bigquery.SchemaField(
             f.name, "DATETIME" if pa.types.is_timestamp(f.type) else BIGQUERY_TYPES[f.type]
         )
         for f in table.schema
     ]
-    client.create_table(bigquery.Table(ref, schema=schema))
+    client.create_table(bigquery.Table(ref, schema=schema), retry=None)
     rows = [{k: _bigquery_json(v) for k, v in row.items()} for row in table.to_pylist()]
     for start in range(0, len(rows), batch):
-        errors = client.insert_rows_json(ref, rows[start : start + batch])
+        errors = client.insert_rows_json(ref, rows[start : start + batch], retry=bigquery_retry())
         if errors:
             raise RuntimeError(f"BigQuery 模擬器寫入 {name} 失敗：{errors[:3]}")
 
@@ -1247,3 +1257,133 @@ def _emulate_bigquery(node: Any) -> Any:
                 hi=bounds.args["high"],
             )
     return node
+
+
+# ---------------------------------------------------------------- Teradata（模擬）
+
+
+class TeradataEmulator:
+    """測試用：沒有 Teradata 實機，把轉譯後的 Teradata SQL 以 SQLGlot 轉回 DuckDB，Teradata 特有的寫法
+    （DATE 的內部整數、INSTR 的第幾次出現、REGEXP_* 的參數、ATAN2 的參數順序、EXTRACT(SECOND) 的小數秒、
+    ADD_MONTHS 的月底、TRUNC 的格式、NUMTODSINTERVAL）依官方文件的語意模擬後在 DuckDB 執行。
+
+    檢查的是轉譯的結構與函式對照的寫法；Teradata 函式本身的語意依官方文件模擬，仍待實機驗證。
+    """
+
+    dialect = "teradata"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        # SQLGlot 解析不了 CHARACTER SET；TRUNC、INSTR、REGEXP_* 的參數自行處理
+        sql = sql.replace(" CHARACTER SET UNICODE", "")
+        for name in ("TRUNC", "INSTR", "REGEXP_INSTR", "REGEXP_SUBSTR", "REGEXP_REPLACE"):
+            sql = re.sub(rf"\b{name}\(", f"TMIG_{name}(", sql)
+        tree = sqlglot.parse_one(sql, read="teradata")
+        duck = _visit(tree, _emulate_teradata).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+def _regex_flag(node: Any) -> str:
+    return "i" if node is not None and "i" in node.name else "c"
+
+
+def _emulate_teradata(node: Any) -> Any:
+    from sqlglot import exp
+
+    name = node.name.upper() if isinstance(node, exp.Anonymous) else ""
+    args = list(node.expressions) if isinstance(node, exp.Anonymous) else []
+    if isinstance(node, exp.DataType):
+        if node.this == exp.DataType.Type.FLOAT:
+            return exp.DataType.build("DOUBLE")  # Teradata 的 FLOAT 是 64 位元
+        if node.this in (exp.DataType.Type.TIMESTAMP, exp.DataType.Type.TIMESTAMPNTZ):
+            return exp.DataType.build("TIMESTAMP")
+        if node.this in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT):
+            return exp.DataType.build("VARCHAR")
+    if name == "TMIG_INSTR":
+        if len(args) == 2:
+            return _duck("instr({s}, {t})", s=args[0], t=args[1])
+        subject, target, _position, occurrence = args
+        # 第 n 次出現的位置（起點都是 1）
+        return _duck(
+            "CASE WHEN {s} IS NULL OR {t} IS NULL THEN NULL "
+            "WHEN len(string_split({s}, {t})) - 1 >= {n} "
+            "THEN length(array_to_string(list_slice(string_split({s}, {t}), 1, {n}), {t})) + 1 "
+            "ELSE 0 END",
+            s=subject,
+            t=target,
+            n=occurrence,
+        )
+    if name == "OREPLACE":
+        return _duck("replace({s}, {a}, {b})", s=args[0], a=args[1], b=args[2])
+    if name == "TMIG_REGEXP_INSTR":
+        flag = _regex_flag(args[5] if len(args) > 5 else None)
+        return _duck(
+            "CASE WHEN {s} IS NULL OR {p} IS NULL THEN NULL "
+            f"WHEN regexp_matches({{s}}, {{p}}, '{flag}') THEN 1 ELSE 0 END",
+            s=args[0],
+            p=args[1],
+        )
+    if name == "TMIG_REGEXP_SUBSTR":
+        flag = _regex_flag(args[4] if len(args) > 4 else None)
+        return _duck(
+            f"CASE WHEN regexp_matches({{s}}, {{p}}, '{flag}') "
+            f"THEN regexp_extract({{s}}, {{p}}, 0, '{flag}') END",
+            s=args[0],
+            p=args[1],
+        )
+    if name == "TMIG_REGEXP_REPLACE":
+        flag = _regex_flag(args[5] if len(args) > 5 else None)
+        every = len(args) <= 4 or args[4].name == "0"
+        options = flag + ("g" if every else "")
+        return _duck(
+            f"regexp_replace({{s}}, {{p}}, {{r}}, '{options}')", s=args[0], p=args[1], r=args[2]
+        )
+    if name == "REGEXP_SIMILAR":
+        return _duck(
+            "CASE WHEN regexp_full_match({s}, {p}) THEN 1 ELSE 0 END", s=args[0], p=args[1]
+        )
+    if name == "TO_TIMESTAMP":
+        value, fmt = args
+        text = fmt.name
+        for oracle, strftime in ORACLE_TO_STRFTIME:
+            text = text.replace(oracle, strftime)
+        return _duck(f"strptime({{s}}, '{text.replace(chr(34), '')}')", s=value)
+    if isinstance(node, exp.AddMonths):
+        # Teradata 的 ADD_MONTHS 超過月底時取月底（與 DuckDB 相同，沒有 Oracle 的月底規則）
+        return _duck(
+            "CAST({d} AS TIMESTAMP) + to_months(CAST({n} AS INTEGER))",
+            d=node.this,
+            n=node.expression,
+        )
+    if (
+        isinstance(node, exp.Cast)
+        and node.to.this == exp.DataType.Type.DATE
+        and isinstance(node.this, exp.Cast)
+        and node.this.to.this == exp.DataType.Type.INT
+    ):
+        # Teradata 的 DATE 內部是 (年 − 1900) × 10000 + 月 × 100 + 日
+        # 1900 年以前是負數：年取向下取整，月日取餘數
+        return _duck(
+            "make_date(CAST(floor(({n}) / 10000) + 1900 AS BIGINT), "
+            "CAST((({n}) - floor(({n}) / 10000) * 10000) // 100 AS BIGINT), "
+            "CAST((({n}) - floor(({n}) / 10000) * 10000) % 100 AS BIGINT))",
+            n=node.this.this,
+        )
+    if isinstance(node, exp.Atan2):
+        # Teradata 的 ATAN2(x, y)
+        return _duck("atan2({y}, {x})", x=node.this, y=node.expression)
+    if (
+        isinstance(node, exp.Extract)
+        and isinstance(node.this, exp.Var)
+        and node.this.name.upper() == "SECOND"
+    ):
+        # Teradata 的 EXTRACT(SECOND) 含小數秒
+        return _duck("(microsecond({x}) / 1000000.0)", x=node.expression)
+    return _emulate(node)

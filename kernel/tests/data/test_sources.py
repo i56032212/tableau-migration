@@ -361,11 +361,11 @@ def test_connections_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     assert '[connections.sales_ora]\ndriver = "oracle"\nuser = "${TMIG_SALES_ORA_USER}"' in text
     assert 'password = "${TMIG_SALES_ORA_PASSWORD}"' in text
     assert '[connections.lake]\ndriver = "databricks"\naccess_token = "${TMIG_LAKE_TOKEN}"' in text
-    assert "連線類型 teradata 尚無執行器" in text
+    assert '[connections.crm_td]\ndriver = "teradata"\nuser = "${TMIG_CRM_TD_USER}"' in text
     # 範本可以直接當成設定檔讀取（憑證都是環境變數）
     out = tmp_path / "connections.toml"
     assert main(["connections", "template", str(path), "--out", str(out)]) == 0
-    assert set(load_connections(out)) == {"sales_ora", "lake"}
+    assert set(load_connections(out)) == {"sales_ora", "lake", "crm_td"}
 
 
 def test_connections_template_for_presto_and_athena(tmp_path: Path) -> None:

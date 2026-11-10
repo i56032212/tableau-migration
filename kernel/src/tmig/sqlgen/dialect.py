@@ -13,7 +13,7 @@
 
 PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）、MySQL（8.0 以上）、Trino（CI 以 Docker 執行；
 Athena 的 SQL 也在同一台執行）與 BigQuery（CI 以 ZetaSQL 的模擬器執行）有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、
-Snowflake 與 Redshift 依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的
+Snowflake、Redshift 與 Teradata（16.20 以上）依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的
 語意模擬後執行，並有轉譯快照。
 
 各方言已知與 DuckDB（＝萃取時的結果）不同之處，與 Tableau 直接連該資料庫時相同，不另外處理：
@@ -49,6 +49,7 @@ SQLGLOT_NAMES: dict[str, str] = {
     "trino": "trino",
     "athena": "athena",
     "bigquery": "bigquery",
+    "teradata": "teradata",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言尚不支援。"""
@@ -168,7 +169,7 @@ def to_dialect(
     tree = rewriter.rewrite(tree)
     rewriter.finish(tree)
     rewriter.validate(tree)
-    out = tree.sql(dialect=SQLGLOT_NAMES[dialect], identify=True)
+    out = rewriter.text(tree.sql(dialect=SQLGLOT_NAMES[dialect], identify=True))
     return _restore(out, custom)
 
 
@@ -532,6 +533,10 @@ class Rewriter:
 
     def finish(self, tree: exp.Expr) -> None:
         """整棵樹改寫完成後的調整。"""
+
+    def text(self, sql: str) -> str:
+        """產生的 SQL 文字的最後調整（SQLGlot 沒有語法節點的寫法）。"""
+        return sql
 
     def validate(self, tree: exp.Expr) -> None:
         for node in tree.walk():
@@ -1638,11 +1643,11 @@ def _is_predicate(node: exp.Expr) -> bool:
 
 
 def _condition_position(node: exp.Expr) -> bool:
-    """節點是否位在條件的位置（WHERE、HAVING、ON、CASE WHEN、AND／OR／NOT 的運算元）。"""
+    """節點是否位在條件的位置（WHERE、HAVING、QUALIFY、ON、CASE WHEN、AND／OR／NOT 的運算元）。"""
     child, parent = node, node.parent
     while isinstance(parent, exp.Paren):
         child, parent = parent, parent.parent
-    if isinstance(parent, (exp.Where, exp.Having, exp.And, exp.Or, exp.Not)):
+    if isinstance(parent, (exp.Where, exp.Having, exp.Qualify, exp.And, exp.Or, exp.Not)):
         return True
     if isinstance(parent, exp.Join):
         return child.arg_key == "on"
@@ -2865,6 +2870,544 @@ class BigQueryRewriter(Rewriter):
         return _template(BIGQUERY_PERCENTILE, "bigquery", x=value, p=fraction)
 
 
+# ---------------------------------------------------------------- Teradata
+
+
+TERADATA_TEXT = "VARCHAR(4000)"
+"""轉成字串時的型別；產生 SQL 後補上 CHARACTER SET UNICODE（見 TeradataRewriter.text）。"""
+TERADATA_MONDAY = "DATE '1900-01-01'"
+TERADATA_SUNDAY = "DATE '1900-01-07'"
+"""與這兩天相隔的天數除以 7 的餘數就是星期（不受系統的週起始日設定影響）。"""
+TERADATA_TRUNC = {"year": "YYYY", "quarter": "Q", "month": "MM", "day": "DD"}
+
+
+class TeradataRewriter(OracleRewriter):
+    """Teradata Vantage（16.20 以上）：依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回 DuckDB 模擬執行）。
+
+    Teradata 14 起有與 Oracle 相容的函式（TO_CHAR、TO_TIMESTAMP、ADD_MONTHS、NUMTODSINTERVAL、DECODE、
+    INSTR、RPAD、REGEXP_*），沿用 Oracle 的規則，差異如下：
+
+    - 沒有布林型別：查詢結果中的布林值（布林維度、集合的成員）列為不支援（與 Oracle 相同）
+    - DATE 沒有時間；日期加減一律轉成 TIMESTAMP(6) 計算（DATE 只能加減天數，NUMTODSINTERVAL 最多 9999 天：
+      天數以 DATE 加減，一天內的時間另外以秒加上）
+    - 星期、ISO 週與年以與 1900-01-01（星期一）相隔的天數計算，不受系統的週起始日設定影響
+    - SUBSTR 的負數起點不是從結尾算起；字串長度為 CHARACTER_LENGTH；REPLACE 為 OREPLACE
+    - REGEXP_SUBSTR 沒有群組參數：取群組時先取整段符合的文字，再以錨定的樣式換成該群組
+    - LIMIT 在子查詢與 CTE 中改成 QUALIFY ROW_NUMBER()；ATAN2 的參數順序是 (x, y)
+    - TRYCAST（16.20 起）只接受字串；文字轉時間依序試 TIMESTAMP(6)、TIMESTAMP(0)、DATE
+    - 連線時把工作階段的時區設為 UTC、日期格式設為 ANSIDATE（YYYY-MM-DD）
+    """
+
+    name = "Teradata"
+    dialect = "teradata"
+    allowed = frozenset({exp.Median, exp.Mod, exp.IntDiv})
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit in ("year", "month"):
+            months = (
+                amount if unit == "month" else exp.Mul(this=_paren(amount), expression=_num(12))
+            )
+            return _fn("ADD_MONTHS", value, _cast(months, "INTEGER"))
+        if unit == "day":
+            # DATE + 整數天數（沒有 9999 天的上限），再加上原本一天中的時間（確定是日期的不加）
+            moved = exp.Add(this=self._date(value.copy()), expression=_cast(amount, "INTEGER"))
+            day = _cast(moved, "TIMESTAMP(6)", "teradata")
+            if _known_date(value):
+                return day
+            time = self._interval(self._seconds_of_day(value), "SECOND")
+            return exp.Paren(this=exp.Add(this=day, expression=time))
+        if unit == "microsecond":
+            unit, amount = "second", exp.Div(this=_paren(amount), expression=_num(1000000.0))
+        return exp.Paren(
+            this=exp.Add(
+                this=self._timestamp(value), expression=self._interval(amount, unit.upper())
+            )
+        )
+
+    def _interval(self, amount: exp.Expr, unit: str) -> exp.Expr:
+        return _fn("NUMTODSINTERVAL", amount, _str(unit))
+
+    def _timestamp(self, value: exp.Expr) -> exp.Expr:
+        if isinstance(value, exp.Cast) and value.to.this in TIMESTAMP_TYPES:
+            return value
+        return _cast(value, "TIMESTAMP(6)", "teradata")
+
+    def _seconds_of_day(self, value: exp.Expr) -> exp.Expr:
+        ts = self._timestamp(value)
+        return exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_extract("HOUR", ts.copy()), expression=_num(3600)),
+                expression=exp.Mul(this=_extract("MINUTE", ts.copy()), expression=_num(60)),
+            ),
+            expression=_extract("SECOND", ts),
+        )
+
+    def _date(self, value: exp.Expr) -> exp.Expr:
+        return (
+            value
+            if isinstance(value, exp.Cast) and value.to.this == exp.DataType.Type.DATE
+            else _cast(value, "DATE")
+        )
+
+    def _days_since(self, value: exp.Expr, origin: str) -> exp.Expr:
+        return exp.Paren(this=exp.Sub(this=self._date(value), expression=exp.Var(this=origin)))
+
+    def _weekday(self, value: exp.Expr, origin: str) -> exp.Expr:
+        """與基準日相隔的天數除以 7 的餘數（負數時補成正數）。"""
+        mod = exp.Mod(this=self._days_since(value, origin), expression=_num(7))
+        return exp.Paren(
+            this=exp.Mod(
+                this=exp.Paren(this=exp.Add(this=mod, expression=_num(7))), expression=_num(7)
+            )
+        )
+
+    def _thursday(self, value: exp.Expr) -> exp.Expr:
+        """ISO 週的星期四（決定 ISO 年與週數）。"""
+        weekday = _cast(self._weekday(value, TERADATA_MONDAY), "INTEGER")
+        return exp.Paren(
+            this=exp.Add(
+                this=exp.Sub(this=self._date(value.copy()), expression=weekday),
+                expression=_num(3),
+            )
+        )
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        base = super().handlers()
+
+        def time_part(field: str) -> Callable[[exp.Expr], exp.Expr]:
+            return lambda n: _extract(field, self._timestamp(n.this))
+
+        def iso_week(value: exp.Expr) -> exp.Expr:
+            thursday = self._thursday(value)
+            year_start = _fn("TRUNC", thursday.copy(), _str("YYYY"))
+            weeks = _int_div(exp.Paren(this=exp.Sub(this=thursday, expression=year_start)), 7)
+            return exp.Paren(this=exp.Add(this=weeks, expression=_num(1)))
+
+        return {
+            **base,
+            exp.Quarter: lambda n: _quarter(n.this),
+            exp.Hour: time_part("HOUR"),
+            exp.Minute: time_part("MINUTE"),
+            exp.Second: lambda n: _cast(
+                _fn("FLOOR", _extract("SECOND", self._timestamp(n.this))), "INTEGER"
+            ),
+            exp.DayOfYear: lambda n: exp.Paren(
+                this=exp.Add(
+                    this=exp.Sub(
+                        this=self._date(n.this.copy()),
+                        expression=_fn("TRUNC", self._date(n.this), _str("YYYY")),
+                    ),
+                    expression=_num(1),
+                )
+            ),
+            exp.Week: lambda n: iso_week(n.this),
+            exp.DayOfWeek: lambda n: self._weekday(n.this, TERADATA_SUNDAY),
+            exp.DayOfWeekIso: lambda n: exp.Paren(
+                this=exp.Add(this=self._weekday(n.this, TERADATA_MONDAY), expression=_num(1))
+            ),
+            exp.Monthname: lambda n: _names(_extract("MONTH", n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(
+                exp.Paren(
+                    this=exp.Add(this=self._weekday(n.this, TERADATA_MONDAY), expression=_num(1))
+                ),
+                DAY_NAMES,
+            ),
+            exp.Atan2: lambda n: _fn("ATAN2", n.expression, n.this),
+            # ** 的優先順序高於加減：底數與指數一律加括號（SQLGlot 不會補）
+            exp.Pow: lambda n: _mark(
+                exp.Pow(this=exp.Paren(this=n.this), expression=exp.Paren(this=n.expression))
+            ),
+            exp.Length: lambda n: _fn("CHARACTER_LENGTH", n.this),
+            exp.Replace: lambda n: _fn(
+                "OREPLACE", n.this, n.expression, n.args.get("replacement") or _str("")
+            ),
+            exp.Left: self.left,
+            exp.Right: self.right,
+            exp.Repeat: lambda n: _fn(
+                "RPAD",
+                n.this.copy(),
+                exp.Mul(
+                    this=_fn("CHARACTER_LENGTH", n.this.copy()), expression=_paren(n.args["times"])
+                ),
+                n.this,
+            ),
+            exp.RegexpLike: self.regexp_like,
+            exp.RegexpExtract: self.regexp_extract,
+            exp.RegexpReplace: lambda n: _fn(
+                "REGEXP_REPLACE",
+                n.this,
+                n.expression,
+                n.args.get("replacement") or _str(""),
+                _num(1),
+                _num(0),
+                _str("c"),
+            ),
+            exp.CurrentDate: lambda n: exp.Var(this="CURRENT_DATE"),
+            exp.DPipe: lambda n: _mark(n),
+            # NUMBER 會轉成 DECIMAL（預設 (5, 0)）：以 DECIMAL(38, 10) 計算
+            exp.Round: lambda n: _cast(
+                _fn(
+                    "ROUND",
+                    _cast(n.this, "DECIMAL(38, 10)", "teradata"),
+                    _cast(n.args.get("decimals") or _num(0), "INTEGER"),
+                ),
+                "FLOAT",
+                "teradata",
+            ),
+            # 整數除法：轉成浮點數相除後向 0 截斷（不依賴浮點數轉整數時的捨入）
+            exp.IntDiv: lambda n: _cast(
+                _fn(
+                    "TRUNC",
+                    exp.Div(
+                        this=_cast(n.this, "FLOAT", "teradata"), expression=_paren(n.expression)
+                    ),
+                ),
+                "BIGINT",
+            ),
+            # Null 的排序與 Teradata 預設相同（最小），不另外寫 NULLS FIRST
+            exp.PercentileCont: lambda n: _mark(
+                exp.WithinGroup(
+                    this=_fn("PERCENTILE_CONT", n.expression),
+                    expression=_mark(
+                        exp.Order(expressions=[_mark(exp.Ordered(this=n.this, nulls_first=True))])
+                    ),
+                )
+            ),
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            **super().functions(),
+            "isoyear": lambda a: _extract("YEAR", self._thursday(a[0])),
+            "now": lambda a: _cast(
+                exp.Var(this="CURRENT_TIMESTAMP(6)"), "TIMESTAMP(6)", "teradata"
+            ),
+        }
+
+    def log(self, node: exp.Expr) -> exp.Expr:
+        if node.expression is None or _literal_int(node.this) == 10:
+            return _fn("LOG", node.expression or node.this)  # Teradata 的 LOG 以 10 為底
+        return exp.Div(this=exp.Ln(this=node.expression), expression=exp.Ln(this=node.this))
+
+    def trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        if unit in TERADATA_TRUNC:
+            # TRUNC 只接受 DATE：截斷後轉回時間（與 DuckDB 的 date_trunc 相同是時間）
+            return _cast(
+                _fn("TRUNC", self._date(node.this), _str(TERADATA_TRUNC[unit])),
+                "TIMESTAMP(6)",
+                "teradata",
+            )
+        if unit in ("hour", "minute", "second"):
+            ts = self._timestamp(node.this)
+            seconds: exp.Expr = exp.Mul(this=_extract("HOUR", ts.copy()), expression=_num(3600))
+            if unit in ("minute", "second"):
+                seconds = exp.Add(
+                    this=seconds,
+                    expression=exp.Mul(this=_extract("MINUTE", ts.copy()), expression=_num(60)),
+                )
+            if unit == "second":
+                seconds = exp.Add(
+                    this=seconds, expression=_fn("FLOOR", _extract("SECOND", ts.copy()))
+                )
+            midnight = _cast(_cast(ts, "DATE"), "TIMESTAMP(6)", "teradata")
+            return exp.Paren(
+                this=exp.Add(this=midnight, expression=self._interval(seconds, "SECOND"))
+            )
+        raise DialectError(f"Teradata 的日期截斷不支援單位 {unit}")
+
+    def date_diff(self, node: exp.Expr) -> exp.Expr:
+        def part(field: str, value: exp.Expr) -> exp.Expr:
+            if field in ("year", "month", "day"):
+                return _extract(field.upper(), value)
+            if field == "quarter":
+                return _quarter(value)
+            return _extract(field.upper(), self._timestamp(value))
+
+        return self.boundary_diff(
+            _unit(node),
+            node.expression,
+            node.this,
+            part,
+            lambda start, end: exp.Sub(this=self._date(end), expression=self._date(start)),
+        )
+
+    def make_date(self, node: exp.Expr) -> exp.Expr:
+        """Teradata 的 DATE 內部是 (年 − 1900) × 10000 + 月 × 100 + 日 的整數。"""
+        y, m, d = (node.args[k] for k in ("year", "month", "day"))
+        number = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(
+                    this=exp.Paren(this=exp.Sub(this=_paren(y), expression=_num(1900))),
+                    expression=_num(10000),
+                ),
+                expression=exp.Mul(this=_paren(m), expression=_num(100)),
+            ),
+            expression=_paren(d),
+        )
+        return _cast(_cast(number, "INTEGER"), "DATE")
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        day = self.make_date(exp.DateFromParts(year=y, month=m, day=d))
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+            ),
+            expression=_paren(ss),
+        )
+        return exp.Paren(
+            this=exp.Add(
+                this=_cast(day, "TIMESTAMP(6)", "teradata"),
+                expression=self._interval(seconds, "SECOND"),
+            )
+        )
+
+    def epoch(self, node: exp.Expr) -> exp.Expr:
+        days = _cast(self._days_since(node.this.copy(), "DATE '1970-01-01'"), "BIGINT")
+        return exp.Paren(
+            this=exp.Add(
+                this=exp.Mul(this=days, expression=_num(86400)),
+                expression=self._seconds_of_day(node.this),
+            )
+        )
+
+    def left(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        head = _fn("SUBSTR", text.copy(), _num(1), count.copy())
+        if _not_negative(count):
+            return head
+        # 數量為負數時去掉右邊的字元（DuckDB 的 left）；Teradata 的 SUBSTR 不接受負數的長度
+        trimmed = _fn(
+            "SUBSTR",
+            text.copy(),
+            _num(1),
+            _fn(
+                "GREATEST",
+                exp.Add(this=_fn("CHARACTER_LENGTH", text), expression=count.copy()),
+                _num(0),
+            ),
+        )
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count.copy(), expression=_num(0)), true=trimmed)],
+            default=head,
+        )
+
+    def right(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        start = exp.Add(
+            this=exp.Sub(
+                this=_fn("CHARACTER_LENGTH", text.copy()), expression=_paren(count.copy())
+            ),
+            expression=_num(1),
+        )
+        # SUBSTR 的起點小於 1 不是從結尾算起：數量超過長度時取整個字串
+        tail = _fn("SUBSTR", text.copy(), _fn("GREATEST", start, _num(1)))
+        if _not_negative(count):
+            return tail
+        trimmed = _fn("SUBSTR", text, exp.Sub(this=_num(1), expression=_paren(count.copy())))
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count, expression=_num(0)), true=trimmed)],
+            default=tail,
+        )
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        """第 i 段：第 i − 1 個與第 i 個分隔字元之間（INSTR 的第四個參數是第幾次出現）。"""
+        text, delimiter = node.args["this"], node.args["delimiter"]
+        index = _literal_int(node.args.get("part_index"))
+        if index is None or index < 1:
+            raise DialectError("Teradata 的 SPLIT 只支援正整數常值的位置")
+
+        def instr(occurrence: int) -> exp.Expr:
+            return _fn("INSTR", text.copy(), delimiter.copy(), _num(1), _num(occurrence))
+
+        if index == 1:
+            start: exp.Expr = _num(1)
+        else:
+            start = exp.Add(
+                this=instr(index - 1), expression=_fn("CHARACTER_LENGTH", delimiter.copy())
+            )
+        end = exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.EQ(this=instr(index), expression=_num(0)),
+                    true=exp.Add(this=_fn("CHARACTER_LENGTH", text.copy()), expression=_num(1)),
+                )
+            ],
+            default=instr(index),
+        )
+        part = _fn("SUBSTR", text.copy(), start.copy(), exp.Sub(this=end, expression=_paren(start)))
+        if index == 1:
+            return part
+        # 分隔字元不夠：空字串（與 DuckDB 的 split_part 相同）
+        return exp.Case(
+            ifs=[exp.If(this=exp.EQ(this=instr(index - 1), expression=_num(0)), true=_str(""))],
+            default=part,
+        )
+
+    def _regex(self, pattern: exp.Expr) -> tuple[exp.Expr, str]:
+        """開頭的 (?i) 換成不分大小寫的比對參數。"""
+        if (
+            isinstance(pattern, exp.Literal)
+            and pattern.is_string
+            and pattern.name.startswith("(?i)")
+        ):
+            return _str(pattern.name[4:]), "i"
+        return pattern, "c"
+
+    def regexp_like(self, node: exp.Expr) -> exp.Expr:
+        pattern, flags = self._regex(node.expression)
+        position = _fn("REGEXP_INSTR", node.this, pattern, _num(1), _num(1), _num(0), _str(flags))
+        return exp.Paren(this=exp.GT(this=position, expression=_num(0)))
+
+    def regexp_extract(self, node: exp.Expr) -> exp.Expr:
+        pattern, flags = self._regex(node.expression)
+        group = _literal_int(node.args.get("group"))
+        if group is None:
+            raise DialectError("REGEXP_EXTRACT 的群組不是常值")
+        whole = _fn("REGEXP_SUBSTR", node.this, pattern.copy(), _num(1), _num(1), _str(flags))
+        if group == 0:
+            return whole
+        if not (isinstance(pattern, exp.Literal) and pattern.is_string):
+            raise DialectError("Teradata 的 REGEXP_EXTRACT 取群組時樣式必須是常值")
+        if group > 8:
+            raise DialectError("Teradata 的 REGEXP_EXTRACT 只能取第 1 到第 8 個群組")
+        # 整段符合的文字以錨定的樣式換成第 group 個群組（外層多一個群組）
+        anchored = _str(f"^({pattern.name})$")
+        return _fn(
+            "REGEXP_REPLACE", whole, anchored, _str(f"\\{group + 1}"), _num(1), _num(1), _str(flags)
+        )
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：TO_TIMESTAMP 不符合格式時報錯，先以依格式產生的正規表示式檢查（日期不存在仍會報錯）。"""
+        fmt = _format_literal(args[1])
+        pattern = "^" + _strftime_regex(fmt).replace("\\d", "[0-9]") + "$"
+        parsed = _fn(
+            "TO_TIMESTAMP", args[0].copy(), _str(_convert_format(fmt, ORACLE_FORMAT, _double_quote))
+        )
+        matches = exp.EQ(
+            this=_fn("REGEXP_SIMILAR", args[0], _str(pattern), _str("c")), expression=_num(1)
+        )
+        return exp.Case(ifs=[exp.If(this=matches, true=_cast(parsed, "TIMESTAMP(6)", "teradata"))])
+
+    def try_cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        assert isinstance(target, exp.DataType)
+        value = node.this
+        if target.this in TIMESTAMP_TYPES:
+            # 有小數秒、沒有小數秒、只有日期的文字
+            attempts = [
+                _mark(exp.TryCast(this=value.copy(), to=_type("TIMESTAMP(6)", "teradata"))),
+                _cast(
+                    _mark(exp.TryCast(this=value.copy(), to=_type("TIMESTAMP(0)", "teradata"))),
+                    "TIMESTAMP(6)",
+                    "teradata",
+                ),
+                _cast(_mark(exp.TryCast(this=value, to=_type("DATE"))), "TIMESTAMP(6)", "teradata"),
+            ]
+            return exp.Coalesce(this=attempts[0], expressions=attempts[1:])
+        return _mark(exp.TryCast(this=value, to=self._target(target)))
+
+    def cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        if not isinstance(target, exp.DataType):
+            return node
+        kind = target.this
+        if kind == exp.DataType.Type.BOOLEAN:
+            raise DialectError("Teradata 沒有布林型別，轉成布林值的計算尚不支援")
+        value = node.this
+        if (
+            isinstance(value, exp.Literal)
+            and value.is_string
+            and kind in (exp.DataType.Type.DATE, *TIMESTAMP_TYPES)
+        ):
+            keyword = "DATE" if kind == exp.DataType.Type.DATE else "TIMESTAMP"
+            text = value.name if keyword == "TIMESTAMP" else value.name[:10]
+            if keyword == "TIMESTAMP" and "." not in text:
+                text += ".000000" if len(text) > 10 else " 00:00:00.000000"
+            return exp.Var(this=f"{keyword} {_single_quote(text)}")
+        if _is_predicate(value) and kind in INTEGER_TYPES:
+            return exp.Case(
+                ifs=[
+                    exp.If(this=value, true=_num(1)),
+                    exp.If(this=exp.Not(this=_paren(value.copy())), true=_num(0)),
+                ]
+            )
+        return _mark(exp.Cast(this=value, to=self._target(target)))
+
+    def _target(self, target: exp.Expr) -> exp.DataType:
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT, exp.DataType.Type.CHAR):
+            return _type(TERADATA_TEXT, "teradata")
+        if kind in INTEGER_TYPES:
+            return _type("BIGINT" if kind == exp.DataType.Type.BIGINT else "INTEGER", "teradata")
+        if kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT):
+            return _type("FLOAT", "teradata")
+        if kind == exp.DataType.Type.DECIMAL:
+            return target if target.expressions else _type("DECIMAL(18, 3)", "teradata")
+        if kind == exp.DataType.Type.DATE:
+            return target
+        if kind in TIMESTAMP_TYPES:
+            return _type("TIMESTAMP(6)", "teradata")
+        raise DialectError(f"Teradata 不支援轉成 {target.sql('duckdb')} 型別")
+
+    def finish(self, tree: exp.Expr) -> None:
+        for select in list(tree.find_all(exp.Select)):
+            _qualify_star(select)
+            if select is not tree and select.args.get("limit") is not None:
+                _limit_to_qualify(select)
+        for boolean in list(tree.find_all(exp.Boolean)):
+            if boolean.root() is tree:
+                _replace_boolean(boolean)
+        for node in tree.walk():
+            if isinstance(node, PREDICATES) and not _condition_position(node):
+                raise DialectError(
+                    "Teradata 沒有布林值：查詢結果或運算中的布林值（例如布林維度、ISNULL、CONTAINS 的結果）尚不支援"
+                )
+
+    def text(self, sql: str) -> str:
+        return sql.replace(TERADATA_TEXT, f"{TERADATA_TEXT} CHARACTER SET UNICODE")
+
+
+def _known_date(value: exp.Expr) -> bool:
+    """確定是日期（沒有時間）的值：轉成 DATE 的轉型或 DATE 常值。"""
+    while isinstance(value, exp.Paren):
+        value = value.this
+    if isinstance(value, exp.Cast):
+        return value.to.this == exp.DataType.Type.DATE
+    return isinstance(value, exp.Var) and value.name.startswith("DATE '")
+
+
+def _int_div(value: exp.Expr, divisor: int) -> exp.Expr:
+    """Teradata 的 INTEGER / INTEGER 是向 0 截斷的整數除法（typed：SQLGlot 不再先轉成浮點數）。"""
+    return _mark(exp.Div(this=value, expression=_num(divisor), typed=True))
+
+
+def _quarter(value: exp.Expr) -> exp.Expr:
+    month = exp.Paren(this=exp.Add(this=_extract("MONTH", value), expression=_num(2)))
+    return exp.Paren(this=_int_div(month, 3))
+
+
+def _limit_to_qualify(select: exp.Select) -> None:
+    """子查詢與 CTE 中的 ORDER BY … LIMIT n → QUALIFY ROW_NUMBER() OVER (ORDER BY …) <= n
+    （Teradata 的子查詢不能排序；TOP 只能用在最外層）。"""
+    limit = select.args["limit"]
+    count = limit.expression if isinstance(limit, exp.Limit) else limit
+    order = select.args.get("order")
+    window = _mark(
+        exp.Window(
+            this=exp.RowNumber(),
+            order=order.copy() if isinstance(order, exp.Order) else None,
+        )
+    )
+    select.set("qualify", _mark(exp.Qualify(this=exp.LTE(this=window, expression=count.copy()))))
+    select.set("limit", None)
+    select.set("order", None)
+
+
 def _capture_groups(pattern: str) -> int:
     """正規表示式（RE2）中擷取的群組數。"""
     return _keep_group(pattern, -1, count=True).count("(") if pattern else 0
@@ -3372,6 +3915,7 @@ REWRITERS: dict[str, Rewriter] = {
     "trino": TrinoRewriter(),
     "athena": TrinoRewriter("Athena", "athena"),
     "bigquery": BigQueryRewriter(),
+    "teradata": TeradataRewriter(),
 }
 
 

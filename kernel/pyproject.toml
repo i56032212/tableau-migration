@@ -31,6 +31,7 @@ trino = ["trino>=0.333"]
 presto = ["presto-python-client>=0.8"]
 athena = ["pyathena[arrow]>=3.0"]
 bigquery = ["google-cloud-bigquery>=3.25"]
+teradata = ["teradatasql>=20.0"]
 
 [project.scripts]
 tmig = "tmig.cli:entry"

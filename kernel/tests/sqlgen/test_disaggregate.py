@@ -113,6 +113,7 @@ def test_totals_are_unsupported(tmp_path: Path) -> None:
         "trino",
         "athena",
         "bigquery",
+        "teradata",
     ],
 )
 def test_live_connections_translate(tmp_path: Path, dialect: str) -> None:

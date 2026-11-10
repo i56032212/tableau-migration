@@ -39,6 +39,7 @@ DBCLASS_DRIVERS = {
     "trino": "trino",
     "athena": "athena",
     "bigquery": "bigquery",
+    "teradata": "teradata",
 }
 """Tableau 的連線類型 → 執行器（其他類型尚無執行器）。"""
 

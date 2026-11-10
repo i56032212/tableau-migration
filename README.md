@@ -143,7 +143,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 
 ## Live 連線
 
-資料源是 Live 連線的報表（Oracle、SQL Server、MySQL、Snowflake、Databricks、PostgreSQL、Redshift、Presto／Trino、Athena、BigQuery），查詢時連到來源資料庫：
+資料源是 Live 連線的報表（Oracle、SQL Server、MySQL、Snowflake、Databricks、PostgreSQL、Redshift、Presto／Trino、Athena、BigQuery、Teradata），查詢時連到來源資料庫：
 
 1. `uv run tmig connections template <報表或資料夾> --out connections.toml` 產生連線設定檔範本
 2. 帳號、密碼、權杖在設定檔中一律寫成 `${環境變數}`（直接寫值會被拒絕），由部署環境或密碼管理服務提供；
@@ -153,7 +153,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 
 連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra sqlserver`、`--extra mysql`、`--extra snowflake`、
 `--extra databricks`、`--extra postgres`、`--extra redshift`、`--extra trino`（PrestoDB 為 `--extra presto`）、
-`--extra athena`、`--extra bigquery`。IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
+`--extra athena`、`--extra bigquery`、`--extra teradata`。IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
 
 各資料庫的轉譯與驗證程度（`kernel/src/tmig/sqlgen/dialect.py`）：
 
@@ -165,6 +165,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 | SQL Server 2017 以上、Azure SQL | 模擬（依官方文件） | 布林值以 BIT 表示；非英文的字串常值為 `N'…'`；星期不受 `@@DATEFIRST` 影響；沒有正規表示式、DATEPARSE、MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH；SPLIT 的位置須為 ±1 到 ±10 的常值 |
 | Snowflake | 模擬（依官方文件） | 工作階段的時區為 UTC；星期與週數以 ISO 的函式計算，不受 WEEK_START 影響 |
 | Oracle 12.2 以上 | 模擬（依官方文件） | 沒有布林值（布林維度等列為不支援） |
+| Teradata Vantage 16.20 以上 | 模擬（依官方文件） | 沿用與 Oracle 相容的函式；沒有布林值（布林維度等列為不支援）與陣列（FINDNTH、SPLIT 的負數位置）；工作階段的時區為 UTC、日期格式為 ANSIDATE；日期加減一律以 TIMESTAMP(6) 計算（時間單位一次最多加減 9999 天）；子查詢中的 LIMIT 改成 QUALIFY ROW_NUMBER()；REGEXP_EXTRACT 取群組時樣式須為常值；轉成字串為 `VARCHAR(4000) CHARACTER SET UNICODE` |
 | Amazon Redshift | 模擬（依官方文件） | 工作階段的時區為 UTC；正規表示式以 PCRE 解讀，只能取第 1 個群組、取代字串不能參照群組；沒有陣列（FINDNTH）與 CORR、COVAR；文字轉數字、日期時先以正規表示式檢查（沒有 TRY_CAST） |
 | Trino、Starburst（Tableau 的 Presto 連線）、PrestoDB | 實跑（CI 以 Docker 的 Trino 479；本機模擬） | 工作階段的時區為 UTC；時間以毫秒表示（PrestoDB、Athena 不支援 `TIMESTAMP(p)`，日期加減的最小單位也是毫秒）；MEDIAN、PERCENTILE 以排序後的陣列內插，與萃取時相同是精確值（Trino 只有近似的 approx_percentile）；伺服器是 PrestoDB 時設定檔用 `driver = "presto"` |
 | Amazon Athena（engine 3） | 實跑（SQL 在 CI 的 Trino 執行；連線本身未實機驗證） | 與 Trino 相同的轉譯；查詢結果寫到 `s3_staging_dir` 或工作群組 `work_group` 設定的位置；AWS 憑證省略時用預設的來源（環境變數、設定檔 profile 或 IAM 角色） |
@@ -823,7 +824,7 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
 合併集合（XML 的寫法尚未在公開報表中看到）、地圖、預測（Forecast）、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
-Relationship 模型中同一個彙總用到多張資料表的欄位、Teradata 等其他資料庫的 Live 連線、
+Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
 Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、
 標題中的 Table Calculation 值、

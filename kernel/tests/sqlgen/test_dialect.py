@@ -119,8 +119,9 @@ DIALECTS = [
     "trino",
     "athena",
     "bigquery",
+    "teradata",
 ]
-SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift", "athena", "bigquery"]
+SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift", "athena", "bigquery", "teradata"]
 """沒有實機的方言：轉譯結果以快照審核（BigQuery 在 CI 以模擬器實跑，仍以快照審核）。"""
 SNAPSHOT_SCHEMAS = {
     "oracle": ["SALES"],
@@ -129,6 +130,7 @@ SNAPSHOT_SCHEMAS = {
     "redshift": ["public"],
     "athena": ["AwsDataCatalog", "sales"],
     "bigquery": ["sales-project", "sales"],
+    "teradata": ["sales"],
 }
 
 
@@ -155,6 +157,7 @@ def test_custom_sql_is_restored(dialect: str) -> None:
         ("trino", "'O''Hare'", "DATE '2024-01-01'"),
         ("athena", "'O''Hare'", "DATE '2024-01-01'"),
         ("bigquery", "'O\\'Hare'", "DATE '2024-01-01'"),
+        ("teradata", "'O''Hare'", "DATE '2024-01-01'"),
     ],
 )
 def test_custom_sql_parameters(dialect: str, region: str, since: str) -> None:
@@ -228,8 +231,8 @@ def test_bigquery_datetime_columns_are_normalized() -> None:
 
 
 def test_unsupported_dialect() -> None:
-    with pytest.raises(DialectError, match="teradata"):
-        to_dialect("SELECT 1", "teradata")
+    with pytest.raises(DialectError, match="exasol"):
+        to_dialect("SELECT 1", "exasol")
 
 
 def test_postgres_semantics() -> None:
@@ -430,8 +433,8 @@ def test_dialect_snapshot(item: tuple[Path, str], dialect: str) -> None:
         except DialectError as exc:
             sql = f"-- 尚不支援：{exc}"
         else:
-            # SQLGlot 的該方言能重新解析（語法正確）
-            sqlglot.parse_one(sql, read=dialect)
+            # SQLGlot 的該方言能重新解析（語法正確；SQLGlot 不認得 Teradata 的 CHARACTER SET）
+            sqlglot.parse_one(sql.replace(" CHARACTER SET UNICODE", ""), read=dialect)
         parts.append(f"-- 取回 {fetch.name}\n{sql}\n")
     text = "\n".join(parts)
     snapshot = directory / "sql" / dialect / f"{worksheet}.sql"
