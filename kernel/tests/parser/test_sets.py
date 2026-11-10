@@ -228,7 +228,10 @@ def test_unsupported_sets(tmp_path: Path) -> None:
     )
     combined = next(f for f in ir.datasources[0].fields if f.id == "f_combined")
     assert combined.calc is not None
-    assert combined.calc.formula == 'IFNULL(STR([Region]), "Null") + ", " + IFNULL(STR([Category]), "Null")'
+    assert (
+        combined.calc.formula
+        == 'IFNULL(STR([Region]), "Null") + ", " + IFNULL(STR([Category]), "Null")'
+    )
 
 
 # ---------------------------------------------------------------- 集合動作
