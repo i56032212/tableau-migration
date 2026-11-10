@@ -107,7 +107,7 @@ def test_lod_is_row_level() -> None:
         ("DATEPART([Region], [Order Date])", "必須是字串常值"),
         ("DATEPART('fortnight', [Order Date])", "不支援「fortnight」"),
         ("WINDOW_SUM(SUM([Sales]), -1)", "必須同時指定起點與終點"),
-        ("WINDOW_SUM(SUM([Sales]), [Parameters].[Top N], 0)", "視窗位移只支援"),
+        ("WINDOW_SUM(SUM([Sales]), 'a', 0)", "視窗位移必須是整數"),
         ("[Loop A]", "循環參照"),
         ("{FIXED [Region] : {FIXED [Category] : SUM([Sales])}}", "LOD 運算式內部必須是彙總"),
         ("[Region] - [Order Date]", "無法相減"),
@@ -126,9 +126,9 @@ def test_errors(formula: str, message: str) -> None:
 
 
 def test_unsupported_function_is_flagged() -> None:
-    exc = error("HEXBINX([Sales], [Profit])")
+    exc = error("SCRIPT_REAL('return 1', SUM([Sales]))")
     assert exc.unsupported
-    assert "HEXBINX" in exc.message
+    assert "SCRIPT_REAL" in exc.message
 
 
 def test_expand_walks_into_calcs() -> None:

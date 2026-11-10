@@ -389,31 +389,32 @@ def _percentile(name: str) -> Checker:
 
 
 def _window(name: str) -> Checker:
-    """WINDOW_*(expr, [start, end])；start、end 為整數常值或 FIRST()、LAST()。"""
+    """WINDOW_*(expr, [start, end])；start、end 為整數常值、FIRST()、LAST() 或整數運算式。"""
 
     base = name.removeprefix("WINDOW_")
 
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
         if len(nodes) == 2:
             raise FormulaSemanticError(f"{name} 必須同時指定起點與終點", pos)
-        for node in nodes[1:]:
-            window_offset(node, name, pos)
+        for node, info in zip(nodes[1:], args[1:], strict=True):
+            window_offset(node, name, pos, info)
         return _window_result(base, args[0].datatype, name, pos)
 
     return check
 
 
-def window_offset(node: Node, name: str, pos: int) -> int | None:
-    """視窗位移：整數常值；FIRST() 與 LAST() 回傳 None（表示無界）。"""
+def window_offset(node: Node, name: str, pos: int, info: Info | None = None) -> int | None:
+    """視窗位移：整數常值；FIRST() 與 LAST() 回傳 None（表示無界）；其他整數運算式（例如 FIRST() + 1、
+    參數）也回傳 None，查詢時逐列計算。"""
     from tmig.formula.ast import Call
 
     if isinstance(node, Call) and node.name in ("FIRST", "LAST") and not node.args:
         return None
     if isinstance(node, LiteralNode) and node.kind == "integer":
         return int(node.value)
-    raise FormulaSemanticError(
-        f"{name} 的視窗位移只支援整數常值、FIRST() 或 LAST()", pos, unsupported=True
-    )
+    if info is not None and info.datatype == "integer":
+        return None
+    raise FormulaSemanticError(f"{name} 的視窗位移必須是整數", pos, unsupported=True)
 
 
 def _window_result(base: str, t: str, name: str, pos: int) -> DataType:
@@ -434,8 +435,8 @@ def _window_extra(name: str) -> Checker:
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
         if len(nodes) == 3:
             raise FormulaSemanticError(f"{name} 必須同時指定起點與終點", pos)
-        for node in nodes[2:]:
-            window_offset(node, name, pos)
+        for node, info in zip(nodes[2:], args[2:], strict=True):
+            window_offset(node, name, pos, info)
         _numeric(name, 0)(args, pos)
         if name == "WINDOW_PERCENTILE":
             node = nodes[1]
@@ -515,6 +516,8 @@ _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("ROUND", 1, 2, _round),
     ("SQRT", 1, 1, _real_numeric),
     ("POWER", 2, 2, _real_numeric),
+    ("HEXBINX", 2, 2, _real_numeric),
+    ("HEXBINY", 2, 2, _real_numeric),
     ("EXP", 1, 1, _real_numeric),
     ("LN", 1, 1, _real_numeric),
     ("LOG", 1, 2, _real_numeric),
@@ -629,6 +632,7 @@ _TABLE_CALC: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("RANK_UNIQUE", 1, 2, _rank),
     ("RANK_PERCENTILE", 1, 2, _rank_percentile),
     ("LOOKUP", 2, 2, _lookup),
+    ("PREVIOUS_VALUE", 1, 1, _total),
 ]
 
 

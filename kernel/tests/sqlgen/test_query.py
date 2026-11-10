@@ -899,7 +899,11 @@ def test_every_table_calc_function_is_tested() -> None:
     from tmig.formula.catalog import is_table_calc_function
     from tmig.formula.functions import implemented_names
 
-    text = Path(__file__).read_text(encoding="utf-8")
+    folder = Path(__file__).parent
+    text = "".join(
+        (folder / name).read_text(encoding="utf-8")
+        for name in ("test_query.py", "test_more_functions.py")
+    )
     names = [n for n in implemented_names() if is_table_calc_function(n)]
     assert [n for n in names if not re.search(rf"\b{n}\(", text)] == []
 

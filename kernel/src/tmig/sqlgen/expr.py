@@ -376,6 +376,8 @@ class ExprCompiler:
             return f"(CASE WHEN {a[0]} < 0 THEN NULL ELSE sqrt({a[0]}) END)"
         if name == "POWER":
             return f"pow({a[0]}, {a[1]})"
+        if name in ("HEXBINX", "HEXBINY"):
+            return _hexbin(a[0], a[1], name == "HEXBINX")
         if name == "EXP":
             return f"exp({a[0]})"
         if name == "LN":
@@ -661,6 +663,19 @@ def interval(part: str, amount: str) -> str:
         "minute": f"to_minutes({n})",
         "second": f"to_seconds({n})",
     }[part]
+
+
+def _hexbin(x: str, y: str, want_x: bool) -> str:
+    """HEXBINX／HEXBINY：點 (x, y) 所在的六角形（邊長 1、頂點朝上）的中心。六角形的中心是兩組錯開的
+    矩形格點（間距 √3 × 3，第二組平移 √3 / 2、1.5），取兩組中較近的一點（與 d3-hexbin 相同，依公開資料推定）。"""
+    w = "sqrt(3)"
+    ax, ay = f"({w} * round(({x}) / {w}))", f"(3 * round(({y}) / 3))"
+    bx, by = f"({w} * (floor(({x}) / {w}) + 0.5))", f"(3 * floor(({y}) / 3) + 1.5)"
+    near_a = f"(pow(({x}) - {ax}, 2) + pow(({y}) - {ay}, 2) <= pow(({x}) - {bx}, 2) + pow(({y}) - {by}, 2))"
+    a, b = (ax, bx) if want_x else (ay, by)
+    return (
+        f"(CASE WHEN ({x}) IS NULL OR ({y}) IS NULL THEN NULL WHEN {near_a} THEN {a} ELSE {b} END)"
+    )
 
 
 __all__ = ["ExprCompiler", "SqlEnv", "interval", "week_offset", "window_offset"]

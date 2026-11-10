@@ -238,7 +238,7 @@ CALCS = "".join(
         calc("Calculation_2", "Ratio", "SUM([Profit]) / SUM([Sales])"),
         calc("Calculation_3", "Region Sales", "{FIXED [Region] : SUM([Sales])}"),
         calc("Calculation_4", "Rank", "RANK(SUM([Sales]))", "integer"),
-        calc("Calculation_5", "Bad", "HEXBINX([Sales], [Profit])", "real", "dimension"),
+        calc("Calculation_5", "Bad", "SCRIPT_REAL('return 1', SUM([Sales]))", "real", "dimension"),
         calc("Calculation_6", "Uses Param", "[Sales] * [Parameters].[Parameter 1]"),
     ]
 )
@@ -264,7 +264,7 @@ def test_calc_levels_and_ast(tmp_path: Path) -> None:
     param = field(ir, "[Calculation_6]")
     assert param.calc is not None and param.calc.ast is not None
     assert param.calc.ast["right"]["id"] == "p_top_n"
-    assert any("Bad" in r and "HEXBINX" in r for r in reasons(ir))
+    assert any("Bad" in r and "SCRIPT_REAL" in r for r in reasons(ir))
 
 
 def test_group_calcs_and_sets(tmp_path: Path) -> None:

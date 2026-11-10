@@ -177,6 +177,12 @@ ROW_CASES: list[tuple[str, str, Any]] = [
     ("SQRT([Sales])", "A1", 10.0),
     ("SQRT([Profit])", "A2", None),
     ("POWER([Quantity], 2)", "A1", 9.0),
+    # 邊長 1 的六角形（頂點朝上）：(2, 0.2) 較靠近 (√3, 0)，(1, 2) 較靠近 (√3 / 2, 1.5)
+    ("HEXBINX(2, 0.2)", "A1", pytest.approx(3**0.5)),
+    ("HEXBINY(2, 0.2)", "A1", 0.0),
+    ("HEXBINX(1, 2)", "A1", pytest.approx(3**0.5 / 2)),
+    ("HEXBINY(1, 2)", "A1", 1.5),
+    ("HEXBINX(NULL, 2)", "A1", None),
     ("EXP(0)", "A1", 1.0),
     ("LN([Profit])", "A4", None),
     ("LOG(1000)", "A1", 3.0),

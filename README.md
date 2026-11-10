@@ -642,7 +642,12 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 - **函式**：REGEXP_EXTRACT 沒有符合時為 Null；正規表示式以 RE2 執行，用到前後查看、反向參照的樣式列為不支援；
   DATENAME 的月份與星期為英文名稱（Tableau 依工作簿的地區設定，中文環境可能不同）；ISDATE 只認得 ISO 格式的日期。
   FLOAT、INT 把日期轉成數值，DATE、DATETIME 把數值轉成日期時，以 1899-12-30 為第 0 天、小數部分是一天中的時間
-  （與 Excel 相同，依公開資料推定）；TabMon 等報表常見的「捨去到 N 分鐘」與兩個時間相減的寫法不受第 0 天影響
+  （與 Excel 相同，依公開資料推定）；TabMon 等報表常見的「捨去到 N 分鐘」與兩個時間相減的寫法不受第 0 天影響。
+  PREVIOUS_VALUE 以遞迴的 CTE 在每個分割中依計算方向的順序逐列計算（公式中的其他 Table Calculation 先算成欄位），
+  只支援寫在工作表上的 Table Calculation 計算欄位中；視窗函式的起訖可以是運算式（例如 `FIRST() + 1`、參數），
+  逐列決定範圍，起點在終點之後時為 Null；HEXBINX／HEXBINY 的六角形邊長為 1、頂點朝上（與 d3-hexbin 相同，
+  方向依公開資料推定）。外部分析服務（SCRIPT_*）、預測模型（MODEL_PERCENTILE、MODEL_QUANTILE）、
+  直通資料庫的 SQL（RAWSQL_*）與空間函式（MAKEPOINT、DISTANCE 等，屬於地圖）尚不支援
 - **Relationship 模型**：語意依 Tableau 文件（「How Analysis Works for Multi-table Data Sources」）與公開文章推定；
   維度表中沒有量值的成員何時列出、只用到其他資料表欄位的篩選對沒有關聯的列以 Null 判斷，這兩點待真實報表確認。
   維度是一對多資料表欄位的運算式（日期部分、計算欄位）時，Tableau 在原值還是運算式的值上去重不明，列為不支援
@@ -683,7 +688,7 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
-合併集合與合併欄位（Combined Field）、地圖、LOD 的維度本身含 LOD、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
+合併集合與合併欄位（Combined Field）、地圖、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
 總計的 Total Using、總計中的 Table Calculation 或與量值篩選並用、標題中的 Table Calculation 值、

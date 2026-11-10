@@ -20,7 +20,7 @@ LOD 的彙總語意：彙總的參數若只含 LOD（不含列層級欄位），
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Literal
@@ -461,6 +461,10 @@ class WorksheetQuery:
         """目前編譯的這組彙總用到哪些部分的列（量值來自多張資料表時，見 _parts_scope）。"""
         self._domain_conds: list[str] = []
         """列層級篩選的條件（直接套用）：補上維度成員時使用。"""
+        self._previous: Callable[[Callable[[int], str]], str] | None = None
+        """PREVIOUS_VALUE 的代換（見 _previous_value）：參數為編譯第 i 個引數的函式。"""
+        self.recursive = False
+        """是否有遞迴的 CTE（PREVIOUS_VALUE）：輸出時寫成 WITH RECURSIVE。"""
 
     # ------------------------------------------------------------ 工具
 
@@ -1999,6 +2003,7 @@ class WorksheetQuery:
         selects = ["m.*"]
         joins: list[str] = []
         expressions: list[str] = []
+        recursive: list[tuple[Measure, _PostEnv, _Window]] = []
         layers: dict[int, list[str]] = {}
         marks_rows: str | None = None
         joined: dict[tuple[Node, tuple[str, ...]], str] = {}
@@ -2028,7 +2033,11 @@ class WorksheetQuery:
             nested_windows = {n.field: self._window(n, dims, sorts, sort_cols) for n in tc.nested}
             items: list[_Nested] = []
             root = m.use.field if tc.type == "formula" else None
-            fields, calls, _ = self._prepare(m.node, window, root, nested_windows, items)
+            previous = self._has_previous(m.node)
+            # PREVIOUS_VALUE 以遞迴的 CTE 逐列計算：其中的其他 Table Calculation 一律先算成欄位
+            fields, calls, _ = self._prepare(
+                m.node, window, root, nested_windows, items, inside=previous
+            )
             for item in items:
                 env = _PostEnv(
                     self,
@@ -2043,8 +2052,11 @@ class WorksheetQuery:
             env = _PostEnv(
                 self, agg_cols, window, totals_for(m.node, window, fields), fields, calls
             )
-            sql = self._compile(lambda m=m, env=env: self.compiler(env).post(m.node))
-            expressions.append(f"{sql} AS {ident(m.col)}")
+            if previous:
+                recursive.append((m, env, window))
+            else:
+                sql = self._compile(lambda m=m, env=env: self.compiler(env).post(m.node))
+                expressions.append(f"{sql} AS {ident(m.col)}")
             self.note(
                 7,
                 f"{m.key}：{tc.type}，計算方向 {tc.preset}"
@@ -2065,7 +2077,59 @@ class WorksheetQuery:
             base = self.cte(
                 7, self.name("nested"), f"SELECT m.*, {', '.join(layers[depth])} FROM {base} m"
             )
+        for m, env, window in recursive:
+            base = self._previous_value(base, m, env, window)
+        if not expressions:
+            return base
         return self.cte(7, "tc", f"SELECT m.*, {', '.join(expressions)} FROM {base} m")
+
+    def _has_previous(self, node: Node) -> bool:
+        return any(isinstance(n, Call) and n.name == "PREVIOUS_VALUE" for n in self.expand(node))
+
+    def _previous_value(self, base: str, m: Measure, env: _PostEnv, window: _Window) -> str:
+        """PREVIOUS_VALUE：每個分割依計算方向的順序逐列計算（遞迴的 CTE）。第一列的 PREVIOUS_VALUE(x) 為 x，
+        之後為這個計算前一列的值；其中的其他 Table Calculation 已先算成欄位。"""
+        rn = ident("__pv_rn")
+        partition = f"PARTITION BY {', '.join(window.partition)}" if window.partition else ""
+        order = f"ORDER BY {', '.join(window.order)}" if window.order else ""
+        numbered = self.cte(
+            7,
+            self.name("pv_rows"),
+            f"SELECT m.*, row_number() OVER ({partition} {order}) AS {rn} FROM {base} m",
+        )
+
+        def compiled(previous: Callable[[Callable[[int], str]], str]) -> str:
+            self._previous = previous
+            try:
+                return self._compile(lambda: self.compiler(env).post(m.node))
+            finally:
+                self._previous = None
+
+        first = compiled(lambda arg: arg(0))
+        step = compiled(lambda arg: f"r.{ident('__pv')}")
+        name = self.name("pv")
+        keys = [(k, ident(f"__pvk{i}")) for i, k in enumerate(window.partition)]
+        anchor_cols = ", ".join([*(f"{k} AS {a}" for k, a in keys), rn])
+        step_cols = ", ".join([*(f"m.{k}" for k, _ in keys), f"m.{rn}"])
+        step_on = " AND ".join(
+            [f"m.{rn} = r.{rn} + 1", *(f"m.{k} IS NOT DISTINCT FROM r.{a}" for k, a in keys)]
+        )
+        self.cte(
+            7,
+            name,
+            f"SELECT {anchor_cols}, {first} AS {ident('__pv')} FROM {numbered} WHERE {rn} = 1 "
+            f"UNION ALL SELECT {step_cols}, {step} FROM {numbered} m JOIN {name} r ON {step_on}",
+        )
+        self.recursive = True
+        join_on = " AND ".join(
+            [f"m.{rn} = r.{rn}", *(f"m.{k} IS NOT DISTINCT FROM r.{a}" for k, a in keys)]
+        )
+        return self.cte(
+            7,
+            self.name("pv_join"),
+            f"SELECT m.* EXCLUDE ({rn}), r.{ident('__pv')} AS {ident(m.col)} "
+            f"FROM {numbered} m LEFT JOIN {name} r ON {join_on}",
+        )
 
     def _prepare(
         self,
@@ -2074,6 +2138,7 @@ class WorksheetQuery:
         root: str | None,
         nested_windows: dict[str, _Window],
         items: list[_Nested],
+        inside: bool = False,
     ) -> tuple[dict[str, str], dict[Node, str], int]:
         """找出運算式中必須先算好的巢狀部分，加入 items（依計算順序）。
 
@@ -2117,6 +2182,10 @@ class WorksheetQuery:
                 if spec is not None and spec.kind == "table_calc":
                     if node.name == "TOTAL":
                         return
+                    if node.name == "PREVIOUS_VALUE":
+                        for arg in node.args:
+                            visit(arg, True)
+                        return
                     if inside:
                         key = self.canon(node)
                         if key not in calls:
@@ -2128,7 +2197,7 @@ class WorksheetQuery:
             for sub in children(node):
                 visit(sub, inside)
 
-        visit(expr, False)
+        visit(expr, inside)
         return fields, calls, depth
 
     def _totals_in(self, expr: Node, skip: dict[str, str]) -> list[Call]:
@@ -2229,10 +2298,12 @@ class WorksheetQuery:
                 value, bounds = f"{fn}({arg(0)})", node.args[1:]
             if not bounds:
                 sql = f"{value} OVER ({partition})" if partition else f"{value} OVER ()"
-            else:
+            elif all(_static_bound(b) for b in bounds):
                 start = _bound(bounds[0], "start")
                 end = _bound(bounds[1], "end")
                 sql = f"{value} {over(f'ROWS BETWEEN {start} AND {end}')}"
+            else:
+                sql = self._dynamic_window(value, bounds, over, inner)
             return self._integer(sql, node) if fn in ("sum", "count") else sql
         if name == "INDEX":
             return f"row_number() {over()}"
@@ -2266,6 +2337,13 @@ class WorksheetQuery:
             else:
                 fn = f"count(*) OVER ({rank_partition} {ordering} RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
             return f"(CASE WHEN ({value}) IS NULL THEN NULL ELSE CAST({fn} AS BIGINT) END)"
+        if name == "PREVIOUS_VALUE":
+            if self._previous is None:
+                raise QueryError(
+                    "PREVIOUS_VALUE 只支援在工作表上的 Table Calculation 計算欄位的公式中使用",
+                    unsupported=True,
+                )
+            return self._previous(arg)
         if name == "RANK_PERCENTILE":
             # (不大於自己的值的個數 - 1) / (個數 - 1)；Null 不計入（與 Tableau 文件的例子相同：
             # 6、9、9、14 → 0、0.67、0.67、1）
@@ -2303,6 +2381,46 @@ class WorksheetQuery:
             )
         raise QueryError(f"Table Calculation 函式 {name} 尚不支援", unsupported=True)
 
+    def _dynamic_window(
+        self, value: str, bounds: Sequence[Node], over: Callable[[str], str], inner: ExprCompiler
+    ) -> str:
+        """視窗的起訖為運算式（例如 FIRST() + 1、參數）：依起訖的正負選用 PRECEDING／FOLLOWING 的組合
+        （DuckDB 的列數必須為非負，逐列計算）；起點在終點之後時為 Null。"""
+
+        def side(node: Node) -> tuple[str | None, str]:
+            # (逐列的位移 SQL，或 None 表示無界)、無界的方向
+            if isinstance(node, Call) and node.name in ("FIRST", "LAST") and not node.args:
+                return None, node.name
+            return self._compile(lambda: inner.post(node)), ""
+
+        (s_sql, s_unbounded), (e_sql, e_unbounded) = side(bounds[0]), side(bounds[1])
+
+        def frame(start_following: bool, end_following: bool) -> str:
+            if s_sql is None:
+                start = "UNBOUNDED PRECEDING" if s_unbounded == "FIRST" else "UNBOUNDED FOLLOWING"
+            elif start_following:
+                start = f"CAST(greatest({s_sql}, 0) AS BIGINT) FOLLOWING"
+            else:
+                start = f"CAST(greatest(-({s_sql}), 0) AS BIGINT) PRECEDING"
+            if e_sql is None:
+                end = "UNBOUNDED FOLLOWING" if e_unbounded == "LAST" else "UNBOUNDED PRECEDING"
+            elif end_following:
+                end = f"CAST(greatest({e_sql}, 0) AS BIGINT) FOLLOWING"
+            else:
+                end = f"CAST(greatest(-({e_sql}), 0) AS BIGINT) PRECEDING"
+            return f"{value} {over(f'ROWS BETWEEN {start} AND {end}')}"
+
+        s_neg = "TRUE" if s_sql is None else f"({s_sql}) <= 0"
+        e_pos = "TRUE" if e_sql is None else f"({e_sql}) > 0"
+        nulls = [f"({x}) IS NULL" for x in (s_sql, e_sql) if x is not None]
+        cases = [f"WHEN {' OR '.join(nulls)} THEN NULL"] if nulls else []
+        if e_sql is not None:
+            cases.append(f"WHEN {s_neg} AND NOT {e_pos} THEN {frame(False, False)}")
+        cases.append(f"WHEN {s_neg} AND {e_pos} THEN {frame(False, True)}")
+        if s_sql is not None:
+            cases.append(f"WHEN NOT {s_neg} AND {e_pos} THEN {frame(True, True)}")
+        return f"(CASE {' '.join(cases)} ELSE NULL END)"
+
     def _integer(self, sql: str, node: Call) -> str:
         if self.datatype(node) == "integer":
             return f"CAST({sql} AS BIGINT)"
@@ -2312,7 +2430,7 @@ class WorksheetQuery:
 
     def _render(self, main: str) -> str:
         boundary = "-- ↑ 以上可下推到來源資料庫；以下一律在 DuckDB 執行\n"
-        lines = ["WITH"]
+        lines = ["WITH RECURSIVE" if self.recursive else "WITH"]
         stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
         current = 0
         pushed = True
@@ -2429,6 +2547,13 @@ def _lit(value: Scalar, datatype: str) -> str:
     if isinstance(value, (int, float)):
         return literal(value, "integer" if isinstance(value, int) else "real")
     return literal(value, "string")
+
+
+def _static_bound(node: Node) -> bool:
+    """整數常值或 FIRST()、LAST()：視窗的起訖可以直接寫成 ROWS BETWEEN。"""
+    if isinstance(node, Call) and node.name in ("FIRST", "LAST") and not node.args:
+        return True
+    return isinstance(node, LiteralNode) and node.kind == "integer"
 
 
 def _bound(node: Node, side: Literal["start", "end"]) -> str:
