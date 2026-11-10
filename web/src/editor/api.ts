@@ -24,6 +24,8 @@ export interface Outline {
     filters: { id: string; kind: string; field: FieldUse; label: string }[];
     dimensions: FieldUse[];
     legends: ("color" | "size" | "shape")[];
+    /** 頁面架上的欄位（顯示名稱）；沒有頁面架為 null */
+    pages: string | null;
   }[];
   dashboards: { id: string; name: string }[];
   stories: { id: string; name: string }[];

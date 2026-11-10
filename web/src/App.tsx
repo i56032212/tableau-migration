@@ -29,6 +29,7 @@ import { Editor } from "./editor/Editor";
 import { StoryEditor } from "./editor/StoryEditor";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
+import { PageControl, pagesOf } from "./PageControl";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
@@ -483,6 +484,9 @@ function WorkbookPage({
       )}
       {worksheet && (
         <div className="single-sheet">
+          {worksheet.pages && view && (
+            <PageControl workbook={workbook} worksheet={worksheet.id} {...pagesOf(ir, worksheet.id)} view={view} onView={setView} />
+          )}
           <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(ir, worksheet.id, view)} />
         </div>
       )}

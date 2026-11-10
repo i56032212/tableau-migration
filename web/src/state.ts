@@ -25,6 +25,8 @@ export interface ViewState {
   sets?: Record<string, SetValue>;
   /** 相對日期篩選的基準日；null 表示由查詢服務決定（cases.yaml 的基準日或今天） */
   today?: string | null;
+  /** 頁面架目前的頁：工作表 id → 頁面欄位的值（沒有列出的工作表為存檔時的頁） */
+  pages?: Record<string, Scalar>;
 }
 
 /** 篩選狀態的欄位鍵，與查詢服務相同：f_region、year(f_order_date)、trunc_month(f_order_date)。 */
@@ -85,6 +87,7 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
   }
   const state: QueryState = { filters: view.sheetFilters[worksheet] ?? {}, parameters: view.parameters, actions };
   if (view.today) state.today = view.today;
+  if (view.pages && worksheet in view.pages) state.pages = { [worksheet]: view.pages[worksheet] };
   // 集合動作：只帶這張工作表的資料源中的集合（其他資料源的集合不影響它）
   const sheet = ir.worksheets.find((w) => w.id === worksheet);
   const fields = new Set(ir.datasources.find((d) => d.id === sheet?.datasource)?.fields.map((f) => f.id) ?? []);

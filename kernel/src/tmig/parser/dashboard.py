@@ -209,6 +209,13 @@ class DashboardParser:
             return Zone(kind="blank", **base)
         if kind_attr == "filter":
             return self._filter_zone(element, name, base)
+        if kind_attr == "currpage":
+            # 頁面控制項：切換工作表頁面架上的頁
+            sheet = self._sheet(element, name)
+            if sheet is None or name not in self.ctx.paged_sheets:
+                self.ctx.flag(element, f"頁面控制項的工作表「{name}」沒有頁面架")
+                return Zone(kind="blank", **base)
+            return Zone(kind="page", worksheet=sheet.id, **base)
         if kind_attr == "paramctrl":
             return self._param_zone(element, base)
         if kind_attr in LEGENDS:

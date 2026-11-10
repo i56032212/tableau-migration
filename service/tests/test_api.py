@@ -169,6 +169,7 @@ def test_cases(client: TestClient) -> None:
         "actions": {},
         "sets": {},
         "today": None,
+        "pages": {},
     }
 
 

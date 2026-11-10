@@ -378,3 +378,23 @@ textarea.formula { width: 100%; font-family: ui-monospace, "Cascadia Mono", Menl
 .story-preview { grid-row: 2; overflow: auto; padding: 12px; background: #e9ebef; }
 .dash-editor .toast, .story-editor .toast { position: absolute; }
 .toolbar > button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* 頁面控制項（頁面架） */
+.page-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+.page-control .page-title {
+  font-weight: 600;
+  margin-right: 4px;
+}
+.page-control select {
+  min-width: 8em;
+}
+.page-control button {
+  min-width: 28px;
+}

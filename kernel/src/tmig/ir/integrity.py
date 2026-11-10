@@ -284,6 +284,10 @@ def check_references(ir: IR) -> list[str]:
                 errors.append(f"{base}.panes[{i}].measure：量值不在{pane.axis}架上")
         for i, use in enumerate(ws.measure_values):
             check_use(use, ws.datasource, f"{base}.measure_values[{i}]", tcs, extra=blended)
+        if ws.pages is not None:
+            check_use(ws.pages, ws.datasource, f"{base}.pages", None)
+            if ws.pages.agg is not None or ws.pages.table_calc is not None:
+                errors.append(f"{base}.pages：頁面架上必須是維度")
         for i, alias in enumerate(ws.measure_aliases):
             if alias.use not in ws.measure_values:
                 errors.append(f"{base}.measure_aliases[{i}]：量值不在 Measure Values 卡上")
@@ -345,6 +349,8 @@ def check_references(ir: IR) -> list[str]:
                 errors.append(f"{where}：工作表「{zone.worksheet}」不存在")
             elif zone.field is not None:
                 check_use(zone.field, sheet.datasource, f"{where}.field", None)
+            elif zone.kind == "page" and sheet.pages is None:
+                errors.append(f"{where}：工作表「{zone.worksheet}」沒有頁面架")
 
     for story in ir.stories:
         point_ids = [point.id for point in story.points]

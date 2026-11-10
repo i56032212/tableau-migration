@@ -387,3 +387,67 @@ def test_export_image_and_powerpoint(engine: str, tmp_path: Path) -> None:
         assert {"ppt/presentation.xml", "ppt/slides/slide1.xml", "ppt/media/image1.png"} <= names
         assert archive.read("ppt/media/image1.png").startswith(b"\x89PNG")
         assert archive.testzip() is None
+
+
+def test_pages_and_disaggregation(engine: str) -> None:
+    """頁面架：拖到「頁面」後出現頁面控制項，切換頁只顯示那一頁；檢視器也能切換。
+    彙總量值關閉後量值不彙總（每一列資料一個標記）。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.locator('.data-pane [data-field="f_order_date"]').drag_to(
+            page.locator('[data-drop="pages"]')
+        )
+        control = page.locator(".editor [data-page-control]")
+        control.wait_for()
+        settle(page)
+        # 沒有存過的頁：從第一頁開始，並存回工作表
+        page.wait_for_function(
+            "() => document.querySelector('.editor [data-page-control] select')?.value === '0'"
+        )
+        settle(page)
+        years = control.locator("option").all_inner_texts()
+        assert len(years) >= 2 and years == sorted(years)
+        saved = sheet()
+        assert saved["pages"]["date"] == {"kind": "part", "unit": "year"}
+        assert str(saved["page"]) == years[0]
+        control.get_by_role("button", name="下一頁").click()
+        settle(page)
+        assert str(sheet()["page"]) == years[1]
+
+        # 彙總量值關閉：SUM(Sales) 變成不彙總的 Sales
+        page.get_by_label("彙總量值").uncheck()
+        settle(page)
+        saved = sheet()
+        assert saved["disaggregated"] is True
+        assert saved["columns"][0]["agg"] is None
+        page.get_by_label("彙總量值").check()
+        settle(page)
+        assert sheet()["columns"][0]["agg"] == "sum"
+
+        # 檢視器：頁面控制項切換頁
+        page.goto(f"{engine}/w/demo/s/ws_sales_by_region")
+        viewer = page.locator(".single-sheet [data-page-control]")
+        viewer.wait_for()
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        assert viewer.locator("select").input_value() == "1"
+        with page.expect_response(lambda r: r.url.endswith("/render")) as response:
+            viewer.get_by_role("button", name="上一頁").click()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert body["pages"] == {"ws_sales_by_region": int(years[0])}
+        assert errors == []
+        browser.close()

@@ -793,6 +793,11 @@ export function DashboardEditor({
               篩選：{f.label}
             </button>
           ))}
+          {controlTarget?.pages && (
+            <button type="button" onClick={() => add(makeZone("page", { worksheet: controlTarget.id }, floating), { w: 260, h: 60 })}>
+              頁面：{controlTarget.pages}
+            </button>
+          )}
           {controlTarget?.legends.map((legend) => (
             <button key={legend} type="button" onClick={() => add(makeZone("legend", { worksheet: controlTarget.id, legend }, floating), { w: 220, h: 140 })}>
               圖例：{legend === "color" ? "色彩" : legend === "size" ? "大小" : "形狀"}

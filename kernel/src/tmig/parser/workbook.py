@@ -323,7 +323,11 @@ class WorkbookParser:
         for window in children(windows, "window"):
             name = window.get("name", "")
             if window.get("class") == "worksheet":
-                self.ctx.sheet_fits[name] = fit_mode(child(window, "viewpoint"))
+                viewpoint = child(window, "viewpoint")
+                self.ctx.sheet_fits[name] = fit_mode(viewpoint)
+                bucket = child(child(child(viewpoint, "current-page"), "multibucket"), "bucket")
+                if bucket is not None and text_of(bucket):
+                    self.ctx.sheet_pages[name] = text_of(bucket)
             elif window.get("class") == "dashboard":
                 self.ctx.dashboard_fits[name] = {
                     vp.get("name", ""): fit_mode(vp)

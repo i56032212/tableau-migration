@@ -88,6 +88,10 @@ class QueryState(BaseModel):
         description="相對日期篩選的基準日（yyyy-mm-dd）；未指定時為查詢時的今天",
         pattern=r"^\d{4}-\d{2}-\d{2}$",
     )
+    pages: dict[str, Scalar] = Field(
+        default_factory=dict,
+        description="頁面架目前的頁：工作表 id → 頁面欄位的值；沒有列出的工作表為存檔時的頁",
+    )
 
 
 def use_key(use: FieldUse) -> str:
@@ -153,6 +157,13 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
         params[param_id] = value
 
     filters: list[Filter] = [_with_selection(f, state) for f in worksheet.filters]
+    if worksheet.pages is not None:
+        # 頁面架：只顯示目前這一頁（等同這個值的維度篩選）；不知道是哪一頁時不篩選
+        page = state.pages.get(worksheet.id, worksheet.page)
+        if worksheet.id in state.pages or worksheet.page is not None:
+            filters.append(
+                _new_filter("page", worksheet.pages, FilterValue(mode="include", values=[page]))
+            )
     applied: list[str] = []
     skipped: list[str] = []
     for n, (key, value) in enumerate(state.filters.items(), start=1):

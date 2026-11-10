@@ -298,6 +298,8 @@ export function zoneLabel(zone: Zone, names: Map<string, string>): string {
       return `參數：${names.get(`param:${zone.parameter ?? ""}`) ?? zone.parameter}`;
     case "legend":
       return `圖例：${names.get(zone.worksheet ?? "") ?? ""}`;
+    case "page":
+      return `頁面：${names.get(zone.worksheet ?? "") ?? ""}`;
     case "text":
       return `文字：${(zone.text ?? "").slice(0, 16)}`;
     case "image":

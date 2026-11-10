@@ -136,6 +136,10 @@ class ParseContext:
     windows: dict[str, tuple[str, str]] = field(default_factory=dict)
     """<windows> 中各視窗的 simple-id（大寫、不含大括號）→（類型、名稱），導覽按鈕以它找目標。"""
     sheet_fits: dict[str, FitMode] = field(default_factory=dict)
+    sheet_pages: dict[str, str] = field(default_factory=dict)
+    paged_sheets: set[str] = field(default_factory=set)
+    """有頁面架的工作表名稱（dashboard 的頁面控制項只能對應這些工作表）。"""
+    """工作表名稱 → 目前的頁（視窗 <viewpoint> 的 <current-page> 中的值原文，例如 #2016-10-01 00:00:00#）。"""
     """工作表名稱 → 工作表視窗的顯示大小（IR 的 FitMode）；沒有視窗的為 standard。"""
     dashboard_fits: dict[str, dict[str, FitMode]] = field(default_factory=dict)
     """dashboard 名稱 → 工作表名稱 → 這個 dashboard 中的顯示大小（<viewpoint> 的 <zoom>）。"""

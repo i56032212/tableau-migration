@@ -157,6 +157,10 @@ export interface Worksheet {
   name: string;
   datasource: string;
   filters: Filter[];
+  /** 頁面架：每一頁是這個維度的一個值 */
+  pages?: FieldUse | null;
+  /** 存檔時的頁；null 為第一頁 */
+  page?: Scalar;
 }
 
 export type ZoneKind =
@@ -165,6 +169,7 @@ export type ZoneKind =
   | "filter"
   | "parameter"
   | "legend"
+  | "page"
   | "text"
   | "image"
   | "title"
@@ -372,6 +377,8 @@ export interface QueryState {
   sets?: Record<string, SetValue>;
   /** 相對日期篩選的基準日（yyyy-mm-dd）；省略時由查詢服務決定 */
   today?: string | null;
+  /** 頁面架目前的頁：工作表 id → 頁面欄位的值 */
+  pages?: Record<string, Scalar>;
 }
 
 export interface WorkbookSummary {

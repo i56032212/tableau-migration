@@ -279,8 +279,16 @@ class _Builder:
         return use.continuous and ch is not None and ch.datatype in ("date", "datetime")
 
     def is_axis(self, use: FieldUse) -> bool:
-        """欄列架上畫成座標軸的量值：連續的量值與 Measure Values。"""
-        return self.is_measure(use) and (use.continuous or use.field in SPECIAL_FIELDS)
+        """欄列架上畫成座標軸的量值：連續的量值與 Measure Values；取消彙總量值時，不彙總的連續數值
+        （每一列資料的值）也是座標軸。"""
+        if self.is_measure(use):
+            return use.continuous or use.field in SPECIAL_FIELDS
+        return (
+            self.ws.disaggregated
+            and use.continuous
+            and use.date is None
+            and self.ch(use).datatype in ("integer", "real")
+        )
 
     # ------------------------------------------------------------ 座標
 

@@ -388,13 +388,10 @@ class SheetParser:
         totals = self._totals(table, rows, cols)
         visual_totals = self._visual_totals() if totals or subtotals else []
         totals_colored = bool(totals or subtotals) and self._totals_colored(child(table, "style"))
-        pages = child(table, "pages")
-        if pages is not None and (text_of(pages) or len(children(pages))):
-            ctx.flag(pages, "頁面架（Pages）v0 不支援")
-        if view is not None:
-            aggregation = child(view, "aggregation")
-            if aggregation is not None and aggregation.get("value") == "false":
-                ctx.flag(aggregation, "取消彙總量值（Aggregate Measures 關閉）v0 不支援")
+        page_use, page = self._pages(child(table, "pages"))
+        aggregation = child(view, "aggregation")
+        # 取消彙總量值：量值的欄位實例沒有彙總（[none:Sales:qk]），查詢時每一列資料是一個標記
+        disaggregated = aggregation is not None and aggregation.get("value") == "false"
         with self._blend_scope():
             marks, panes, mark_dims = self._marks(
                 child(table, "panes"), rows, cols, _folded_axes(child(table, "style"))
@@ -453,6 +450,9 @@ class SheetParser:
             label_valign=sheet_formats.label_valign,
             fit=ctx.sheet_fits.get(self.name, "standard"),
             blends=blends,
+            disaggregated=disaggregated,
+            pages=page_use,
+            page=page,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -613,6 +613,33 @@ class SheetParser:
             if any(f.id == use.field for f in secondary.fields):
                 return is_aggregate(secondary, use)
         return is_aggregate(self.ds, use)
+
+    # ------------------------------------------------------------ 頁面架
+
+    def _pages(self, element: etree._Element | None) -> tuple[FieldUse | None, Scalar]:
+        """頁面架：一個維度（<pages><column>…</column></pages>）；目前的頁取自工作表視窗的
+        <current-page>。頁面的歷程記錄（page-trail-options）不支援，只顯示目前的頁。"""
+        columns = children(element, "column")
+        if element is None or not columns:
+            return None, None
+        if len(columns) > 1:
+            self.ctx.flag(element, f"工作表「{self.name}」的頁面架上有多個欄位，v0 不支援")
+            return None, None
+        use = self._use(text_of(columns[0]), columns[0], "頁面架")
+        if use is None:
+            return None, None
+        if use.field in SPECIAL_FIELDS or self._is_measure(use):
+            self.ctx.flag(element, f"工作表「{self.name}」的頁面架上是量值，v0 不支援")
+            return None, None
+        self.ctx.paged_sheets.add(self.name)
+        raw = self.ctx.sheet_pages.get(self.name)
+        if raw is None:
+            return use, None
+        try:
+            return use, parse_literal(raw, value_type(self._field(use.field), use))
+        except LiteralError:
+            self.ctx.ignore(element, f"工作表「{self.name}」目前的頁 {raw} 無法辨識：顯示第一頁")
+            return use, None
 
     # ------------------------------------------------------------ Data Blending
 

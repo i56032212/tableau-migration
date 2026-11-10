@@ -2,7 +2,7 @@
 // 每次變更整理後把整張工作表存回（PUT），檢視重新查詢；復原與重做在這裡記錄。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FieldUse } from "../types";
+import type { FieldUse, Scalar } from "../types";
 import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
@@ -30,11 +30,13 @@ import {
   markUses,
   newTableCalc,
   pillLabel,
+  setAggregated,
   type SheetIR,
   swapAxes,
   tidySheet,
 } from "./model";
 import { FiltersShelf, MarksCard, MeasureValuesCard, Shelf } from "./Shelves";
+import { PageControl } from "../PageControl";
 
 const EMPTY_STATE = { filters: {}, parameters: {} };
 
@@ -105,6 +107,18 @@ function AnalyticsCard() {
           {trend ? "趨勢線 ✓" : "＋ 趨勢線…"}
         </button>
       </div>
+      <label className="hint aggregate-toggle" title="關閉時量值不彙總，每一列資料是一個標記（Tableau 的「分析＞彙總量值」）">
+        <input
+          type="checkbox"
+          aria-label="彙總量值"
+          checked={!sheet.disaggregated}
+          onChange={(e) => {
+            const aggregated = e.target.checked;
+            editor.apply((s) => setAggregated(s, aggregated, fields));
+          }}
+        />{" "}
+        彙總量值
+      </label>
       <ul className="analytics-list">
         {lines.map((line, i) => (
           <li key={i}>
@@ -455,6 +469,7 @@ export function Editor({
         </div>
         <DataPane onDatasource={changeDatasource} />
         <div className="cards-pane">
+          <Shelf label="頁面" shelf="pages" />
           <FiltersShelf />
           {measureValuesUsed && <MeasureValuesCard />}
           <MarksCard />
@@ -463,6 +478,26 @@ export function Editor({
         <div className="view-pane">
           <Shelf label="欄" shelf="columns" />
           <Shelf label="列" shelf="rows" />
+          {Boolean(stored?.pages) && (
+            <PageControl
+              workbook={workbook}
+              worksheet={sheet.id}
+              use={stored!.pages as FieldUse}
+              saved={(shown.page as Scalar | undefined) ?? null}
+              caption={fields.get((stored!.pages as FieldUse).field)?.caption ?? ""}
+              view={{
+                sheetFilters: {},
+                parameters: {},
+                actions: {},
+                selections: {},
+                pages: shown.page !== null && shown.page !== undefined ? { [sheet.id]: shown.page as Scalar } : {},
+              }}
+              onView={(next) => {
+                const page = next.pages?.[sheet.id];
+                if (page !== undefined) apply((s) => ({ ...s, page }));
+              }}
+            />
+          )}
           <div className="editor-canvas">
             {empty ? (
               <div className="placeholder">將欄位從資料窗格拖曳到欄、列或標記卡</div>

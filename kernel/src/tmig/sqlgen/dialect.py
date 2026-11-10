@@ -455,6 +455,9 @@ COMMON: frozenset[type[exp.Expr]] = frozenset(
         exp.StrPosition,
         exp.Chr,
         exp.RegexpLike,
+        # 取消彙總量值時每一列資料的編號（ROW_NUMBER() OVER (ORDER BY NULL)）
+        exp.Window,
+        exp.RowNumber,
     }
 )
 
@@ -2137,6 +2140,7 @@ class TSqlRewriter(Rewriter):
                 )
             ),
             exp.Literal: self.literal,
+            exp.Window: self.window,
         }
 
     def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
@@ -2159,6 +2163,17 @@ class TSqlRewriter(Rewriter):
             raise DialectError(f"SQL Server 沒有 {what}")
 
         return raise_
+
+    def window(self, node: exp.Expr) -> exp.Expr:
+        """視窗的排序不能是常值：ORDER BY NULL 改成 ORDER BY (SELECT NULL)。"""
+        order = node.args.get("order")
+        if isinstance(order, exp.Order):
+            for item in order.expressions:
+                if isinstance(item, exp.Ordered) and isinstance(item.this, exp.Null):
+                    item.set("this", _mark(exp.Var(this="(SELECT NULL)")))
+                    # 與 SQL Server 預設的 Null 順序相同，不另外產生排序 Null 的運算式
+                    item.set("nulls_first", True)
+        return node
 
     def literal(self, node: exp.Expr) -> exp.Expr:
         """非 ASCII 的字串常值寫成 N'…'（nvarchar）。"""

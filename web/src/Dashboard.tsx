@@ -4,6 +4,7 @@ import { isDesktop } from "./desktop";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
 import { FilterControl, ParameterControl } from "./Controls";
 import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
+import { PageControl, pagesOf } from "./PageControl";
 import {
   actionUrl,
   applySetActions,
@@ -318,6 +319,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
                 onMarks={zone.worksheet && hasActions(zone.worksheet) ? (e) => onMarks(zone.worksheet!, e) : undefined}
                 setFilter={setFilter}
                 setParameter={setParameter}
+                onView={onView}
                 onButton={onButton}
                 targetsShown={
                   zone.button?.action === "toggle"
@@ -375,6 +377,7 @@ interface ZoneProps {
   onMarks?: (event: MarkEvent) => void;
   setFilter: (worksheet: string, key: string, value: FilterValue) => void;
   setParameter: (id: string, value: Scalar) => void;
+  onView: (view: ViewState) => void;
   onButton: (button: Button) => void;
   /** 顯示／隱藏按鈕的區塊目前是否顯示 */
   targetsShown: boolean;
@@ -392,6 +395,7 @@ function ZoneContent({
   onMarks,
   setFilter,
   setParameter,
+  onView,
   onButton,
   targetsShown,
 }: ZoneProps) {
@@ -435,6 +439,8 @@ function ZoneContent({
     }
     case "legend":
       return <Legend response={renders[zone.worksheet!]} kind={zone.legend} />;
+    case "page":
+      return <PageControl workbook={workbook} worksheet={zone.worksheet!} {...pagesOf(ir, zone.worksheet!)} view={view} onView={onView} />;
     case "title":
       return (
         <div className="title" style={richAlign(zone.content)}>

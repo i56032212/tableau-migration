@@ -5636,6 +5636,46 @@
           "title": "Fit",
           "type": "string"
         },
+        "disaggregated": {
+          "default": false,
+          "description": "取消彙總量值（Aggregate Measures 關閉）：量值不彙總，每一列資料是一個標記",
+          "title": "Disaggregated",
+          "type": "boolean"
+        },
+        "pages": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "頁面架：每一頁是這個維度的一個值，檢視只顯示目前這一頁（等同這個值的維度篩選）"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "目前的頁（Tableau 存檔時的頁面）；None 為第一頁（檢視器依可選值決定）",
+          "title": "Page"
+        },
         "blends": {
           "description": "Data Blending：次要資料源與連結欄位；欄列架與標記卡上可以有這些資料源的量值",
           "items": {
@@ -5709,6 +5749,7 @@
             "filter",
             "parameter",
             "legend",
+            "page",
             "text",
             "image",
             "title",

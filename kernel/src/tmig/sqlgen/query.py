@@ -136,6 +136,8 @@ STAGES = {
     8: "Table Calculation 篩選",
 }
 VALUE_COL = "__v"
+ROW_ID = "__row_id"
+"""取消彙總量值時每一列資料的編號：併入彙總的層級，每一列各是一個標記（完全相同的列也不合併）。"""
 PUSHDOWN_BOUNDARY = 6
 """這一段以前可以交給來源資料庫；之後一律在 DuckDB 執行。"""
 
@@ -785,13 +787,17 @@ class WorksheetQuery:
             self.note(1, f"萃取篩選 {flt.id} 已在建立萃取時套用，不重複")
         conds = [self._filter_condition(f) for f in stage["datasource"]]
         self._domain_conds = [self._row_condition(f) for f in stage["datasource"]]
+        disaggregated = self._disaggregated()
+        row_id = f", row_number() OVER (ORDER BY NULL) AS {ident(ROW_ID)}" if disaggregated else ""
+        if disaggregated:
+            self.note(1, "取消彙總量值：每一列資料編號，各是一個標記")
         if self.source.projected:
             # Live 連線與 Relationship 模型：先以欄位 id 為別名選出實體欄位（各資料表的同名欄位不衝突），
             # 再套用資料源篩選
             self.cte(1, "base", base_sql)
-            self.cte(1, "src", f"SELECT * FROM base{_where(conds)}")
+            self.cte(1, "src", f"SELECT *{row_id} FROM base{_where(conds)}")
         else:
-            self.cte(1, "src", f"SELECT * FROM {base_sql}{_where(conds)}")
+            self.cte(1, "src", f"SELECT *{row_id} FROM {base_sql}{_where(conds)}")
         for flt in stage["datasource"]:
             self.note(1, f"資料源篩選 {flt.id}")
 
@@ -832,14 +838,21 @@ class WorksheetQuery:
 
         # 6. 彙總與量值篩選
         level = [self.dim_sql(d.use) for d in dims]
+        if disaggregated:
+            level.append(ident(ROW_ID))
         agg_nodes = list(
             {self.canon(a): a for m in measures for a in self.aggregates_in(m.node)}.values()
         )
         self._guard(self._covered([d.use for d in dims]), "檢視的彙總", agg_nodes)
         agg_name, agg_cols, keys = self.aggregate("agg", agg_nodes, level, rows_cte, 6, dims)
-        if self.model_plan is not None and self.model_plan.domain is not None and dims:
+        if (
+            self.model_plan is not None
+            and self.model_plan.domain is not None
+            and dims
+            and not disaggregated
+        ):
             agg_name = self._domain_marks(agg_name, agg_cols, keys, dims)
-        for d, key in zip(dims, keys, strict=True):
+        for d, key in zip(dims, keys[: len(dims)], strict=True):
             d.col = key
         post = self.compiler(_PostEnv(self, agg_cols))
         plain = [m for m in measures if not m.is_tc]
@@ -922,6 +935,16 @@ class WorksheetQuery:
             if self.source.custom_sql
             else {},
             guards=self._guard_list(),
+        )
+
+    def _disaggregated(self) -> bool:
+        """取消彙總量值且檢視中有不彙總的量值（只有維度時與 Tableau 相同，相同的組合只畫一個標記）。"""
+        if not self.worksheet.disaggregated:
+            return False
+        measures = {f.id for f in self.datasource.fields if f.role == "measure"}
+        return any(
+            u.field in measures and u.agg is None and u.table_calc is None
+            for u in self._view_uses()
         )
 
     # ------------------------------------------------------------ Relationship 模型
@@ -2894,6 +2917,8 @@ def totals_sql(
     ws = _find_worksheet(ir, worksheet)
     if not ws.totals and not ws.subtotals:
         return []
+    if ws.disaggregated:
+        raise QueryError("取消彙總量值與總計、小計一起使用尚不支援", unsupported=True)
     if ws.blends:
         raise QueryError("Data Blending 與總計、小計一起使用尚不支援", unsupported=True)
     dims = {c.key for c in main.columns if c.role == "dimension"}

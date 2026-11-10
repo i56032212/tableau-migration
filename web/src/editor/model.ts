@@ -125,7 +125,7 @@ export const EDITOR_REF = "/editor";
 /** 標記卡上的位置：單一欄位或多個欄位。 */
 export type MarkSlot = "color" | "size" | "shape" | "angle" | "path" | "label" | "detail" | "tooltip";
 export const LIST_SLOTS: MarkSlot[] = ["label", "detail", "tooltip"];
-export type ShelfName = "rows" | "columns" | "filters" | "measure_values" | `marks.${MarkSlot}`;
+export type ShelfName = "rows" | "columns" | "filters" | "pages" | "measure_values" | `marks.${MarkSlot}`;
 
 export const MARK_TYPES: [string, string][] = [
   ["automatic", "自動"],
@@ -293,6 +293,38 @@ export function markUses(marks: MarksIR): FieldUse[] {
 }
 
 /** 工作表中所有的膠囊（判斷 Table Calculation、排序是否還有人用）。 */
+/** 彙總量值（分析＞彙總量值）：關閉時欄列架與標記卡上的量值不彙總（每一列資料是一個標記），
+ * 開啟時改回預設的彙總。日期、Table Calculation 與彙總的計算欄位不變。 */
+export function setAggregated(sheet: SheetIR, aggregated: boolean, fields: Map<string, CatalogField>): SheetIR {
+  const convert = (use: FieldUse): FieldUse => {
+    const field = fields.get(use.field);
+    if (!field || field.role !== "measure" || use.date || use.table_calc || field.level === "aggregate" || field.level === "table_calc") return use;
+    if (!aggregated && use.agg !== null) return { ...use, agg: null, continuous: true };
+    if (aggregated && use.agg === null) return { ...use, agg: field.default_agg ?? "sum", continuous: true };
+    return use;
+  };
+  const card = (marks: MarksIR): MarksIR => {
+    const updated: MarksIR = { ...marks };
+    for (const slot of ["color", "size", "shape", "angle", "path"] as const) {
+      const use = marks[slot] as FieldUse | null | undefined;
+      if (use) (updated as Record<string, unknown>)[slot] = convert(use);
+    }
+    for (const slot of LIST_SLOTS) {
+      (updated as Record<string, unknown>)[slot] = ((marks[slot] as FieldUse[] | undefined) ?? []).map(convert);
+    }
+    return updated;
+  };
+  return {
+    ...sheet,
+    disaggregated: !aggregated,
+    rows: sheet.rows.map(convert),
+    columns: sheet.columns.map(convert),
+    marks: card(sheet.marks),
+    panes: sheet.panes.map((p) => ({ ...p, measure: convert(p.measure), marks: card(p.marks) })),
+    measure_values: sheet.measure_values.map(convert),
+  };
+}
+
 export function allUses(sheet: SheetIR): FieldUse[] {
   const panes = (sheet.panes as PaneIR[]).flatMap((p) => [p.measure, ...markUses(p.marks)]);
   return [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks), ...panes, ...sheet.measure_values];
@@ -432,6 +464,7 @@ export function usesOn(sheet: SheetIR, shelf: ShelfName, card: Card = "all"): Fi
   if (shelf === "columns") return sheet.columns;
   if (shelf === "measure_values") return sheet.measure_values;
   if (shelf === "filters") return sheet.filters.map((f) => f.field).filter((u): u is FieldUse => Boolean(u));
+  if (shelf === "pages") return sheet.pages ? [sheet.pages as FieldUse] : [];
   const slot = shelf.slice("marks.".length) as MarkSlot;
   const value = cardMarks(sheet, card)[slot];
   if (Array.isArray(value)) return value as FieldUse[];
@@ -443,6 +476,11 @@ export function setUses(sheet: SheetIR, shelf: ShelfName, uses: FieldUse[], card
   if (shelf === "rows" || shelf === "columns") return { ...sheet, [shelf]: uses };
   if (shelf === "measure_values") return { ...sheet, measure_values: uses };
   if (shelf === "filters") return sheet;
+  if (shelf === "pages") {
+    // 頁面架只有一個離散的維度；換了欄位就從第一頁開始
+    const last = uses[uses.length - 1];
+    return { ...sheet, pages: last ? { ...last, agg: null, continuous: false, table_calc: null } : null, page: null };
+  }
   const slot = shelf.slice("marks.".length) as MarkSlot;
   const value = LIST_SLOTS.includes(slot) ? uses : (uses[uses.length - 1] ?? null);
   return updateCard(sheet, card, (marks) => ({ ...marks, [slot]: value }));
@@ -473,7 +511,7 @@ export function changeUse(
 
 /** 在架上第 index 個位置插入膠囊（index 省略時放在最後）；標記卡的單一位置（色彩、大小等）換成它。 */
 export function insertUse(sheet: SheetIR, shelf: ShelfName, use: FieldUse, index?: number, card: Card = "all"): SheetIR {
-  if (shelf.startsWith("marks.") && !LIST_SLOTS.includes(shelf.slice("marks.".length) as MarkSlot)) {
+  if (shelf === "pages" || (shelf.startsWith("marks.") && !LIST_SLOTS.includes(shelf.slice("marks.".length) as MarkSlot))) {
     return setUses(sheet, shelf, [use], card);
   }
   const uses = [...usesOn(sheet, shelf, card)];

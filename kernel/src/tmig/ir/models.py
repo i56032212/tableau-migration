@@ -1246,6 +1246,18 @@ class Worksheet(IRModel):
         default=None, description="欄位標籤的背景顏色（列標題上方的欄位名稱）；None 為不上色"
     )
     fit: FitMode = Field(default="standard", description="工作表本身（工作表分頁）的顯示大小")
+    disaggregated: bool = Field(
+        default=False,
+        description="取消彙總量值（Aggregate Measures 關閉）：量值不彙總，每一列資料是一個標記",
+    )
+    pages: FieldUse | None = Field(
+        default=None,
+        description="頁面架：每一頁是這個維度的一個值，檢視只顯示目前這一頁（等同這個值的維度篩選）",
+    )
+    page: Scalar = Field(
+        default=None,
+        description="目前的頁（Tableau 存檔時的頁面）；None 為第一頁（檢視器依可選值決定）",
+    )
     blends: list[Blend] = Field(
         default_factory=list,
         description="Data Blending：次要資料源與連結欄位；欄列架與標記卡上可以有這些資料源的量值",
@@ -1272,6 +1284,7 @@ ZoneKind = Literal[
     "filter",
     "parameter",
     "legend",
+    "page",
     "text",
     "image",
     "title",
@@ -1310,6 +1323,7 @@ _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {
     "filter": ("worksheet", "field", "control"),
     "parameter": ("parameter", "control"),
     "legend": ("worksheet", "legend"),
+    "page": ("worksheet",),
     "text": ("text",),
     "image": ("image",),
     "title": (),
