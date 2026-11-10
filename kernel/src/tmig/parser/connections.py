@@ -59,6 +59,9 @@ DIALECTS: dict[str, Dialect] = {
     "impala": "impala",
     "db2": "db2",
     "saphana": "hana",
+    # Amazon Aurora for MySQL、Google Cloud SQL（MySQL）：MySQL 的協定與 SQL
+    "aurora": "mysql",
+    "googlecloudsql": "mysql",
 }
 """Tableau 的連線類型 → SQLGlot 方言（類型名稱依公開資料整理，待真實報表確認）。"""
 

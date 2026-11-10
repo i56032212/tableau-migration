@@ -48,6 +48,8 @@ DBCLASS_DRIVERS = {
     "impala": "impala",
     "db2": "db2",
     "saphana": "hana",
+    "aurora": "mysql",
+    "googlecloudsql": "mysql",
 }
 """Tableau 的連線類型 → 執行器（其他類型尚無執行器）。Spark SQL 連到 Databricks 時用 databricks，
 Cloudera Hadoop 連到 Impala 時用 impala（依連線的方言，見 driver_for）。"""

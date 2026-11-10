@@ -165,7 +165,7 @@ IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
 | PostgreSQL 16 以上 | 實跑 | |
 | Databricks／Spark 3.4 以上 | 實跑（本機 Spark） | 工作階段的時區為 UTC |
 | Spark SQL（Spark Thrift Server，例如 Amazon EMR、自建 Spark；Tableau 的 Spark SQL 連線） | 實跑（本機以 Spark Thrift Server 經 HiveServer2 協定） | 與 Databricks 相同的轉譯；主機是 Databricks 時改用 Databricks 的驅動。以 HiveServer2 協定連線：`auth_mechanism` 預設為 PLAIN（有密碼時為 LDAP），可改為 NOSASL、GSSAPI（Kerberos）、JWT；`http_path` 有值時以 HTTP 傳輸（例如經過 Knox）；工作階段的時區為 UTC |
-| MySQL 8.0 以上（MariaDB 依 MySQL） | 實跑 | 工作階段為唯讀、UTC、英文的月份與星期名稱；布林值是 1／0，取回後轉回布林；沒有 MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH |
+| MySQL 8.0 以上（MariaDB、Amazon Aurora for MySQL、Google Cloud SQL 依 MySQL） | 實跑 | 工作階段為唯讀、UTC、英文的月份與星期名稱；布林值是 1／0，取回後轉回布林；沒有 MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH |
 | SQL Server 2017 以上、Azure SQL | 模擬（依官方文件） | 布林值以 BIT 表示；非英文的字串常值為 `N'…'`；星期不受 `@@DATEFIRST` 影響；沒有正規表示式、DATEPARSE、MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH；SPLIT 的位置須為 ±1 到 ±10 的常值 |
 | Snowflake | 模擬（依官方文件） | 工作階段的時區為 UTC；星期與週數以 ISO 的函式計算，不受 WEEK_START 影響 |
 | Oracle 12.2 以上 | 模擬（依官方文件） | 沒有布林值（布林維度等列為不支援） |

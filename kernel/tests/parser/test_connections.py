@@ -166,7 +166,7 @@ def test_hadoop_connections(tmp_path: Path) -> None:
 
 
 def test_db2_and_hana(tmp_path: Path) -> None:
-    """IBM Db2 與 SAP HANA 的連線：資料庫、結構描述照記；有方言轉譯與執行器。"""
+    """IBM Db2、SAP HANA 與 MySQL 相容的雲端資料庫：資料庫照記；有方言轉譯與執行器。"""
     table = "<relation connection='db.1' name='orders' table='[SALES].[ORDERS]' type='table' />"
     for xml, dialect, database in (
         (
@@ -175,6 +175,9 @@ def test_db2_and_hana(tmp_path: Path) -> None:
             "SAMPLE",
         ),
         ("<connection class='saphana' port='30015' server='hana.example.com' />", "hana", None),
+        # Amazon Aurora for MySQL、Google Cloud SQL 是 MySQL
+        ("<connection class='aurora' dbname='crm' server='x.rds.amazonaws.com' />", "mysql", "crm"),
+        ("<connection class='googlecloudsql' dbname='crm' server='10.0.0.5' />", "mysql", "crm"),
     ):
         ir = parse(tmp_path, live_datasource(xml, table))
         assert reasons(ir) == []
