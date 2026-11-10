@@ -298,7 +298,8 @@ class _Builder:
         encoding["title"] = SEPARATOR.join(self.ch(u).title for u in uses)
         axis: dict[str, Any] = {"ticks": False}  # Tableau 的標題沒有刻度
         if not shown:
-            axis.update(labels=False, domain=False)
+            # 全部不顯示：不保留標題的空間
+            axis.update(labels=False, domain=False, labelPadding=0, minExtent=0, maxExtent=0)
         expr = _header_expr(shown, len(uses), multiline and len(uses) > 1)
         if shown and expr is not None:
             axis["labelExpr"] = expr
@@ -1161,6 +1162,14 @@ def build_spec(
             ("rows", "y", rows_dims, ws.row_style),
             ("columns", "x", cols_dims, ws.column_style),
         ]
+        x = encoding.get("x")
+        if (
+            isinstance(x, dict)
+            and x.get("field") == "cols_dim"
+            and len(cols_dims) > 1
+            and x.get("type") in ("ordinal", "nominal")
+        ):
+            _column_headers(builder, spec, x, cols_dims, values)
         headers: RowHeaders | None = None
         y = encoding.get("y")
         if isinstance(y, dict) and y.get("type") in ("ordinal", "nominal"):
@@ -1178,8 +1187,8 @@ def build_spec(
                 _divider(spec, enc, channel, values, len(dims), style.divider)
             if shelf == "rows" and headers is not None and style.header_divider is not None:
                 _header_divider(spec, enc, values, len(dims), style.header_divider, headers)
-            if shelf == "columns" and style.header_divider is not None and dims:
-                shown = len(builder.header(dims, "columns")[0])
+            shown = len(builder.header(dims, "columns")[0]) if shelf == "columns" and dims else 0
+            if shelf == "columns" and style.header_divider is not None and shown:
                 _column_header_divider(
                     spec,
                     enc,
@@ -1383,12 +1392,17 @@ def _row_headers(
         for level in shown
     ]
     total = sum(widths)
+    # 交叉表中每一列有多筆資料（每一欄一筆）：標題只寫在其中一筆，避免同一個字重疊畫好幾次
+    seen: set[tuple[Any, int]] = set()
     for record in values:
         value = record.get("rows_dim")
         for level in shown:
-            record[f"{HEADER}{level}"] = placed.get((value, level), "")
+            key = (value, level)
+            first = key not in seen
+            seen.add(key)
+            record[f"{HEADER}{level}"] = placed.get(key, "") if first else ""
             if between:
-                record[f"{HEADER}{level}_mid"] = between.get((value, level), "")
+                record[f"{HEADER}{level}_mid"] = between.get(key, "") if first else ""
     if between:
         # 中間兩列之間：列的高度以整列計算（band），文字畫在上面那一列的尾端
         scale = dict(encoding.get("scale") or {})
@@ -1477,6 +1491,88 @@ def _row_headers(
     encoding["axis"] = axis
     _add_layers(spec, layers)
     return RowHeaders(total, starts)
+
+
+COLUMN_HEADER = "__colheader"
+"""多層欄標題的資料欄（__colheader0、__colheader1…）與圖層名稱前綴。"""
+
+
+def _column_headers(
+    builder: _Builder,
+    spec: dict[str, Any],
+    encoding: dict[str, Any],
+    dims: list[FieldUse],
+    values: list[dict[str, Any]],
+) -> None:
+    """多層的欄標題：每一層一行（文字表在上方、其他圖在下方，外層離圖最遠），外層的成員與 Tableau 相同
+    合併成一格、寫在各組的中間（偶數欄的組寫在中間兩欄之間）。座標軸只留下欄位標籤。"""
+    shown, _, _ = builder.header(dims, "columns")
+    if not shown:
+        return
+    order = list(dict.fromkeys(v.get("cols_dim") for v in values))
+    parts = {value: _levels(value, len(dims)) for value in order}
+    placed: dict[tuple[Any, int], str] = {}
+    between: dict[tuple[Any, int], str] = {}
+    for level in shown:
+        for group in _groups(order, parts, level):
+            text = parts[group[0]][level] if level < len(parts[group[0]]) else ""
+            if len(group) % 2 == 0:
+                between[(group[len(group) // 2 - 1], level)] = text
+            else:
+                placed[(group[len(group) // 2], level)] = text
+    seen: set[tuple[Any, int]] = set()
+    for record in values:
+        value = record.get("cols_dim")
+        for level in shown:
+            key = (value, level)
+            first = key not in seen
+            seen.add(key)
+            record[f"{COLUMN_HEADER}{level}"] = placed.get(key, "") if first else ""
+            record[f"{COLUMN_HEADER}{level}_mid"] = between.get(key, "") if first else ""
+    scale = dict(encoding.get("scale") or {})
+    scale.update(type="band", paddingInner=0, paddingOuter=0)
+    encoding["scale"] = scale
+    axis = dict(encoding.get("axis") or {})
+    top = axis.get("orient") == "top"
+    position = {k: encoding[k] for k in ("field", "type", "sort", "scale") if k in encoding}
+    color = _label_color(builder.ws)
+    layers: list[dict[str, Any]] = []
+    count = len(shown)
+    for index, level in enumerate(shown):
+        # 離圖最近的是最內層：上方時往上排，下方時往下排
+        distance = 4 + (count - 1 - index) * HEADER_LINE_HEIGHT
+        setting = builder.axis_of(dims[level], "columns")
+        mark = {
+            "type": "text",
+            "y": -distance if top else {"expr": f"height + {distance}"},
+            "align": "center",
+            "baseline": "bottom" if top else "top",
+            **builder.label_font(dims[level], "columns").mark(),
+            "color": _css_color(setting.label_color)
+            if setting is not None and setting.label_color is not None
+            else color,
+        }
+        for suffix, band in (("", 0.5), ("_mid", 1)):
+            layers.append(
+                {
+                    "name": f"{DECO}{COLUMN_HEADER}{level}{suffix}",
+                    "transform": [{"calculate": "-1", "as": ROW}],
+                    "mark": mark,
+                    "encoding": {
+                        "x": {**position, "bandPosition": band},
+                        "text": {"field": f"{COLUMN_HEADER}{level}{suffix}"},
+                    },
+                }
+            )
+    extent = count * HEADER_LINE_HEIGHT + 4
+    axis.update(labels=False, minExtent=extent, maxExtent=extent)
+    axis.pop("labelExpr", None)
+    axis.pop("labelPadding", None)
+    axis.pop("labelLineHeight", None)
+    if not axis.get("tickOpacity"):
+        axis["ticks"] = False
+    encoding["axis"] = axis
+    _add_layers(spec, layers)
 
 
 FIELD_LABEL_HEIGHT = 20

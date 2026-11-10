@@ -229,3 +229,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 @media (max-width: 720px) { .ds-top { grid-template-columns: 1fr; } }
 /* 工具提示：與 Tableau 相同 9pt（12 像素）的預設字型 */
 #vg-tooltip-element { font-family: var(--tableau-font); font-size: 12px; }
+/* 捲動時固定的標題（WorksheetView 的 freezeHeaders）：疊在原圖上，不擋點選 */
+.frozen-host { position: relative; display: inline-block; vertical-align: top; }
+.frozen-host > .frozen { display: block; }

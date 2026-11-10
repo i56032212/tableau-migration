@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tmig.data.executor import execute
+from tmig.render.vegalite import main_encoding
 from tmig.sqlgen.query import GRAND_TOTAL, SUBTOTAL, totals_sql, worksheet_sql
 
 from ..parser.builder import DS, ref, worksheet
@@ -146,7 +147,8 @@ def test_column_subtotals_cross_row_totals(tmp_path: Path, db: Path) -> None:
     ]
     spec = render_with_totals(ir, db).spec
     # 第一列 East 沒有 2024 年的 Furniture：仍排在 Furniture 之下、小計之前（與 Tableau 相同）
-    assert spec["encoding"]["x"]["sort"] == [
+    x = main_encoding(spec)["x"]  # type: ignore[index]
+    assert x["sort"] == [
         "Furniture｜2023",
         "Furniture｜2024",
         "Furniture｜Total",
@@ -157,10 +159,12 @@ def test_column_subtotals_cross_row_totals(tmp_path: Path, db: Path) -> None:
         "Technology｜Total",
         GRAND_TOTAL,
     ]
-    # 多層的欄標題分行顯示，多出的一行往上排（不疊在座標軸上）
-    axis = spec["encoding"]["x"]["axis"]
-    assert axis["labelExpr"] == "split(datum.label, '｜')"
-    assert axis["labelPadding"] == 2 + axis["labelLineHeight"]
+    # 多層的欄標題每一層一行（外層合併成一格），座標軸只留下欄位標籤
+    assert x["axis"]["labels"] is False
+    furniture = {
+        v["__colheader0"] for v in spec["data"]["values"] if v["cols_dim"] == "Furniture｜2024"
+    }
+    assert "Furniture" in furniture  # Furniture 有三欄：寫在中間那一欄
     values = spec["data"]["values"]
     assert list(dict.fromkeys(v["c0_label"] for v in values)) == [
         "East",

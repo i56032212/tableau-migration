@@ -114,6 +114,67 @@ export function applyFit(spec: Spec, fit: FitMode | null | undefined, availableW
   return { x: !fillX, y: !fillY };
 }
 
+/**
+ * 捲動時固定標題（與 Tableau 相同）：上下捲動時，圖上方（欄標題、欄位標籤）與下方（座標軸）的區域固定在區塊的
+ * 上緣與下緣；左右捲動時，左側（列標題）固定在左緣。以繪好的 SVG 的複本裁出這些區域、以 sticky 疊在原圖上。
+ */
+export function freezeHeaders(
+  element: HTMLElement,
+  result: Result,
+  scroll: { x: boolean; y: boolean },
+  background?: string,
+) {
+  // vega-embed 把 SVG 直接放在區塊（.chart）中：另包一層與圖同寬高的容器，固定的區域才能隨捲動貼在邊緣
+  const svg = element.querySelector(":scope > svg, :scope > .frozen-host > svg") as SVGSVGElement | null;
+  if (!svg) return;
+  let host = svg.parentElement as HTMLElement;
+  host.querySelectorAll(":scope > .frozen").forEach((e) => e.remove());
+  if (!scroll.x && !scroll.y) return;
+  if (!host.classList.contains("frozen-host")) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "frozen-host";
+    host.insertBefore(wrapper, svg);
+    wrapper.appendChild(svg);
+    host = wrapper;
+  }
+  const [originX, originY] = result.view.origin();
+  const width = Number(svg.getAttribute("width")) || svg.getBoundingClientRect().width;
+  const height = Number(svg.getAttribute("height")) || svg.getBoundingClientRect().height;
+  const below = height - originY - result.view.height();
+  const fill =
+    background && background !== "transparent" ? background : getComputedStyle(element).backgroundColor || "#ffffff";
+  const solid = fill === "rgba(0, 0, 0, 0)" || fill === "transparent" ? "#ffffff" : fill;
+  const box = (name: string, style: Record<string, string>, offsetX: number, offsetY: number) => {
+    const div = document.createElement("div");
+    div.className = `frozen ${name}`;
+    div.setAttribute("aria-hidden", "true");
+    Object.assign(div.style, { position: "sticky", overflow: "hidden", background: solid, pointerEvents: "none" }, style);
+    const copy = svg.cloneNode(true) as SVGSVGElement;
+    copy.removeAttribute("id");
+    copy.style.display = "block";
+    copy.style.marginLeft = `${-offsetX}px`;
+    copy.style.marginTop = `${-offsetY}px`;
+    div.appendChild(copy);
+    return div;
+  };
+  if (scroll.y && originY > 0) {
+    const top = box("frozen-top", { top: "0", height: `${originY}px`, width: `${width}px`, marginBottom: `${-originY}px`, zIndex: "2" }, 0, 0);
+    host.insertBefore(top, svg);
+  }
+  if (scroll.x && originX > 0) {
+    const left = box("frozen-left", { left: "0", width: `${originX}px`, height: `${height}px`, marginBottom: `${-height}px`, zIndex: "3" }, 0, 0);
+    host.insertBefore(left, svg);
+    if (scroll.y && originY > 0) {
+      const corner = box("frozen-corner", { left: "0", top: "0", width: `${originX}px`, height: `${originY}px`, marginBottom: `${-originY}px`, zIndex: "4" }, 0, 0);
+      host.insertBefore(corner, svg);
+    }
+  }
+  if (scroll.y && below > 1) {
+    const bottom = box("frozen-bottom", { bottom: "0", height: `${below}px`, width: `${width}px`, marginTop: `${-below}px`, zIndex: "2" }, 0, height - below);
+    host.appendChild(bottom);
+  }
+}
+
 /** 工作表標題的樣式：後端依標題的格式（沒有時為 Tableau 預設的 15pt）算出的字型、顏色與對齊。 */
 function titleStyle(usermeta: Record<string, any>): React.CSSProperties {
   const font = usermeta.title_font as
@@ -232,6 +293,8 @@ export function WorksheetView({
           return;
         }
         view = result;
+        // 捲動時與 Tableau 相同，欄標題、座標軸與列標題固定在區塊邊緣
+        freezeHeaders(element, result, scroll, (original.usermeta?.background as string | undefined) ?? undefined);
         if (!interactive) return;
         const markAt = (item: any): Mark | null | undefined => {
           const row = item?.datum?.__row;

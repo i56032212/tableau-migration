@@ -251,7 +251,8 @@ def test_fit_modes_size_and_scroll(tmp_path: Path) -> None:
             # 縱軸（列標題）的標籤：Vega-Lite 的座標軸群組以 aria-label 標示 X-axis／Y-axis
             tops = page.eval_on_selector_all(
                 f"[data-zone='{zone}'] .role-axis[aria-label^='Y-axis'] .role-axis-label text",
-                "els => els.map(e => e.getBoundingClientRect().top)",
+                # 捲動時固定的標題是原圖的複本，不算
+                "els => els.filter(e => !e.closest('.frozen')).map(e => e.getBoundingClientRect().top)",
             )
             return sorted(tops)
 
@@ -270,9 +271,18 @@ def test_fit_modes_size_and_scroll(tmp_path: Path) -> None:
             assert tops[1] - tops[0] == pytest.approx(20, abs=0.5), zone
         svg, client, _ = sizes("z9")
         assert svg < client - 40
-        # 區塊放不下時捲動
+        # 區塊放不下時捲動；與 Tableau 相同，捲動時欄位標籤固定在上緣、座標軸固定在下緣
         svg, client, scroll = sizes("z10")
         assert scroll > client
+        chart = page.locator("[data-zone='z10'] .chart")
+        chart.evaluate("e => e.scrollTop = 60")
+        page.wait_for_timeout(200)
+        box = chart.bounding_box()
+        top = page.locator("[data-zone='z10'] .frozen-top").bounding_box()
+        bottom = page.locator("[data-zone='z10'] .frozen-bottom").bounding_box()
+        assert box is not None and top is not None and bottom is not None
+        assert top["y"] == pytest.approx(box["y"], abs=1)
+        assert bottom["y"] + bottom["height"] == pytest.approx(box["y"] + box["height"], abs=1)
         # 整個檢視：4 個區的長條填滿區塊的高度、不捲動
         assert page.locator("[data-zone='z7'] .chart").get_attribute("data-scroll") == "false"
         tops = rows("z7")

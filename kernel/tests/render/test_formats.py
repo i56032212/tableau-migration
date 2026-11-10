@@ -286,16 +286,27 @@ def test_single_row_header(tmp_path: Path, db: Path) -> None:
 
 
 def test_hidden_header_levels_in_text_tables(tmp_path: Path, db: Path) -> None:
-    """文字表的多層欄標題分行顯示：隱藏的層不佔一行。"""
+    """文字表的多層欄標題每一層一行（外層在上），外層的成員合併成一格、寫在各組的中間；隱藏的層不佔一行。"""
     hide = rule("label", fmt("display", "false", "none:Category:nk"))
     spec = render(parse(tmp_path, nested("cols", hide, mark="Text")), db).spec
-    axis = spec["encoding"]["x"]["axis"]
-    assert axis["labelExpr"] == "[(split(datum.label, '｜')[0] || '')]"
-    assert axis["labelPadding"] == 2
-    assert axis["title"] == "Region"
-    shown = render(parse(tmp_path, nested("cols", mark="Text")), db).spec["encoding"]["x"]["axis"]
-    assert shown["labelExpr"] == "split(datum.label, '｜')"
-    assert shown["labelPadding"] == 2 + 15  # 一行 9pt 的字
+    axis = main_encoding(spec)["x"]["axis"]  # type: ignore[index]
+    assert (axis["labels"], axis["minExtent"], axis["title"]) == (False, 15 + 4, "Region")
+    names = {layer.get("name") for layer in spec["layer"]}
+    assert "__deco__colheader0" in names and "__deco__colheader1" not in names
+
+    spec = render(parse(tmp_path, nested("cols", mark="Text")), db).spec
+    assert main_encoding(spec)["x"]["axis"]["minExtent"] == 2 * 15 + 4  # type: ignore[index]
+    values = spec["data"]["values"]
+    columns = list(dict.fromkeys(v["cols_dim"] for v in values))
+    assert columns[:2] == ["East｜Furniture", "East｜Technology"]
+    # East 有兩欄：寫在兩欄之間（第一欄的尾端）；每一欄只寫一次
+    east = [v for v in values if v["cols_dim"] == "East｜Furniture"]
+    assert [v["__colheader0_mid"] for v in east].count("East") == 1
+    north = [v for v in values if v["cols_dim"] == "North｜Office"]
+    assert [v["__colheader0"] for v in north].count("North") == 1
+    mid = next(layer for layer in spec["layer"] if layer.get("name") == "__deco__colheader0_mid")
+    assert mid["encoding"]["x"]["bandPosition"] == 1
+    assert mid["mark"]["y"] == -(4 + 15)  # 外層在最內層的上面一行
 
 
 # ---------------------------------------------------------------- 文字表的對齊與欄位標籤

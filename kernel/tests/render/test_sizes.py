@@ -522,7 +522,7 @@ def test_banding_level_and_column_header_dividers(tmp_path: Path, db: Path) -> N
     assert [v["__band_rows"] for v in values] == [False, False, True, False, False, True, True]
 
     spec = render(parse(tmp_path, nested("cols", mark="Text")), db).spec
-    axis = spec["encoding"]["x"]["axis"]
+    axis = main_encoding(spec)["x"]["axis"]  # type: ignore[index]
     assert (axis["ticks"], axis["tickBand"], axis["tickColor"]) == (True, "extent", "#d4d4d4")
     assert axis["tickSize"] == 2 * 15 + 4  # 兩行標題的高度
     assert "indexof(" in axis["tickOpacity"]["condition"]["test"]
