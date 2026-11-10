@@ -5146,6 +5146,31 @@
       "title": "UrlField",
       "type": "object"
     },
+    "VisualTotal": {
+      "additionalProperties": false,
+      "description": "總計的計算方式（Total Using）：這個量值的總計與小計是範圍內各標記的值再加總（或平均、最小、最大），\n不是在較粗的詳細程度重新彙總（column-instance 的 visual-totals）。",
+      "properties": {
+        "use": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "agg": {
+          "enum": [
+            "sum",
+            "avg",
+            "min",
+            "max"
+          ],
+          "title": "Agg",
+          "type": "string"
+        }
+      },
+      "required": [
+        "use",
+        "agg"
+      ],
+      "title": "VisualTotal",
+      "type": "object"
+    },
     "Workbook": {
       "additionalProperties": false,
       "properties": {
@@ -5346,6 +5371,14 @@
             "$ref": "#/$defs/FieldUse"
           },
           "title": "Subtotals",
+          "type": "array"
+        },
+        "visual_totals": {
+          "description": "總計與小計的計算方式改成畫面上各標記的值再彙總的量值（Total Using）",
+          "items": {
+            "$ref": "#/$defs/VisualTotal"
+          },
+          "title": "Visual Totals",
           "type": "array"
         },
         "axes": {

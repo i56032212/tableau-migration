@@ -624,8 +624,10 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   與 Tableau 的「自動」相同，另外查詢去掉該架上離散維度的詳細程度（標記卡上的維度保留、篩選照樣套用、
   INCLUDE／EXCLUDE 相對於總計的詳細程度），不是把畫面上的值相加。依量值著色時總計不上色、不影響色階範圍，
   色彩設定「包含總計」時才上色；總計不能點選、不畫參考線。資料表的最後幾列是總計；計算比對只比工作表的標記，
-  總計的數字以公開報表的截圖確認。總計的計算方式改成畫面上的值再彙總（Total Using）、總計中的 Table Calculation、
-  與量值篩選並用時算不出與 Tableau 相同的數字，前者在解析時、後兩者在查詢時列為不支援（盤點也會列出）。
+  總計的數字以公開報表的截圖確認。總計的計算方式改成畫面上的值再彙總（Total Using：`visual-totals` 的 Sum、Avg、
+  Min、Max）時，總計與小計為範圍內各標記的值再彙總；總計中的 Table Calculation 套用到總計的值（在去掉維度後的
+  詳細程度計算，例如合計百分比的總計列為 100%，依 Tableau 文件推定）；與量值篩選並用時與 Tableau 相同只合計
+  通過篩選的標記（以工作表結果中標記的維度組合限定底層資料），Table Calculation 篩選只隱藏標記、不影響總計。
   小計（`<subtotals>` 列出的維度）與總計相同，在去掉同一架上之後的維度的詳細程度重新彙總，標題為 Total，
   緊接在各組之後（兩層小計時較內層的在前）；列與欄的小計、總計交叉處也有值。同一架上最內層的維度與不在架上的維度
   沒有小計（Tableau 的設定留著，畫面上沒有）。資料表的順序與圖表相同。Retail Analysis 的 Sheet 7
@@ -691,7 +693,7 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 合併集合與合併欄位（Combined Field）、地圖、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
-總計的 Total Using、總計中的 Table Calculation 或與量值篩選並用、標題中的 Table Calculation 值、
+標題中的 Table Calculation 值、
 故事點記下的其他狀態（參數、範圍篩選、排序等）、導覽到 Story 的按鈕。
 
 ## 開發規則

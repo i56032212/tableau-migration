@@ -71,6 +71,7 @@ from tmig.sqlgen.query import (
     preview_sql,
     title_sql,
     totals_sql,
+    visual_totals,
     worksheet_sql,
 )
 from tmig.verify.cases import CasesError, case_state, load_cases
@@ -441,13 +442,15 @@ def create_app(
         try:
             # 總計（Grand Total）與標題中的欄位值（例如 KPI 卡標題中的合計）也是報表上的數字：
             # 算不出來時整張工作表列為不支援，不默默省略
-            total_queries = totals_sql(ir, sheet.id, query, state, user)
-            title_queries = title_sql(ir, sheet.id, query, state, user)
             result = data.run(query, datasource, database)
+            # 與量值篩選一起使用時，總計只合計通過篩選的標記（以工作表的結果限定）
+            total_queries = totals_sql(ir, sheet.id, query, state, user, result)
+            title_queries = title_sql(ir, sheet.id, query, state, user)
             panes = {
                 i: (q.columns, data.run(q, datasource, database)) for i, q in pane_queries.items()
             }
             totals = [(t, data.run(t.query, datasource, database)) for t in total_queries]
+            totals = visual_totals(sheet, query, result, totals)
             title_fields: dict[str, str] = {}
             if title_queries is not None:
                 measures = title_queries.measures

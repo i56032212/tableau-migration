@@ -1117,6 +1117,14 @@ FitMode = Literal["standard", "fit_width", "fit_height", "entire_view"]
 連續的座標軸填滿；fit_width／fit_height 另外讓寬度／高度符合區塊；entire_view 兩者都符合。"""
 
 
+class VisualTotal(IRModel):
+    """總計的計算方式（Total Using）：這個量值的總計與小計是範圍內各標記的值再加總（或平均、最小、最大），
+    不是在較粗的詳細程度重新彙總（column-instance 的 visual-totals）。"""
+
+    use: FieldUse
+    agg: Literal["sum", "avg", "min", "max"]
+
+
 class Worksheet(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -1159,6 +1167,10 @@ class Worksheet(IRModel):
         default_factory=list,
         description="小計：欄列架上這些離散維度的每個值之後加一列（或一欄）合計，在去掉同一架上"
         "之後維度的詳細程度重新彙總（Tableau 的「自動」）",
+    )
+    visual_totals: list[VisualTotal] = Field(
+        default_factory=list,
+        description="總計與小計的計算方式改成畫面上各標記的值再彙總的量值（Total Using）",
     )
     axes: list[Axis] = Field(
         default_factory=list, description="座標軸與標題的設定（沒有設定的欄位依預設）"

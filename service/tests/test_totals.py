@@ -1,7 +1,7 @@
 """總計（Grand Total）：檢視器的圖表與資料表加上總計；算不出與 Tableau 相同的數字時整張工作表列為不支援。
 
 以示範報表為底：「Region Share by Year」（Region × 年的文字表）加上總計列與總計欄；
-「Sales by Region」（工具提示有累計的 Table Calculation）也加上總計，應列為不支援、不默默省略。
+「Sales by Region」（工具提示有累計的 Table Calculation）也加上總計：累計套用到總計的值。
 """
 
 from __future__ import annotations
@@ -71,11 +71,15 @@ def test_totals_in_chart_and_data_table(client: TestClient) -> None:
     assert table[-1][3] == corner["c3_label"]
 
 
-def test_unsupported_totals_mark_the_sheet_unsupported(client: TestClient) -> None:
+def test_table_calc_in_totals(client: TestClient) -> None:
+    """工具提示有累計的 Table Calculation：總計列的累計套用到總計的值（只有一列，等於總計本身）。"""
     data = client.post("/api/workbooks/totals/worksheets/ws_sales_by_region/render").json()
-    assert data["spec"] is None
-    assert data["unsupported"] == "總計中的 Table Calculation 尚不支援"
-    assert data["name"] == "Sales by Region"
+    assert data["unsupported"] is None
+    values = data["spec"]["data"]["values"]
+    totals = [v for v in values if v.get("__total")]
+    assert totals, "總計列照樣畫出"
+    running = next(k for k, key in data["spec"]["usermeta"]["measures"].items() if "#tc_" in key)
+    assert all(isinstance(v[running], int | float) for v in totals)
 
 
 @pytest.fixture(scope="module")

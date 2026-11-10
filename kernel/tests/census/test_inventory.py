@@ -219,27 +219,26 @@ def test_query_time_unsupported_counts(tmp_path: Path) -> None:
     from ..parser import builder as b
     from ..parser.builder import instance, ref, worksheet
 
-    running = instance(
-        "[Sales]",
-        "Sum",
-        "[cum:sum:Sales:qk]",
-        "quantitative",
-        "<table-calc ordering-type='Rows' type='CumTotal' />",
+    # 被參照的計算欄位中的 PREVIOUS_VALUE：產生查詢時才知道不支援
+    calcs = b.calc("Calculation_2", "Carry", "PREVIOUS_VALUE(0) + SUM([Sales])") + b.calc(
+        "Calculation_3", "Outer", "RUNNING_SUM([Calculation_2])"
     )
-    totals = worksheet(
+    sheet = worksheet(
         "Totals",
-        [instance("[Region]", "None", "[none:Region:nk]"), running],
+        [
+            instance("[Region]", "None", "[none:Region:nk]"),
+            instance("[Calculation_3]", "User", "[usr:Calculation_3:qk]", "quantitative"),
+        ],
         rows=ref("none:Region:nk"),
         mark="Text",
-        encodings=f"<text column='{ref('cum:sum:Sales:qk')}' />",
-    ).replace("<rows>", "<rows total='true'>")
-    xml = b.workbook(b.extract_datasource(), worksheets=totals)
+        encodings=f"<text column='{ref('usr:Calculation_3:qk')}' />",
+    )
+    xml = b.workbook(b.extract_datasource(columns=calcs), worksheets=sheet)
     row, _, unsupported = inventory_workbook(b.write_twb(tmp_path, xml))
-    assert [u.reason for u in unsupported] == [
-        "工作表「Totals」：總計中的 Table Calculation 尚不支援"
-    ]
+    reason = "PREVIOUS_VALUE 只支援在工作表上的 Table Calculation 計算欄位的公式中使用"
+    assert [u.reason for u in unsupported] == [f"工作表「Totals」：{reason}"]
     assert row.readiness == "needs_features"
-    assert row.unsupported_top == ["工作表「…」：總計中的 Table Calculation 尚不支援（1）"]
+    assert row.unsupported_top == [f"工作表「…」：{reason}（1）"]
 
     # 巢狀 Table Calculation 已支援：不再列入
     calc = b.calc("Calculation_1", "Nested", "RUNNING_SUM(RANK(SUM([Sales])))")

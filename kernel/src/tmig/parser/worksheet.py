@@ -44,6 +44,7 @@ from tmig.ir.models import (
     TableCalcPreset,
     TextRun,
     TupleFilter,
+    VisualTotal,
     Worksheet,
 )
 from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
@@ -237,6 +238,16 @@ REFERENCE_FORMULAS = frozenset(
         "median_confidence",
     }
 )
+VISUAL_TOTALS: dict[str, Literal["sum", "avg", "min", "max"]] = {
+    "sum": "sum",
+    "avg": "avg",
+    "average": "avg",
+    "min": "min",
+    "minimum": "min",
+    "max": "max",
+    "maximum": "max",
+}
+"""總計的計算方式（Total Using）：visual-totals 的值 → 畫面上各標記的值再彙總的方式。"""
 DISTRIBUTIONS = frozenset({"percentile", "stdev", "quantiles", "confidence", "median_confidence"})
 """分布（多個值，之間塗上底色）的計算方式；百分比（reference-line-value 的 percentage）也是分布。"""
 LINE_PATTERNS = {"solid": "solid", "dashed": "dashed", "dotted": "dotted", "dash-dot": "dashed"}
@@ -349,9 +360,8 @@ class SheetParser:
         rows = self._shelf(child(table, "rows"))
         cols = self._shelf(child(table, "cols"))
         subtotals = self._subtotals(table, rows, cols)
-        totals = self._totals(table, rows, cols, bool(subtotals))
-        if subtotals and not totals and self._visual_totals():
-            subtotals = []  # Total Using（已列為不支援）
+        totals = self._totals(table, rows, cols)
+        visual_totals = self._visual_totals() if totals or subtotals else []
         totals_colored = bool(totals or subtotals) and self._totals_colored(child(table, "style"))
         pages = child(table, "pages")
         if pages is not None and (text_of(pages) or len(children(pages))):
@@ -400,6 +410,7 @@ class SheetParser:
             totals=totals,
             totals_colored=totals_colored,
             subtotals=subtotals,
+            visual_totals=visual_totals,
             axes=sheet_formats.axes,
             row_style=sheet_formats.row_style,
             column_style=sheet_formats.column_style,
@@ -942,15 +953,31 @@ class SheetParser:
                     )
         return found
 
-    def _visual_totals(self) -> list[etree._Element]:
-        return [inst for inst in self.instances.values() if inst.get("visual-totals")]
+    def _visual_totals(self) -> list[VisualTotal]:
+        """總計的計算方式（Total Using）：量值欄位實例的 visual-totals（Sum、Avg、Min、Max）；自動（Default）
+        與沒有寫的不列出。"""
+        found: list[VisualTotal] = []
+        for key, inst in self.instances.items():
+            raw = (inst.get("visual-totals") or "").lower()
+            if not raw or raw in ("default", "automatic", "auto"):
+                continue
+            agg = VISUAL_TOTALS.get(raw)
+            use = self.resolve(key)
+            if agg is None or isinstance(use, str):
+                self.ctx.flag(
+                    inst,
+                    f"工作表「{self.name}」的總計計算方式（Total Using：{inst.get('visual-totals')}）"
+                    "無法辨識",
+                )
+                continue
+            found.append(VisualTotal(use=use, agg=agg))
+        return found
 
     def _totals(
         self,
         table: etree._Element,
         rows: list[FieldUse],
         cols: list[FieldUse],
-        subtotals: bool = False,
     ) -> list[Literal["rows", "columns"]]:
         """總計（Grand Total）：欄列架的 total='true'。列架的總計是最下方的一列（每一欄的合計），
         欄架的總計是最右邊的一欄（每一列的合計），都在去掉該架上離散維度的詳細程度重新彙總
@@ -967,17 +994,6 @@ class SheetParser:
                 )
                 continue
             totals.append(shelf)  # type: ignore[arg-type]
-        # 總計的計算方式改成「畫面上各標記的值再加總（或平均…）」（Total Using）尚不支援；
-        # 以自動的方式算會得到不同的數字，所以不顯示總計（列為不支援）
-        visual = self._visual_totals()
-        if (totals or subtotals) and visual:
-            for inst in visual:
-                self.ctx.flag(
-                    inst,
-                    f"工作表「{self.name}」的總計計算方式（Total Using：{inst.get('visual-totals')}）"
-                    "尚不支援，只支援自動",
-                )
-            return []
         return totals
 
     @staticmethod

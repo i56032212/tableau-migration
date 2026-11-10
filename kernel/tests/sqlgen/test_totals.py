@@ -13,8 +13,8 @@ import pytest
 
 from tmig.data.executor import execute
 from tmig.parser.workbook import parse_workbook
-from tmig.sqlgen.query import QueryError, worksheet_sql
 from tmig.sqlgen.query import totals_sql as make_totals
+from tmig.sqlgen.query import worksheet_sql
 
 from ..parser import builder as b
 from ..parser.builder import calc, instance, ref, worksheet
@@ -140,31 +140,58 @@ def test_no_totals_without_the_setting(tmp_path: Path, db: Path) -> None:
     assert run_totals(tmp_path, db, sheet(totals=())) == {}
 
 
-def test_unsupported_totals_are_refused(tmp_path: Path) -> None:
-    """總計中的 Table Calculation、與量值篩選一起使用：算不出與 Tableau 相同的數字，列為不支援。"""
+def test_totals_with_table_calcs_and_measure_filters(tmp_path: Path, db: Path) -> None:
+    """總計中的 Table Calculation 套用到總計的值；與量值篩選一起使用時只合計通過篩選的標記
+    （Tableau 的行為）；Table Calculation 篩選只隱藏標記，不影響總計。"""
     running = instance(
         "[Sales]",
         "Sum",
-        "[cum:sum:Sales:qk]",
+        "[pcto:sum:Sales:qk]",
         "quantitative",
-        "<table-calc ordering-type='Rows' type='CumTotal' />",
+        "<table-calc ordering-type='Columns' type='PctTotal' />",
     )
+    xml = sheet(encodings=text("pcto:sum:Sales:qk"), instances=[REGION, SALES, running])
+    ((total,),) = run_totals(tmp_path, db, xml).values()
+    # 合計百分比（依列）的總計列：總計本身占總計的 100%
+    assert total == {"sum(f_sales)#tc_percent_of_total_sales": pytest.approx(1.0)}
+
     measure_filter = (
         f"<filter class='quantitative' column='{ref('sum:Sales:qk')}' included-values='in-range'>"
         "<min>300</min></filter>"
     )
-    cases = {
-        "總計中的 Table Calculation 尚不支援": sheet(
-            encodings=text("cum:sum:Sales:qk"), instances=[REGION, SALES, running]
-        ),
-        "總計與量值篩選一起使用尚不支援": sheet(view_extra=measure_filter),
-    }
-    for message, xml in cases.items():
-        ir = parse_workbook(
-            b.write_twb(tmp_path, b.workbook(b.extract_datasource(), worksheets=xml))
+    ir = parse_workbook(
+        b.write_twb(
+            tmp_path,
+            b.workbook(b.extract_datasource(), worksheets=sheet(view_extra=measure_filter)),
         )
-        ws = ir.worksheets[0]
-        main = worksheet_sql(ir, ws.id)
-        with pytest.raises(QueryError, match=message) as info:
-            make_totals(ir, ws.id, main)
-        assert info.value.unsupported
+    )
+    ws = ir.worksheets[0]
+    main = worksheet_sql(ir, ws.id)
+    marks = execute(db, main.sql)
+    # 通過篩選的是 East 350、West 800：總計 1150（不是全部的 1310）
+    (query,) = make_totals(ir, ws.id, main, marks=marks)
+    assert execute(db, query.query.sql).records()[0]["sum(f_sales)"] == 1150
+    # 只產生 SQL、不執行（盤點）時不限定
+    assert make_totals(ir, ws.id, main) != []
+
+
+def test_visual_totals(tmp_path: Path, db: Path) -> None:
+    """Total Using：總計改為畫面上各標記的值再加總（各區平均的和），而不是整體的平均。"""
+    from tmig.sqlgen.query import visual_totals
+
+    visual = (
+        "<column-instance column='[Sales]' derivation='Avg' name='[avg:Sales:vtsum:qk]' "
+        "pivot='key' type='quantitative' visual-totals='Sum' />"
+    )
+    xml = sheet(encodings=text("avg:Sales:vtsum:qk"), instances=[REGION, visual])
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(b.extract_datasource(), worksheets=xml)))
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    assert [(v.use.agg, v.agg) for v in ws.visual_totals] == [("avg", "sum")]
+    main = worksheet_sql(ir, ws.id)
+    marks = execute(db, main.sql)
+    totals = [(t, execute(db, t.query.sql)) for t in make_totals(ir, ws.id, main, marks=marks)]
+    ((_, result),) = visual_totals(ws, main, marks, totals)
+    by_region = {r["f_region"]: r["avg(f_sales)"] for r in marks.records()}
+    # 各區的平均：East 350 / 3、West 800 / 3、South 50、North 60
+    assert result.records()[0]["avg(f_sales)"] == pytest.approx(sum(by_region.values()))

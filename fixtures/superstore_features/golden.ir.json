@@ -1442,6 +1442,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -1612,6 +1613,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -1762,6 +1764,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -1923,6 +1926,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2078,6 +2082,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2276,6 +2281,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2416,6 +2422,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2537,6 +2544,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2678,6 +2686,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2819,6 +2828,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -2976,6 +2986,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3097,6 +3108,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3218,6 +3230,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3331,6 +3344,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3473,6 +3487,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3612,6 +3627,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3751,6 +3767,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -3894,6 +3911,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -4061,6 +4079,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -4182,6 +4201,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -4383,6 +4403,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -4586,6 +4607,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -4758,6 +4780,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -4965,6 +4988,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -5166,6 +5190,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -5324,6 +5349,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -5443,6 +5469,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -5584,6 +5611,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -5705,6 +5733,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -5863,6 +5892,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,
@@ -6020,6 +6050,7 @@
       "totals": [],
       "totals_colored": false,
       "subtotals": [],
+      "visual_totals": [],
       "axes": [],
       "row_style": {
         "grid": true,

@@ -219,8 +219,8 @@ def test_grand_totals_need_discrete_headers(tmp_path: Path) -> None:
     assert parse(tmp_path, with_totals(bars, "rows")).worksheets[0].totals == ["rows"]
 
 
-def test_visual_totals_are_flagged(tmp_path: Path) -> None:
-    """Total Using（畫面上各標記的值再彙總）與自動的數字不同：不顯示總計，列為不支援。"""
+def test_visual_totals_are_parsed(tmp_path: Path) -> None:
+    """Total Using（畫面上各標記的值再彙總）：記在工作表上，總計照樣顯示。"""
     visual = (
         "<column-instance column='[Sales]' derivation='Avg' name='[avg:Sales:vtsum:qk]' "
         "pivot='key' type='quantitative' visual-totals='Sum' />"
@@ -234,12 +234,12 @@ def test_visual_totals_are_flagged(tmp_path: Path) -> None:
         encodings=f"<text column='{ref('avg:Sales:vtsum:qk')}' />",
     )
     ir = parse(tmp_path, with_totals(sheet, "rows"))
-    assert [u.reason for u in ir.unsupported] == [
-        "工作表「Matrix」的總計計算方式（Total Using：Sum）尚不支援，只支援自動"
-    ]
-    assert ir.worksheets[0].totals == []
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    assert ws.totals == ["rows"]
+    assert [v.agg for v in ws.visual_totals] == ["sum"]
     # 沒有總計時 Total Using 沒有作用
-    assert parse(tmp_path, sheet).unsupported == []
+    assert parse(tmp_path, sheet).worksheets[0].visual_totals == []
 
 
 # ---------------------------------------------------------------- 呈現

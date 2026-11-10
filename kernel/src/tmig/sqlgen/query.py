@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from tmig.formula.analyze import Analyzer, Target
 from tmig.formula.ast import (
@@ -83,6 +83,9 @@ from tmig.sqlgen.model import (
 )
 from tmig.sqlgen.source import SourceError, datasource_source
 from tmig.sqlgen.sql import ident, literal
+
+if TYPE_CHECKING:
+    from tmig.data.executor import QueryResult
 
 DUPLICATE_SAFE = frozenset({"MIN", "MAX", "COUNTD", "ATTR"})
 """同一列重複出現也不影響結果的彙總（Relationship 模型的一對多分支不需要檢查）。"""
@@ -2866,12 +2869,15 @@ def totals_sql(
     main: WorksheetSql,
     state: QueryState | None = None,
     user: Identity | None = None,
+    marks: QueryResult | None = None,
 ) -> list[TotalQuery]:
     """總計（Grand Total）的查詢：與 Tableau 的「自動」相同，在去掉該架上離散維度的詳細程度重新彙總
     底層資料（平均是所有資料列的平均、相異計數是整體的相異數，不是各列結果再加總）；篩選照樣套用。
 
     工作表的查詢（main）不含總計，計算比對以它為準；總計另外查詢，用於圖表與資料表的顯示。
-    尚不支援：總計中的 Table Calculation、與量值篩選一起使用（Tableau 只合計通過篩選的標記）。
+    Table Calculation 套用到總計的值（在去掉維度後的詳細程度計算，例如總計列的合計百分比為 100%）。
+    與量值篩選一起使用時，與 Tableau 相同只合計通過篩選的標記：marks 為工作表的查詢結果，總計限定在這些
+    標記的維度組合（量值篩選不再套用）；Table Calculation 篩選只隱藏標記，不影響總計。
     """
     ws = _find_worksheet(ir, worksheet)
     if not ws.totals and not ws.subtotals:
@@ -2890,10 +2896,12 @@ def totals_sql(
         options[shelf] = found
     if not options["rows"] and not options["columns"]:
         return []
-    if any(c.use is not None and c.use.table_calc is not None for c in main.columns):
-        raise QueryError("總計中的 Table Calculation 尚不支援", unsupported=True)
-    if any(f.stage in ("measure", "table_calc") for f in main.state.filters):
-        raise QueryError("總計與量值篩選一起使用尚不支援", unsupported=True)
+    late = {f.id for f in main.state.filters if f.stage in ("measure", "table_calc")}
+    own = {f.id for f in ws.filters}
+    if late - own:
+        raise QueryError("總計與工作表以外的量值篩選一起使用尚不支援", unsupported=True)
+    measure_filtered = any(f.stage == "measure" for f in main.state.filters)
+    restriction = _marks_filter(ws, main, marks) if measure_filtered else None
     # 列與欄的每一種組合（右下角等交叉處）；只有總計時與以前相同：列、欄、兩者
     combos: list[list[tuple[str, list[FieldUse], str]]] = []
     rows_opts: list[tuple[list[FieldUse], str] | None] = [*options["rows"], None]
@@ -2910,11 +2918,15 @@ def totals_sql(
         labels = {use_key(u): kind for _, uses, kind in combo for u in uses}
         dropped = list(labels)
         fields = {u.field for _, uses, _ in combo for u in uses}
+        kept_filters = [f for f in ws.filters if f.id not in late]
+        if restriction is not None:
+            kept_filters.append(restriction)
         virtual = ws.model_copy(
             update={
                 "rows": [u for u in ws.rows if use_key(u) not in dropped],
                 "columns": [u for u in ws.columns if use_key(u) not in dropped],
                 "sorts": [s for s in ws.sorts if s.field not in fields],
+                "filters": kept_filters,
                 "reference_lines": [],
                 "totals": [],
                 "subtotals": [],
@@ -2940,6 +2952,85 @@ def totals_sql(
             )
         )
     return result
+
+
+def _marks_filter(ws: Worksheet, main: WorksheetSql, marks: QueryResult | None) -> TupleFilter:
+    """量值篩選後留下的標記：以標記的維度組合篩選底層資料（總計只合計這些標記）。marks 為 None 時
+    （例如盤點只產生 SQL、不執行）不限定。"""
+    dims = [c for c in main.columns if c.role == "dimension" and c.use is not None]
+    tuples: list[list[Scalar]] = []
+    if marks is not None:
+        index = {key: i for i, key in enumerate(marks.columns)}
+        seen: set[tuple[Scalar, ...]] = set()
+        for row in marks.rows:
+            values = tuple(_scalar(row[index[c.key]]) for c in dims if c.key in index)
+            if values not in seen:
+                seen.add(values)
+                tuples.append(list(values))
+    return TupleFilter(
+        kind="tuple",
+        id="marks_restriction",
+        fields=[c.use for c in dims if c.use is not None],
+        stage="dimension",
+        mode="include" if marks is not None and dims else "all",
+        tuples=tuples if marks is not None and dims else [],
+        source_ref=ws.source_ref,
+    )
+
+
+def _scalar(value: Any) -> Scalar:
+    """查詢結果的值 → IR 的常值（日期為 ISO 字串）。"""
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if isoformat is not None else float(value)
+
+
+def visual_totals(
+    ws: Worksheet,
+    main: WorksheetSql,
+    marks: QueryResult,
+    totals: list[tuple[TotalQuery, QueryResult]],
+) -> list[tuple[TotalQuery, QueryResult]]:
+    """總計的計算方式（Total Using）：這些量值的總計與小計改為範圍內各標記的值再加總（或平均、最小、
+    最大）。範圍為總計保留的維度相同的標記（工作表的查詢結果，量值篩選後）。"""
+    from tmig.data.executor import QueryResult  # 避免循環匯入（executor 也匯入本模組）
+
+    if not ws.visual_totals:
+        return totals
+    aggs = {use_key(v.use): v.agg for v in ws.visual_totals}
+    dims = [c.key for c in main.columns if c.role == "dimension"]
+    index = {key: i for i, key in enumerate(marks.columns)}
+    result: list[tuple[TotalQuery, QueryResult]] = []
+    for total, rows in totals:
+        kept = [d for d in dims if d not in total.dropped and d in index]
+        groups: dict[tuple[Any, ...], dict[str, list[Any]]] = {}
+        for row in marks.rows:
+            group = groups.setdefault(tuple(row[index[d]] for d in kept), {})
+            for key in aggs:
+                if key in index and row[index[key]] is not None:
+                    group.setdefault(key, []).append(row[index[key]])
+        at = {key: i for i, key in enumerate(rows.columns)}
+        changed: list[tuple[Any, ...]] = []
+        for row in rows.rows:
+            values = list(row)
+            found = groups.get(tuple(row[at[d]] for d in kept if d in at), {})
+            for key, agg in aggs.items():
+                if key in at:
+                    values[at[key]] = _visual_total(found.get(key, []), agg)
+            changed.append(tuple(values))
+        result.append((total, QueryResult(rows.columns, changed)))
+    return result
+
+
+def _visual_total(values: list[Any], agg: str) -> Any:
+    if not values:
+        return None
+    if agg == "sum":
+        return sum(values)
+    if agg == "avg":
+        return sum(values) / len(values)
+    return min(values) if agg == "min" else max(values)
 
 
 @dataclass
