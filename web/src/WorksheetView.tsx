@@ -194,18 +194,31 @@ function titleStyle(usermeta: Record<string, any>): React.CSSProperties {
   };
 }
 
-/** 多張圖（同一架上有多個量值）無法自動填滿容器：依區塊大小平分每張圖的寬高。 */
+/**
+ * 多張圖（同一架上有多個量值、窗格）無法自動填滿容器：依區塊大小平分每張圖的寬高。窗格（spacing 小）之間
+ * 只有最下面（最左邊）一張畫刻度，留給刻度與窗格標題的空間比多個量值的圖少。
+ */
 function sizeConcat(spec: Record<string, any>, width: number, height: number) {
-  const AXIS = 110; // 座標軸標籤與標題約占的寬度
-  const GAP = 28; // 每張圖之間與 x 軸標籤的高度
+  const panes = typeof spec.spacing === "number";
+  const AXIS = panes ? 80 : 110; // 座標軸標籤與標題約占的寬度
+  const GAP = panes ? 6 : 28; // 每張圖之間的高度
+  const TITLE = 90; // 窗格的列標題（左側）
+  const rowTitles = (s: Record<string, any>) => (s.title && s.title.orient === "left" ? TITLE : 0);
   if (Array.isArray(spec.vconcat)) {
     const n = spec.vconcat.length;
-    const h = Math.max(Math.floor((height - GAP * n - 30) / n), 60);
-    spec.vconcat = spec.vconcat.map((s: Record<string, any>) => ({ ...s, width: Math.max(width - AXIS, 80), height: h }));
+    const h = Math.max(Math.floor((height - GAP * n - (panes ? 40 : 30)) / n), panes ? 30 : 60);
+    spec.vconcat = spec.vconcat.map((s: Record<string, any>) => {
+      if (Array.isArray(s.hconcat)) {
+        const m = s.hconcat.length;
+        const w = Math.max(Math.floor((width - AXIS - 40 - GAP * m) / m), 40);
+        return { ...s, hconcat: s.hconcat.map((c: Record<string, any>) => ({ ...c, width: w, height: h })) };
+      }
+      return { ...s, width: Math.max(width - AXIS - rowTitles(s), 80), height: h };
+    });
   }
   if (Array.isArray(spec.hconcat)) {
     const n = spec.hconcat.length;
-    const w = Math.max(Math.floor((width - AXIS * n) / n), 60);
+    const w = Math.max(Math.floor((width - AXIS - (panes ? GAP * n : AXIS * (n - 1))) / n), 40);
     spec.hconcat = spec.hconcat.map((s: Record<string, any>) => ({ ...s, width: w, height: Math.max(height - 60, 60) }));
   }
 }

@@ -36,7 +36,8 @@ import statistics
 import unicodedata
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, Literal, TypeGuard
 
 from tmig.data.executor import QueryResult
@@ -1143,6 +1144,9 @@ def build_spec(
         # 多個量值時每張圖各自畫（見 _Builder.multi）
         _trend_lines(builder, body, trend, builder.records_of(ws.marks))
 
+    if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
+        body = _small_multiples(builder, body, values, rows_dims, cols_dims, rows_meas, cols_meas)
+
     # 列數不含總計（與工作表的查詢、計算比對的筆數相同）
     marks_count = sum(1 for v in values if not v.get(TOTAL))
     spec: dict[str, Any] = {
@@ -1876,6 +1880,8 @@ def _trend_lines(
             step = (model.high - model.low) / (TREND_SAMPLES - 1)
             samples = [(v, v) for v in (model.low + step * i for i in range(TREND_SAMPLES))]
         common: dict[str, Any] = {f"{TREND}_group": group}
+        # 窗格的維度值：分面（小倍數）時每個窗格只畫自己的趨勢線
+        common.update(zip(keys, key[: len(keys)], strict=True))
         if color_field is not None:
             common[color_field] = key[-1]
         if trend.tooltips:
@@ -3067,6 +3073,185 @@ def _template(text: str) -> str:
 
 PIE_SIZE = 1.0
 """圓餅沒有設定大小時的大小（直徑為區塊較短邊的一半；依公開報表推定，使用者多半調大）。"""
+
+
+MAX_PANES = 200
+"""分面（小倍數）最多的窗格數；超過時以單一窗格呈現。"""
+
+
+def _small_multiples(
+    builder: _Builder,
+    body: dict[str, Any],
+    values: list[dict[str, Any]],
+    rows_dims: list[FieldUse],
+    cols_dims: list[FieldUse],
+    rows_meas: list[FieldUse],
+    cols_meas: list[FieldUse],
+) -> dict[str, Any]:
+    """欄列架上與量值的座標軸同一架的離散維度把圖分成窗格（Tableau 的窗格；例如列為 Region、SUM(Sales)，
+    欄為連續的月份時，每個地區一張折線圖由上往下排）：每個窗格篩選自己的資料，共用刻度；列的窗格只有
+    最下面一張畫橫軸的刻度，欄的窗格只有最左邊一張畫縱軸的刻度。窗格的標題寫在左側（列）與上方（欄）。"""
+    row_uses = (
+        rows_dims if rows_meas and rows_dims and all(not u.continuous for u in rows_dims) else []
+    )
+    col_uses = (
+        cols_dims if cols_meas and cols_dims and all(not u.continuous for u in cols_dims) else []
+    )
+    if not (rows_meas and cols_meas):
+        # 只有一個量值的座標軸：另一架的維度是座標（標題），不分窗格
+        row_uses = row_uses if rows_meas else []
+        col_uses = col_uses if cols_meas else []
+    row_chs = [builder.ch(u) for u in row_uses if u.field not in SPECIAL_FIELDS]
+    col_chs = [builder.ch(u) for u in col_uses if u.field not in SPECIAL_FIELDS]
+    if len(row_chs) != len(row_uses) or len(col_chs) != len(col_uses) or not (row_chs or col_chs):
+        return body
+
+    def panes(
+        chs: list[Channel], ranked: bool = False
+    ) -> tuple[list[tuple[Any, ...]], dict[tuple[Any, ...], str]]:
+        """窗格依資料的順序；欄的窗格依欄維度自己的排序（查詢算出的名次，見 _column_order）。"""
+        keys: list[tuple[Any, ...]] = []
+        labels: dict[tuple[Any, ...], str] = {}
+        records = values
+        if ranked and any(v.get(ORDER) is not None for v in values):
+            records = sorted(values, key=lambda v: (v.get(ORDER) is None, v.get(ORDER) or 0))
+        for record in records:
+            key = tuple(record.get(c.name) for c in chs)
+            if key not in labels:
+                keys.append(key)
+                labels[key] = " / ".join(str(record.get(c.label, "")) for c in chs)
+        return keys, labels
+
+    row_keys, row_labels = panes(row_chs) if row_chs else ([()], {(): ""})
+    col_keys, col_labels = panes(col_chs, ranked=True) if col_chs else ([()], {(): ""})
+    if len(row_keys) * len(col_keys) > MAX_PANES:
+        builder.notes.append(f"窗格超過 {MAX_PANES} 個，以單一窗格呈現")
+        return body
+    row_shown, _, row_color = builder.header(row_uses, "rows") if row_uses else ([], None, None)
+    col_shown, _, col_color = builder.header(col_uses, "columns") if col_uses else ([], None, None)
+    font = builder.font("label")
+
+    def pane(
+        row: tuple[Any, ...], col: tuple[Any, ...], first_col: bool, first_row: bool, last_row: bool
+    ) -> dict[str, Any]:
+        chart = copy.deepcopy(body)
+        pairs = [(c.name, v) for c, v in zip(row_chs, row, strict=True)]
+        pairs += [(c.name, v) for c, v in zip(col_chs, col, strict=True)]
+        chart["transform"] = [{"filter": _all_equal(pairs)}, *chart.get("transform", [])]
+        for layer in _own_data_layers(chart):
+            present = [(name, v) for name, v in pairs if name in layer["data"]["values"][0]]
+            if present:
+                layer["transform"] = [{"filter": _all_equal(present)}, *layer.get("transform", [])]
+        if not last_row:
+            _hide_axis(chart, "x")
+        if not first_col:
+            _hide_axis(chart, "y")
+        grid = bool(row_chs) and bool(col_chs)
+        if row_chs and first_col and row_shown:
+            if grid:
+                # 欄與列都分窗格：列的標題寫在縱軸標題的上一行（圖的標題留給欄）
+                _prefix_axis_title(chart, "y", row_labels[row])
+            else:
+                chart["title"] = {
+                    "text": row_labels[row],
+                    "orient": "left",
+                    "angle": 0,
+                    "anchor": "middle",
+                    "align": "right",
+                    "baseline": "middle",
+                    "fontWeight": font.weight,
+                    "fontSize": font.size,
+                    "font": font.family,
+                    "color": row_color or builder.text_color(),
+                    "offset": 6,
+                }
+        if col_chs and first_row and col_shown:
+            chart["title"] = {
+                "text": col_labels[col],
+                "orient": "top",
+                "anchor": "middle",
+                "fontWeight": font.weight,
+                "fontSize": font.size,
+                "font": font.family,
+                "color": col_color or builder.text_color(),
+            }
+        return chart
+
+    shared = {"scale": {"x": "shared", "y": "shared", "color": "shared", "size": "shared"}}
+    grid = [
+        [pane(row, col, j == 0, i == 0, i == len(row_keys) - 1) for j, col in enumerate(col_keys)]
+        for i, row in enumerate(row_keys)
+    ]
+    if len(col_keys) == 1:
+        return {"vconcat": [line[0] for line in grid], "resolve": shared, "spacing": 4}
+    if len(row_keys) == 1:
+        return {"hconcat": grid[0], "resolve": shared, "spacing": 4}
+    return {
+        "vconcat": [{"hconcat": line, "resolve": shared, "spacing": 4} for line in grid],
+        "resolve": shared,
+        "spacing": 4,
+    }
+
+
+def _all_equal(pairs: list[tuple[str, Any]]) -> str:
+    """Vega 運算式：資料欄依序等於各值。"""
+    return " && ".join(
+        f"datum[{json.dumps(name)}] === {_js_literal(value)}" for name, value in pairs
+    )
+
+
+def _js_literal(value: Any) -> str:
+    """資料列中的值在規格（JSON）中的寫法：日期為 ISO 8601 字串。"""
+    if isinstance(value, datetime | date):
+        return json.dumps(value.isoformat())
+    if isinstance(value, Decimal):
+        return json.dumps(float(value))
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _own_data_layers(node: dict[str, Any]) -> list[dict[str, Any]]:
+    """有自己資料的圖層（趨勢線等），且資料不是空的。"""
+    found: list[dict[str, Any]] = []
+    for child in node.get("layer", []):
+        values = (
+            child.get("data", {}).get("values") if isinstance(child.get("data"), dict) else None
+        )
+        if isinstance(values, list) and values and isinstance(values[0], dict):
+            found.append(child)
+        found.extend(_own_data_layers(child))
+    return found
+
+
+def _prefix_axis_title(node: dict[str, Any], channel: str, text: str) -> None:
+    """座標軸標題的上一行加上文字（窗格的標題）。"""
+    encoding = node.get("encoding")
+    if isinstance(encoding, dict) and isinstance(encoding.get(channel), dict):
+        target = encoding[channel]
+        title = target.get("title")
+        target["title"] = [text, *([str(title)] if title else [])]
+        return
+    for child in node.get("layer", []):
+        if not str(child.get("name", "")).startswith((REF, DECO)):
+            _prefix_axis_title(child, channel, text)
+            return
+
+
+def _hide_axis(node: dict[str, Any], channel: str) -> None:
+    """不畫這個方向座標軸的刻度文字與標題（保留格線）：窗格之間共用的座標軸只畫一次。"""
+    encoding = node.get("encoding")
+    if isinstance(encoding, dict) and isinstance(encoding.get(channel), dict):
+        target = encoding[channel]
+        if target.get("axis") is not None or target.get("type") in (
+            "quantitative",
+            "temporal",
+            "ordinal",
+            "nominal",
+        ):
+            axis = dict(target.get("axis") or {})
+            axis.update(labels=False, title=None, ticks=False)
+            target["axis"] = axis
+    for child in node.get("layer", []):
+        _hide_axis(child, channel)
 
 
 def _color_datum(body: dict[str, Any], title: str, scale: dict[str, Any]) -> None:
