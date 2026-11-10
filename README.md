@@ -788,6 +788,11 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   合併欄位的顏色（多個欄位放在色彩上，`map-pri`）依預設色盤
 - **合併欄位（Combined Field）**：`nest-group` 群組中 crossjoin 的各欄位組合成一個字串維度，成員與 Tableau 相同
   寫成「值, 值」（Null 寫成 Null）；排序依組合後的字串（Tableau 依各欄位的值，數字與日期的欄位可能不同）
+- **百分位數彙總**：彙總選單的百分位數（5、10、25、50、75、90、95；`derivation='Percentile'` 與 `aggregation-param`）
+  與 PERCENTILE 函式相同以線性內插計算；Tableau 匯出時的欄名未確認（計算比對接受 `PCT50(…)` 等寫法）
+- **Measure Values 與其他量值**：同一架上的 Measure Values 與其他量值（各自一個軸或疊成雙軸），Measure Values 的軸
+  的標記卡與共用的相同時等同共用的；其他量值的色彩若是 Measure Names，以它自己的名稱上色、與 Measure Values 共用圖例
+- **Drop Lines**：選取標記時才顯示的 Drop Lines 不顯示（記為略過）；一律顯示的列為不支援
 - **多層圓餅**：疊在圓餅上（雙軸）、有角度與顏色的標記卡畫成另一層圓餅，各自依自己的詳細程度（較粗的另外查詢）
   與大小畫出，後面的標記卡畫在上面；沒有角度與顏色的標記卡畫成中間的洞。分面的多層圓餅只畫第一層
 - **樣式**：篩選與參數控制項、dashboard 標題物件的字型、依欄位設定的儲存格字型、表頭與窗格的框線、

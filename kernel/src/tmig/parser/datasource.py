@@ -771,30 +771,8 @@ class DatasourceParser:
     def _add_table_count(
         self, state: DsState, name: str, caption: str | None, anchor: etree._Element
     ) -> None:
-        """資料表的筆數欄位：以公式 1 表示，COUNT 後即為列數（單表萃取）。"""
-        if name in state.by_name:
-            return
-        label = caption or strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
         # Relationship 模型中，筆數欄位屬於它的邏輯資料表（COUNT 為該表的列數）
-        table = None
-        if self.model_tables is not None and name.startswith(TABLE_ID_PREFIX):
-            table = strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
-        state.add_field(
-            DataField(
-                id=self.ctx.ids.make("f", f"{label} count", name),
-                name=name,
-                caption=label,
-                role="measure",
-                datatype="integer",
-                default_agg="count",
-                format=None,
-                hidden=False,
-                column=None,
-                table=table,
-                calc=Calc(formula="1"),
-                source_ref=xpath(anchor),
-            )
-        )
+        add_table_count(self.ctx, state, name, caption, anchor, self.model_tables is not None)
 
     def _add_calc(self, state: DsState, column: etree._Element) -> None:
         add_calc_field(self.ctx, state, column)
@@ -844,6 +822,40 @@ def _source_datatype(state: DsState, source: str) -> str | None:
         if column.get("name") == source:
             return column.get("datatype")
     return None
+
+
+def add_table_count(
+    ctx: ParseContext,
+    state: DsState,
+    name: str,
+    caption: str | None,
+    anchor: etree._Element,
+    model: bool = False,
+) -> None:
+    """資料表的筆數欄位（「資料表 (計數)」）：以公式 1 表示，COUNT 後即為列數。model：Relationship 模型，
+    欄位屬於它的邏輯資料表。"""
+    if name in state.by_name:
+        return
+    label = caption or strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
+    table = None
+    if model and name.startswith(TABLE_ID_PREFIX):
+        table = strip_brackets(name.removeprefix(TABLE_ID_PREFIX))
+    state.add_field(
+        DataField(
+            id=ctx.ids.make("f", f"{label} count", name),
+            name=name,
+            caption=label,
+            role="measure",
+            datatype="integer",
+            default_agg="count",
+            format=None,
+            hidden=False,
+            column=None,
+            table=table,
+            calc=Calc(formula="1"),
+            source_ref=xpath(anchor),
+        )
+    )
 
 
 def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) -> DataField | None:

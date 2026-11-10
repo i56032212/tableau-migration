@@ -1351,7 +1351,14 @@
                 "stdev",
                 "stdevp",
                 "var",
-                "varp"
+                "varp",
+                "pct5",
+                "pct10",
+                "pct25",
+                "pct50",
+                "pct75",
+                "pct90",
+                "pct95"
               ],
               "type": "string"
             },
@@ -1849,7 +1856,14 @@
                 "stdev",
                 "stdevp",
                 "var",
-                "varp"
+                "varp",
+                "pct5",
+                "pct10",
+                "pct25",
+                "pct50",
+                "pct75",
+                "pct90",
+                "pct95"
               ],
               "type": "string"
             },

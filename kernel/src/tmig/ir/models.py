@@ -56,7 +56,17 @@ Aggregation = Literal[
     "stdevp",
     "var",
     "varp",
+    "pct5",
+    "pct10",
+    "pct25",
+    "pct50",
+    "pct75",
+    "pct90",
+    "pct95",
 ]
+"""pct5…pct95：百分位數（Tableau 彙總選單的 Percentile，以內插計算，同 PERCENTILE 函式）。"""
+PERCENTILES: dict[str, int] = {f"pct{p}": p for p in (5, 10, 25, 50, 75, 90, 95)}
+"""百分位數彙總 → 百分位（0–100）。"""
 DatePart = Literal["year", "quarter", "month", "week", "weekday", "day", "hour", "minute", "second"]
 WeekDay = Literal["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 CalcLevel = Literal["row", "aggregate", "lod", "table_calc"]

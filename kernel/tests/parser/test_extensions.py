@@ -171,6 +171,25 @@ def test_table_count_from_table_column(tmp_path: Path) -> None:
     assert any(f.name == TABLE and f.caption == "Orders" for f in ir.datasources[0].fields)
 
 
+def test_table_count_only_in_worksheet_dependencies(tmp_path: Path) -> None:
+    """單表資料源的「資料表 (計數)」只寫在工作表的相依清單中（沒有 object-graph，較舊版本的寫法）。"""
+    column = f"<column caption='Orders' datatype='integer' name='{TABLE}' role='measure' type='quantitative' />"
+    sheets = worksheet(
+        "Counts",
+        [*BASIC, COUNT],
+        rows=ref("none:Region:nk"),
+        cols=COUNT_REF,
+        deps_extra=column,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    count = next(f for f in ir.datasources[0].fields if f.name == TABLE)
+    assert (count.caption, count.datatype, count.table) == ("Orders", "integer", None)
+    assert count.calc is not None and count.calc.formula == "1"
+    (use,) = ir.worksheets[0].columns
+    assert (use.field, use.agg) == (count.id, "count")
+
+
 # ---------------------------------------------------------------- H3 不影響數字的元素
 
 
@@ -255,6 +274,37 @@ def test_natural_sort_is_alphabetic(tmp_path: Path, sort: str) -> None:
     assert reasons(ir) == []
     (sort_ir,) = ir.worksheets[0].sorts
     assert (sort_ir.kind, sort_ir.order) == ("alphabetic", "desc")
+
+
+def test_old_shelf_sort_and_drop_lines(tmp_path: Path) -> None:
+    """較舊版本的依量值排序（<view><rows><shelf-sort>）；選取時才顯示的 Drop Lines 記為略過。"""
+    sort = (
+        f"<rows><shelf-sort direction='DESC' measure-to-sort-by='{ref('sum:Sales:qk')}'>"
+        f"<dimensions-to-sort><dimension>{ref('none:Region:nk')}</dimension></dimensions-to-sort>"
+        "</shelf-sort></rows>"
+    )
+    drop = "<dropline drop-when='selected' haslabel='false' x-axis='true' y-axis='false' />"
+    sheets = worksheet(
+        "S",
+        BASIC,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=sort,
+        pane_extra=drop,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    (sort_ir,) = ir.worksheets[0].sorts
+    assert (sort_ir.field, sort_ir.kind, sort_ir.order) == ("f_region", "by_field", "desc")
+    assert sort_ir.by == FieldUse(field="f_sales", agg="sum", continuous=True)
+    assert any("Drop Lines" in u.reason for u in ir.ignored)
+
+    always = drop.replace("selected", "always")
+    sheets = worksheet(
+        "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), pane_extra=always
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == ["一律顯示的 Drop Lines v0 不支援"]
 
 
 # ---------------------------------------------------------------- I1 自動與範圍尺寸

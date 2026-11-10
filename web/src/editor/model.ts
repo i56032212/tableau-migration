@@ -148,6 +148,13 @@ export const AGGREGATIONS: [string, string][] = [
   ["countd", "相異計數"],
   ["min", "最小值"],
   ["max", "最大值"],
+  ["pct5", "第 5 百分位數"],
+  ["pct10", "第 10 百分位數"],
+  ["pct25", "第 25 百分位數"],
+  ["pct50", "第 50 百分位數"],
+  ["pct75", "第 75 百分位數"],
+  ["pct90", "第 90 百分位數"],
+  ["pct95", "第 95 百分位數"],
   ["stdev", "標準差"],
   ["stdevp", "母體標準差"],
   ["var", "變異數"],
@@ -584,7 +591,12 @@ export function formulaRef(field: CatalogField): string {
 export function measureFormula(use: FieldUse, fields: Map<string, CatalogField>): string | null {
   const field = fields.get(use.field);
   if (!field) return null;
-  if (use.agg) return `${(AGG_FUNCTIONS[use.agg] ?? use.agg.toUpperCase())}(${formulaRef(field)})`;
+  if (use.agg) {
+    // 百分位數：PERCENTILE([Sales], 0.9)
+    const percentile = /^pct(\d+)$/.exec(use.agg);
+    if (percentile) return `PERCENTILE(${formulaRef(field)}, ${Number(percentile[1]) / 100})`;
+    return `${(AGG_FUNCTIONS[use.agg] ?? use.agg.toUpperCase())}(${formulaRef(field)})`;
+  }
   if (field.level === "aggregate") return formulaRef(field);
   return null;
 }

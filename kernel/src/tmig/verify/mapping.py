@@ -76,6 +76,14 @@ AGG_LABELS: dict[str, list[str]] = {
     "stdevp": ["STDEVP({c})", "Std. Dev. (Pop.) of {c}"],
     "var": ["VAR({c})", "Variance of {c}"],
     "varp": ["VARP({c})", "Variance (Pop.) of {c}"],
+    # 百分位數：Tableau 匯出的欄名未確認（依膠囊的寫法推定）
+    "pct5": ["PCT5({c})", "Pct5 {c}", "Percentile 5 of {c}"],
+    "pct10": ["PCT10({c})", "Pct10 {c}", "Percentile 10 of {c}"],
+    "pct25": ["PCT25({c})", "Pct25 {c}", "Percentile 25 of {c}"],
+    "pct50": ["PCT50({c})", "Pct50 {c}", "Percentile 50 of {c}"],
+    "pct75": ["PCT75({c})", "Pct75 {c}", "Percentile 75 of {c}"],
+    "pct90": ["PCT90({c})", "Pct90 {c}", "Percentile 90 of {c}"],
+    "pct95": ["PCT95({c})", "Pct95 {c}", "Percentile 95 of {c}"],
 }
 AGG_WORDS = {"sum": "Sum", "avg": "Average", "min": "Minimum", "max": "Maximum"}
 

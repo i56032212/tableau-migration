@@ -74,6 +74,13 @@ AGGREGATIONS = {
     "stdevp": "STDEVP",
     "var": "VAR",
     "varp": "VARP",
+    "pct5": "PCT5",
+    "pct10": "PCT10",
+    "pct25": "PCT25",
+    "pct50": "PCT50",
+    "pct75": "PCT75",
+    "pct90": "PCT90",
+    "pct95": "PCT95",
 }
 VALUES_SHOWN = 10
 """篩選的說明中最多列出幾個值。"""

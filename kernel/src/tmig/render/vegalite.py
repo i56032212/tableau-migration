@@ -121,6 +121,13 @@ AGG_LABELS = {
     "stdevp": "STDEVP",
     "var": "VAR",
     "varp": "VARP",
+    "pct5": "PCT5",
+    "pct10": "PCT10",
+    "pct25": "PCT25",
+    "pct50": "PCT50",
+    "pct75": "PCT75",
+    "pct90": "PCT90",
+    "pct95": "PCT95",
 }
 TC_LABELS = {
     "running_total": "累計",
@@ -758,6 +765,26 @@ class _Builder:
         keys: dict[Scalar, Any] = {use_key(u): self.ch(u).title for u in measures}
         return discrete_scale(setting, ((t, t) for t in titles), keys)
 
+    def folded_names_scale(self, measures: list[FieldUse]) -> dict[str, Any] | None:
+        """Measure Values 與其他量值在同一架上（各自一個軸或雙軸）、色彩是 Measure Names：Measure Values 的
+        各量值與其他量值共用一個比例尺（其他量值以自己的名稱上色，與 Tableau 相同）。"""
+        if MEASURE_VALUES not in self.channels:
+            return None
+        others = [u for u in measures if u.field != MEASURE_VALUES]
+        cards = [self.ws.marks, *(p.marks for p in self.ws.panes)]
+        named = [m for m in cards if m.color is not None and m.color.field == MEASURE_NAMES]
+        if not others or not named:
+            return None
+        setting = next((m.color_palette for m in named if m.color_palette is not None), None)
+        if setting is None or setting.kind != "discrete":
+            setting = AUTOMATIC_DISCRETE
+        titles = [*self.measure_names.values(), *(self.ch(u).title for u in others)]
+        keys: dict[Scalar, Any] = {
+            **self.measure_names,
+            **{use_key(u): self.ch(u).title for u in others},
+        }
+        return discrete_scale(setting, ((t, t) for t in titles), keys)
+
     def multi(
         self,
         rows_dims: list[FieldUse],
@@ -775,6 +802,8 @@ class _Builder:
         charts: list[dict[str, Any]] = []
         kinds: list[str] = []
         names_scale = self.names_scale(measures)
+        folded_scale = self.folded_names_scale(measures)
+        folded = MEASURE_VALUES in self.channels
         for use in measures:
             pane = _take_pane(remaining, use, axis)
             marks = pane.marks if pane is not None else self.ws.marks
@@ -801,6 +830,19 @@ class _Builder:
                 and marks.color.field == MEASURE_NAMES
             ):
                 _color_datum(body, self.ch(use).title, names_scale)
+            if folded and use.field != MEASURE_VALUES:
+                # Measure Values 以外的量值：長表中每列在每個 Measure Values 的量值重複一次，只取一份；
+                # 色彩上的 Measure Names 是這個量值自己的名稱
+                _first_fold_only(body)
+                if (
+                    folded_scale is not None
+                    and marks.color is not None
+                    and marks.color.field == MEASURE_NAMES
+                ):
+                    # 比例尺在 Measure Values 的圖上（含這個量值的名稱）
+                    _color_datum(body, self.ch(use).title, None, replace=True)
+            elif folded_scale is not None:
+                _names_scale(body, folded_scale)
             if marks.trend is not None:
                 _trend_lines(self, body, marks.trend, self.records_of(marks))
             kinds.append(kind)
@@ -3263,8 +3305,38 @@ def _hide_axis(node: dict[str, Any], channel: str) -> None:
         _hide_axis(child, channel)
 
 
-def _color_datum(body: dict[str, Any], title: str, scale: dict[str, Any]) -> None:
-    """量值的圖層以固定的顏色（Measure Names 中這個量值的顏色）呈現，與其他量值共用圖例。"""
+def _first_fold_only(body: dict[str, Any]) -> None:
+    """Measure Values 的長表中只取每列的第一份（各標記卡另外查詢的資料沒有 __mn_i，全部保留）；
+    工具提示不列 Measure Names／Values。"""
+    body.setdefault("transform", []).insert(0, {"filter": "!(datum.__mn_i > 0)"})
+
+    def visit(node: dict[str, Any]) -> None:
+        tooltip = node.get("encoding", {}).get("tooltip")
+        if isinstance(tooltip, list):
+            node["encoding"]["tooltip"] = [
+                t for t in tooltip if t.get("field") not in ("__mn", "__mv_label")
+            ]
+        for child in node.get("layer", []):
+            visit(child)
+
+    visit(body)
+
+
+def _names_scale(body: dict[str, Any], scale: dict[str, Any]) -> None:
+    """以 Measure Names 上色的圖層改用共用的比例尺（見 folded_names_scale）。"""
+    color = body.get("encoding", {}).get("color")
+    if isinstance(color, dict) and color.get("field") == "__mn":
+        color["scale"] = scale
+    for child in body.get("layer", []):
+        _names_scale(child, scale)
+
+
+def _color_datum(
+    body: dict[str, Any], title: str, scale: dict[str, Any] | None, replace: bool = False
+) -> None:
+    """量值的圖層以固定的顏色（Measure Names 中這個量值的顏色）呈現，與其他量值共用圖例。
+    replace：取代既有的顏色（Measure Values 的長表中的 Measure Names）。scale 為 None 時沿用其他圖層
+    以欄位上色的比例尺（圖層與並排的圖共用色彩的比例尺）。"""
 
     def visit(node: dict[str, Any]) -> None:
         mark = node.get("mark")
@@ -3273,12 +3345,14 @@ def _color_datum(body: dict[str, Any], title: str, scale: dict[str, Any]) -> Non
         decoration = isinstance(name, str) and name.startswith(("__ref", "__deco"))
         if mark is not None and kind != "text" and not decoration:
             encoding = node.setdefault("encoding", {})
+            if replace and isinstance(encoding.get("color"), dict) and "field" in encoding["color"]:
+                del encoding["color"]
             if "color" not in encoding:
                 encoding["color"] = {
                     "datum": title,
                     "type": "nominal",
                     "title": MEASURE_NAMES_TITLE,
-                    "scale": scale,
+                    **({"scale": scale} if scale is not None else {}),
                 }
         for child in node.get("layer", []):
             visit(child)

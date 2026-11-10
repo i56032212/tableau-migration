@@ -56,7 +56,7 @@ from tmig.ir.models import (
 )
 from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
 from tmig.parser.context import DsState, FilterKind, ParseContext, SharedView, SheetState
-from tmig.parser.datasource import add_calc_field, analyze_calcs
+from tmig.parser.datasource import TABLE_ID_PREFIX, add_calc_field, add_table_count, analyze_calcs
 from tmig.parser.fields import (
     FilterParser,
     bucket_values,
@@ -75,6 +75,7 @@ from tmig.parser.formats import (
     reference_styles,
     worksheet_formats,
 )
+from tmig.parser.model import graph_objects
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -173,6 +174,10 @@ KNOWN = frozenset(
         "bucket",
         "shelf-sorts",
         "shelf-sort-v2",
+        # 較舊版本的依量值排序：<view><rows><shelf-sort><dimensions-to-sort><dimension>
+        "shelf-sort",
+        "dimensions-to-sort",
+        "dimension",
         "slices",
         "aggregation",
         "panes",
@@ -497,7 +502,14 @@ class SheetParser:
                 continue
             for column in children(dep, "column"):
                 name = column.get("name", "")
-                if name in state.by_name or child(column, "calculation") is None:
+                if name in state.by_name:
+                    continue
+                if name.startswith(TABLE_ID_PREFIX) and len(graph_objects(state.element)) <= 1:
+                    # 單表資料源的「資料表 (計數)」只寫在工作表的相依清單中
+                    add_table_count(self.ctx, state, name, column.get("caption"), column)
+                    added = True
+                    continue
+                if child(column, "calculation") is None:
                     continue
                 # 直接在欄列架上輸入的臨時計算，只存在工作表裡
                 if add_calc_field(self.ctx, state, column) is not None:
@@ -981,10 +993,15 @@ class SheetParser:
             if measure is None:
                 continue
             if measure.field in SPECIAL_FIELDS:
-                # 例如 Measure Values 與另一個量值疊成雙軸：Measure Values 的軸有自己的標記卡
-                self.ctx.flag(
-                    element, "Measure Values 的軸有個別的標記卡（例如與其他量值疊成雙軸），尚不支援"
-                )
+                # Measure Values 的軸的標記卡：與共用的標記卡相同、不是雙軸時（例如 Measure Values 與
+                # 另一個量值各自一個軸）等同共用的標記卡；疊成雙軸或設定不同尚不支援
+                index = element.get("y-index") or element.get("x-index") or "0"
+                dual = (index.isdigit() and int(index) > 0) or instance_key(axis_ref) in folded
+                if dual or _pane_signature(element) != _pane_signature(main):
+                    self.ctx.flag(
+                        element,
+                        "Measure Values 的軸有個別的標記卡（例如與其他量值疊成雙軸），尚不支援",
+                    )
                 continue
             if measure not in (rows if axis == "rows" else cols):
                 self.ctx.flag(element, f"標記卡的量值 {axis_ref} 不在欄列架上")
@@ -1978,6 +1995,19 @@ class SheetParser:
                         if found is not None:
                             sorts.append(found)
                     continue
+                elif tag in ("rows", "cols"):
+                    # 較舊版本的依量值排序（工具列的排序按鈕）：<rows><shelf-sort measure-to-sort-by>
+                    for item in children(element, "shelf-sort"):
+                        for dim in children(child(item, "dimensions-to-sort"), "dimension"):
+                            found = self._by_field(
+                                item,
+                                text_of(dim),
+                                item.get("measure-to-sort-by"),
+                                item.get("direction"),
+                            )
+                            if found is not None:
+                                sorts.append(found)
+                    continue
                 else:
                     continue
             except LiteralError as exc:
@@ -2052,6 +2082,13 @@ class SheetParser:
                 continue
             if tag in IGNORED_ELEMENTS:
                 self.ctx.ignore(item, IGNORED_ELEMENTS[tag])
+                continue
+            if tag == "dropline":
+                # Drop Lines：預設只在選取標記時顯示
+                if item.get("drop-when") == "always":
+                    self.ctx.flag(item, "一律顯示的 Drop Lines v0 不支援")
+                else:
+                    self.ctx.ignore(item, "Drop Lines（選取標記時才顯示）：新平台不顯示")
                 continue
             if tag in KNOWN_UNSUPPORTED:
                 self.ctx.flag(item, f"{KNOWN_UNSUPPORTED[tag]} v0 不支援")

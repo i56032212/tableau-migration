@@ -389,3 +389,57 @@ def test_dual_axis_with_coarser_pane() -> None:
     assert line["encoding"]["color"]["title"] == "Segment"
     tooltip = {t["field"] for t in bars["encoding"]["tooltip"]}
     assert tooltip and all(field in bar_values[0] for field in tooltip)  # 只列出長條資料中有的欄位
+
+
+def test_measure_values_dual_with_another_measure(tmp_path: Path, db: Path) -> None:
+    """Measure Values 與另一個量值疊成雙軸、色彩都是 Measure Names：Measure Values 的軸的標記卡與共用的
+    相同時等同共用的；另一個量值只畫一份（長表中重複的列不畫），以自己的名稱上色、共用圖例。"""
+    deps = [
+        instance("[Region]", "None", "[none:Region:nk]"),
+        instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+        instance("[Sales]", "Avg", "[avg:Sales:qk]", "quantitative"),
+        instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative"),
+    ]
+    values = f"[{b.DS}].[Multiple Values]"
+    color = f"<color column='[{b.DS}].[:Measure Names]' />"
+
+    def pane(pane_id: int, axis: str, index: str = "") -> str:
+        return (
+            f"<pane id='{pane_id}' y-axis-name='{axis}'{index}><view><breakdown value='auto' /></view>"
+            f"<mark class='Line' /><encodings>{color}</encodings></pane>"
+        )
+
+    sheet = worksheet(
+        "Dual",
+        deps,
+        rows=f"({values} + {ref('sum:Profit:qk')})",
+        cols=ref("none:Region:nk"),
+        mark="Line",
+        encodings=color,
+        panes_extra=pane(2, values) + pane(3, ref("sum:Profit:qk"), " y-index='1'"),
+        view_extra=(
+            f"<filter class='categorical' column='[{b.DS}].[:Measure Names]'>"
+            "<groupfilter function='union' user:op='manual'>"
+            f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref('sum:Sales:qk')}&quot;' />"
+            f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref('avg:Sales:qk')}&quot;' />"
+            "</groupfilter></filter>"
+        ),
+    )
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet)))
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    assert [(p.measure.field, p.dual) for p in ws.panes] == [("f_profit", True)]
+    query = worksheet_sql(ir, ws.id)
+    rendered = build_spec(ir, ws.id, query.columns, execute(db, query.sql))
+    assert rendered.spec is not None
+    assert [e.message for e in validator().iter_errors(rendered.spec)] == []
+    assert rendered.spec["resolve"] == {"scale": {"y": "independent"}}
+    folded, profit = rendered.spec["layer"]
+    assert folded["encoding"]["color"]["field"] == "__mn"
+    assert folded["encoding"]["color"]["scale"]["domain"] == ["Sales", "AVG(Sales)", "Profit"]
+    assert profit["encoding"]["color"] == {
+        "datum": "Profit",
+        "type": "nominal",
+        "title": "Measure Names",
+    }
+    assert profit["transform"] == [{"filter": "!(datum.__mn_i > 0)"}]

@@ -11,6 +11,7 @@ from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
+    PERCENTILES,
     Aggregation,
     CategoricalFilter,
     ConditionFilter,
@@ -129,6 +130,13 @@ def use_from_instance(ds: DsState, instance: etree._Element) -> FieldUse | str:
         return FieldUse(field=data_field.id)
     if derivation in AGG_DERIVATIONS:
         return FieldUse(field=data_field.id, agg=AGG_DERIVATIONS[derivation], continuous=continuous)
+    if derivation == "Percentile":
+        # 百分位數：百分位在 aggregation-param（彙總選單只有 5、10、25、50、75、90、95）
+        param = instance.get("aggregation-param", "")
+        agg = f"pct{param}"
+        if agg not in PERCENTILES:
+            return f"百分位數 {param}（{instance.get('name')}）v0 不支援"
+        return FieldUse(field=data_field.id, agg=agg, continuous=continuous)  # type: ignore[arg-type]
     if derivation in DATE_DERIVATIONS:
         if data_field.datatype not in ("date", "datetime"):
             return f"{column} 不是日期欄位，卻使用日期衍生 {derivation}"
@@ -192,7 +200,7 @@ def value_type(field: DataField, use: FieldUse) -> str:
         return "integer" if use.date.kind == "part" else field.datatype
     if use.agg in ("count", "countd"):
         return "integer"
-    if use.agg in ("avg", "median", "stdev", "stdevp", "var", "varp"):
+    if use.agg in ("avg", "median", "stdev", "stdevp", "var", "varp", *PERCENTILES):
         return "real"
     return field.datatype
 

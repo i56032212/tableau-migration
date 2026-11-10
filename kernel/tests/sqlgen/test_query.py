@@ -1048,3 +1048,38 @@ def test_sql_has_stage_comments_and_pushdown_boundary(tmp_path: Path) -> None:
     assert "以上可下推到來源資料庫" in query.sql
     assert query.sql.index("以上可下推") < query.sql.index("-- 第 7 段")
     assert [n.stage for n in query.plan] == [1, 6, 7]
+
+
+# ---------------------------------------------------------------- 百分位數彙總
+
+
+def percentile(p: int) -> str:
+    return (
+        f"<column-instance aggregation-param='{p}' column='[Sales]' derivation='Percentile' "
+        f"name='[prc{p}:Sales:qk]' pivot='key' type='quantitative' />"
+    )
+
+
+def test_percentile_aggregation(run: Run) -> None:
+    """彙總選單的百分位數（Percentile 50、90）：與 PERCENTILE 函式相同，以內插計算。"""
+    sheet = region_sheet(
+        [percentile(50), percentile(90)],
+        cols=ref("prc50:Sales:qk"),
+        mark="Text",
+        encodings=f"<text column='{ref('prc90:Sales:qk')}' />",
+    )
+    rows = run(sheet)
+    got = {r["f_region"]: (r["pct50(f_sales)"], r["pct90(f_sales)"]) for r in rows}
+    # East 50、100、200：中位數 100，第 90 百分位在 1.8 的位置 → 100 + 0.8 × 100 = 180
+    assert got == {
+        "East": pytest.approx((100.0, 180.0)),
+        "West": pytest.approx((300.0, 380.0)),
+        "South": pytest.approx((50.0, 74.0)),
+        "North": pytest.approx((60.0, 60.0)),
+    }
+
+
+def test_unknown_percentile_is_unsupported(tmp_path: Path) -> None:
+    sheet = region_sheet([percentile(33)], cols=ref("prc33:Sales:qk"))
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet)))
+    assert any("百分位數 33" in u.reason for u in ir.unsupported)

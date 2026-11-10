@@ -44,6 +44,7 @@ from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
     IR,
+    PERCENTILES,
     SPECIAL_FIELDS,
     Calc,
     CategoricalFilter,
@@ -559,6 +560,9 @@ class WorksheetQuery:
                 raise QueryError(
                     f"{self.fields[use.field].caption} 已經是彙總，不能再套用 {use.agg}"
                 )
+            if use.agg in PERCENTILES:
+                fraction = LiteralNode(0, "real", PERCENTILES[use.agg] / 100)
+                return Call(0, "PERCENTILE", (ref, fraction))
             return Call(0, AGG_FUNCTIONS[use.agg], (ref,))
         return ref
 
