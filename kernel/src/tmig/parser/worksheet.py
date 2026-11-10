@@ -32,6 +32,7 @@ from tmig.ir.models import (
     SPECIAL_FIELDS,
     Blend,
     BlendLink,
+    CategoricalFilter,
     ColorPalette,
     DataField,
     FieldUse,
@@ -42,6 +43,7 @@ from tmig.ir.models import (
     NestedTableCalc,
     Pane,
     ParamRef,
+    RangeFilter,
     ReferenceLine,
     Scalar,
     Sort,
@@ -53,7 +55,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
-from tmig.parser.context import DsState, FilterKind, ParseContext, SheetState
+from tmig.parser.context import DsState, FilterKind, ParseContext, SharedView, SheetState
 from tmig.parser.datasource import add_calc_field, analyze_calcs
 from tmig.parser.fields import (
     FilterParser,
@@ -166,6 +168,7 @@ KNOWN = frozenset(
         "computed-sort",
         "manual-sort",
         "natural-sort",
+        "alphabetic-sort",
         "dictionary",
         "bucket",
         "shelf-sorts",
@@ -199,6 +202,9 @@ KNOWN = frozenset(
         "reference-line-value",
         # 小計
         "subtotals",
+        # Data Blending 手動設為作用中、取消作用的連結欄位（_blends）
+        "join-lod-include-overrides",
+        "join-lod-exclude-overrides",
         # 趨勢線（不分組的因子 <excluded-factors><column>）
         "trendline",
         "excluded-factors",
@@ -346,6 +352,10 @@ class SheetParser:
         """目前解析的位置可以用次要資料源的欄位（欄列架、標記卡與其中的文字、數字格式）。"""
         self._colors: dict[str, etree._Element] | None = None
         """色彩編碼（工作表與資料源的 <style>）：欄位實例鍵 → <encoding>。"""
+        self.cross: dict[str, str] = {}
+        """跨資料源篩選：其他資料源的欄位（[資料源].[欄位實例]）→ 主要資料源中對應的欄位實例名稱。"""
+        self._keyed: dict[str, Filter] = {}
+        """工作表上的單一欄位篩選，以篩選的欄位實例名稱為鍵（跨資料源篩選與同一欄位的篩選合併用）。"""
 
     # ------------------------------------------------------------ 入口
 
@@ -402,7 +412,13 @@ class SheetParser:
         card_uses = [*rows, *cols, *marks.uses(), *(u for p in panes for u in p.marks.uses())]
         if not measure_values and any(u.field == MEASURE_VALUES for u in card_uses):
             return None  # 無法得知 Measure Values 的量值（已列為不支援）
-        blends = self._blends(view, [*card_uses, *measure_values], bool(totals or subtotals))
+        blends = self._blends(
+            view,
+            [*card_uses, *measure_values],
+            bool(totals or subtotals),
+            child(table, "join-lod-include-overrides"),
+            child(table, "join-lod-exclude-overrides"),
+        )
         if blends is None:
             return None
         sheet_id = ctx.ids.make("ws", self.name)
@@ -462,6 +478,7 @@ class SheetParser:
             instances=self.instances,
             uses=self.uses,
             filter_kinds=kinds,
+            cross=self.cross,
         )
         return worksheet
 
@@ -644,10 +661,17 @@ class SheetParser:
     # ------------------------------------------------------------ Data Blending
 
     def _blends(
-        self, view: etree._Element, uses: list[FieldUse], totals: bool
+        self,
+        view: etree._Element,
+        uses: list[FieldUse],
+        totals: bool,
+        include: etree._Element | None = None,
+        exclude: etree._Element | None = None,
     ) -> list[Blend] | None:
         """次要資料源與連結欄位。自訂關聯（<datasource-relationships>）優先，沒有時以同名的維度自動連結；
-        檢視中要有連結欄位（作用中的連結），否則無法混合。"""
+        檢視中要有連結欄位（作用中的連結），否則無法混合。
+
+        連結欄位在檢視中時自動作用；手動取消作用的連結（<join-lod-exclude-overrides>）不用。"""
         assert self.ds is not None
         primary_ids = {f.id for f in self.ds.fields}
         dims = [
@@ -668,11 +692,48 @@ class SheetParser:
             if not links:
                 self.ctx.flag(view, f"{label}：找不到連結欄位")
                 return None
+            excluded = self._override_fields(exclude, name, secondary, label)
+            if excluded is None:
+                return None
+            links = [link for link in links if link.secondary.field not in excluded]
             if not any(link.secondary_for(d) is not None for link in links for d in dims):
                 self.ctx.flag(view, f"{label}：檢視中沒有連結欄位（沒有作用中的連結）")
                 return None
+            # 手動設為作用中的連結（<join-lod-include-overrides>）：連結欄位在檢視中時與自動相同；
+            # 不在檢視中時要在更細的層級混合後再彙總，尚不支援
+            included = self._override_fields(include, name, secondary, label)
+            if included is None:
+                return None
+            active = {
+                link.secondary.field
+                for link in links
+                for d in dims
+                if link.secondary_for(d) is not None
+            }
+            if included - active:
+                self.ctx.flag(
+                    include if include is not None else view,
+                    f"{label}：連結欄位不在檢視中卻設為作用中，v0 不支援",
+                )
+                return None
             blends.append(Blend(datasource=secondary.id, links=links))
         return blends
+
+    def _override_fields(
+        self, element: etree._Element | None, name: str, secondary: DsState, label: str
+    ) -> set[str] | None:
+        """<join-lod-include-overrides>、<join-lod-exclude-overrides> 中這個次要資料源的欄位 id。"""
+        found: set[str] = set()
+        for column in children(element, "column"):
+            parts = qualified_parts(text_of(column))
+            if len(parts) != 2 or parts[0] != name:
+                continue
+            field = secondary.by_name.get("[" + parts[1].replace("]", "]]") + "]")
+            if field is None:
+                self.ctx.flag(column, f"{label}：連結欄位 {text_of(column)} 無法解析")
+                return None
+            found.add(field.id)
+        return found
 
     def _links(self, name: str, secondary: DsState) -> list[BlendLink]:
         assert self.ds is not None
@@ -1672,10 +1733,16 @@ class SheetParser:
         parser = FilterParser(self.ctx, self.ds, self.resolve, "worksheet")
         filters: list[Filter] = []
         kinds: dict[str, FilterKind] = {}
+        cross: list[etree._Element] = []
         for element in children(view, "filter"):
-            key = instance_key(element.get("column", ""))
+            column = element.get("column", "")
+            key = instance_key(column)
             if key == "[:Measure Names]":
                 continue  # 決定 Measure Values 的量值，不是資料篩選
+            parts = qualified_parts(column)
+            if len(parts) == 2 and parts[0] not in (self.ds.name, "Parameters"):
+                cross.append(element)  # 其他資料源的欄位：主要資料源自己的篩選都解析後再處理
+                continue
             tuple_kind = self.ds.auto_groups.get(key) or next(
                 (kind for prefix, kind in TUPLE_PREFIXES.items() if key.startswith(prefix)), None
             )
@@ -1688,8 +1755,60 @@ class SheetParser:
             if parsed is None or isinstance(parsed, TupleFilter):
                 continue
             filters.append(parsed)
-            kinds[instance_key(element.get("column", ""))] = parsed.kind
+            kinds[key] = parsed.kind
+            self._keyed[key] = parsed
+        for element in cross:
+            self._cross_filter(element, parser, filters, kinds)
         return filters, kinds
+
+    def _cross_filter(
+        self,
+        element: etree._Element,
+        parser: FilterParser,
+        filters: list[Filter],
+        kinds: dict[str, FilterKind],
+        group: str | None = None,
+    ) -> bool:
+        """其他資料源欄位的篩選（Tableau 10 的跨資料源篩選，套用到相關資料源）：<target field> 是主要資料源
+        中對應的欄位（依資料源的關聯），以相同的值篩選該欄位。沒有對應欄位的（次要資料源自己的篩選）
+        尚不支援。
+
+        同一欄位已有不設限、不屬於篩選群組的篩選時（Tableau 常一併放上）以跨資料源的篩選取代；否則一併
+        套用（AND），篩選控制項控制跨資料源的篩選。回傳是否加入。"""
+        assert self.ds is not None
+        column = element.get("column", "")
+        target_el = child(element, "target")
+        target = target_el.get("field", "") if target_el is not None else ""
+        if qualified_parts(target)[:1] != [self.ds.name]:
+            self.ctx.flag(
+                element,
+                f"工作表「{self.name}」以其他資料源的欄位 {column} 篩選，沒有對應到主要資料源的欄位"
+                "（次要資料源的篩選），v0 不支援",
+            )
+            return False
+        key = instance_key(target)
+        if key not in self.instances and key not in self.uses:
+            # 對應的欄位沒有出現在工作表的欄位實例中：依欄位實例名稱推得
+            resolved = use_from_name(self.ds, key)
+            if isinstance(resolved, FieldUse):
+                self.uses[key] = resolved
+        parsed = parser.parse(element, group=group, column=target)
+        if parsed is None or isinstance(parsed, TupleFilter):
+            return False
+        existing = self._keyed.get(key)
+        index = next((i for i, f in enumerate(filters) if f is existing), None)
+        if index is None:
+            filters.append(parsed)
+        elif existing is not None and existing.group is None and _unrestricted(existing):
+            filters[index] = parsed
+        else:
+            # 放在前面：工作表的篩選狀態以欄位為鍵，套用到同一欄位的第一個篩選（跨資料源篩選的控制項）
+            filters.insert(index, parsed)
+        kinds[key] = parsed.kind
+        self._keyed[key] = parsed
+        parts = qualified_parts(column)
+        self.cross[f"[{parts[0]}].{instance_key(column)}"] = key
+        return True
 
     def _tuple_filter(self, element: etree._Element, kind: str) -> TupleFilter | None:
         """篩選動作、工具提示、排除與只保留的篩選：依多個欄位的值組合篩選。"""
@@ -1762,8 +1881,13 @@ class SheetParser:
             return
         assert self.ds is not None
         parser = FilterParser(self.ctx, self.ds, self.resolve, "worksheet")
+        related: list[tuple[etree._Element, str, str]] = []
         for column in children(child(view, "slices"), "column"):
+            parts = qualified_parts(text_of(column))
             key = instance_key(text_of(column))
+            if len(parts) == 2 and parts[0] != ds_name:
+                related.append((column, parts[0], key))  # 主要資料源自己的全域篩選之後再處理
+                continue
             element = shared.filters.get(key)
             if element is None or key in kinds or key in shared.failed:
                 continue
@@ -1778,6 +1902,56 @@ class SheetParser:
             )
             filters.append(parsed)
             kinds[key] = parsed.kind
+            self._keyed[key] = parsed
+        for column, name, key in related:
+            self._related_filter(column, name, key, shared, parser, filters, kinds)
+
+    def _related_filter(
+        self,
+        column: etree._Element,
+        name: str,
+        key: str,
+        shared: SharedView,
+        parser: FilterParser,
+        filters: list[Filter],
+        kinds: dict[str, FilterKind],
+    ) -> None:
+        """篩選架上其他資料源的欄位：主要資料源的全域篩選中「套用到所有使用相關資料源的工作表」的篩選
+        （跨資料源篩選），與該資料源自己的工作表屬於同一篩選群組，篩選控制項一起更新。"""
+        foreign = f"[{name}].{key}"
+        element = shared.related.get(foreign)
+        if element is None:
+            other = self.ctx.shared_views.get(name)
+            if other is not None and key in other.filters:
+                self.ctx.flag(
+                    column,
+                    f"工作表「{self.name}」套用次要資料源的全域篩選（Data Blending），v0 不支援",
+                )
+            return
+        if foreign in self.cross or foreign in shared.failed:
+            return  # 工作表上有本地的跨資料源篩選
+        target_el = child(element, "target")
+        target_key = instance_key(target_el.get("field", "")) if target_el is not None else ""
+        if target_key and target_key not in self.instances and target_key in shared.instances:
+            self.instances[target_key] = shared.instances[target_key]
+        if not self._cross_filter(
+            element, parser, filters, kinds, self._related_group(name, key, shared)
+        ):
+            shared.failed.add(foreign)
+
+    def _related_group(self, name: str, key: str, shared: SharedView) -> str:
+        """跨資料源篩選的群組：與篩選欄位所屬資料源的全域篩選相同（見 _shared_filters）。"""
+        state = self.ctx.datasources.get(name)
+        if state is None:
+            return f"shared:{name}:{key}"
+        inst = shared.foreign_instances.get(name, {}).get(key)
+        if inst is None:
+            own = self.ctx.shared_views.get(name)
+            inst = own.instances.get(key) if own is not None else None
+        use = use_from_instance(state, inst) if inst is not None else use_from_name(state, key)
+        if isinstance(use, str):
+            return f"shared:{state.id}:{key}"
+        return f"shared:{state.id}:{use_key(use)}"
 
     def _sorts(self, view: etree._Element) -> list[Sort]:
         sorts: list[Sort] = []
@@ -1790,7 +1964,8 @@ class SheetParser:
                     parsed = self._sort(element, tag)
                 elif tag == "manual-sort":
                     parsed = self._manual(element)
-                elif tag == "natural-sort":
+                elif tag in ("natural-sort", "alphabetic-sort"):
+                    # 依字母排序（alphabetic-sort 是較舊版本的寫法）
                     parsed = self._simple(element, element.get("column"), "alphabetic")
                 elif tag == "shelf-sorts":
                     for item in children(element, "shelf-sort-v2"):
@@ -1936,6 +2111,15 @@ def _tuple_tree(node: etree._Element) -> TupleTree | None:
             excluded += sub[2]
         return "exclude", first[1], excluded
     return None
+
+
+def _unrestricted(flt: Filter) -> bool:
+    """不設限的篩選（全部的值，含 Null）。"""
+    if isinstance(flt, CategoricalFilter):
+        return flt.mode == "all"
+    if isinstance(flt, RangeFilter):
+        return flt.min is None and flt.max is None and flt.include_null
+    return False
 
 
 def _is_blank(table: etree._Element | None) -> bool:

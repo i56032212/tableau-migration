@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 from lxml import etree
 from pydantic import ValidationError
@@ -21,6 +22,7 @@ from tmig.ir.models import (
     Datasource,
     DatasourceSettings,
     FieldUse,
+    Filter,
     FitMode,
     ParameterAction,
     Scalar,
@@ -411,14 +413,27 @@ class WorkbookParser:
             if clearing is None:
                 ctx.flag(action, f"篩選動作「{caption}」清除選取的方式 {on_empty} v0 不支援")
                 continue
+            # exclude 參數列出的工作表與來源工作表不受動作篩選：它們身上這個動作的篩選維持靜態
+            excluded = {by_name.get(n) for n in (params.get("exclude") or "").split(",")}
+            excluded |= set(sources)
+            for ws in worksheets:
+                if ws.id in excluded:
+                    ws.filters = [
+                        f.model_copy(update={"action": None})
+                        if isinstance(f, TupleFilter) and f.action == action_id
+                        else f
+                        for f in ws.filters
+                    ]
             targets = [
                 ws.id
                 for ws in worksheets
                 if any(isinstance(f, TupleFilter) and f.action == action_id for f in ws.filters)
             ]
             source_ds = {sheet_ds[s] for s in sources}
-            if any(sheet_ds[t] not in source_ds for t in targets):
-                ctx.flag(action, f"篩選動作「{caption}」跨資料源，v0 不支援")
+            if any(sheet_ds[t] not in source_ds for t in targets) and not self._cross_action(
+                action, action_id, source_ds, worksheets, targets
+            ):
+                ctx.flag(action, f"篩選動作「{caption}」跨資料源，對應的欄位無法解析，v0 不支援")
                 continue
             result.append(
                 Action(
@@ -446,6 +461,57 @@ class WorkbookParser:
                 for f in ws.filters
             ]
         return result
+
+    def _cross_action(
+        self,
+        action: etree._Element,
+        action_id: str,
+        source_ds: set[str],
+        worksheets: list[Worksheet],
+        targets: list[str],
+    ) -> bool:
+        """跨資料源的篩選動作：<link expression> 以 tsl: 網址記下目標資料源的欄位對應來源工作表的哪個欄位
+        （[目標資料源].[欄位]~s0=<[來源欄位]~na>）；目標工作表上動作的篩選記下各欄位對應的來源欄位。
+        來源工作表要用同一個資料源。"""
+        if len(source_ds) != 1:
+            return False
+        states = {state.id: state for state in self.ctx.datasources.values()}
+        source = states.get(next(iter(source_ds)))
+        link = child(action, "link")
+        expression = (link.get("expression") or "") if link is not None else ""
+        if source is None or "?" not in expression:
+            return False
+        mapping: dict[tuple[str, str], str] = {}
+        for item in expression.split("?", 1)[1].split("&"):
+            key, _, value = item.partition("=")
+            parts = qualified_parts(re.sub(r"~[a-z0-9]+$", "", unquote(key)))
+            found = re.fullmatch(r"<(\[.*\])~[a-z0-9]+>", value)
+            if len(parts) == 2 and found:
+                mapping[(parts[0], "[" + parts[1].replace("]", "]]") + "]")] = found.group(1)
+        updated: dict[str, list[Filter]] = {}
+        for ws in worksheets:
+            if ws.id not in targets or ws.datasource in source_ds:
+                continue
+            target = states.get(ws.datasource)
+            if target is None:
+                return False
+            filters: list[Filter] = []
+            for flt in ws.filters:
+                if isinstance(flt, TupleFilter) and flt.action == action_id:
+                    names = [
+                        mapping.get((target.name, target.field_by_id(u.field).name))
+                        for u in flt.fields
+                    ]
+                    fields = [source.by_name.get(n) if n else None for n in names]
+                    if any(f is None for f in fields):
+                        return False
+                    flt = flt.model_copy(update={"source_fields": [f.id for f in fields if f]})
+                filters.append(flt)
+            updated[ws.id] = filters
+        for ws in worksheets:
+            if ws.id in updated:
+                ws.filters = updated[ws.id]
+        return True
 
     def _link_stale_filters(
         self,
@@ -786,9 +852,13 @@ class WorkbookParser:
             if ds is None:
                 continue  # 資料源本身無法移轉時已列為不支援
             instances: dict[str, etree._Element] = {}
+            foreign: dict[str, dict[str, etree._Element]] = {}
             added = False
             for dep in children(view, "datasource-dependencies"):
                 if dep.get("datasource") != name:
+                    found = foreign.setdefault(dep.get("datasource", ""), {})
+                    for inst in children(dep, "column-instance"):
+                        found[instance_key(inst.get("name", ""))] = inst
                     continue
                 for column in children(dep, "column"):
                     if column.get("name", "") in ds.by_name or child(column, "calculation") is None:
@@ -799,5 +869,20 @@ class WorkbookParser:
                     instances[instance_key(inst.get("name", ""))] = inst
             if added:
                 analyze_calcs(ctx, ds)
-            filters = {instance_key(f.get("column", "")): f for f in children(view, "filter")}
-            ctx.shared_views[name] = SharedView(element=view, instances=instances, filters=filters)
+            filters: dict[str, etree._Element] = {}
+            related: dict[str, etree._Element] = {}
+            for item in children(view, "filter"):
+                column = item.get("column", "")
+                parts = qualified_parts(column)
+                if len(parts) == 2 and parts[0] != name:
+                    # 套用到所有使用相關資料源的工作表（Tableau 10 的跨資料源篩選）
+                    related[f"[{parts[0]}].{instance_key(column)}"] = item
+                else:
+                    filters[instance_key(column)] = item
+            ctx.shared_views[name] = SharedView(
+                element=view,
+                instances=instances,
+                filters=filters,
+                related=related,
+                foreign_instances=foreign,
+            )

@@ -212,6 +212,31 @@ def test_problems_worksheet_shapes(problems: CensusReport) -> None:
     assert map_sheet.maps
 
 
+def test_cross_datasource_filters_are_not_blending(tmp_path: Path) -> None:
+    """工作表列出兩個資料源，但只以跨資料源篩選（對應到主要資料源的欄位）用到另一個：不是 Data Blending。"""
+    from ..parser import builder as b
+    from ..sqlgen.test_blend import (
+        blended,
+        cross_filter,
+        orders_sheet,
+        target_ref,
+        targets_datasource,
+    )
+
+    sheets = orders_sheet("Cross", cross_filter(["East"], group="2"))
+    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheets)
+    report = run_census(b.write_twb(tmp_path, xml))
+    (sheet,) = report.worksheets
+    assert len(sheet.datasources) == 2
+    assert not sheet.blending
+    assert statuses(report)["no_blending"] == "pass"
+
+    sheets = blended(rows=b.ref("none:Region:nk"), cols=target_ref("sum:Target:qk"))
+    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheets)
+    (sheet,) = run_census(b.write_twb(tmp_path, xml, "blended.twb")).worksheets
+    assert sheet.blending
+
+
 # ---------------------------------------------------------------- 報告
 
 

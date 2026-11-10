@@ -198,17 +198,23 @@ def _with_selection(flt: Filter, state: QueryState) -> Filter:
     marks = state.actions.get(flt.action) or []
     if not marks:
         return flt
-    keys = [use_key(u) for u in flt.fields]
-    shared = [k for k in keys if all(k in mark for mark in marks)]
+    # 選取的標記以來源工作表的欄位為鍵；跨資料源的動作以對應的欄位取值
+    sources = flt.source_fields or [u.field for u in flt.fields]
+    keys = [
+        use_key(u.model_copy(update={"field": s})) for u, s in zip(flt.fields, sources, strict=True)
+    ]
+    shared = [i for i, k in enumerate(keys) if all(k in mark for mark in marks)]
     if not shared:
         return flt
-    fields = [u for u, k in zip(flt.fields, keys, strict=True) if k in shared]
+    fields = [flt.fields[i] for i in shared]
     tuples: list[list[Scalar]] = []
     for mark in marks:
-        row = [mark[k] for k in shared]
+        row = [mark[keys[i]] for i in shared]
         if row not in tuples:
             tuples.append(row)
-    return flt.model_copy(update={"fields": fields, "mode": "include", "tuples": tuples})
+    return flt.model_copy(
+        update={"fields": fields, "mode": "include", "tuples": tuples, "source_fields": None}
+    )
 
 
 def _replace(existing: Filter, value: FilterValue) -> Filter:

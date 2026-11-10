@@ -239,9 +239,12 @@ class FilterParser:
         self.resolve = resolve
         self.scope = scope
 
-    def parse(self, element: etree._Element, group: str | None = None) -> Filter | None:
-        """group：篩選群組；省略時依 filter-group 屬性（「套用到選取的工作表」）。"""
-        column = element.get("column", "")
+    def parse(
+        self, element: etree._Element, group: str | None = None, column: str | None = None
+    ) -> Filter | None:
+        """group：篩選群組；省略時依 filter-group 屬性（「套用到選取的工作表」）。
+        column：篩選的欄位；省略時為 <filter column>（跨資料源篩選傳入相關資料源中對應的欄位）。"""
+        column = column or element.get("column", "")
         resolved = self.resolve(column)
         if isinstance(resolved, str):
             self.ctx.flag(element, f"篩選的欄位無法解析：{resolved}")

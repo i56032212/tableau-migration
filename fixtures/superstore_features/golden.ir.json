@@ -2706,6 +2706,7 @@
           "mode": "all",
           "tuples": [],
           "action": "act_filter_category_detail",
+          "source_fields": null,
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[9]/table/view/filter"
         }
@@ -2852,6 +2853,7 @@
           "mode": "include",
           "tuples": [],
           "action": "act_filter_segment_detail",
+          "source_fields": null,
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[10]/table/view/filter"
         }
@@ -3014,6 +3016,7 @@
             ]
           ],
           "action": null,
+          "source_fields": null,
           "group": null,
           "source_ref": "/workbook/worksheets/worksheet[11]/table/view/filter"
         }

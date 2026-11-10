@@ -430,7 +430,7 @@ def _worksheet(ws: etree._Element) -> WorksheetInfo:
     return WorksheetInfo(
         name=ws.get("name", ""),
         datasources=names,
-        blending=len(names) > 1,
+        blending=_blends(view, names, used),
         mark_types=marks,
         pane_count=len(panes),
         encodings=encodings,
@@ -891,6 +891,22 @@ def features_outside_v0(r: CensusReport) -> list[str]:
 
 
 Grade = Literal["A", "B", "C"]
+
+
+def _blends(view: etree._Element | None, names: list[str], used: list[str]) -> bool:
+    """工作表是否混合次要資料源（Data Blending）：欄列架、標記卡或 Measure Values 用到其他資料源的欄位，
+    或以次要資料源的欄位篩選。對應到主要資料源欄位的跨資料源篩選（<target field>）不是混合。"""
+    if len(names) < 2:
+        return False
+    texts = list(used)
+    for flt in children(view, "filter"):
+        column = flt.get("column", "")
+        if column.endswith("[:Measure Names]"):
+            texts += [g.get("member", "") for g in descendants(flt, "groupfilter")]
+        target = child(flt, "target")
+        if target is not None and target.get("field", "").startswith(f"[{names[0]}]."):
+            texts = [t for t in texts if t != column]  # 跨資料源篩選
+    return any(f"[{name}]." in text for name in names[1:] for text in texts)
 
 
 def _blending_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:

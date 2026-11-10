@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tmig.ir import IR, CategoricalFilter, FieldUse, iter_zones
+import pytest
+
+from tmig.ir import IR, CategoricalFilter, FieldUse, TupleFilter, iter_zones
 from tmig.parser.workbook import parse_workbook
 
 from . import builder as b
@@ -236,8 +238,16 @@ def test_control_modes_and_highlighter(tmp_path: Path) -> None:
     assert zones["z4"].kind == "blank"
 
 
-def test_natural_sort_is_alphabetic(tmp_path: Path) -> None:
-    sort = f"<sort class='natural' column='{ref('none:Region:nk')}' direction='DESC' />"
+@pytest.mark.parametrize(
+    "sort",
+    [
+        f"<sort class='natural' column='{ref('none:Region:nk')}' direction='DESC' />",
+        f"<natural-sort column='{ref('none:Region:nk')}' direction='DESC' />",
+        # 較舊版本的寫法
+        f"<alphabetic-sort column='{ref('none:Region:nk')}' direction='DESC' />",
+    ],
+)
+def test_natural_sort_is_alphabetic(tmp_path: Path, sort: str) -> None:
     sheets = worksheet(
         "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), view_extra=sort
     )
@@ -556,20 +566,61 @@ def test_filter_action_and_target_filter(tmp_path: Path) -> None:
     )
 
 
-def test_filter_action_across_datasources_is_unsupported(tmp_path: Path) -> None:
-    """來源與目標工作表在不同的資料源（公開範例 Logshark 的 VizqlDesktop）：Tableau 依欄位名稱對應，
-    v0 不支援，列為不支援、不建立動作（目標工作表照常顯示全部）。"""
+def cross_action_workbook(link: str) -> str:
+    """來源工作表用 Orders、目標工作表用 Returns（federated.test02）的篩選動作。"""
     second = "federated.test02"
-    xml = action_workbook(action_filter())
+    xml = action_workbook(action_filter(), actions=action().replace("<command", link + "<command"))
     start = xml.index("<worksheet name='Target'>")
     end = xml.index("</worksheet>", start)
     xml = xml[:start] + xml[start:end].replace(DS, second) + xml[end:]
     other = b.extract_datasource(extra=ACTION_GROUPS, name=second, caption="Returns")
-    xml = xml.replace("</datasources>", other + "</datasources>", 1)
-    ir = parse(tmp_path, xml)
-    assert reasons(ir) == ["篩選動作「Filter Region」跨資料源，v0 不支援"]
+    return xml.replace("</datasources>", other + "</datasources>", 1)
+
+
+def test_filter_action_across_datasources(tmp_path: Path) -> None:
+    """來源與目標工作表在不同的資料源（公開範例 Logshark 的 VizqlDesktop）：<link expression> 記下目標資料源
+    的欄位對應來源的哪個欄位；目標工作表的動作篩選記下對應的來源欄位，選取時以它取值。"""
+    from tmig.planner.state import QueryState, apply_state
+
+    link = (
+        "<link caption='Filter Region' delimiter=',' escape='\\' include-null='true' multi-select='true'"
+        " expression='tsl:Board?%5Bfederated.test02%5D.%5BRegion%5D~s0=&lt;[Region]~na&gt;' />"
+    )
+    ir = parse(tmp_path, cross_action_workbook(link))
+    assert reasons(ir) == []
+    (act,) = ir.actions
+    assert (act.sources, act.targets) == (["ws_source"], ["ws_target"])
+    source, target = ir.worksheets
+    assert (source.datasource, target.datasource) == (ir.datasources[0].id, ir.datasources[1].id)
+    (flt,) = target.filters
+    assert isinstance(flt, TupleFilter)
+    assert ([u.field for u in flt.fields], flt.source_fields) == (["f_region_2"], ["f_region"])
+    # 來源工作表的標記以 Orders 的欄位為鍵
+    state = QueryState(actions={act.id: [{"f_region": "East", "f_category": "Furniture"}]})
+    (effective,) = apply_state(ir, target, state).filters
+    assert isinstance(effective, TupleFilter)
+    assert ([u.field for u in effective.fields], effective.mode, effective.tuples) == (
+        ["f_region_2"],
+        "include",
+        [["East"]],
+    )
+
+    # 沒有欄位對應：列為不支援、不建立動作（目標工作表照常顯示全部）
+    ir = parse(tmp_path, cross_action_workbook(""))
+    assert reasons(ir) == ["篩選動作「Filter Region」跨資料源，對應的欄位無法解析，v0 不支援"]
     assert ir.actions == []
-    assert [ws.datasource for ws in ir.worksheets] == [ir.datasources[0].id, ir.datasources[1].id]
+
+
+def test_filter_action_does_not_filter_excluded_sheets(tmp_path: Path) -> None:
+    """exclude 參數列出的工作表不受動作篩選：它身上這個動作的篩選維持靜態（不連到動作）。"""
+    excluded = action().replace(
+        "<param name='target'", "<param name='exclude' value='Target' /><param name='target'"
+    )
+    ir = parse(tmp_path, action_workbook(action_filter(), actions=excluded))
+    (act,) = ir.actions
+    assert act.targets == []
+    (flt,) = ir.worksheets[1].filters
+    assert isinstance(flt, TupleFilter) and flt.action is None
 
 
 def test_filter_action_exclude_all_when_cleared(tmp_path: Path) -> None:

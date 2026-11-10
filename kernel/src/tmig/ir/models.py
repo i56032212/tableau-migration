@@ -557,6 +557,11 @@ class TupleFilter(IRModel):
     action: Id | None = Field(
         default=None, description="篩選動作的 id：選取來源工作表的標記時，以選取的值取代 tuples"
     )
+    source_fields: list[Id] | None = Field(
+        default=None,
+        description="跨資料源的篩選動作：fields 各欄位在來源工作表的資料源中對應的欄位 id（依序）；"
+        "None 表示來源與目標是同一個資料源",
+    )
     group: str | None = Field(default=None, description="篩選群組（見 CategoricalFilter.group）")
     source_ref: SourceRef
 
@@ -564,6 +569,8 @@ class TupleFilter(IRModel):
     def _check(self) -> Self:
         if self.stage not in ("context", "dimension"):
             raise ValueError(f"tuple 篩選不能屬於 {self.stage} 階段")
+        if self.source_fields is not None and len(self.source_fields) != len(self.fields):
+            raise ValueError("source_fields 的長度必須與 fields 相同")
         if self.mode == "all" and self.tuples:
             raise ValueError("mode 為 all 時 tuples 必須為空")
         if any(len(t) != len(self.fields) for t in self.tuples):

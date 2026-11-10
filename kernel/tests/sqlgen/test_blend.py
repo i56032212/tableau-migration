@@ -13,8 +13,8 @@ import duckdb
 import pytest
 
 from tmig.data.executor import execute_query
-from tmig.ir import IR, Blend, BlendLink, FieldUse
-from tmig.ir.integrity import check_references
+from tmig.ir import IR, Blend, BlendLink, CategoricalFilter, FieldUse
+from tmig.ir.integrity import check_references, iter_zones
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import build_spec
 from tmig.sqlgen.query import QueryError, totals_sql, worksheet_sql
@@ -358,3 +358,199 @@ def test_editor_adds_and_removes_blends(tmp_path: Path, folder: Path) -> None:
     )
     ir, saved = replace_worksheet(ir, empty)
     assert (saved.datasource, saved.blends) == (ir.datasources[1].id, [])
+
+
+# ---------------------------------------------------------------- 手動設定的連結
+
+
+def overrides(kind: str, *columns: str) -> str:
+    items = "".join(f"<column>[{TARGETS}].[{c}]</column>" for c in columns)
+    return f"<join-lod-{kind}-overrides>{items}</join-lod-{kind}-overrides>"
+
+
+def test_deactivated_link_is_not_used(tmp_path: Path, folder: Path) -> None:
+    """取消作用的連結（<join-lod-exclude-overrides>，Order Date）：只以地區連結，目標以地區彙總、在各年重複。"""
+    sheet = blended(
+        rows=ref("none:Region:nk"),
+        cols=ref("yr:Order Date:ok"),
+        instances=[REGION, YEAR, SALES],
+        encodings=(
+            f"<text column='{target_ref('sum:Target:qk')}' />"
+            f"<tooltip column='{ref('sum:Sales:qk')}' />"
+        ),
+        table_extra=overrides("exclude", "Order Date"),
+    )
+    ir = parse(tmp_path, folder, sheet)
+    ids = fields(ir)
+    assert [link.secondary.field for link in ir.worksheets[0].blends[0].links] == [
+        ids["Targets.Region"]
+    ]
+    target = f"sum({ids['Targets.Target']})"
+    year = f"year({ids['Order Date']})"
+    got = {(r[ids["Region"]], r[year]): r[target] for r in run(ir, folder)}
+    assert got == {
+        ("East", 2023): 400.0,
+        ("North", 2024): None,
+        ("South", 2024): 50.0,
+        ("West", 2023): 900.0,
+        ("West", 2024): 900.0,
+    }
+
+
+def test_link_activated_outside_the_view(tmp_path: Path, folder: Path) -> None:
+    """手動設為作用中的連結（<join-lod-include-overrides>）：在檢視中時與自動相同；不在檢視中尚不支援。"""
+    sheet = blended(
+        rows=ref("none:Region:nk"),
+        cols=target_ref("sum:Target:qk"),
+        table_extra=overrides("include", "Region"),
+    )
+    ir = parse(tmp_path, folder, sheet)
+    assert ir.unsupported == []
+    assert len(ir.worksheets[0].blends) == 1
+
+    sheet = blended(
+        rows=ref("none:Region:nk"),
+        cols=target_ref("sum:Target:qk"),
+        table_extra=overrides("include", "Order Date"),
+    )
+    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheet)
+    ir = parse_workbook(b.write_twb(tmp_path, xml))
+    assert any("不在檢視中卻設為作用中" in u.reason for u in ir.unsupported)
+    assert ir.worksheets == []
+
+
+# ---------------------------------------------------------------- 跨資料源篩選
+
+SOURCES = (
+    f"<datasource caption='Orders' name='{DS}' /><datasource caption='Targets' name='{TARGETS}' />"
+)
+TARGET_DEPS = (
+    f"<datasource-dependencies datasource='{TARGETS}'>{TARGET_REGION}</datasource-dependencies>"
+)
+
+
+def cross_filter(values: list[str], group: str = "", target: bool = True) -> str:
+    """Targets 的 Region 的篩選，套用到相關資料源：<target field> 是 Orders 的 Region。"""
+    members = "".join(
+        f"<groupfilter function='member' level='[none:Region:nk]' member='&quot;{v}&quot;' />"
+        for v in values
+    )
+    attrs = f" filter-group='{group}'" if group else ""
+    found = f"<target field='{ref('none:Region:nk')}' />" if target else ""
+    return f"""<filter class='categorical' column='{target_ref("none:Region:nk")}'{attrs}>
+      <groupfilter function='union' user:ui-enumeration='inclusive'>{members}</groupfilter>
+      {found}
+    </filter>"""
+
+
+def orders_sheet(name: str, view_extra: str) -> str:
+    return worksheet(
+        name,
+        [REGION, SALES],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        datasources=SOURCES,
+        view_extra=TARGET_DEPS + view_extra,
+    )
+
+
+def test_cross_datasource_filter(tmp_path: Path, folder: Path) -> None:
+    """其他資料源欄位的篩選（套用到選取的工作表、使用相關資料源）：以 <target field> 對應的主要資料源欄位
+    篩選；同一欄位不設限的篩選由它取代。"""
+    unrestricted = f"""<filter class='categorical' column='{ref("none:Region:nk")}'>
+      <groupfilter function='level-members' level='[none:Region:nk]' user:ui-enumeration='all' />
+    </filter>"""
+    sheet = orders_sheet("Cross", unrestricted + cross_filter(["East", "West"], group="2"))
+    ir = parse(tmp_path, folder, sheet)
+    assert ir.unsupported == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    assert ws.blends == []
+    (flt,) = ws.filters
+    assert isinstance(flt, CategoricalFilter)
+    assert (flt.field.field, flt.mode, flt.values, flt.group) == (
+        ids["Region"],
+        "include",
+        ["East", "West"],
+        "group:2",
+    )
+    assert {r[ids["Region"]] for r in run(ir, folder)} == {"East", "West"}
+
+    # 沒有對應到主要資料源的欄位：次要資料源自己的篩選，尚不支援
+    sheet = orders_sheet("Secondary", cross_filter(["East"], target=False))
+    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheet)
+    ir = parse_workbook(b.write_twb(tmp_path, xml))
+    assert any("沒有對應到主要資料源的欄位" in u.reason for u in ir.unsupported)
+
+
+def test_related_global_filter_and_control(tmp_path: Path, folder: Path) -> None:
+    """全域篩選「套用到所有使用相關資料源的工作表」：存在主要資料源的 <shared-view>，工作表的篩選架列出
+    其他資料源的欄位；與該資料源自己的工作表同一篩選群組。dashboard 上的控制項以它篩選。"""
+    shared = f"""
+    <shared-views>
+      <shared-view name='{DS}'>
+        <datasources><datasource caption='Orders' name='{DS}' /></datasources>
+        <datasource-dependencies datasource='{DS}'>{REGION}</datasource-dependencies>
+        {TARGET_DEPS}
+        {cross_filter(["East"])}
+      </shared-view>
+      <shared-view name='{TARGETS}'>
+        <datasources><datasource caption='Targets' name='{TARGETS}' /></datasources>
+        {TARGET_DEPS}
+        <filter class='categorical' column='{target_ref("none:Region:nk")}'>
+          <groupfilter function='member' level='[none:Region:nk]' member='&quot;East&quot;' />
+          <target field='{target_ref("none:Region:nk")}' />
+        </filter>
+      </shared-view>
+    </shared-views>"""
+    slices = f"<slices><column>{target_ref('none:Region:nk')}</column></slices>"
+    orders = orders_sheet("Orders", slices)
+    targets = worksheet(
+        "Targets",
+        [],
+        rows=target_ref("none:Region:nk"),
+        cols=target_ref("sum:Target:qk"),
+        datasources=f"<datasource caption='Targets' name='{TARGETS}' />",
+        view_extra=(
+            f"<datasource-dependencies datasource='{TARGETS}'>{TARGET_REGION}{TARGET}"
+            f"</datasource-dependencies>{slices}"
+        ),
+    )
+    board = f"""
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='50000' id='2' name='Orders' w='100000' x='0' y='0' />
+          <zone h='50000' id='3' mode='checkdropdown' name='Orders' param='{target_ref("none:Region:nk")}' type-v2='filter' w='100000' x='0' y='50000' />
+        </zone>
+      </zones>
+    </dashboard>"""
+    xml = b.workbook(
+        b.extract_datasource() + targets_datasource(),
+        worksheets=orders + targets,
+        dashboards=board,
+        extra=shared,
+    )
+    ir = parse_workbook(b.write_twb(tmp_path, xml))
+    assert ir.unsupported == []
+    assert check_references(ir) == []
+    ids = fields(ir)
+    by_name = {w.name: w for w in ir.worksheets}
+    group = f"shared:{ir.datasources[1].id}:{ids['Targets.Region']}"
+    (on_orders,) = by_name["Orders"].filters
+    (on_targets,) = by_name["Targets"].filters
+    assert isinstance(on_orders, CategoricalFilter) and isinstance(on_targets, CategoricalFilter)
+    assert (on_orders.field.field, on_orders.values, on_orders.group) == (
+        ids["Region"],
+        ["East"],
+        group,
+    )
+    assert (on_targets.field.field, on_targets.values, on_targets.group) == (
+        ids["Targets.Region"],
+        ["East"],
+        group,
+    )
+    control = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "filter")
+    assert control.worksheet == by_name["Orders"].id
+    assert control.field == FieldUse(field=ids["Region"])

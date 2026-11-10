@@ -89,6 +89,8 @@ class SheetState:
     """已解析的欄位實例，以名稱（含方括號）為鍵。"""
     filter_kinds: dict[str, FilterKind]
     """工作表上的篩選種類，以欄位實例名稱為鍵；dashboard 依此決定控制項。"""
+    cross: dict[str, str] = field(default_factory=dict)
+    """跨資料源篩選：其他資料源的欄位（[資料源].[欄位實例]）→ 篩選的主要資料源欄位實例名稱。"""
 
 
 @dataclass
@@ -100,6 +102,11 @@ class SharedView:
     """欄位實例，以名稱（含方括號）為鍵。"""
     filters: dict[str, etree._Element]
     """以欄位實例名稱（例如 [none:Region:nk]）為鍵的 <filter>。"""
+    related: dict[str, etree._Element] = field(default_factory=dict)
+    """其他資料源的欄位「套用到所有使用相關資料源的工作表」的篩選，以 [資料源].[欄位實例] 為鍵；
+    <target field> 是這個資料源中對應的欄位。"""
+    foreign_instances: dict[str, dict[str, etree._Element]] = field(default_factory=dict)
+    """其他資料源的欄位實例：資料源名稱 → 欄位實例名稱 → <column-instance>。"""
     failed: set[str] = field(default_factory=set)
     """解析失敗、已列為不支援的篩選，避免每張工作表重複列出。"""
 

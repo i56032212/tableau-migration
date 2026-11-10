@@ -94,6 +94,8 @@ export interface TupleFilter {
   mode: "include" | "exclude" | "all";
   tuples: Scalar[][];
   action: string | null;
+  /** 跨資料源的篩選動作：fields 各欄位在來源工作表的資料源中對應的欄位 id */
+  source_fields?: string[] | null;
   group?: string | null;
 }
 

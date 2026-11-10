@@ -236,6 +236,9 @@ def check_references(ir: IR) -> list[str]:
                 check_use(use, ds_id, f"{where}.fields[{i}]", None)
             if flt.action is not None and flt.action not in actions:
                 errors.append(f"{where}.action：篩選動作「{flt.action}」不存在")
+            for i, fid in enumerate(flt.source_fields or []):
+                if not any(fid in found for found in fields_by_ds.values()):
+                    errors.append(f"{where}.source_fields[{i}]：欄位「{fid}」不存在")
             return
         check_use(flt.field, ds_id, f"{where}.field", table_calcs)
         if (

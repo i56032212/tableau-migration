@@ -5120,6 +5120,24 @@
           "description": "篩選動作的 id：選取來源工作表的標記時，以選取的值取代 tuples",
           "title": "Action"
         },
+        "source_fields": {
+          "anyOf": [
+            {
+              "items": {
+                "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "跨資料源的篩選動作：fields 各欄位在來源工作表的資料源中對應的欄位 id（依序）；None 表示來源與目標是同一個資料源",
+          "title": "Source Fields"
+        },
         "group": {
           "anyOf": [
             {

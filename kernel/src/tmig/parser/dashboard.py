@@ -331,6 +331,18 @@ class DashboardParser:
             return Zone(kind="blank", **base)
         param = element.get("param", "")
         key = instance_key(param)
+        parts = qualified_parts(param)
+        if len(parts) == 2 and parts[0] != sheet.ds.name:
+            # 其他資料源的欄位：工作表上的跨資料源篩選（篩選主要資料源中對應的欄位）
+            mapped = sheet.cross.get(f"[{parts[0]}].{key}")
+            if mapped is None:
+                self.ctx.flag(
+                    element,
+                    f"篩選控制項的欄位 {param} 是其他資料源的欄位，工作表「{name}」上沒有對應的"
+                    "跨資料源篩選",
+                )
+                return Zone(kind="blank", **base)
+            key = mapped
         use = sheet.uses.get(key)
         if use is None:
             self.ctx.flag(element, f"篩選控制項的欄位 {param} 不在工作表「{name}」上")
