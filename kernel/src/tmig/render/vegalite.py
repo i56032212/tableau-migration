@@ -97,7 +97,9 @@ from tmig.sqlgen.query import (
 
 SCHEMA = "https://vega.github.io/schema/vega-lite/v6.json"
 SEPARATOR = "｜"
-UNSUPPORTED_MARKS = {"gantt", "map"}
+UNSUPPORTED_MARKS = {"map"}
+GANTT_DAY_MS = 86400000
+"""甘特條在日期軸上的長度：「大小」的量值以天為單位（與 Tableau 相同）。"""
 TIME_UNITS = {
     "year": "utcyear",
     "quarter": "utcyearquarter",
@@ -537,6 +539,12 @@ class _Builder:
         cols_meas: list[FieldUse],
     ) -> tuple[dict[str, Any], str]:
         """一張圖的 mark、encoding（與標籤圖層）。回傳規格片段與實際的標記類型。"""
+        if mark == "gantt":
+            found = self.gantt(marks, rows_dims, cols_dims, rows_meas, cols_meas)
+            if found is not None:
+                return found
+            self.notes.append("甘特條有多個連續座標軸或在窗格中，尚未支援，以長條呈現")
+            mark = "bar"
         encoding: dict[str, Any] = {}
         vl_mark: dict[str, Any]
         label_field: str | None = None
@@ -661,6 +669,90 @@ class _Builder:
                 ],
             }, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    def gantt(
+        self,
+        marks: Marks,
+        rows_dims: list[FieldUse],
+        cols_dims: list[FieldUse],
+        rows_meas: list[FieldUse],
+        cols_meas: list[FieldUse],
+    ) -> tuple[dict[str, Any], str] | None:
+        """甘特條：從連續座標軸上的位置開始，長度為「大小」的量值（日期軸以天為單位，可以是負數）；
+        沒有大小時畫成細線。連續座標軸只能有一個（欄或列，同一架上沒有其他維度），另一架上的離散維度
+        分列；不符合時回傳 None。"""
+
+        def continuous(dims: list[FieldUse]) -> list[FieldUse]:
+            return [u for u in dims if _dimension(self.ch(u))["type"] != "ordinal"]
+
+        layout: (
+            tuple[Literal["rows", "columns"], FieldUse, bool, list[FieldUse], list[FieldUse]] | None
+        ) = None
+        shelves: list[
+            tuple[Literal["rows", "columns"], list[FieldUse], list[FieldUse], list[FieldUse]]
+        ] = [
+            ("columns", cols_meas, cols_dims, rows_dims),
+            ("rows", rows_meas, rows_dims, cols_dims),
+        ]
+        for shelf, meas, dims, other in shelves:
+            if meas and len(meas) == 1 and not continuous(dims):
+                layout = (shelf, meas[0], True, other, dims)
+            elif not meas and len(dims) == 1 and continuous(dims):
+                layout = (shelf, dims[0], False, other, [])
+            else:
+                continue
+            break
+        if layout is None:
+            return None
+        shelf, axis_use, is_measure, other, same = layout
+        if same or continuous(other) or (rows_meas and cols_meas):
+            return None
+        position, band = ("x", "y") if shelf == "columns" else ("y", "x")
+        if is_measure:
+            pos = self.axis_measure(axis_use, shelf)
+        else:
+            found = self.axis_dim([axis_use], "cols_dim" if shelf == "columns" else "rows_dim")
+            assert found is not None
+            pos = found
+        temporal = pos.get("type") == "temporal"
+        if temporal:
+            # 位置是資料中的日期本身（已截斷），以 UTC 呈現；結束的時間以毫秒計算
+            pos.pop("timeUnit", None)
+            pos["scale"] = {**pos.get("scale", {}), "type": "utc"}
+        encoding: dict[str, Any] = {position: pos}
+        band_enc = self.axis_dim(other, "rows_dim" if shelf == "columns" else "cols_dim")
+        if band_enc is not None:
+            encoding[band] = band_enc
+        transform: list[dict[str, Any]] = []
+        vl_mark: dict[str, Any]
+        if marks.size is not None:
+            start = f"datum[{json.dumps(pos['field'])}]"
+            length = f"datum[{json.dumps(self.ch(marks.size).name)}]"
+            end = (
+                f"time(toDate({start})) + {length} * {GANTT_DAY_MS}"
+                if temporal
+                else f"{start} + {length}"
+            )
+            transform.append({"calculate": end, "as": "__gantt_end"})
+            encoding[f"{position}2"] = {"field": "__gantt_end"}
+            vl_mark = {"type": "bar", "tooltip": True}
+        else:
+            vl_mark = {
+                "type": "tick",
+                "tooltip": True,
+                "orient": "vertical" if position == "x" else "horizontal",
+                "thickness": 2,
+            }
+        self.common(encoding, marks)
+        encoding.pop("size", None)  # 「大小」是甘特條的長度
+        _mark_style(vl_mark, marks)
+        self.size_mark(vl_mark, encoding, marks)
+        if marks.label or id(marks) in self.label_fields:
+            self.notes.append("甘特條的標籤尚未畫出")
+        body: dict[str, Any] = {"mark": vl_mark, "encoding": encoding}
+        if transform:
+            body["transform"] = transform
+        return body, "gantt"
 
     def size_mark(self, vl_mark: dict[str, Any], encoding: dict[str, Any], marks: Marks) -> None:
         """標記卡的「大小」：離散的列（欄）上長條占列高（欄寬）的比例，圓點與形狀的直徑，折線的寬度

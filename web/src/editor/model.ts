@@ -137,6 +137,7 @@ export const MARK_TYPES: [string, string][] = [
   ["shape", "形狀"],
   ["text", "文字"],
   ["pie", "圓餅"],
+  ["gantt", "甘特條"],
   ["polygon", "多邊形"],
 ];
 

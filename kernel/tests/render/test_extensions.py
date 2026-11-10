@@ -443,3 +443,47 @@ def test_measure_values_dual_with_another_measure(tmp_path: Path, db: Path) -> N
         "title": "Measure Names",
     }
     assert profit["transform"] == [{"filter": "!(datum.__mn_i > 0)"}]
+
+
+def test_gantt_bars(tmp_path: Path, db: Path) -> None:
+    """甘特條：從連續日期上的位置開始，長度為「大小」的量值（以天為單位）；沒有大小時畫成細線。"""
+    deps = [
+        instance("[Region]", "None", "[none:Region:nk]"),
+        instance("[Order Date]", "Day-Trunc", "[tdy:Order Date:qk]", "quantitative"),
+        instance("[Quantity]", "Sum", "[sum:Quantity:qk]", "quantitative"),
+    ]
+
+    def render(encodings: str) -> dict[str, Any]:
+        sheet = worksheet(
+            "Gantt",
+            deps,
+            rows=ref("none:Region:nk"),
+            cols=ref("tdy:Order Date:qk"),
+            mark="GanttBar",
+            encodings=encodings,
+        )
+        ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet)))
+        assert ir.unsupported == []
+        ws = ir.worksheets[0]
+        query = worksheet_sql(ir, ws.id)
+        rendered = build_spec(ir, ws.id, query.columns, execute(db, query.sql))
+        assert rendered.spec is not None, rendered.unsupported
+        assert [e.message for e in validator().iter_errors(rendered.spec)] == []
+        return rendered.spec
+
+    spec = render(f"<size column='{ref('sum:Quantity:qk')}' />")
+    assert spec["usermeta"]["mark"] == "gantt"
+    assert spec["mark"]["type"] == "bar"
+    assert spec["encoding"]["x"]["type"] == "temporal"
+    assert spec["encoding"]["x"]["scale"] == {"type": "utc"}
+    assert "timeUnit" not in spec["encoding"]["x"]
+    assert spec["encoding"]["x2"] == {"field": "__gantt_end"}
+    assert "size" not in spec["encoding"]
+    (end,) = spec["transform"]
+    field = spec["encoding"]["x"]["field"]
+    assert end["calculate"].startswith(f'time(toDate(datum["{field}"])) + datum[')
+    assert end["calculate"].endswith(" * 86400000")
+
+    spec = render("")
+    assert spec["mark"]["type"] == "tick"
+    assert spec["mark"]["orient"] == "vertical"

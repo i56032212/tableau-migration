@@ -117,7 +117,7 @@ def test_marks_and_labels(ir) -> None:
 
 def test_unsupported_mark(ir) -> None:
     sheet = ir.worksheets[0].model_copy(deep=True)
-    sheet.marks.type = "gantt"
+    sheet.marks.type = "map"
     patched = ir.model_copy(update={"worksheets": [sheet, *ir.worksheets[1:]]})
     query = worksheet_sql(patched, sheet.id)
     rendered = build_spec(
@@ -127,4 +127,4 @@ def test_unsupported_mark(ir) -> None:
         QueryResult(columns=[c.key for c in query.columns], rows=[]),
     )
     assert rendered.spec is None
-    assert rendered.unsupported == "標記類型 gantt 尚未支援"
+    assert rendered.unsupported == "標記類型 map 尚未支援"
