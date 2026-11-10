@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import copy
 import itertools
 import json
 import math
@@ -59,6 +60,7 @@ from tmig.ir.models import (
     Scalar,
     ShelfStyle,
     TextRun,
+    TrendLine,
     Worksheet,
     ZeroLine,
 )
@@ -82,6 +84,7 @@ from tmig.render.format import (
     parse_format,
 )
 from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
+from tmig.render.trends import fit_model, format_p, format_r2
 from tmig.sqlgen.query import (
     COLUMN_ORDER,
     GRAND_TOTAL,
@@ -760,6 +763,8 @@ class _Builder:
             else:
                 body, kind = self.unit(marks, mark, rows_dims, cols_dims, rows_meas, [use])
             body = self.with_pane_data(body, pane)
+            if marks.trend is not None:
+                _trend_lines(self, body, marks.trend, self.records_of(marks))
             kinds.append(kind)
             if pane is not None and pane.dual and charts:
                 channel = "y" if axis == "rows" else "x"
@@ -1051,12 +1056,13 @@ def build_spec(
 
     builder.values = values
     mark = ws.marks.type
+    multiple = len(rows_meas) > 1 or len(cols_meas) > 1
     if pie_marks is not None:
         body = builder.pie(pie_marks, rows_dims, cols_dims)
         if len(ws.panes) > 1:
             body = builder.donut(body, values, rows_dims, cols_dims)
         mark = "pie"
-    elif len(rows_meas) > 1 or len(cols_meas) > 1:
+    elif multiple:
         body, mark = builder.multi(rows_dims, cols_dims, rows_meas, cols_meas)
     else:
         if mark == "automatic":
@@ -1086,6 +1092,12 @@ def build_spec(
     if ws.reference_lines:
         params = {p.id: p.value for p in ir.parameters} | (parameters or {})
         body = _with_reference_lines(builder, body, values, params)
+    trend = next((m.trend for m in [ws.marks, *(p.marks for p in ws.panes)] if m.trend), None)
+    if trend is not None and mark == "pie":
+        builder.notes.append("圓餅沒有座標軸，趨勢線未畫出")
+    elif trend is not None and not multiple:
+        # 多個量值時每張圖各自畫（見 _Builder.multi）
+        _trend_lines(builder, body, trend, builder.records_of(ws.marks))
 
     # 列數不含總計（與工作表的查詢、計算比對的筆數相同）
     marks_count = sum(1 for v in values if not v.get(TOTAL))
@@ -1739,6 +1751,167 @@ def _levels(value: Any, levels: int) -> list[str]:
     """列（欄）的值中各層的成員（多層的合併成「外層｜內層」）。"""
     text = str(value if value is not None else "")
     return text.split(SEPARATOR) if levels > 1 else [text]
+
+
+TREND_COLOR = "#4f4f4f"
+"""趨勢線沒有設定顏色（也沒有依顏色分組）時的顏色。"""
+TREND = "__ref_trend"
+"""趨勢線的圖層名稱與資料欄前綴（__ref 開頭，檢視器選取標記時略過）。"""
+TREND_SAMPLES = 60
+"""曲線（與信賴區間）在連續的橫軸上取的點數。"""
+DAY_ZERO = datetime(1899, 12, 30)
+"""日期轉成數值時的第 0 天（與 FLOAT(日期) 相同）。"""
+
+
+def _trend_lines(
+    builder: _Builder, body: dict[str, Any], trend: TrendLine, records: list[dict[str, Any]]
+) -> None:
+    """趨勢線圖層：縱軸的值對橫軸的值配適模型（tmig.render.trends），每個窗格、依顏色分組時每個顏色
+    一條，畫在各組資料的範圍內；信賴區間為上下兩條虛線，停在線上時顯示公式、R 平方與 P 值。
+    資料附在圖層上（時間軸以 1899-12-30 起的天數計算）。"""
+    encoding = main_encoding(body)
+    x = encoding.get("x") if encoding is not None else None
+    y = encoding.get("y") if encoding is not None else None
+    if (
+        encoding is None
+        or not isinstance(x, dict)
+        or not isinstance(y, dict)
+        or y.get("type") != "quantitative"
+        or x.get("type") not in ("quantitative", "temporal")
+        or "field" not in x
+        or "field" not in y
+    ):
+        builder.notes.append("趨勢線需要橫軸與縱軸都是連續的座標軸，未畫出")
+        return
+    temporal = x["type"] == "temporal"
+    excluded = {
+        builder.channels[use_key(u)].name for u in trend.excluded if use_key(u) in builder.channels
+    }
+    keys = [k for k in _scope_keys(builder)["pane"] if k not in excluded]
+    color = encoding.get("color")
+    color_field: str | None = None
+    if (
+        trend.by_color
+        and isinstance(color, dict)
+        and color.get("type") in ("nominal", "ordinal")
+        and "field" in color
+    ):
+        color_ch = next(
+            (c for c in builder.channels.values() if color["field"] in (c.name, c.label)), None
+        )
+        if color_ch is None or color_ch.name not in excluded:
+            color_field = color["field"]
+    groups: dict[tuple[Any, ...], list[tuple[float, float, Any]]] = {}
+    for record in records:
+        if record.get(TOTAL):
+            continue
+        raw, value = record.get(x["field"]), record.get(y["field"])
+        number = _date_number(raw) if temporal else (float(raw) if _is_number(raw) else None)
+        if number is None or not _is_number(value):
+            continue
+        key = tuple(record.get(k) for k in keys)
+        if color_field is not None:
+            key += (record.get(color_field),)
+        groups.setdefault(key, []).append((number, float(value), raw))
+    x_title, y_title = str(x.get("title") or ""), str(y.get("title") or "")
+    rows: list[dict[str, Any]] = []
+    bands = False
+    for group, (key, points) in enumerate(groups.items()):
+        model = fit_model(
+            [(px, py) for px, py, _ in points], trend.fit, trend.degree, trend.intercept
+        )
+        if model is None:
+            continue
+        if temporal:
+            # 時間軸：取各標記的時間（字串照原樣，與標記的時間以同樣的方式解析）
+            positions = dict(sorted((px, raw) for px, _, raw in points))
+            samples = [(px, raw) for px, raw in positions.items() if model.low <= px <= model.high]
+        elif trend.fit == "linear" and not trend.confidence_bands:
+            samples = [(model.low, model.low), (model.high, model.high)]
+        else:
+            step = (model.high - model.low) / (TREND_SAMPLES - 1)
+            samples = [(v, v) for v in (model.low + step * i for i in range(TREND_SAMPLES))]
+        common: dict[str, Any] = {f"{TREND}_group": group}
+        if color_field is not None:
+            common[color_field] = key[-1]
+        if trend.tooltips:
+            common[f"{TREND}_model"] = model.equation(y_title, x_title)
+            common[f"{TREND}_r2"] = format_r2(model.r2)
+            common[f"{TREND}_p"] = format_p(model.p_value)
+        for number, at in samples:
+            predicted = model.predict(number)
+            if predicted is None or not math.isfinite(predicted):
+                continue
+            row = {**common, f"{TREND}_x": at, f"{TREND}_y": predicted}
+            bounds = model.bounds(number) if trend.confidence_bands else None
+            if bounds is not None and all(math.isfinite(b) for b in bounds):
+                row[f"{TREND}_low"], row[f"{TREND}_high"] = bounds
+                bands = True
+            rows.append(row)
+    if not rows:
+        builder.notes.append("趨勢線的資料不足（每組至少要有與參數個數相同的標記），未畫出")
+        return
+
+    def position(field: str, source: dict[str, Any], kind: str) -> dict[str, Any]:
+        # 與主圖共用刻度與座標軸：同樣的標題與刻度設定
+        out: dict[str, Any] = {"field": field, "type": kind}
+        for prop in ("title", "scale", "timeUnit"):
+            if prop in source:
+                out[prop] = copy.deepcopy(source[prop])
+        return out
+
+    line: dict[str, Any] = {
+        "x": position(f"{TREND}_x", x, x["type"]),
+        "y": position(f"{TREND}_y", y, "quantitative"),
+        "detail": {"field": f"{TREND}_group", "type": "nominal"},
+    }
+    mark: dict[str, Any] = {"type": "line", "strokeWidth": trend.width}
+    if trend.pattern != "solid":
+        mark["strokeDash"] = DASHES[trend.pattern]
+    if trend.color is not None:
+        mark["color"] = _css_color(trend.color)
+    elif color_field is not None and isinstance(color, dict):
+        # 與標記共用色彩刻度與圖例（同樣的欄位與設定，圖例合併成一個）
+        line["color"] = copy.deepcopy(color)
+    else:
+        mark["color"] = TREND_COLOR
+    if trend.tooltips:
+        tips: list[dict[str, Any]] = []
+        if color_field is not None and isinstance(color, dict):
+            tips.append({"field": color_field, "title": color.get("title", "")})
+        tips += [
+            {"field": f"{TREND}_model", "title": "Trend Line"},
+            {"field": f"{TREND}_r2", "title": "R-Squared"},
+            {"field": f"{TREND}_p", "title": "P-value"},
+        ]
+        line["tooltip"] = tips
+    else:
+        mark["tooltip"] = False
+    layers = [{"name": TREND, "data": {"values": rows}, "mark": mark, "encoding": line}]
+    if bands:
+        for bound in ("low", "high"):
+            layers.append(
+                {
+                    "name": f"{TREND}_{bound}",
+                    "data": {"values": rows},
+                    "mark": {**mark, "strokeDash": DASHES["dashed"]},
+                    "encoding": {**line, "y": position(f"{TREND}_{bound}", y, "quantitative")},
+                }
+            )
+    _add_layers(body, layers)
+
+
+def _date_number(value: Any) -> float | None:
+    """日期、日期時間（ISO 8601 字串）→ 1899-12-30 起的天數（含一天中的時間）。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC).replace(tzinfo=None)
+    return (moment - DAY_ZERO).total_seconds() / 86400
 
 
 def _column_header_divider(

@@ -354,7 +354,7 @@ def test_nested_dimensions_and_dates(tmp_path: Path) -> None:
     ("kwargs", "message"),
     [
         ({"encodings": f"<geometry column='{ref('none:Category:nk')}' />"}, "標記編碼 <geometry>"),
-        ({"pane_extra": "<trend-line fit='linear' />"}, "趨勢線"),
+        ({"pane_extra": "<forecast-specification />"}, "預測"),
         ({"view_extra": "<strange-element />"}, "未知元素 <strange-element>"),
         ({"mark": "Map"}, "標記類型 Map"),
     ],

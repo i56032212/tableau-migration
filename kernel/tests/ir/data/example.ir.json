@@ -204,6 +204,7 @@
         "stroke": null,
         "label_font": null,
         "label_match": false,
+        "trend": null,
         "mark_size": null,
         "size": null,
         "label": [
@@ -396,6 +397,7 @@
         "stroke": null,
         "label_font": null,
         "label_match": false,
+        "trend": null,
         "mark_size": null,
         "size": null,
         "label": [],

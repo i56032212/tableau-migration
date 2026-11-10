@@ -57,6 +57,7 @@ from tmig.ir.models import (
     FontStyle,
     Scalar,
     ShelfStyle,
+    TrendLine,
     ZeroLine,
     ZoneStyle,
 )
@@ -359,6 +360,52 @@ def font_attr(font: FontStyle | None, name: str, value: str | None) -> FontStyle
     if name == "font-style" and value in ("italic", "normal"):
         return current.model_copy(update={"italic": value == "italic"})
     return current
+
+
+TREND_FITS: dict[str, Literal["linear", "log", "exp", "power", "polynomial"]] = {
+    "linear": "linear",
+    "log": "log",
+    "logarithmic": "log",
+    "exp": "exp",
+    "exponential": "exp",
+    "power": "power",
+    "polynomial": "polynomial",
+}
+
+
+def pane_trend_line(pane: etree._Element) -> tuple[TrendLine | None, str | None]:
+    """標記卡（<pane>）的趨勢線：<trendline enabled fit degree exclude-color exclude-intercept
+    enable-confidence-bands enable-tooltips> 與 <style-rule element='trendline'> 的線條格式。回傳趨勢線與
+    不支援的原因（沒有時為 None）；不分組的因子（<excluded-factors>）由呼叫端解析。"""
+    element = child(pane, "trendline")
+    if element is None or element.get("enabled") == "false":
+        return None, None
+    fit = TREND_FITS.get(element.get("fit") or "linear")
+    if fit is None:
+        return None, f"趨勢線的模型 {element.get('fit')} 尚不支援"
+    raw: dict[str, str] = {}
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") == "trendline":
+            for item in children(rule, "format"):
+                raw[item.get("attr") or ""] = item.get("value") or ""
+    if raw.get("line-visibility") == "off":
+        return None, None
+    color = hex_color(raw.get("stroke-color"))
+    width = _int(raw.get("stroke-size"))
+    pattern = raw.get("line-pattern-only")
+    degree = _int(element.get("degree"))
+    trend = TrendLine(
+        fit=fit,
+        degree=min(max(degree, 2), 8) if degree else 3,
+        by_color=element.get("exclude-color") != "true",
+        intercept=element.get("exclude-intercept") != "true",
+        confidence_bands=element.get("enable-confidence-bands") == "true",
+        tooltips=element.get("enable-tooltips") != "false",
+        color=color,
+        width=width or 1,
+        pattern="dashed" if pattern == "dashed" else "dotted" if pattern == "dotted" else "solid",
+    )
+    return trend, None
 
 
 def pane_label_match(pane: etree._Element) -> bool:

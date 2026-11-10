@@ -62,6 +62,7 @@ from tmig.parser.formats import (
     pane_label_font,
     pane_label_match,
     pane_mark_size,
+    pane_trend_line,
     worksheet_formats,
 )
 from tmig.parser.refs import qualified_parts
@@ -177,6 +178,9 @@ KNOWN = frozenset(
         "reference-line-value",
         # 小計
         "subtotals",
+        # 趨勢線（不分組的因子 <excluded-factors><column>）
+        "trendline",
+        "excluded-factors",
     }
 )
 OPAQUE = frozenset(
@@ -208,7 +212,6 @@ REFERENCE_FORMULAS = frozenset(
 REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
 REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
 KNOWN_UNSUPPORTED = {
-    "trend-line": "趨勢線",
     "forecast-specification": "預測",
     "mapsources": "地圖",
     "mapsource": "地圖",
@@ -701,6 +704,15 @@ class SheetParser:
         marks.cell_align = pane_cell_align(pane)
         marks.label_font = pane_label_font(pane)
         marks.label_match = pane_label_match(pane)
+        marks.trend, reason = pane_trend_line(pane)
+        trend_el = child(pane, "trendline")
+        if reason is not None and trend_el is not None:
+            self.ctx.flag(trend_el, reason)
+        if marks.trend is not None:
+            for column in children(child(trend_el, "excluded-factors"), "column"):
+                use = self._use(text_of(column), column, "趨勢線的因子")
+                if use is not None:
+                    marks.trend.excluded.append(use)
         marks.mark_size = pane_mark_size(pane)
         return marks, dims
 

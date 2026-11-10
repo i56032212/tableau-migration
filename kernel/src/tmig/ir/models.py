@@ -839,6 +839,7 @@ class Marks(IRModel):
     label_match: bool = Field(
         default=False, description="標記標籤的顏色與標記相符（datalabel 的 color-mode='match'）"
     )
+    trend: TrendLine | None = Field(default=None, description="趨勢線；None 為沒有")
     mark_size: float | None = Field(
         default=None,
         gt=0,
@@ -967,6 +968,31 @@ class Banding(IRModel):
         ge=1,
         description="以前幾層標題的組為單位上色（band-level）；None 或大於層數時為每一列（欄）",
     )
+
+
+class TrendLine(IRModel):
+    """趨勢線（分析的「趨勢線」）：以標記在連續座標軸上的位置做迴歸（縱軸的值對橫軸的值），每個窗格一條，
+    依顏色分組時每個顏色一條；畫在資料的範圍內。"""
+
+    fit: Literal["linear", "log", "exp", "power", "polynomial"] = "linear"
+    degree: int = Field(default=3, ge=2, le=8, description="多項式的次數")
+    by_color: bool = Field(default=True, description="依顏色分組（exclude-color='false'）")
+    intercept: bool = Field(
+        default=True, description="模型含截距；False 為「通過原點」（exclude-intercept='true'）"
+    )
+    confidence_bands: bool = Field(
+        default=False, description="畫出 95% 信賴區間的上下兩條線（enable-confidence-bands）"
+    )
+    tooltips: bool = Field(
+        default=True, description="停在線上時顯示模型的公式、R 平方與 P 值（enable-tooltips）"
+    )
+    excluded: list[FieldUse] = Field(
+        default_factory=list,
+        description="不分組的因子（<excluded-factors>）：這些維度的各個值共用一個模型",
+    )
+    color: HexColor | None = Field(default=None, description="線的顏色；None 依顏色分組或預設")
+    width: int = Field(default=1, ge=1, description="線寬（像素）")
+    pattern: Literal["solid", "dashed", "dotted"] = "solid"
 
 
 class ZeroLine(IRModel):
