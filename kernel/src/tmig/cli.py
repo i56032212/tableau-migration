@@ -34,7 +34,7 @@ from pydantic import ValidationError
 
 from tmig import __version__
 from tmig.census import render_markdown, run_census
-from tmig.ir import IR, dumps_ir, ir_json_schema_text, load_ir
+from tmig.ir import IR, dumps_ir, has_local_data, ir_json_schema_text, load_ir
 from tmig.parser.twbx import WorkbookFormatError
 from tmig.parser.workbook import WorkbookParseError, parse_workbook
 
@@ -447,7 +447,6 @@ def _extract_inputs(path: Path) -> tuple[IR, Path]:
 def _cmd_extract_refresh(args: argparse.Namespace) -> int:
     from tmig.data.extract_refresh import RefreshError, refresh_extract, refresh_plan
     from tmig.data.sources import SourceConnectionError, load_connections, open_executor
-    from tmig.ir import ExtractConnection
 
     try:
         ir, default_dir = _extract_inputs(args.path)
@@ -458,11 +457,11 @@ def _cmd_extract_refresh(args: argparse.Namespace) -> int:
     targets = [
         ds
         for ds in ir.datasources
-        if isinstance(ds.connection, ExtractConnection)
+        if has_local_data(ds.connection)
         and (args.datasource is None or ds.id == args.datasource)
     ]
     if not targets:
-        print("沒有萃取型的資料源", file=sys.stderr)
+        print("沒有萃取或檔案型的資料源", file=sys.stderr)
         return 1
     try:
         configs = load_connections(args.config)

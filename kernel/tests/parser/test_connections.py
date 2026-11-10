@@ -152,9 +152,14 @@ def test_extract_records_its_source(tmp_path: Path) -> None:
 
 def test_unsupported_connections(tmp_path: Path) -> None:
     table = "<relation connection='db.1' name='ORDERS' table='[SALES].[ORDERS]' type='table' />"
+    # 沒有萃取的 Excel：檔案型資料源（匯入時讀進 DuckDB，見 tests/data/test_file_sources.py）
     excel = "<connection class='excel-direct' filename='orders.xlsx' />"
     ir = parse(tmp_path, live_datasource(excel, table), lenient=True)
-    assert any("檔案型 Live 連線尚不支援" in r for r in reasons(ir))
+    assert ir.datasources[0].connection.kind == "file"
+    # 資料解譯器整理過的工作表與原始檔案的版面不同
+    cleaned = "<connection class='excel-direct' cleaning='yes' filename='orders.xlsx' />"
+    ir = parse(tmp_path, live_datasource(cleaned, table), lenient=True)
+    assert any("資料解譯器" in r for r in reasons(ir))
 
     unknown = "<connection class='exasol' server='x' />"
     ir = parse(tmp_path, live_datasource(unknown, table), lenient=True)

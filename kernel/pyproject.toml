@@ -13,6 +13,9 @@ dependencies = [
     "pyarrow>=15",
     # 排程的時區（Q1、Q2）：Windows 沒有系統的時區資料庫
     "tzdata>=2024.1",
+    # 檔案型資料源（沒有萃取的 Excel）：.xlsx 與舊版的 .xls
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
 ]
 
 [project.optional-dependencies]

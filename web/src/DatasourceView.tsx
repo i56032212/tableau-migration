@@ -58,7 +58,7 @@ export function DatasourceView({ workbook, datasource }: { workbook: string; dat
       <header className="ds-header">
         <h1>{datasource.caption}</h1>
         <span className={`ds-badge ${datasource.connection.kind}`}>
-          {datasource.connection.kind === "extract" ? "萃取" : "即時"}
+          {{ extract: "萃取", file: "檔案", live: "即時" }[datasource.connection.kind]}
         </span>
         {datasource.published && <span className="ds-badge published">已發布的資料源</span>}
       </header>
@@ -187,7 +187,12 @@ function countText(preview: DatasourcePreview): string {
 
 function Connection({ connection }: { connection: DatasourceConnection }) {
   const items: [string, string | number | null | undefined][] =
-    connection.kind === "extract"
+    connection.kind === "file"
+      ? [
+          ["類型", connection.type],
+          ["檔案", connection.files?.join("、")],
+        ]
+      : connection.kind === "extract"
       ? [
           ["類型", connection.type],
           ["萃取檔", connection.file],

@@ -84,6 +84,43 @@ def _check_model(ds: Datasource, errors: list[str]) -> None:
             )
 
 
+def _check_files(ds: Datasource, errors: list[str]) -> None:
+    """檔案型資料源：關聯樹中的資料表都是匯入後的 Files.<name>，且有對應的檔案。"""
+    from tmig.ir.models import (
+        FILE_SCHEMA,
+        FileConnection,
+        JoinRelation,
+        ModelRelation,
+        Relation,
+        TableRelation,
+    )
+
+    connection = ds.connection
+    if not isinstance(connection, FileConnection):
+        return
+    where = f"datasources[{ds.id}].connection"
+    names = [t.name for t in connection.tables]
+    if len(set(names)) != len(names):
+        errors.append(f"{where}.tables：資料表名稱重複")
+    known = set(names)
+
+    def visit(relation: Relation) -> None:
+        if isinstance(relation, JoinRelation):
+            visit(relation.left)
+            visit(relation.right)
+        elif not isinstance(relation, TableRelation):
+            errors.append(f"{where}.relation：檔案型資料源只能有資料表與 join")
+        elif relation.table != [FILE_SCHEMA, relation.name] or relation.name not in known:
+            errors.append(f"{where}.relation：資料表「{relation.name}」沒有對應的檔案")
+
+    top = connection.relation
+    if isinstance(top, ModelRelation):
+        for logical in top.tables:
+            visit(logical.relation)
+    else:
+        visit(top)
+
+
 def _check_refresh(ds: Datasource, errors: list[str]) -> None:
     from tmig.ir.models import ExtractConnection
 
@@ -127,6 +164,7 @@ def check_references(ir: IR) -> list[str]:
         for flt in ds.filters:
             claim(flt.id, f"datasources[{ds.id}].filters[{flt.id}]")
         _check_model(ds, errors)
+        _check_files(ds, errors)
         _check_refresh(ds, errors)
     for prm in ir.parameters:
         claim(prm.id, f"parameters[{prm.id}]")

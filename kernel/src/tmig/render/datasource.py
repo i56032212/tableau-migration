@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from pathlib import PurePosixPath
 from typing import Any
 
 from tmig.ir.models import (
@@ -17,6 +18,7 @@ from tmig.ir.models import (
     Datasource,
     ExtractConnection,
     FieldUse,
+    FileConnection,
     Filter,
     JoinRelation,
     JoinTerm,
@@ -108,6 +110,17 @@ def datasource_summary(ds: Datasource, parameters: Sequence[Parameter] = ()) -> 
         if model is not None
         else _single(ds)
     )
+    if isinstance(ds.connection, FileConnection):
+        # 檔案型資料源：資料表顯示檔案與工作表（而不是匯入後的 Files.<name>）
+        files = {
+            t.name: f"{PurePosixPath(t.path).name}：{t.sheet}"
+            if t.sheet
+            else PurePosixPath(t.path).name
+            for t in ds.connection.tables
+        }
+        for table in tables:
+            for item in table["physical"]:
+                item["source"] = files.get(item["name"], item["source"])
     relationships = (
         [
             {
@@ -265,7 +278,15 @@ def _term(term: JoinTerm) -> str:
     return _value(term.literal)
 
 
-def _connection(connection: ExtractConnection | LiveConnection) -> dict[str, Any]:
+def _connection(connection: ExtractConnection | LiveConnection | FileConnection) -> dict[str, Any]:
+    if isinstance(connection, FileConnection):
+        formats = {t.format for t in connection.tables}
+        kinds = {"excel": DATABASES["excel-direct"], "text": DATABASES["textscan"]}
+        return {
+            "kind": "file",
+            "type": "、".join(kinds[f] for f in sorted(formats)),
+            "files": list(dict.fromkeys(t.path for t in connection.tables)),
+        }
     if isinstance(connection, ExtractConnection):
         refresh = connection.refresh
         return {

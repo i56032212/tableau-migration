@@ -18,7 +18,7 @@ from typing import Any, Literal
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, ExtractConnection, load_ir
+from tmig.ir import IR, has_local_data, load_ir
 from tmig.parser.workbook import parse_workbook
 from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, worksheet_sql
@@ -128,7 +128,7 @@ def ensure_data(directory: Path, ir: IR) -> list[str]:
     在說明中提醒：預期結果須在同一時間點從 Tableau 抓取。
     """
     data = directory / "data"
-    extracts = [ds for ds in ir.datasources if isinstance(ds.connection, ExtractConnection)]
+    extracts = [ds for ds in ir.datasources if has_local_data(ds.connection)]
     notes: list[str] = []
     for ds in extracts:
         refreshed = data / f"{ds.id}.refresh.json"

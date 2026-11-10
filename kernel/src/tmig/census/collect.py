@@ -235,6 +235,15 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         extract_files = [c.get("dbname", "") for c in data_named if c.get("dbname")]
         extract_tables = _tables(conn)
     data_in_hyper = bool(extract_files) or bool(extract is not None and extract_enabled)
+    data_files: list[str] = []
+    if not data_in_hyper:
+        for c in named:
+            if c.get("class") == "excel-direct" and c.get("filename"):
+                data_files.append(c.get("filename", ""))
+            elif c.get("class") == "textscan" and c.get("filename"):
+                directory = (c.get("directory") or "").replace("\\", "/").rstrip("/")
+                filename = c.get("filename", "")
+                data_files.append(f"{directory}/{filename}" if directory else filename)
 
     relation_types = sorted({rel.get("type", "") for rel in descendants(conn, "relation")} - {""})
     graph = child(ds, "object-graph")
@@ -303,6 +312,7 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         extract_enabled=extract_enabled,
         extract_files=extract_files,
         extract_tables=extract_tables,
+        data_files=data_files,
         source_relation_types=relation_types,
         logical_tables=logical_tables,
         custom_sql="text" in relation_types,
@@ -544,12 +554,27 @@ def _checks(
         if ds.published:
             problems.append(f"「{ds.caption}」是 Published Data Source（需先下載 .tdsx 併入報表）")
         elif not ds.data_in_hyper:
-            # Live 連線（第三階段）：連到資料庫的可以下推查詢；連到檔案的尚不支援。
+            # Live 連線（第三階段）：連到資料庫的可以下推查詢；Excel、文字檔在 .twbx 內時匯入資料庫。
             # 連線類型與關聯方式是否支援由解析器判斷（列入 unsupported）
             classes = [c for c in ds.connection_classes if c]
             files = [c for c in classes if c in FILE_CLASSES]
-            if files:
+            absent = [
+                f
+                for f in ds.data_files
+                if _norm(f) not in packaged_paths and PurePath(_norm(f)).name not in packaged_names
+            ]
+            if files and not set(files) <= {"excel-direct", "textscan"}:
                 problems.append(f"「{ds.caption}」是連到檔案（{'、'.join(files)}）的 Live 連線")
+            elif files and not packaged:
+                problems.append(
+                    f"「{ds.caption}」連到檔案（{'、'.join(ds.data_files)}），.twb 不含檔案，請用 .twbx"
+                )
+            elif files and absent:
+                problems.append(f"「{ds.caption}」的檔案不在 .twbx 內：{'、'.join(absent)}")
+            elif files:
+                sources.append(
+                    f"「{ds.caption}」：{'、'.join(ds.data_files)}（檔案，匯入時讀進資料庫）"
+                )
             else:
                 sources.append(
                     f"「{ds.caption}」：Live（{'、'.join(classes) or '未知'}），部署時需提供連線設定"

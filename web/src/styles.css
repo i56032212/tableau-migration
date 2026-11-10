@@ -190,6 +190,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .ds-header h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .ds-badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #e5edf6; color: var(--accent); }
 .ds-badge.live { background: #e7f5ec; color: #15803d; }
+.ds-badge.file { background: #fef3c7; color: #a16207; }
 .ds-badge.published { background: #f3e8ff; color: #7e22ce; }
 .ds-top { display: grid; grid-template-columns: minmax(220px, 320px) 1fr; gap: 12px; }
 .ds-side, .ds-canvas, .ds-grid { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; min-width: 0; }

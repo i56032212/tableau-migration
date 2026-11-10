@@ -13,6 +13,7 @@ from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
+    FILE_SCHEMA,
     Aggregation,
     Allowed,
     AllowedAll,
@@ -25,12 +26,17 @@ from tmig.ir.models import (
     ExtractConnection,
     ExtractRefresh,
     FieldUse,
+    FileColumn,
+    FileConnection,
+    FileTable,
+    JoinRelation,
     LiveConnection,
     LogicalTable,
     MemberAlias,
     ModelRelation,
     Parameter,
     PublishedSource,
+    Relation,
     SourceColumn,
     TableRelation,
     Unsupported,
@@ -114,6 +120,8 @@ DS_CHILDREN = frozenset(
         "field-sort-info",
     }
 )
+FILE_SOURCES = frozenset({"excel-direct", "textscan"})
+"""檔案型連線（沒有萃取時匯入 DuckDB，見 FileConnection）。"""
 TABLE_ID_PREFIX = "[__tableau_internal_object_id__]."
 """物件模型中每張邏輯資料表的筆數欄位（Tableau 2020.2 起的「資料表 (計數)」）。"""
 
@@ -251,7 +259,13 @@ class DatasourceParser:
                 return None
         located = None if published else self._data_connection(conn)
         connection: Connection | None
-        if located is None:
+        is_file, files = (False, None) if published or located else self._files(conn)
+        if is_file:
+            # Excel、文字檔且沒有萃取：匯入時讀進 DuckDB
+            if files is None and not ctx.lenient:
+                return None
+            data_conn, via_extract, connection = conn, False, files or placeholder
+        elif located is None:
             live = None if published else self._live(conn)
             if live is None and not ctx.lenient:
                 return None
@@ -324,6 +338,148 @@ class DatasourceParser:
         if len(named) == 1 and named[0].get("class") in ("hyper", "dataengine"):
             return named[0], False
         return None
+
+    def _files(self, conn: etree._Element) -> tuple[bool, FileConnection | None]:
+        """Excel、文字檔且沒有萃取（檔案型連線）：每張資料表的檔案與 Tableau 讀到的欄名、型別。
+        回傳（是否為檔案型連線, 連線）；不支援的寫法列入 unsupported，連線為 None。"""
+        named: dict[str, etree._Element] = {}
+        for nc in descendants(conn, "named-connection"):
+            for found in children(nc, "connection"):
+                named[nc.get("name", "")] = found
+        if not named or any(c.get("class") not in FILE_SOURCES for c in named.values()):
+            return False, None
+        for found in named.values():
+            if found.get("cleaning") == "yes":
+                self.ctx.flag(
+                    found, f"資料源「{self.caption}」使用資料解譯器（Data Interpreter），v0 不支援"
+                )
+                return True, None
+        tables: dict[str, FileTable] = {}
+        if len(self.objects) > 1:
+            # Relationship 模型：每張邏輯資料表一個檔案中的資料表
+            model_tables = live_tables(self.ctx, self.objects, self.caption)
+            if model_tables is None:
+                return True, None
+            converted: list[LogicalTable] = []
+            for logical, obj in zip(model_tables, self.objects, strict=True):
+                assert obj.live is not None
+                relation = self._file_relation(logical.relation, obj.live, named, tables)
+                if relation is None:
+                    return True, None
+                converted.append(logical.model_copy(update={"relation": relation}))
+            self.model_tables = converted
+            first = converted[0].relation
+            return True, FileConnection(kind="file", tables=list(tables.values()), relation=first)
+        relations = children(conn, "relation")
+        if len(relations) != 1:
+            self.ctx.flag(conn, f"資料源「{self.caption}」的資料表關聯樹無法解析")
+            return True, None
+        tree = parse_relation(self.ctx, relations[0], self.caption)
+        if tree is None:
+            return True, None
+        relation = self._file_relation(tree, relations[0], named, tables)
+        if relation is None:
+            return True, None
+        return True, FileConnection(kind="file", tables=list(tables.values()), relation=relation)
+
+    def _file_relation(
+        self,
+        relation: Relation,
+        element: etree._Element,
+        named: dict[str, etree._Element],
+        tables: dict[str, FileTable],
+    ) -> Relation | None:
+        """關聯樹中的資料表改成匯入後的資料表（Files.<name>），並記下各資料表的檔案。"""
+        if isinstance(relation, JoinRelation):
+            sides = [r for r in children(element) if local_name(r) == "relation"]
+            left = self._file_relation(relation.left, sides[0], named, tables)
+            right = self._file_relation(relation.right, sides[1], named, tables)
+            if left is None or right is None:
+                return None
+            return relation.model_copy(update={"left": left, "right": right})
+        if not isinstance(relation, TableRelation):
+            self.ctx.flag(element, f"資料源「{self.caption}」的檔案中有自訂 SQL，v0 不支援")
+            return None
+        found = self._file_table(relation.name, element, named)
+        if found is None:
+            return None
+        tables[found.name] = found
+        return TableRelation(kind="table", name=relation.name, table=[FILE_SCHEMA, relation.name])
+
+    def _file_table(
+        self, name: str, element: etree._Element, named: dict[str, etree._Element]
+    ) -> FileTable | None:
+        source = named.get(element.get("connection", ""))
+        if source is None and len(named) == 1:
+            source = next(iter(named.values()))
+        if source is None:
+            self.ctx.flag(element, f"資料源「{self.caption}」的資料表「{name}」找不到檔案的連線")
+            return None
+        table = strip_brackets(element.get("table", ""))
+        columns_el = child(element, "columns")
+        columns = self._file_columns(name, columns_el)
+        if not columns:
+            self.ctx.flag(element, f"資料源「{self.caption}」的資料表「{name}」沒有欄位資訊")
+            return None
+        header = (columns_el.get("header") if columns_el is not None else None) != "no"
+        if source.get("class") == "textscan":
+            # 文字檔：資料表名稱是檔名，副檔名前的點寫成 #（[orders#csv]）
+            base, sep, ext = table.rpartition("#")
+            filename = f"{base}.{ext}" if sep else table or source.get("filename", "")
+            directory = (source.get("directory") or "").replace("\\", "/").rstrip("/")
+            path = self._packaged(f"{directory}/{filename}" if directory else filename)
+            if path is None:
+                self.ctx.flag(source, f"資料源「{self.caption}」的檔案「{filename}」不在 .twbx 內")
+                return None
+            assert columns_el is not None
+            separator = columns_el.get("separator") or ","
+            return FileTable(
+                name=name,
+                format="text",
+                path=path,
+                header=header,
+                separator="\t" if separator == "\\t" else separator,
+                charset=columns_el.get("character-set") or "UTF-8",
+                locale=columns_el.get("locale") or None,
+                columns=columns,
+            )
+        filename = source.get("filename", "")
+        path = self._packaged(filename)
+        if path is None:
+            self.ctx.flag(source, f"資料源「{self.caption}」的檔案「{filename}」不在 .twbx 內")
+            return None
+        grid = (columns_el.get("gridOrigin") or "") if columns_el is not None else ""
+        cells = grid.split(":no:")[0].split(":yes:")[0] if grid else None
+        return FileTable(
+            name=name,
+            format="excel",
+            path=path,
+            sheet=table[:-1] if table.endswith("$") else table,
+            cells=cells if cells and ":" in cells else None,
+            header=header,
+            columns=columns,
+        )
+
+    def _file_columns(self, name: str, columns_el: etree._Element | None) -> list[FileColumn]:
+        """檔案中各欄的欄名與型別：<columns> 中的 <column>，依 ordinal 排列；沒有時依 metadata-record。"""
+        found: list[tuple[int, FileColumn]] = []
+        for column in children(columns_el, "column"):
+            datatype = column.get("datatype", "")
+            ordinal = column.get("ordinal", "")
+            if datatype not in DATATYPES or not ordinal.isdigit() or not column.get("name"):
+                continue
+            found.append((int(ordinal), FileColumn(name=column.get("name", ""), datatype=datatype)))  # type: ignore[arg-type]
+        if not found:
+            for record in self._meta_columns(child(self.el, "connection")):
+                parent = text_of(child(record.element, "parent-name"))
+                ordinal = text_of(child(record.element, "ordinal"))
+                if strip_brackets(parent) != name or not ordinal.isdigit():
+                    continue
+                if record.local_type in DATATYPES:
+                    found.append(
+                        (int(ordinal), FileColumn(name=record.remote, datatype=record.local_type))  # type: ignore[arg-type]
+                    )
+        return [column for _, column in sorted(found, key=lambda item: item[0])]
 
     def _live(self, conn: etree._Element) -> LiveConnection | None:
         """Live 連線（N1）：資料在來源資料庫，查詢時下推；只支援單一具名連線（不跨資料庫）。"""
@@ -680,7 +836,7 @@ class DatasourceParser:
             return None
         if self.model_tables is not None:
             return object_id_of(record.element)
-        if state.connection.kind != "live":
+        if state.connection.kind not in ("live", "file"):
             return None
         parent = text_of(child(record.element, "parent-name"))
         return strip_brackets(parent) or None

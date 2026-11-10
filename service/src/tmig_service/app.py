@@ -620,7 +620,7 @@ def create_app(
             parameters = custom_sql_parameters(ir)
             result = data.run_sql(preview.sql, datasource, database, parameters)
             total: int | None = None
-            if datasource.connection.kind == "extract":
+            if datasource.connection.kind in ("extract", "file"):
                 counted = data.run_sql(preview.count_sql, datasource, database, parameters)
                 total = int(counted.rows[0][0]) if counted.rows else 0
         except QueryError as exc:

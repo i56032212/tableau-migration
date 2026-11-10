@@ -582,7 +582,9 @@ export interface DesktopToken {
 
 /** 資料源分頁：連線、資料表與關聯、欄位與資料源篩選（與完整的報表定義相同要下載 workbook 的權限）。 */
 export interface DatasourceConnection {
-  kind: "extract" | "live";
+  kind: "extract" | "live" | "file";
+  /** 檔案型資料源（Excel、文字檔）在 .twbx 內的檔案 */
+  files?: string[];
   /** 連線類型的顯示名稱，例如「Tableau 萃取（Hyper）」「PostgreSQL」 */
   type: string;
   file?: string;

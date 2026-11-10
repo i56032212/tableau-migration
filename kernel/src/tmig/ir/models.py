@@ -400,7 +400,54 @@ class ExtractConnection(IRModel):
     )
 
 
-Connection = Annotated[ExtractConnection | LiveConnection, Field(discriminator="kind")]
+FILE_SCHEMA = "Files"
+"""檔案型資料源匯入 DuckDB 後的結構描述：每張資料表為 Files.<資料表名稱>。"""
+
+
+class FileColumn(IRModel):
+    """檔案中的一欄：Tableau 讀取時給的欄名與型別（依欄的順序）。"""
+
+    name: str = Field(min_length=1)
+    datatype: DataType
+
+
+class FileTable(IRModel):
+    """檔案型資料源中的一張資料表：Excel 的工作表，或文字檔（CSV 等）。"""
+
+    name: str = Field(min_length=1, description="關聯樹中的資料表名稱（relation 的 name）")
+    format: Literal["excel", "text"]
+    path: str = Field(min_length=1, description=".twbx 內的路徑，一律用 /")
+    sheet: str | None = Field(default=None, description="Excel 的工作表（或具名範圍）")
+    cells: str | None = Field(
+        default=None, description="Excel 的資料範圍，例如 A1:U10195；None 表示整張工作表"
+    )
+    header: bool = Field(default=True, description="第一列是欄名")
+    separator: str = Field(default=",", min_length=1, description="文字檔的分隔字元")
+    charset: str = Field(default="UTF-8", min_length=1, description="文字檔的字元集")
+    locale: str | None = Field(default=None, description="文字檔的地區設定（數字與日期的寫法）")
+    columns: list[FileColumn] = Field(min_length=1)
+
+
+class FileConnection(IRModel):
+    """資料在 .twbx 內的檔案（Excel、文字檔）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進
+    DuckDB（每張資料表一張 Files.<name>），之後與萃取相同在本機查詢。檔案的內容是報表封裝時的快照
+    （與 Tableau Server 上的 .twbx 相同）。"""
+
+    kind: Literal["file"]
+    tables: list[FileTable] = Field(min_length=1)
+    relation: TopRelation = Field(
+        description="資料表（table 為 [Files, name]）、join 樹或 Relationship 模型"
+    )
+
+
+Connection = Annotated[
+    ExtractConnection | LiveConnection | FileConnection, Field(discriminator="kind")
+]
+
+
+def has_local_data(connection: ExtractConnection | LiveConnection | FileConnection) -> bool:
+    """資料在 .twbx 內（萃取或檔案）：匯入 DuckDB 後在本機查詢。"""
+    return isinstance(connection, ExtractConnection | FileConnection)
 
 
 class DatasourceSettings(IRModel):

@@ -2,6 +2,7 @@
 
 from tmig.ir.integrity import check_references, iter_zones
 from tmig.ir.models import (
+    FILE_SCHEMA,
     IR,
     IR_VERSION,
     MEASURE_NAMES,
@@ -34,6 +35,9 @@ from tmig.ir.models import (
     FieldFilter,
     FieldSet,
     FieldUse,
+    FileColumn,
+    FileConnection,
+    FileTable,
     Filter,
     FitMode,
     FontElement,
@@ -91,10 +95,12 @@ from tmig.ir.models import (
     ZeroLine,
     Zone,
     ZoneStyle,
+    has_local_data,
 )
 from tmig.ir.serialize import dumps_ir, ir_json_schema, ir_json_schema_text, load_ir, save_ir
 
 __all__ = [
+    "FILE_SCHEMA",
     "IR",
     "IR_VERSION",
     "MEASURE_NAMES",
@@ -127,6 +133,9 @@ __all__ = [
     "FieldFilter",
     "FieldSet",
     "FieldUse",
+    "FileColumn",
+    "FileConnection",
+    "FileTable",
     "Filter",
     "FitMode",
     "FontElement",
@@ -186,6 +195,7 @@ __all__ = [
     "ZoneStyle",
     "check_references",
     "dumps_ir",
+    "has_local_data",
     "ir_json_schema",
     "ir_json_schema_text",
     "iter_zones",

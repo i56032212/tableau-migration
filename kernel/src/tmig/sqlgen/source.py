@@ -14,6 +14,7 @@ from tmig.ir.models import (
     DataField,
     Datasource,
     ExtractConnection,
+    FileConnection,
     JoinRelation,
     JoinTerm,
     ModelRelation,
@@ -51,20 +52,24 @@ class Source:
 
 
 def datasource_source(ds: Datasource) -> Source:
+    """萃取為單一資料表（或 Relationship 模型）；Live 連線與檔案型資料源依關聯樹（檔案匯入後的
+    資料表為 Files.<name>，與 Live 連線相同以欄位 id 為別名選出）。"""
     connection = ds.connection
     if isinstance(connection, ExtractConnection):
         if connection.model is not None:
             return Source("", projected=True, custom_sql=[], model=connection.model)
         table = ".".join(ident(p) for p in connection.table.split("."))
         return Source(from_sql=table, projected=False, custom_sql=[])
-    if connection.relation is None:
+    relation = connection.relation
+    if relation is None:
         raise SourceError(f"資料源「{ds.caption}」沒有資料表")
-    if isinstance(connection.relation, ModelRelation):
-        model = connection.relation
-        return Source("", projected=True, custom_sql=model_custom_sql(model), model=model)
+    if isinstance(relation, ModelRelation):
+        return Source("", projected=True, custom_sql=model_custom_sql(relation), model=relation)
+    if isinstance(connection, FileConnection) and isinstance(relation, SqlRelation):
+        raise SourceError(f"資料源「{ds.caption}」的檔案中有自訂 SQL")
     custom: list[str] = []
-    from_sql = _relation_sql(connection.relation, custom)
-    names = _relation_names(connection.relation)
+    from_sql = _relation_sql(relation, custom)
+    names = _relation_names(relation)
     default = names[0] if len(names) == 1 else None
     projections: list[str] = []
     for data_field in ds.fields:

@@ -27,7 +27,7 @@ from typing import Any
 
 import duckdb
 
-from tmig.ir.models import IR, DataField, ExtractConnection, TableRelation
+from tmig.ir.models import IR, DataField, ExtractConnection, FileConnection, TableRelation
 from tmig.parser.workbook import parse_workbook
 
 NUMERIC_TAGS = frozenset({"BIG_INT", "INT", "SMALL_INT", "NUMERIC", "DOUBLE", "FLOAT"})
@@ -338,7 +338,10 @@ def _missing_columns(
 def import_workbook(
     twbx: str | Path, out_dir: str | Path, ir: IR | None = None
 ) -> list[DatasourceImport]:
-    """匯入 .twbx 內每個資料源的萃取：<out_dir>/<資料源 id>.duckdb 與 .import.json。"""
+    """匯入 .twbx 內每個資料源的萃取與檔案（Excel、文字檔）：<out_dir>/<資料源 id>.duckdb 與
+    .import.json。"""
+    from tmig.data.file_import import file_missing_columns, import_file_tables, read_member
+
     twbx_path = Path(twbx)
     target = Path(out_dir)
     target.mkdir(parents=True, exist_ok=True)
@@ -347,6 +350,26 @@ def import_workbook(
     with zipfile.ZipFile(twbx_path) as archive, tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         for ds in workbook_ir.datasources:
+            if isinstance(ds.connection, FileConnection):
+                out_path = target / f"{ds.id}.duckdb"
+                tables = import_file_tables(archive, ds.connection, out_path)
+                digest = hashlib.sha256()
+                paths = list(dict.fromkeys(t.path for t in ds.connection.tables))
+                for path in paths:
+                    digest.update(read_member(archive, path))
+                result = DatasourceImport(
+                    datasource=ds.id,
+                    hyper_file="、".join(paths),
+                    hyper_sha256=digest.hexdigest(),
+                    duckdb=out_path.name,
+                    table=tables[0],
+                    other_tables=[],
+                    missing_columns=file_missing_columns(ds.connection, ds.fields, tables),
+                    extra_tables=tables[1:],
+                )
+                _write_report(target, ds.id, result)
+                results.append(result)
+                continue
             if not isinstance(ds.connection, ExtractConnection):
                 continue  # Live 連線的資料在來源資料庫，不在 .twbx 內
             member = ds.connection.hyper_file
@@ -371,13 +394,17 @@ def import_workbook(
                 missing_columns=_missing_columns(ds.connection, ds.fields, tables),
                 extra_tables=tables[1:],
             )
-            # 重新匯入快照：先前從來源更新的紀錄不再適用
-            (target / f"{ds.id}.refresh.json").unlink(missing_ok=True)
-            report = target / f"{ds.id}.import.json"
-            report.write_text(
-                json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-                newline="\n",
-            )
+            _write_report(target, ds.id, result)
             results.append(result)
     return results
+
+
+def _write_report(target: Path, ds_id: str, result: DatasourceImport) -> None:
+    # 重新匯入快照：先前從來源更新的紀錄不再適用
+    (target / f"{ds_id}.refresh.json").unlink(missing_ok=True)
+    report = target / f"{ds_id}.import.json"
+    report.write_text(
+        json.dumps(result.to_json(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )

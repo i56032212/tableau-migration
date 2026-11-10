@@ -24,7 +24,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from tmig import __version__
-from tmig.ir import IR, ExtractConnection, dumps_ir, iter_zones, save_ir
+from tmig.ir import IR, dumps_ir, has_local_data, iter_zones, save_ir
 
 FORMAT = "tmigx"
 FORMAT_VERSION = 1
@@ -94,7 +94,7 @@ def read_report_file(directory: Path, path: str) -> bytes | None:
 
 
 def extract_ids(ir: IR) -> list[str]:
-    return [ds.id for ds in ir.datasources if isinstance(ds.connection, ExtractConnection)]
+    return [ds.id for ds in ir.datasources if has_local_data(ds.connection)]
 
 
 def write_package(target: Path, ir: IR, directory: Path) -> PackageInfo:

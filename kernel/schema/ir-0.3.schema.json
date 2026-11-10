@@ -1486,6 +1486,7 @@
           "discriminator": {
             "mapping": {
               "extract": "#/$defs/ExtractConnection",
+              "file": "#/$defs/FileConnection",
               "live": "#/$defs/LiveConnection"
             },
             "propertyName": "kind"
@@ -1496,6 +1497,9 @@
             },
             {
               "$ref": "#/$defs/LiveConnection"
+            },
+            {
+              "$ref": "#/$defs/FileConnection"
             }
           ],
           "title": "Connection"
@@ -1913,6 +1917,189 @@
         "field"
       ],
       "title": "FieldUse",
+      "type": "object"
+    },
+    "FileColumn": {
+      "additionalProperties": false,
+      "description": "檔案中的一欄：Tableau 讀取時給的欄名與型別（依欄的順序）。",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "datatype": {
+          "enum": [
+            "string",
+            "integer",
+            "real",
+            "boolean",
+            "date",
+            "datetime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "datatype"
+      ],
+      "title": "FileColumn",
+      "type": "object"
+    },
+    "FileConnection": {
+      "additionalProperties": false,
+      "description": "資料在 .twbx 內的檔案（Excel、文字檔）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進\nDuckDB（每張資料表一張 Files.<name>），之後與萃取相同在本機查詢。檔案的內容是報表封裝時的快照\n（與 Tableau Server 上的 .twbx 相同）。",
+      "properties": {
+        "kind": {
+          "const": "file",
+          "title": "Kind",
+          "type": "string"
+        },
+        "tables": {
+          "items": {
+            "$ref": "#/$defs/FileTable"
+          },
+          "minItems": 1,
+          "title": "Tables",
+          "type": "array"
+        },
+        "relation": {
+          "description": "資料表（table 為 [Files, name]）、join 樹或 Relationship 模型",
+          "discriminator": {
+            "mapping": {
+              "join": "#/$defs/JoinRelation",
+              "model": "#/$defs/ModelRelation",
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            },
+            {
+              "$ref": "#/$defs/JoinRelation"
+            },
+            {
+              "$ref": "#/$defs/ModelRelation"
+            }
+          ],
+          "title": "Relation"
+        }
+      },
+      "required": [
+        "kind",
+        "tables",
+        "relation"
+      ],
+      "title": "FileConnection",
+      "type": "object"
+    },
+    "FileTable": {
+      "additionalProperties": false,
+      "description": "檔案型資料源中的一張資料表：Excel 的工作表，或文字檔（CSV 等）。",
+      "properties": {
+        "name": {
+          "description": "關聯樹中的資料表名稱（relation 的 name）",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "excel",
+            "text"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "path": {
+          "description": ".twbx 內的路徑，一律用 /",
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sheet": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Excel 的工作表（或具名範圍）",
+          "title": "Sheet"
+        },
+        "cells": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Excel 的資料範圍，例如 A1:U10195；None 表示整張工作表",
+          "title": "Cells"
+        },
+        "header": {
+          "default": true,
+          "description": "第一列是欄名",
+          "title": "Header",
+          "type": "boolean"
+        },
+        "separator": {
+          "default": ",",
+          "description": "文字檔的分隔字元",
+          "minLength": 1,
+          "title": "Separator",
+          "type": "string"
+        },
+        "charset": {
+          "default": "UTF-8",
+          "description": "文字檔的字元集",
+          "minLength": 1,
+          "title": "Charset",
+          "type": "string"
+        },
+        "locale": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字檔的地區設定（數字與日期的寫法）",
+          "title": "Locale"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/FileColumn"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "format",
+        "path",
+        "columns"
+      ],
+      "title": "FileTable",
       "type": "object"
     },
     "FontStyle": {

@@ -40,6 +40,10 @@ class DatasourceInfo(BaseModel):
         description="萃取或資料檔在 .twbx 內的路徑（.hyper 或舊版 .tde）"
     )
     extract_tables: list[str] = Field(description="萃取或資料檔中的資料表")
+    data_files: list[str] = Field(
+        default_factory=list,
+        description="沒有萃取的檔案型連線（Excel、文字檔）在 .twbx 內的檔案",
+    )
     source_relation_types: list[str] = Field(description="來源連線的關聯類型：table、join、text…")
     logical_tables: int = Field(description="Relationship 模型中的邏輯資料表數")
     custom_sql: bool

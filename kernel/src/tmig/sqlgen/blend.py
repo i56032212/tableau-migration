@@ -23,8 +23,13 @@ from tmig.ir.models import (
     Blend,
     ExtractConnection,
     FieldUse,
+    FileConnection,
+    JoinRelation,
     LiveConnection,
     Marks,
+    ModelRelation,
+    Relation,
+    TableRelation,
     Worksheet,
 )
 from tmig.planner.identity import Identity
@@ -96,18 +101,23 @@ def blend_sql(
                 unsupported=True,
             )
         connection = secondary.connection
-        if not isinstance(connection, ExtractConnection) or connection.model is not None:
+        alias = f"__blend{n}"
+        if isinstance(connection, ExtractConnection) and connection.model is None:
+            moved = connection.model_copy(update={"table": f"{alias}.{connection.table}"})
+        elif isinstance(connection, FileConnection) and not isinstance(
+            connection.relation, ModelRelation
+        ):
+            # 檔案型資料源：關聯樹中的資料表加上附加的名稱
+            moved = connection.model_copy(
+                update={"relation": _attached_relation(connection.relation, alias)}
+            )
+        else:
             raise QueryError(
                 f"Data Blending：次要資料源「{secondary.caption}」為 Live 連線或 Relationship 模型，"
                 "尚不支援",
                 unsupported=True,
             )
-        alias = f"__blend{n}"
-        attached = secondary.model_copy(
-            update={
-                "connection": connection.model_copy(update={"table": f"{alias}.{connection.table}"})
-            }
-        )
+        attached = secondary.model_copy(update={"connection": moved})
         holder = _secondary_worksheet(ws, secondary.id, [f for _, f in pairs], uses)
         sub = ir.model_copy(
             update={
@@ -166,6 +176,20 @@ def blend_sql(
         guards=main.guards,
         attach=attach,
     )
+
+
+def _attached_relation(relation: Relation, alias: str) -> Relation:
+    """關聯樹中的資料表改成附加的 DuckDB 檔中的資料表（<alias>.Files.<name>）。"""
+    if isinstance(relation, JoinRelation):
+        return relation.model_copy(
+            update={
+                "left": _attached_relation(relation.left, alias),
+                "right": _attached_relation(relation.right, alias),
+            }
+        )
+    if isinstance(relation, TableRelation):
+        return relation.model_copy(update={"table": [alias, *relation.table]})
+    return relation
 
 
 def _link_condition(left: str, left_type: str, right: str, right_type: str) -> str:

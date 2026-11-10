@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from tmig.ir import IR, ExtractConnection
+from tmig.ir import IR, ExtractConnection, has_local_data
 
 _VIEWS_URL = re.compile(r"/views/([^/?#]+)")
 
@@ -53,7 +53,7 @@ class Report:
         return self.directory.name
 
     def extract_datasources(self) -> list[str]:
-        return [ds.id for ds in self.ir.datasources if isinstance(ds.connection, ExtractConnection)]
+        return [ds.id for ds in self.ir.datasources if has_local_data(ds.connection)]
 
 
 @dataclass
