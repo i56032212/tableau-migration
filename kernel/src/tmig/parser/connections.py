@@ -46,13 +46,27 @@ DIALECTS: dict[str, Dialect] = {
     "mysql": "mysql",
     "mariadb": "mysql",
     "snowflake": "snowflake",
+    "presto": "trino",
+    "trino": "trino",
+    "athena": "athena",
     "bigquery": "bigquery",
     "teradata": "teradata",
 }
 """Tableau 的連線類型 → SQLGlot 方言（類型名稱依公開資料整理，待真實報表確認）。"""
 
 EXECUTABLE: frozenset[str] = frozenset(
-    {"oracle", "databricks", "spark", "postgres", "redshift", "tsql", "mysql", "snowflake"}
+    {
+        "oracle",
+        "databricks",
+        "spark",
+        "postgres",
+        "redshift",
+        "tsql",
+        "mysql",
+        "snowflake",
+        "trino",
+        "athena",
+    }
 )
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
 
@@ -144,7 +158,13 @@ def live_connection(
     for problem in viewer_identity_problems(named, caption):
         ctx.flag(named, problem)
     server = named.get("server") or None
-    database = named.get("service") or named.get("v-catalog") or named.get("dbname") or None
+    database = (
+        named.get("service")
+        or named.get("v-catalog")
+        or named.get("dbname")
+        or named.get("catalog")
+        or None
+    )
     port_text = named.get("port") or ""
     tree = parse_relation(ctx, relation, caption) if relation is not None else None
     if relation is not None and tree is None:

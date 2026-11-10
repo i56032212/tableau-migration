@@ -107,14 +107,26 @@ def test_two_stage_matches_single_stage(directory: Path) -> None:
 # ---------------------------------------------------------------- 轉譯
 
 
-DIALECTS = ["postgres", "databricks", "spark", "oracle", "mysql", "tsql", "snowflake", "redshift"]
-SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift"]
+DIALECTS = [
+    "postgres",
+    "databricks",
+    "spark",
+    "oracle",
+    "mysql",
+    "tsql",
+    "snowflake",
+    "redshift",
+    "trino",
+    "athena",
+]
+SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift", "athena"]
 """沒有實機的方言：轉譯結果以快照審核。"""
 SNAPSHOT_SCHEMAS = {
     "oracle": ["SALES"],
     "tsql": ["dbo"],
     "snowflake": ["PUBLIC"],
     "redshift": ["public"],
+    "athena": ["AwsDataCatalog", "sales"],
 }
 
 
@@ -138,6 +150,8 @@ def test_custom_sql_is_restored(dialect: str) -> None:
         ("snowflake", "'O\\'Hare'", "DATE '2024-01-01'"),
         ("tsql", "'O''Hare'", "CAST('2024-01-01' AS DATE)"),
         ("redshift", "'O''Hare'", "DATE '2024-01-01'"),
+        ("trino", "'O''Hare'", "DATE '2024-01-01'"),
+        ("athena", "'O''Hare'", "DATE '2024-01-01'"),
     ],
 )
 def test_custom_sql_parameters(dialect: str, region: str, since: str) -> None:

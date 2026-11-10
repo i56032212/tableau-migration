@@ -39,6 +39,7 @@ from ..engines import (
     RedshiftEmulator,
     SnowflakeEmulator,
     SparkExecutor,
+    TrinoEmulator,
     TSqlEmulator,
     as_live,
     extract_tables,
@@ -51,15 +52,29 @@ from ..engines import (
     postgres_cluster,
     postgres_executor,
     spark_session,
+    trino_address,
+    trino_connect,
+    trino_load,
 )
 from ..formula.helpers import analyzer
 from .test_expr import AGG_CASES, COLUMNS, ROW_CASES, ROWS, Env
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = sorted(p.parent for p in (ROOT / "fixtures").glob("*/golden.ir.json"))
-ENGINES = ["postgres", "spark", "oracle", "mysql", "tsql", "snowflake", "redshift"]
+ENGINES = [
+    "postgres",
+    "spark",
+    "oracle",
+    "mysql",
+    "tsql",
+    "snowflake",
+    "redshift",
+    "trino",
+    "athena",
+]
 EMULATED = {"oracle", "tsql", "snowflake", "redshift"}
-"""沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。"""
+"""沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。Trino 在 CI 以 Docker 實跑（本機模擬）；
+Athena 的 SQL 也在同一台 Trino 執行（Athena engine 3 以 Trino 為基礎）。"""
 ORACLE_UNSUPPORTED = {
     # Oracle 的 SQL 沒有陣列（FINDNTH 以陣列計算）；SPLIT 只支援正整數常值的位置
     "FINDNTH('a-b-c', '-', 2)",
@@ -218,6 +233,39 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         }[request.param](con)
         try:
             yield Engine(request.param, emulator, live(request.param, [schema]))
+        finally:
+            con.close()
+        return
+    if request.param in ("trino", "athena"):
+        address = trino_address()
+        if address is None:
+            # DuckDB 的記憶體資料庫名稱就是 memory：資料表放在 memory."default"，與 Trino 的寫法相同
+            con = duckdb.connect()
+            con.execute('CREATE SCHEMA "default"')
+            con.register("expression_rows", _expression_table())
+            con.execute("CREATE TABLE t AS SELECT * FROM expression_rows")
+            for name, table in tables.items():
+                con.register(f"rows_{name}", table)
+                con.execute(f'CREATE TABLE "default"."{name}" AS SELECT * FROM "rows_{name}"')
+            try:
+                yield Engine(
+                    request.param,
+                    TrinoEmulator(con, request.param),
+                    live(request.param, ["memory", "default"]),
+                )
+            finally:
+                con.close()
+            return
+        from tmig.data.sources import TrinoExecutor
+
+        con = trino_connect(address)
+        trino_load(con, "t", _expression_table())
+        for name, table in tables.items():
+            trino_load(con, name, table)
+        executor = TrinoExecutor(con)
+        executor.dialect = request.param
+        try:
+            yield Engine(request.param, executor, live(request.param, ["memory", "default"]))
         finally:
             con.close()
         return
@@ -393,5 +441,38 @@ def test_mysql_executor_session(mysql_params: dict[str, Any]) -> None:
         assert row == {"tz": "+00:00", "names": "en_US", "ro": 1, "m": "February"}
         with pytest.raises(Exception, match="READ ONLY"):
             executor.fetch("CREATE TABLE should_fail (x INT)")
+    finally:
+        executor.close()
+
+
+def test_trino_executor_session() -> None:
+    """正式的連線方式（連線設定檔 → open_executor）：工作階段的時區為 UTC、小數依小數位數轉型。"""
+    from tmig.data.sources import ConnectionConfig, open_executor
+    from tmig.ir import LiveConnection
+
+    address = trino_address()
+    if address is None:
+        pytest.skip("沒有 Trino（TMIG_TEST_TRINO）")
+    host, _, port = address.partition(":")
+    trino_connect(address).close()
+    connection = LiveConnection(
+        kind="live",
+        connection_id="trino_test",
+        dbclass="presto",
+        dialect="trino",
+        server=host,
+        port=int(port or 8080),
+        database="memory",
+        schema_name="default",
+    )
+    executor = open_executor(
+        connection, {"trino_test": ConnectionConfig("trino_test", "trino", {"driver": "trino"})}
+    )
+    try:
+        row = executor.fetch(
+            "SELECT current_timezone() AS tz, CAST(12.5 AS DECIMAL(10, 2)) AS d, "
+            "CAST(7 AS DECIMAL(10, 0)) AS n, current_catalog AS c"
+        ).to_pylist()[0]
+        assert row == {"tz": "UTC", "d": 12.5, "n": 7, "c": "memory"}
     finally:
         executor.close()

@@ -101,6 +101,40 @@ def test_databricks_custom_sql(tmp_path: Path) -> None:
     assert conn.relation.sql.endswith("order_date >= '2024-01-01'")
 
 
+def test_presto_and_athena(tmp_path: Path) -> None:
+    """Presto 連線（Trino、Starburst、PrestoDB）的資料庫是 catalog；Athena 的區域在主機名稱中。"""
+    table = "<relation connection='db.1' name='orders' table='[sales].[orders]' type='table' />"
+    presto = (
+        "<connection authentication='ldap' catalog='hive' class='presto' port='8443' "
+        "schema='sales' server='trino.example.com' sslmode='require' username='reader' />"
+    )
+    ir = parse(tmp_path, live_datasource(presto, table))
+    assert reasons(ir) == []
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection)
+    assert (conn.dialect, conn.server, conn.port, conn.database, conn.schema_name) == (
+        "trino",
+        "trino.example.com",
+        8443,
+        "hive",
+        "sales",
+    )
+    assert conn.connection_id == "presto_trino_example_com_hive"
+    athena = (
+        "<connection class='athena' port='443' schema='sales' "
+        "server='athena.us-east-1.amazonaws.com' username='reader' />"
+    )
+    ir = parse(tmp_path, live_datasource(athena, table))
+    assert reasons(ir) == []
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection)
+    assert (conn.dialect, conn.server, conn.schema_name) == (
+        "athena",
+        "athena.us-east-1.amazonaws.com",
+        "sales",
+    )
+
+
 def test_join_tree(tmp_path: Path) -> None:
     relation = """
       <relation join='left' type='join'>

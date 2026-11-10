@@ -1,4 +1,4 @@
-"""來源資料庫的實跑測試環境：本機 PostgreSQL 與 Spark（沒有時略過）。
+"""來源資料庫的實跑測試環境：本機 PostgreSQL 與 Spark（沒有時略過）、CI 的 Trino（本機模擬）。
 
 - PostgreSQL：環境變數 TMIG_TEST_POSTGRES 提供連線字串時直接使用；否則找 PostgreSQL 的執行檔
   （PATH、PGBIN、/usr/lib/postgresql/*/bin），在暫存目錄建立臨時的資料庫叢集，測試結束後關閉
@@ -945,4 +945,177 @@ def _emulate_redshift(node: Any) -> Any:
     if name == "TMIG_TO_TIMESTAMP":
         value, fmt = node.expressions
         return _duck(f"strptime({{x}}, '{_pg_format(fmt.name)}')", x=value)
+    return node
+
+
+# ---------------------------------------------------------------- Trino（CI 實跑；本機模擬）
+
+
+def service_address(env: str, name: str) -> str | None:
+    """CI 以 Docker 啟動的來源資料庫（環境變數提供位址）；本機沒有時回傳 None（改用模擬）。
+    TMIG_REQUIRE_SERVICES=1（CI）時沒有提供改為測試失敗，避免默默改用模擬。"""
+    value = os.environ.get(env) or None
+    if value is None and os.environ.get("TMIG_REQUIRE_SERVICES") == "1":
+        pytest.fail(f"TMIG_REQUIRE_SERVICES=1，但沒有 {name}（環境變數 {env}）")
+    return value
+
+
+def trino_address() -> str | None:
+    """Trino 的位址（TMIG_TEST_TRINO=主機:連接埠）。"""
+    return service_address("TMIG_TEST_TRINO", "Trino")
+
+
+def trino_connect(address: str) -> Any:
+    """連上 Trino（memory catalog）；伺服器剛啟動時會回報 SERVER_STARTING_UP，最多等 5 分鐘。"""
+    import trino
+
+    host, _, port = address.partition(":")
+    deadline = time.monotonic() + 300
+    while True:
+        con = trino.dbapi.connect(
+            host=host,
+            port=int(port or 8080),
+            user="tmig",
+            catalog="memory",
+            schema="default",
+            timezone="UTC",
+        )
+        try:
+            cursor = con.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchall()
+            return con
+        except Exception as exc:
+            con.close()
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"Trino（{address}）沒有回應：{exc}") from exc
+            time.sleep(3)
+
+
+TRINO_TYPES = {
+    pa.string(): "VARCHAR",
+    pa.large_string(): "VARCHAR",
+    pa.float64(): "DOUBLE",
+    pa.int64(): "BIGINT",
+    pa.int32(): "INTEGER",
+    pa.bool_(): "BOOLEAN",
+    pa.date32(): "DATE",
+}
+
+
+def _trino_type(kind: pa.DataType) -> str:
+    if pa.types.is_timestamp(kind):
+        return "TIMESTAMP(6)"
+    return TRINO_TYPES[kind]
+
+
+def _trino_literal(value: Any) -> str:
+    import datetime as dt
+
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"DOUBLE '{value!r}'"
+    if isinstance(value, dt.datetime):
+        return f"TIMESTAMP '{value.isoformat(sep=' ', timespec='microseconds')}'"
+    if isinstance(value, dt.date):
+        return f"DATE '{value.isoformat()}'"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def trino_load(con: Any, name: str, table: pa.Table, batch: int = 400) -> None:
+    """Arrow 資料表 → Trino 的 memory.default（欄名照原文；Trino 的識別字不分大小寫）。"""
+
+    def run(sql: str) -> None:
+        cursor = con.cursor()
+        cursor.execute(sql)
+        cursor.fetchall()
+
+    target = f'memory.default."{name}"'
+    run(f"DROP TABLE IF EXISTS {target}")
+    columns = ", ".join(f'"{f.name}" {_trino_type(f.type)}' for f in table.schema)
+    run(f"CREATE TABLE {target} ({columns})")
+    rows = table.to_pylist()
+    names = table.column_names
+    for start in range(0, len(rows), batch):
+        values = ", ".join(
+            "(" + ", ".join(_trino_literal(row[n]) for n in names) + ")"
+            for row in rows[start : start + batch]
+        )
+        run(f"INSERT INTO {target} VALUES {values}")
+
+
+class TrinoEmulator:
+    """測試用：本機沒有 Trino 時，把轉譯後的 Trino SQL 以 SQLGlot 轉回 DuckDB 執行；Trino 特有的寫法
+    （CODEPOINT、陣列的 REPEAT、SLICE 的長度、取代字串的 $1）依官方文件的語意模擬。
+    CI 另以 Docker 的 Trino 實跑（TMIG_TEST_TRINO）。"""
+
+    def __init__(self, con: Any, dialect: str = "trino") -> None:
+        self.con = con
+        self.dialect = dialect
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        tree = sqlglot.parse_one(sql, read=self.dialect)
+        duck = _visit(tree, _emulate_trino).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+def _java_to_re2(text: str) -> str:
+    """Java 的取代字串（$1 參照群組、\\$ 為錢字號）→ RE2（\\1）。"""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            out.append("\\\\" if nxt == "\\" else nxt)
+            i += 2
+            continue
+        if char == "$" and i + 1 < len(text) and text[i + 1].isdigit():
+            out.append("\\" + text[i + 1])
+            i += 2
+            continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def _emulate_trino(node: Any) -> Any:
+    from sqlglot import exp
+
+    if isinstance(node, exp.DataType) and node.this in (
+        exp.DataType.Type.VARCHAR,
+        exp.DataType.Type.TEXT,
+    ):
+        return exp.DataType.build("VARCHAR")  # VARCHAR(1)
+    if isinstance(node, exp.Anonymous) and node.name.upper() == "CODEPOINT":
+        return _duck("unicode({x})", x=node.expressions[0])
+    if isinstance(node, exp.ArrayToString) and isinstance(node.this, exp.Repeat):
+        # Trino 的 REPEAT 產生陣列：串接起來就是 DuckDB 的字串 repeat
+        return node.this
+    if isinstance(node, exp.ArraySlice):
+        # Trino 的 SLICE(陣列, 起點, 長度)；SQLGlot 把長度當成結尾
+        return _duck(
+            "list_slice({a}, {s}, {s} + {n} - 1)",
+            a=node.this,
+            s=node.args["start"],
+            n=node.args["end"],
+        )
+    if isinstance(node, exp.RegexpReplace):
+        replacement = node.args.get("replacement")
+        if isinstance(replacement, exp.Literal) and replacement.is_string:
+            return _duck(
+                f"regexp_replace({{s}}, {{p}}, '{_java_to_re2(replacement.name)}', 'g')",
+                s=node.this,
+                p=node.expression,
+            )
     return node

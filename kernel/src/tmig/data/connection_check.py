@@ -35,6 +35,9 @@ DBCLASS_DRIVERS = {
     "mysql": "mysql",
     "mariadb": "mysql",
     "snowflake": "snowflake",
+    "presto": "trino",
+    "trino": "trino",
+    "athena": "athena",
 }
 """Tableau 的連線類型 → 執行器（其他類型尚無執行器）。"""
 
@@ -125,9 +128,20 @@ def template(found: dict[str, FoundConnection]) -> str:
         lines.append(f'driver = "{driver}"')
         if driver == "databricks":
             lines.append(f'access_token = "${{{env_name(connection_id, "TOKEN")}}}"')
+        elif driver == "athena":
+            lines.append('s3_staging_dir = "s3://…/"   # 查詢結果的位置（或改用 work_group）')
+            lines.append(
+                "# 省略下面兩行時用 AWS 預設的憑證（環境變數、設定檔 profile 或 IAM 角色）"
+            )
+            lines.append(f'access_key_id = "${{{env_name(connection_id, "ACCESS_KEY_ID")}}}"')
+            lines.append(
+                f'secret_access_key = "${{{env_name(connection_id, "SECRET_ACCESS_KEY")}}}"'
+            )
         else:
             lines.append(f'user = "${{{env_name(connection_id, "USER")}}}"')
             lines.append(f'password = "${{{env_name(connection_id, "PASSWORD")}}}"')
+        if driver == "trino":
+            lines.append('# driver = "presto"   # 伺服器是 PrestoDB（不是 Trino、Starburst）時')
         if driver == "snowflake":
             lines.append('# warehouse = "…"   # 省略時用帳號的預設 warehouse')
             lines.append('# role = "…"')

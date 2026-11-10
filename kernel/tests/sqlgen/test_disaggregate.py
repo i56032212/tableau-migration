@@ -101,7 +101,18 @@ def test_totals_are_unsupported(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "dialect", ["postgres", "databricks", "oracle", "mysql", "tsql", "snowflake", "redshift"]
+    "dialect",
+    [
+        "postgres",
+        "databricks",
+        "oracle",
+        "mysql",
+        "tsql",
+        "snowflake",
+        "redshift",
+        "trino",
+        "athena",
+    ],
 )
 def test_live_connections_translate(tmp_path: Path, dialect: str) -> None:
     """Live 連線：每一列的編號（ROW_NUMBER）下推到來源資料庫。"""

@@ -236,6 +236,8 @@ Dialect = Literal[
     "tsql",
     "mysql",
     "snowflake",
+    "trino",
+    "athena",
     "bigquery",
     "teradata",
     "duckdb",

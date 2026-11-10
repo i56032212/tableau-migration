@@ -24,6 +24,16 @@
     password = "${SNOWFLAKE_PASSWORD}"
     warehouse = "REPORTING_WH"         # account 省略時取主機名稱的第一段
 
+    [connections.presto_trino_example_com_hive]
+    driver = "trino"                   # Trino、Starburst；PrestoDB 用 presto
+    user = "${TRINO_USER}"
+    password = "${TRINO_PASSWORD}"     # 有密碼時以 HTTPS 連線
+
+    [connections.athena_athena_us_east_1_amazonaws_com]
+    driver = "athena"
+    s3_staging_dir = "s3://query-results-bucket/tableau/"
+    # 省略 access_key_id、secret_access_key 時用 AWS 預設的憑證（環境變數、設定檔或 IAM 角色）
+
 - 密碼、權杖一律寫成 ${環境變數}，不能直接寫在設定檔中；環境變數由部署環境或密碼管理服務注入
 - 建議使用唯讀的服務帳號；PostgreSQL 與 MySQL 的工作階段另外設為唯讀
 - 執行器回傳 Arrow 資料表；小數（DECIMAL／NUMBER）轉成浮點數或整數、含時區的時間轉成 UTC 的
@@ -58,6 +68,9 @@ DRIVERS = (
     "sqlserver",
     "mysql",
     "snowflake",
+    "trino",
+    "presto",
+    "athena",
     "duckdb",
 )
 DRIVER_DIALECTS = {
@@ -68,9 +81,14 @@ DRIVER_DIALECTS = {
     "sqlserver": "tsql",
     "mysql": "mysql",
     "snowflake": "snowflake",
+    "trino": "trino",
+    "presto": "trino",
+    "athena": "athena",
     "duckdb": "duckdb",
 }
-SECRET_KEYS = frozenset({"password", "access_token", "token", "client_secret"})
+SECRET_KEYS = frozenset(
+    {"password", "access_token", "token", "client_secret", "secret_access_key", "session_token"}
+)
 ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -184,6 +202,10 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return MySQLExecutor.open(connection, params)
     if config.driver == "snowflake":
         return SnowflakeExecutor.open(connection, params)
+    if config.driver in ("trino", "presto"):
+        return TrinoExecutor.open(connection, params, presto=config.driver == "presto")
+    if config.driver == "athena":
+        return AthenaExecutor.open(connection, params)
     return DatabricksExecutor.open(connection, params)
 
 
@@ -613,6 +635,149 @@ class SnowflakeExecutor:
         self.con.close()
 
 
+class TrinoExecutor:
+    """Trino、Starburst（trino 用戶端）與 PrestoDB（presto-python-client）：工作階段的時區設為 UTC。
+
+    有密碼時以 HTTP 基本驗證（必須是 HTTPS）、有 access_token 時以 JWT 連線；catalog、schema 省略時
+    取工作簿中的連線資訊。Trino 沒有唯讀的工作階段設定：請使用唯讀的服務帳號。
+    """
+
+    dialect = "trino"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(
+        cls, connection: LiveConnection, params: dict[str, Any], presto: bool = False
+    ) -> TrinoExecutor:
+        try:
+            if presto:
+                import prestodb as client  # pyright: ignore[reportMissingImports]
+            else:
+                import trino as client  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            extra = "presto" if presto else "trino"
+            raise SourceConnectionError(
+                f"未安裝 {'PrestoDB' if presto else 'Trino'} 驅動：uv sync --extra {extra}"
+            ) from exc
+        host = params.get("host") or connection.server
+        if not host:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少主機")
+        user = params.get("user") or "tmig"
+        auth = None
+        if params.get("password"):
+            auth = client.auth.BasicAuthentication(user, params["password"])
+        elif params.get("access_token") and not presto:
+            auth = client.auth.JWTAuthentication(params["access_token"])
+        scheme = params.get("http_scheme") or ("https" if auth is not None else "http")
+        port = int(params.get("port") or connection.port or (443 if scheme == "https" else 8080))
+        timezone = params.get("timezone") or "UTC"
+        kwargs: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "user": user,
+            "catalog": params.get("catalog") or connection.database,
+            "schema": params.get("schema") or connection.schema_name,
+            "http_scheme": scheme,
+            "source": "tmig",
+        }
+        if auth is not None:
+            kwargs["auth"] = auth
+        if presto:
+            kwargs["http_headers"] = {"X-Presto-Time-Zone": timezone}
+        else:
+            kwargs["timezone"] = timezone
+            if "verify" in params:
+                kwargs["verify"] = params["verify"]
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:
+            con = client.dbapi.connect(**kwargs)
+        except Exception as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                f"無法連上 {'PrestoDB' if presto else 'Trino'}（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:
+        cursor = self.con.cursor()
+        try:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            description = cursor.description or []
+        finally:
+            cursor.close()
+        names = [d[0] for d in description]
+        scales = [d[5] if len(d) > 5 and isinstance(d[5], int) else None for d in description]
+        return rows_to_arrow(names, rows, scales)
+
+    def close(self) -> None:
+        self.con.close()
+
+
+class AthenaExecutor:
+    """Amazon Athena（PyAthena，以 Arrow 取回）。尚未實機驗證。
+
+    查詢結果寫到 s3_staging_dir（或工作群組 work_group 設定的位置）；AWS 憑證省略時用預設的來源
+    （環境變數、設定檔 profile 或 IAM 角色），區域省略時取主機名稱 athena.<區域>.amazonaws.com。
+    """
+
+    dialect = "athena"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> AthenaExecutor:
+        if not params.get("s3_staging_dir") and not params.get("work_group"):
+            raise SourceConnectionError(
+                f"連線 {connection.connection_id} 需要 s3_staging_dir 或 work_group（查詢結果的位置）"
+            )
+        try:
+            from pyathena import connect  # pyright: ignore[reportMissingImports]
+            from pyathena.arrow.cursor import ArrowCursor  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 Athena 驅動：uv sync --extra athena") from exc
+        region = params.get("region") or _athena_region(connection.server)
+        kwargs: dict[str, Any] = {
+            "s3_staging_dir": params.get("s3_staging_dir"),
+            "work_group": params.get("work_group"),
+            "region_name": region,
+            "schema_name": params.get("schema") or connection.schema_name or "default",
+            "catalog_name": params.get("catalog") or "AwsDataCatalog",
+            "aws_access_key_id": params.get("access_key_id"),
+            "aws_secret_access_key": params.get("secret_access_key"),
+            "aws_session_token": params.get("session_token"),
+            "profile_name": params.get("profile"),
+        }
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:  # pragma: no cover - 需要 AWS
+            con = connect(cursor_class=ArrowCursor, **kwargs)
+        except Exception as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                f"無法連上 Athena（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:  # pragma: no cover - 需要 AWS
+        cursor = self.con.cursor()
+        try:
+            cursor.execute(sql)
+            table = cursor.as_arrow()
+        finally:
+            cursor.close()
+        return normalize_arrow(table)
+
+    def close(self) -> None:  # pragma: no cover
+        self.con.close()
+
+
+def _athena_region(server: str | None) -> str | None:
+    """athena.us-east-1.amazonaws.com → us-east-1。"""
+    match = re.match(r"athena[.-]([a-z0-9-]+)\.amazonaws\.com", server or "", re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
 # ---------------------------------------------------------------- Arrow
 
 
@@ -662,6 +827,7 @@ def normalize_arrow(table: pa.Table) -> pa.Table:
 __all__ = [
     "CONFIG_ENV",
     "DRIVER_DIALECTS",
+    "AthenaExecutor",
     "ConnectionConfig",
     "DatabricksExecutor",
     "DuckDBExecutor",
@@ -673,6 +839,7 @@ __all__ = [
     "SnowflakeExecutor",
     "SourceConnectionError",
     "SqlServerExecutor",
+    "TrinoExecutor",
     "config_path",
     "executor_for",
     "load_connections",

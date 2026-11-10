@@ -78,6 +78,69 @@ def test_config_rejects_literal_secrets(tmp_path: Path) -> None:
         load_connections(config)
 
 
+def test_config_rejects_literal_aws_secrets(tmp_path: Path) -> None:
+    config = write_config(
+        tmp_path / "connections.toml",
+        '[connections.lake]\ndriver = "athena"\nsecret_access_key = "abc"\n',
+    )
+    with pytest.raises(SourceConnectionError, match="secret_access_key 不能直接寫在設定檔"):
+        load_connections(config)
+
+
+def test_trino_executor_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """有密碼時以 HTTPS 的基本驗證連線；catalog、schema 取工作簿中的連線資訊；工作階段為 UTC。"""
+    import trino
+
+    from tmig.data.sources import TrinoExecutor
+    from tmig.ir import LiveConnection
+
+    calls: list[dict[str, object]] = []
+
+    def connect(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(trino.dbapi, "connect", connect)
+    connection = LiveConnection(
+        kind="live",
+        connection_id="presto_x",
+        dbclass="presto",
+        dialect="trino",
+        server="trino.example.com",
+        database="hive",
+        schema_name="sales",
+    )
+    TrinoExecutor.open(connection, {"user": "reader"})
+    TrinoExecutor.open(connection, {"user": "reader", "password": "pw", "catalog": "iceberg"})
+    plain, secure = calls
+    assert (plain["http_scheme"], plain["port"], plain["catalog"], plain["schema"]) == (
+        "http",
+        8080,
+        "hive",
+        "sales",
+    )
+    assert plain["timezone"] == "UTC" and "auth" not in plain
+    assert (secure["http_scheme"], secure["port"], secure["catalog"]) == ("https", 443, "iceberg")
+    assert isinstance(secure["auth"], trino.auth.BasicAuthentication)
+
+
+def test_athena_executor_options() -> None:
+    from tmig.data.sources import AthenaExecutor, _athena_region
+    from tmig.ir import LiveConnection
+
+    assert _athena_region("athena.ap-northeast-1.amazonaws.com") == "ap-northeast-1"
+    assert _athena_region("example.com") is None
+    connection = LiveConnection(
+        kind="live",
+        connection_id="athena_x",
+        dbclass="athena",
+        dialect="athena",
+        server="athena.us-east-1.amazonaws.com",
+    )
+    with pytest.raises(SourceConnectionError, match="s3_staging_dir 或 work_group"):
+        AthenaExecutor.open(connection, {})
+
+
 def test_config_errors(tmp_path: Path) -> None:
     assert load_connections(tmp_path / "missing.toml") == {}
     config = write_config(tmp_path / "bad.toml", '[connections.x]\ndriver = "mssql"\n')
@@ -268,6 +331,33 @@ def test_connections_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     out = tmp_path / "connections.toml"
     assert main(["connections", "template", str(path), "--out", str(out)]) == 0
     assert set(load_connections(out)) == {"sales_ora", "lake"}
+
+
+def test_connections_template_for_presto_and_athena(tmp_path: Path) -> None:
+    from tmig.data.connection_check import FoundConnection, template
+    from tmig.ir import LiveConnection
+
+    def found(connection_id: str, dbclass: str, dialect: str, server: str) -> FoundConnection:
+        connection = LiveConnection(
+            kind="live",
+            connection_id=connection_id,
+            dbclass=dbclass,
+            dialect=dialect,  # type: ignore[arg-type]
+            server=server,
+        )
+        return FoundConnection(connection, ["報表"])
+
+    text = template(
+        {
+            "presto_x": found("presto_x", "presto", "trino", "trino.example.com"),
+            "athena_x": found("athena_x", "athena", "athena", "athena.us-east-1.amazonaws.com"),
+        }
+    )
+    assert '[connections.presto_x]\ndriver = "trino"\nuser = "${TMIG_PRESTO_X_USER}"' in text
+    assert '[connections.athena_x]\ndriver = "athena"\ns3_staging_dir = "s3://…/"' in text
+    assert 'secret_access_key = "${TMIG_ATHENA_X_SECRET_ACCESS_KEY}"' in text
+    config = write_config(tmp_path / "connections.toml", text)
+    assert {c.driver for c in load_connections(config).values()} == {"trino", "athena"}
 
 
 def test_connections_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

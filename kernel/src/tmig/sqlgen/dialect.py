@@ -11,9 +11,10 @@
   不送出可能算錯的 SQL（SQLGlot 對不認得的函式不會報錯，只會原樣輸出）
 - 自訂 SQL 以佔位資料表表示，產生目標方言後才換回原文（原文不經過轉譯）
 
-PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）與 MySQL（8.0 以上）有實跑測試
-（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）與 Snowflake 依官方文件撰寫，
-尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的語意模擬後執行，並有轉譯快照。
+PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）、MySQL（8.0 以上）與 Trino（CI 以 Docker 執行；
+Athena 的 SQL 也在同一台執行）有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、
+Snowflake 與 Redshift 依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的
+語意模擬後執行，並有轉譯快照。
 
 各方言已知與 DuckDB（＝萃取時的結果）不同之處，與 Tableau 直接連該資料庫時相同，不另外處理：
 字串的排序與比較依資料庫的定序；Oracle 的空字串即 Null、ADD_MONTHS 在月底的行為；
@@ -45,6 +46,8 @@ SQLGLOT_NAMES: dict[str, str] = {
     "mysql": "mysql",
     "tsql": "tsql",
     "snowflake": "snowflake",
+    "trino": "trino",
+    "athena": "athena",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言尚不支援。"""
@@ -282,6 +285,19 @@ def _is_array(node: exp.Expr) -> bool:
 def _array(node: exp.Expr) -> exp.Expr:
     node.meta["array"] = True
     return node
+
+
+def _template(text: str, dialect: str, **parts: exp.Expr) -> exp.Expr:
+    """目標方言的運算式樣板：{名稱} 換成（已改寫的）節點。樣板本身的節點都標記為改寫規則產生的，
+    換進去的節點照樣驗證。"""
+    tree = sqlglot.parse_one(text.format(**{k: f"__tmig_{k}__" for k in parts}), read=dialect)
+    for node in tree.walk():
+        _mark(node)
+    for column in list(tree.find_all(exp.Column)):
+        key = column.name
+        if key.startswith("__tmig_") and key.endswith("__"):
+            column.replace(exp.Paren(this=parts[key[7:-2]].copy()))
+    return tree
 
 
 INTERVAL_FUNCTIONS = {
@@ -2197,6 +2213,317 @@ SNOWFLAKE_FORMAT = {
 """strftime 的格式 → Snowflake 的日期格式（文字以雙引號包住）。"""
 
 
+# ---------------------------------------------------------------- Trino／Presto、Amazon Athena
+
+
+TRINO_FORMAT = {
+    "%Y": "%Y",
+    "%y": "%y",
+    "%m": "%m",
+    "%d": "%d",
+    "%H": "%H",
+    "%I": "%h",
+    "%M": "%i",
+    "%S": "%s",
+    "%p": "%p",
+    "%b": "%b",
+    "%B": "%M",
+    "%j": "%j",
+    "%f": "%f",
+}
+"""strftime 的格式 → Trino 的 date_parse 格式（MySQL 的寫法：%i 是分鐘、%M 是月份名稱）。"""
+
+_TRINO_POSITION = "(1 + CAST({p} AS DOUBLE) * (CARDINALITY(tmig_v) - 1))"
+TRINO_PERCENTILE = (
+    "ELEMENT_AT(TRANSFORM(ARRAY[ARRAY_SORT(ARRAY_AGG({x}) FILTER (WHERE {x} IS NOT NULL))], "
+    "tmig_v -> CASE WHEN CARDINALITY(tmig_v) = 0 THEN NULL "
+    f"ELSE ELEMENT_AT(tmig_v, CAST(FLOOR({_TRINO_POSITION}) AS BIGINT)) "
+    f"+ ({_TRINO_POSITION} - FLOOR({_TRINO_POSITION})) "
+    f"* (ELEMENT_AT(tmig_v, CAST(CEIL({_TRINO_POSITION}) AS BIGINT)) "
+    f"- ELEMENT_AT(tmig_v, CAST(FLOOR({_TRINO_POSITION}) AS BIGINT))) END), 1)"
+)
+"""精確的百分位數（與 DuckDB 的 quantile_cont 相同的線性內插）：不是 Null 的值排序成陣列，取第
+1 + p × (n − 1) 個位置前後兩個值內插。Trino 只有近似的 approx_percentile。"""
+
+TIME_UNITS = ("hour", "minute", "second", "microsecond")
+
+
+def _not_negative(node: exp.Expr) -> bool:
+    """確定不是負數的數量：非負的常值或字串長度（STARTSWITH、ENDSWITH 的寫法）。"""
+    while isinstance(node, (exp.Cast, exp.Paren)):
+        node = node.this
+    fixed = _literal_int(node)
+    return (fixed is not None and fixed >= 0) or isinstance(node, exp.Length)
+
+
+def _known_timestamp(value: exp.Expr) -> bool:
+    """確定是 TIMESTAMP 的值：轉成 TIMESTAMP 的轉型，或對它加減的結果。"""
+    if value.meta.get("timestamp"):
+        return True
+    return isinstance(value, exp.Cast) and value.to.this in TIMESTAMP_TYPES
+
+
+class TrinoRewriter(Rewriter):
+    """Trino（原 PrestoSQL）、Starburst 與 PrestoDB 共同支援的寫法；Tableau 的 Presto 連線用這一套。
+    Amazon Athena（engine 3 以 Trino 為基礎）規則相同（AthenaRewriter）。連線時把工作階段的時區設為 UTC。
+
+    - 時間一律以 TIMESTAMP（毫秒）表示：PrestoDB 與 Athena 不支援 TIMESTAMP(p)；date_add 最小的單位是
+      毫秒（沒有微秒），日期加減時間單位前先轉成 TIMESTAMP（DATE 不能加減小時）
+    - 星期：DAY_OF_WEEK 是 ISO（星期一為 1）；週數 WEEK 與 ISO 年 YEAR_OF_WEEK 與 DuckDB 相同
+    - DATEDIFF 以年、季、月、日、時、分、秒的邊界計數（date_diff 是經過的完整單位）
+    - 沒有 make_date、left／right 與精確的百分位數：以 date_add、substr 與排序後的陣列內插計算
+    - split_part 超出範圍為 Null（DuckDB 為空字串）、不接受負數的位置：以 element_at 取
+    - 正規表示式以 Joni（Java 的寫法）解讀；取代字串的群組參照為 $1、錢字號寫成 \\$
+    """
+
+    name = "Trino"
+    dialect = "trino"
+    allowed = frozenset(
+        {
+            exp.Year,
+            exp.Quarter,
+            exp.Month,
+            exp.Day,
+            exp.Hour,
+            exp.Minute,
+            exp.Second,
+            exp.DayOfYear,
+            exp.DayOfWeekIso,
+            exp.Week,
+            exp.TimeToUnix,
+            exp.Pi,
+            exp.Degrees,
+            exp.Radians,
+            exp.Round,
+            exp.Variance,
+            exp.VariancePop,
+            exp.IntDiv,
+            exp.Mod,
+            exp.NullSafeEQ,
+            exp.CurrentDate,
+            exp.TryCast,
+            exp.RegexpExtract,
+            exp.DPipe,
+            exp.Boolean,
+            exp.ArrayToString,
+        }
+    )
+
+    def __init__(self, name: str = "Trino", dialect: str = "trino") -> None:
+        self.name = name
+        self.dialect = dialect
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit in ("second", "microsecond"):
+            # 秒與微秒換成毫秒（date_add 最小的單位）
+            factor = _num(1000) if unit == "second" else _num(0.001)
+            millis = _fn("ROUND", exp.Mul(this=_paren(amount), expression=factor))
+            unit, amount = "millisecond", millis
+        if unit in (*TIME_UNITS, "millisecond"):
+            value = self._timestamp(value)
+        result = _fn("DATE_ADD", _str(unit), _cast(amount, "BIGINT"), value)
+        if _known_timestamp(value):
+            result.meta["timestamp"] = True
+        return result
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        return {
+            # 星期日為 0（DAY_OF_WEEK 是 ISO：星期一為 1、星期日為 7）
+            exp.DayOfWeek: lambda n: exp.Paren(
+                this=exp.Mod(this=_fn("DAY_OF_WEEK", n.this), expression=_num(7))
+            ),
+            exp.TimestampTrunc: self.date_trunc,
+            exp.DateTrunc: self.date_trunc,
+            exp.DateDiff: self.date_diff,
+            exp.DateFromParts: lambda n: self.make_date(
+                n.args["year"], n.args["month"], n.args["day"]
+            ),
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.Monthname: lambda n: _names(_fn("MONTH", n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(_fn("DAY_OF_WEEK", n.this), DAY_NAMES),
+            exp.Log: self.log,
+            # CODEPOINT 只接受一個字元的 VARCHAR(1)
+            exp.Unicode: lambda n: _fn(
+                "CODEPOINT", _cast(_fn("SUBSTR", n.this, _num(1), _num(1)), "VARCHAR(1)")
+            ),
+            # REPEAT 是陣列函式：重複的元素串接成字串
+            exp.Repeat: lambda n: _fn(
+                "ARRAY_JOIN",
+                _fn("REPEAT", n.this, _cast(n.args["times"], "INTEGER")),
+                _str(""),
+            ),
+            exp.Left: self.left,
+            exp.Right: self.right,
+            exp.SplitPart: self.split_part,
+            exp.Split: lambda n: _array(_fn("SPLIT", n.this, n.expression)),
+            exp.Length: lambda n: _fn("CARDINALITY", n.this) if _is_array(n.this) else n,
+            exp.RegexpReplace: self.regexp_replace,
+            exp.Median: lambda n: self.percentile(n.this, _num(0.5)),
+            exp.PercentileCont: lambda n: self.percentile(n.this, n.expression),
+            exp.DataType: self.datatype,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            "isoyear": lambda a: _fn("YEAR_OF_WEEK", a[0]),
+            "now": lambda a: exp.Var(this="LOCALTIMESTAMP"),
+            "try_strptime": self.parse_date,
+            "list_slice": self.list_slice,
+        }
+
+    def _timestamp(self, value: exp.Expr) -> exp.Expr:
+        """要加減時間單位或取時間部分的值：先轉成 TIMESTAMP（已知是時間的不再轉）。"""
+        return value if _known_timestamp(value) else _cast(value, "TIMESTAMP")
+
+    def datatype(self, node: exp.Expr) -> exp.Expr:
+        # DuckDB 的 DECIMAL 預設為 (18, 3)；Trino 為 (38, 0)
+        decimal = isinstance(node, exp.DataType) and node.this == exp.DataType.Type.DECIMAL
+        if decimal and not node.expressions:
+            return _type("DECIMAL(18, 3)")
+        return node
+
+    def date_trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        value = node.this
+        if unit in TIME_UNITS:
+            value = self._timestamp(value)
+        return _fn("DATE_TRUNC", _str(unit), value)
+
+    def date_diff(self, node: exp.Expr) -> exp.Expr:
+        def part(field: str, value: exp.Expr) -> exp.Expr:
+            return _fn(field.upper(), self._timestamp(value) if field in TIME_UNITS else value)
+
+        return self.boundary_diff(
+            _unit(node),
+            node.expression,
+            node.this,
+            part,
+            lambda start, end: _fn(
+                "DATE_DIFF", _str("day"), _cast(start, "DATE"), _cast(end, "DATE")
+            ),
+        )
+
+    def make_date(self, y: exp.Expr, m: exp.Expr, d: exp.Expr) -> exp.Expr:
+        """2000-01-01 依序加上年、月、日的差（Trino 沒有由年月日組成日期的函式）。"""
+        value: exp.Expr = _cast(_str("2000-01-01"), "DATE")
+        for unit, part, origin in (("year", y, 2000), ("month", m, 1), ("day", d, 1)):
+            if _literal_int(part) == origin:
+                continue
+            offset = _cast(exp.Sub(this=_paren(part), expression=_num(origin)), "BIGINT")
+            value = _fn("DATE_ADD", _str(unit), offset, value)
+        return value
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+            ),
+            expression=_paren(ss),
+        )
+        return self.add_interval(_cast(self.make_date(y, m, d), "TIMESTAMP"), "second", seconds)
+
+    def log(self, node: exp.Expr) -> exp.Expr:
+        if node.expression is None:
+            return _fn("LOG10", node.this)  # DuckDB 的 log(x) 以 10 為底
+        base = _literal_int(node.this)
+        if base in (2, 10):
+            return _fn(f"LOG{base}", node.expression)
+        return exp.Div(this=exp.Ln(this=node.expression), expression=exp.Ln(this=node.this))
+
+    def left(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        head = _fn("SUBSTR", text.copy(), _num(1), _cast(count.copy(), "BIGINT"))
+        if _not_negative(count):
+            return head
+        # DuckDB 的 left 數量為負數時去掉右邊的字元
+        trimmed = _fn(
+            "SUBSTR",
+            text,
+            _num(1),
+            _fn("GREATEST", exp.Add(this=exp.Length(this=text.copy()), expression=count), _num(0)),
+        )
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count.copy(), expression=_num(0)), true=trimmed)],
+            default=head,
+        )
+
+    def right(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        start = exp.Add(
+            this=exp.Sub(this=exp.Length(this=text.copy()), expression=_paren(count.copy())),
+            expression=_num(1),
+        )
+        # 數量超過長度時取整個字串（substr 的起點小於 1 時從結尾算起）
+        tail = _fn("SUBSTR", text.copy(), _fn("GREATEST", start, _num(1)))
+        if _not_negative(count):
+            return tail
+        # DuckDB 的 right 數量為負數時去掉左邊的字元
+        trimmed = _fn("SUBSTR", text, exp.Sub(this=_num(1), expression=_paren(count.copy())))
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count, expression=_num(0)), true=trimmed)],
+            default=tail,
+        )
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        text, delimiter = node.this, node.args["delimiter"]
+        index = node.args["part_index"]
+        fixed = _literal_int(index)
+        if fixed is not None and fixed > 0:
+            part = _fn("SPLIT_PART", text.copy(), delimiter.copy(), _cast(index.copy(), "BIGINT"))
+        else:
+            # 負數從結尾算起（element_at）；0 與超出範圍為空字串
+            part = _fn(
+                "ELEMENT_AT",
+                _fn("SPLIT", text.copy(), delimiter.copy()),
+                exp.Nullif(this=index.copy(), expression=_num(0)),
+            )
+        known = exp.And(
+            this=exp.And(
+                this=exp.Not(this=exp.Is(this=text, expression=exp.Null())),
+                expression=exp.Not(this=exp.Is(this=delimiter, expression=exp.Null())),
+            ),
+            expression=exp.Not(this=exp.Is(this=index, expression=exp.Null())),
+        )
+        return exp.Coalesce(
+            this=part, expressions=[exp.Case(ifs=[exp.If(this=known, true=_str(""))])]
+        )
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        replacement = node.args.get("replacement") or _str("")
+        if not (isinstance(replacement, exp.Literal) and replacement.is_string):
+            raise DialectError("REGEXP_REPLACE 的取代字串不是常值")
+        return _fn(
+            "REGEXP_REPLACE", node.this, node.expression, _str(java_replacement(replacement.name))
+        )
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：date_parse 不符合格式時報錯，以 TRY 包住得 Null。"""
+        fmt = _convert_format(
+            _format_literal(args[1]), TRINO_FORMAT, lambda s: s.replace("%", "%%")
+        )
+        return _cast(_fn("TRY", _fn("DATE_PARSE", args[0], _str(fmt))), "TIMESTAMP")
+
+    def list_slice(self, args: list[exp.Expr]) -> exp.Expr:
+        """DuckDB 的 list_slice（1 起算、含結尾）→ SLICE（起點、長度）。"""
+        array, start, end = args
+        if not _is_array(array):
+            raise DialectError("list_slice 只支援 FINDNTH 的寫法")
+        length = _fn(
+            "GREATEST",
+            exp.Add(
+                this=exp.Sub(this=_paren(end), expression=_paren(start.copy())), expression=_num(1)
+            ),
+            _num(0),
+        )
+        return _array(_fn("SLICE", array, start, length))
+
+    def percentile(self, value: exp.Expr, fraction: exp.Expr) -> exp.Expr:
+        return _template(TRINO_PERCENTILE, "trino", x=value, p=fraction)
+
+
 # ---------------------------------------------------------------- SQL Server
 
 
@@ -2634,6 +2961,8 @@ REWRITERS: dict[str, Rewriter] = {
     "mysql": MySQLRewriter(),
     "snowflake": SnowflakeRewriter(),
     "tsql": TSqlRewriter(),
+    "trino": TrinoRewriter(),
+    "athena": TrinoRewriter("Athena", "athena"),
 }
 
 
