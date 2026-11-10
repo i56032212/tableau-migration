@@ -677,7 +677,13 @@ class _Builder:
 
     def common(self, encoding: dict[str, Any], marks: Marks) -> None:
         """顏色、大小、形狀、詳細資料與工具提示。"""
-        if marks.color is not None:
+        names_only = (
+            marks.color is not None
+            and marks.color.field == MEASURE_NAMES
+            and MEASURE_NAMES not in self.channels
+        )
+        # 沒有 Measure Values 時色彩上的 Measure Names（雙軸）：各量值一個顏色，由 multi 加上
+        if marks.color is not None and not names_only:
             ch = self.ch(marks.color)
             records = self.records_of(marks)
             # 量值以連續色彩呈現；彙總後是布林或文字（例如 ATTR([是否本週])）時與 Tableau 相同為離散色彩
@@ -727,6 +733,22 @@ class _Builder:
 
     # ------------------------------------------------------------ 多個量值
 
+    def names_scale(self, measures: list[FieldUse]) -> dict[str, Any] | None:
+        """色彩上的 Measure Names（沒有 Measure Values，例如雙軸）：每個量值一個顏色的比例尺，
+        依量值的名稱；色彩的設定（指定的顏色）以量值的欄位鍵對應。"""
+        if MEASURE_NAMES in self.channels:
+            return None
+        cards = [self.ws.marks, *(p.marks for p in self.ws.panes)]
+        named = [m for m in cards if m.color is not None and m.color.field == MEASURE_NAMES]
+        if not named:
+            return None
+        setting = next((m.color_palette for m in named if m.color_palette is not None), None)
+        if setting is None or setting.kind != "discrete":
+            setting = AUTOMATIC_DISCRETE
+        titles = [self.ch(u).title for u in measures]
+        keys: dict[Scalar, Any] = {use_key(u): self.ch(u).title for u in measures}
+        return discrete_scale(setting, ((t, t) for t in titles), keys)
+
     def multi(
         self,
         rows_dims: list[FieldUse],
@@ -743,6 +765,7 @@ class _Builder:
         remaining = list(self.ws.panes)
         charts: list[dict[str, Any]] = []
         kinds: list[str] = []
+        names_scale = self.names_scale(measures)
         for use in measures:
             pane = _take_pane(remaining, use, axis)
             marks = pane.marks if pane is not None else self.ws.marks
@@ -763,6 +786,12 @@ class _Builder:
             else:
                 body, kind = self.unit(marks, mark, rows_dims, cols_dims, rows_meas, [use])
             body = self.with_pane_data(body, pane)
+            if (
+                names_scale is not None
+                and marks.color is not None
+                and marks.color.field == MEASURE_NAMES
+            ):
+                _color_datum(body, self.ch(use).title, names_scale)
             if marks.trend is not None:
                 _trend_lines(self, body, marks.trend, self.records_of(marks))
             kinds.append(kind)
@@ -3038,6 +3067,29 @@ def _template(text: str) -> str:
 
 PIE_SIZE = 1.0
 """圓餅沒有設定大小時的大小（直徑為區塊較短邊的一半；依公開報表推定，使用者多半調大）。"""
+
+
+def _color_datum(body: dict[str, Any], title: str, scale: dict[str, Any]) -> None:
+    """量值的圖層以固定的顏色（Measure Names 中這個量值的顏色）呈現，與其他量值共用圖例。"""
+
+    def visit(node: dict[str, Any]) -> None:
+        mark = node.get("mark")
+        kind = mark.get("type") if isinstance(mark, dict) else mark
+        name = node.get("name")
+        decoration = isinstance(name, str) and name.startswith(("__ref", "__deco"))
+        if mark is not None and kind != "text" and not decoration:
+            encoding = node.setdefault("encoding", {})
+            if "color" not in encoding:
+                encoding["color"] = {
+                    "datum": title,
+                    "type": "nominal",
+                    "title": MEASURE_NAMES_TITLE,
+                    "scale": scale,
+                }
+        for child in node.get("layer", []):
+            visit(child)
+
+    visit(body)
 
 
 def _pie_fraction(marks: Marks) -> float:

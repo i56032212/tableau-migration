@@ -47,7 +47,7 @@ from tmig.access.permissions import ADMIN_ROLES
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, iter_zones
+from tmig.ir import IR, iter_zones, save_ir
 from tmig.package import read_report_file
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
@@ -148,6 +148,18 @@ class Workspace:
                 self._cache[name] = cached
                 self._data_ready.discard(name)
         return cached
+
+    def save_ir(self, name: str, ir: IR) -> Loaded:
+        """桌面版編輯器的變更：寫回報表目錄的 golden.ir.json，並換掉快取（之後的查詢用新的 IR）。"""
+        loaded = self.get(name)
+        if loaded.published is not None:
+            raise HTTPException(409, "伺服器上的報表不能直接編輯")
+        golden = loaded.directory / "golden.ir.json"
+        save_ir(ir, golden)
+        updated = Loaded(loaded.directory, ir, golden.stat().st_mtime, None)
+        with self._lock:
+            self._cache[name] = updated
+        return updated
 
     def forget(self, name: str) -> None:
         """報表目錄移除後（桌面版關閉報表）丟掉快取。"""
@@ -412,6 +424,24 @@ def create_app(
         state = state or QueryState()
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
+        target = next((w for w in ir.worksheets if w.id == ws), None)
+        empty = {
+            "worksheet": ws,
+            "name": target.name if target else ws,
+            "title": target.name if target else ws,
+            "rows": 0,
+            "spec": None,
+            "unsupported": None,
+            "notes": [],
+        }
+        if target is not None and not [
+            *target.rows,
+            *target.columns,
+            *target.marks.uses(),
+            *(u for pane in target.panes for u in pane.marks.uses()),
+        ]:
+            # 空白的工作表（例如編輯器中剛新增的）：與 Tableau 相同什麼都不畫
+            return empty
         try:
             query = worksheet_sql(ir, ws, state, user)
         except StateError as exc:
@@ -426,6 +456,9 @@ def create_app(
                     "notes": [],
                 }
             raise HTTPException(422, str(exc)) from exc
+        if not query.columns:
+            # 沒有任何欄位要查詢（例如只有 Measure Names、還沒有量值）
+            return empty
         sheet = next(w for w in ir.worksheets if w.id == query.worksheet)
         datasource = next(d for d in ir.datasources if d.id == sheet.datasource)
 

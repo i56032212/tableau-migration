@@ -28,6 +28,8 @@ interface Props {
   onMarks?: (event: MarkEvent) => void;
   /** 目前選取的標記：其餘標記淡化 */
   selected?: Mark[];
+  /** 編輯器：工作表的定義改變後遞增，重新查詢 */
+  revision?: number;
 }
 
 type Spec = Record<string, any>;
@@ -219,6 +221,7 @@ export function WorksheetView({
   onRendered,
   onMarks,
   selected,
+  revision = 0,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
   // 事件處理以 ref 取最新的回呼，圖表不必因父元件重繪而重建
@@ -254,7 +257,7 @@ export function WorksheetView({
     };
     // onRendered 只用來回報結果，不觸發重新查詢
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbook, worksheet, stateKey]);
+  }, [workbook, worksheet, stateKey, revision]);
 
   useEffect(() => {
     const element = chartRef.current;

@@ -104,6 +104,9 @@ export async function saveDocument(workbook: string, saveAs: boolean): Promise<v
 
 export async function closeDocument(workbook: string, go: Go): Promise<void> {
   try {
+    const doc = (await api.desktopDocuments()).find((d) => d.id === workbook);
+    // 編輯過、還沒儲存：先確認（與 Tableau 關閉活頁簿時相同）
+    if (doc?.modified && !window.confirm(`「${doc.name}」有尚未儲存的變更，仍要關閉嗎？`)) return;
     await api.desktopClose(workbook);
     go("/");
   } catch (e) {

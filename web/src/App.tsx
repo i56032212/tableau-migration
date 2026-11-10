@@ -21,19 +21,21 @@ import {
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
+import { Editor } from "./editor/Editor";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
-// /w/<報表>/ds/<資料源>；?case=<篩選組合>
+// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）；?case=<篩選組合>
 type Route =
   | { page: "home" }
   | { page: "workbook"; workbook: string }
   | { page: "dashboard"; workbook: string; dashboard: string }
   | { page: "sheet"; workbook: string; worksheet: string }
   | { page: "story"; workbook: string; story: string }
-  | { page: "datasource"; workbook: string; datasource: string };
+  | { page: "datasource"; workbook: string; datasource: string }
+  | { page: "edit"; workbook: string; worksheet: string };
 
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
@@ -42,13 +44,14 @@ function parseRoute(path: string): Route {
     if (parts[2] === "s" && parts[3]) return { page: "sheet", workbook: parts[1], worksheet: parts[3] };
     if (parts[2] === "story" && parts[3]) return { page: "story", workbook: parts[1], story: parts[3] };
     if (parts[2] === "ds" && parts[3]) return { page: "datasource", workbook: parts[1], datasource: parts[3] };
+    if (parts[2] === "edit" && parts[3]) return { page: "edit", workbook: parts[1], worksheet: parts[3] };
     return { page: "workbook", workbook: parts[1] };
   }
   return { page: "home" };
 }
 
-/** 檢視（dashboard、工作表、Story）與資料源分頁的網址。 */
-function viewPath(workbook: string, kind: "d" | "s" | "story" | "ds", id: string): string {
+/** 檢視（dashboard、工作表、Story）、資料源分頁與編輯器的網址。 */
+function viewPath(workbook: string, kind: "d" | "s" | "story" | "ds" | "edit", id: string): string {
   return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
 }
 
@@ -222,6 +225,8 @@ function WorkbookPage({
   // 篩選組合套用完成前不查詢，避免先以預設狀態查一次
   const [view, setView] = useState<ViewState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 編輯器改變報表後遞增，重新載入報表的定義
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     Promise.all([api.ir(workbook), api.cases(workbook)])
@@ -240,7 +245,7 @@ function WorkbookPage({
         setDatasources([]);
         setDatasourceError(e.message);
       });
-  }, [workbook]);
+  }, [workbook, version]);
 
   useEffect(() => {
     if (ir) setView(caseState(ir, cases.find((c) => c.name === caseName)));
@@ -269,6 +274,7 @@ function WorkbookPage({
   const stories = ir.stories ?? [];
   const dashboard = route.page === "dashboard" ? ir.dashboards.find((d) => d.id === route.dashboard) : undefined;
   const worksheet = route.page === "sheet" ? ir.worksheets.find((w) => w.id === route.worksheet) : undefined;
+  const editing = route.page === "edit" && me.mode === "desktop" ? route.worksheet : null;
   const story = route.page === "story" ? stories.find((s) => s.id === route.story) : undefined;
   const datasource =
     route.page === "datasource" ? datasources.find((d) => d.id === route.datasource) : undefined;
@@ -310,11 +316,15 @@ function WorkbookPage({
                   ? `story:${story.id}`
                   : datasource
                     ? `ds:${datasource.id}`
-                    : ""
+                    : editing
+                      ? `edit:${editing}`
+                      : ""
           }
           onChange={(e) => {
             const [kind, id] = e.target.value.split(":");
-            navigate(viewPath(workbook, kind as "d" | "s" | "story" | "ds", id) + window.location.search);
+            // 編輯中切換工作表時繼續編輯
+            const target = editing && kind === "s" ? "edit" : kind;
+            navigate(viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit", id) + window.location.search);
           }}
         >
           {datasources.map((d) => (
@@ -333,11 +343,16 @@ function WorkbookPage({
             </option>
           ))}
           {ir.worksheets.map((w) => (
-            <option key={w.id} value={`s:${w.id}`}>
+            <option key={w.id} value={editing === w.id ? `edit:${w.id}` : `s:${w.id}`}>
               工作表：{w.name}
             </option>
           ))}
         </select>
+        {me.mode === "desktop" && worksheet && (
+          <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit", worksheet.id))}>
+            編輯工作表
+          </button>
+        )}
         <div className="cases" role="group" aria-label="篩選組合">
           <button type="button" className={caseName === null ? "active" : ""} onClick={() => navigate(base)}>
             預設
@@ -370,6 +385,19 @@ function WorkbookPage({
           cases={cases}
         />
       )}
+      {editing && (
+        <Editor
+          key={editing}
+          workbook={workbook}
+          worksheet={editing}
+          onChanged={() => setVersion((v) => v + 1)}
+          onOpen={(id) => navigate(viewPath(workbook, "edit", id))}
+          onClose={(id) => {
+            setVersion((v) => v + 1);
+            navigate(id ? viewPath(workbook, "s", id) : `/w/${encodeURIComponent(workbook)}`);
+          }}
+        />
+      )}
       {worksheet && (
         <div className="single-sheet">
           <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(ir, worksheet.id, view)} />
@@ -380,7 +408,7 @@ function WorkbookPage({
       {route.page === "datasource" && !datasource && (datasources.length > 0 || datasourceError) && (
         <main className="error">{datasourceError ? `無法開啟資料源：${datasourceError}` : "找不到這個資料源"}</main>
       )}
-      {!dashboard && !worksheet && !story && route.page !== "datasource" && (
+      {!dashboard && !worksheet && !story && !editing && route.page !== "datasource" && (
         <main className="error">找不到這個 dashboard、工作表或 Story</main>
       )}
     </div>

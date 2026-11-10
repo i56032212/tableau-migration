@@ -61,6 +61,7 @@ from tmig_service.desktop_remote import (
     http_client,
     remote_router,
 )
+from tmig_service.editor import editor_router
 
 TOKEN_COOKIE = "tmig_desktop"
 TOKEN_HEADER = "x-tmig-token"
@@ -102,6 +103,8 @@ class Document:
     """最近一次存成的報表套件；「儲存」直接寫到這裡。"""
     server: dict[str, Any] | None = None
     """從伺服器開啟或發布到伺服器的報表：url、report、version（基準版本）、project、name。"""
+    modified: bool = False
+    """編輯器改過、還沒存成報表套件。"""
 
 
 class Documents:
@@ -149,6 +152,14 @@ class Documents:
 
     def update(self, document: Document) -> None:
         self._write(self.root / document.id, document)
+
+    def mark_modified(self, document_id: str) -> None:
+        """編輯器改過報表（關閉前提醒儲存）。"""
+        with self._lock:
+            document = self._read(self.root / document_id) if _plain_name(document_id) else None
+            if document is not None and not document.modified:
+                document.modified = True
+                self._write(self.root / document_id, document)
 
     def remove(self, document_id: str) -> None:
         self.get(document_id)
@@ -271,6 +282,7 @@ def desktop_router(documents: Documents) -> APIRouter:
         except OSError as exc:
             raise HTTPException(500, f"無法寫入 {target}：{exc}") from exc
         document.saved = str(target)
+        document.modified = False
         documents.update(document)
         return {
             "document": asdict(document),
@@ -383,7 +395,11 @@ def create_desktop_app(
         workspace,
         web_dist,
         auth=DesktopAuthenticator(username or local_username()),
-        routers=[desktop_router(documents), remote_router(remote, documents, _opened)],
+        routers=[
+            desktop_router(documents),
+            remote_router(remote, documents, _opened),
+            editor_router(on_change=documents.mark_modified),
+        ],
     )
     app.state.documents = documents
     app.add_middleware(DesktopGuard, token=token)

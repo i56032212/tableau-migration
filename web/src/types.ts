@@ -441,6 +441,8 @@ export interface DesktopDocument {
   kind: "twbx" | "twb" | "package";
   /** 最近一次存成的報表套件 */
   saved: string | null;
+  /** 編輯器改過、還沒儲存 */
+  modified?: boolean;
   /** 從伺服器開啟或發布到伺服器的報表；version 為之後發布時的基準版本 */
   server?: {
     url: string;

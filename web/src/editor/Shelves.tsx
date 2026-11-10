@@ -1,0 +1,669 @@
+// 欄列架、篩選架、Measure Values 卡與標記卡：膠囊的拖放與膠囊選單（彙總、日期、Table Calculation、排序…）。
+
+import type React from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { FieldUse } from "../types";
+import { currentDrag, endDrag, startDrag, useEditor, type DragItem } from "./context";
+import {
+  AGGREGATIONS,
+  DATE_PARTS,
+  DATE_TRUNCS,
+  DIRECTIONS,
+  type Card,
+  cardMarks,
+  changeUse,
+  type CatalogField,
+  defaultUse,
+  firstMeasure,
+  type FilterIR,
+  insertUse,
+  isDate,
+  isMeasure,
+  isNumeric,
+  isSpecial,
+  MARK_TYPES,
+  type MarkSlot,
+  MEASURE_NAMES,
+  MEASURE_VALUES,
+  newTableCalc,
+  pillLabel,
+  QUICK_CALCS,
+  removeUse,
+  sameUse,
+  setSort,
+  setUses,
+  type ShelfName,
+  type SheetIR,
+  updateCard,
+  usesOn,
+} from "./model";
+
+// ---------------------------------------------------------------- 選單
+
+export interface MenuItem {
+  label: string;
+  checked?: boolean;
+  disabled?: boolean;
+  action?: () => void;
+  children?: MenuItem[];
+}
+
+export const SEPARATOR: MenuItem = { label: "-" };
+
+function MenuList({ items, onDone }: { items: MenuItem[]; onDone: () => void }) {
+  return (
+    <ul className="menu" role="menu">
+      {items.map((item, i) =>
+        item.label === "-" ? (
+          <li key={`sep${i}`} className="menu-sep" role="separator" />
+        ) : (
+          <li
+            key={`${item.label}${i}`}
+            role="menuitem"
+            aria-disabled={item.disabled ? "true" : undefined}
+            aria-checked={item.checked === undefined ? undefined : item.checked}
+            className={`${item.children ? "has-sub" : ""}${item.disabled ? " disabled" : ""}`}
+            tabIndex={-1}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (item.disabled || item.children) return;
+              onDone();
+              item.action?.();
+            }}
+          >
+            <span className="menu-check">{item.checked ? "✓" : ""}</span>
+            <span className="menu-label">{item.label}</span>
+            {item.children && <span className="menu-arrow">▸</span>}
+            {item.children && <MenuList items={item.children} onDone={onDone} />}
+          </li>
+        ),
+      )}
+    </ul>
+  );
+}
+
+/** 浮動的選單：點選外面或按 Esc 關閉。 */
+export function PopupMenu({ anchor, items, onClose }: { anchor: DOMRect; items: MenuItem[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: anchor.left, top: anchor.bottom + 2 });
+  useLayoutEffect(() => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return;
+    const left = Math.max(4, Math.min(anchor.left, window.innerWidth - box.width - 8));
+    const top = anchor.bottom + box.height + 4 > window.innerHeight ? Math.max(4, anchor.top - box.height - 2) : anchor.bottom + 2;
+    setPosition({ left, top });
+  }, [anchor]);
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+  return (
+    <div className="popup-menu" ref={ref} style={{ left: position.left, top: position.top }}>
+      <MenuList items={items} onDone={onClose} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 膠囊
+
+function pillClass(use: FieldUse, fields: Map<string, CatalogField>): string {
+  if (use.field === MEASURE_NAMES) return "pill discrete";
+  if (use.field === MEASURE_VALUES) return "pill continuous";
+  const measure = isMeasure(use, fields);
+  return `pill ${use.continuous ? "continuous" : "discrete"}${measure ? " measure" : ""}`;
+}
+
+function specialLabel(use: FieldUse): string | null {
+  if (use.field === MEASURE_NAMES) return "Measure Names";
+  if (use.field === MEASURE_VALUES) return "Measure Values";
+  return null;
+}
+
+export function Pill({
+  use,
+  shelf,
+  index,
+  card,
+  label,
+  menu,
+  className,
+}: {
+  use: FieldUse;
+  shelf: ShelfName;
+  index: number;
+  card: Card;
+  label?: string;
+  menu: () => MenuItem[];
+  className?: string;
+}) {
+  const { fields, sheet } = useEditor();
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const text = label ?? specialLabel(use) ?? pillLabel(use, fields, sheet.table_calcs);
+  return (
+    <>
+      <button
+        type="button"
+        className={className ?? pillClass(use, fields)}
+        draggable
+        data-pill={text}
+        onDragStart={(e) => startDrag(e, { kind: "pill", shelf, index, card })}
+        onDragEnd={endDrag}
+        onClick={(e) => setAnchor((e.currentTarget as HTMLElement).getBoundingClientRect())}
+        title={text}
+      >
+        <span className="pill-text">{text}</span>
+        <span className="pill-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      {anchor && <PopupMenu anchor={anchor} items={menu()} onClose={() => setAnchor(null)} />}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- 拖放
+
+/** 放下：資料窗格的欄位（加上預設的彙總、日期）或架上的膠囊（移動；按住 Ctrl 為複製）。 */
+export function useDropTarget(
+  shelf: ShelfName,
+  card: Card,
+  onFilter?: (use: FieldUse) => void,
+): {
+  over: boolean;
+  handlers: Pick<React.HTMLAttributes<HTMLElement>, "onDragOver" | "onDragEnter" | "onDragLeave" | "onDrop">;
+  dropAt: (event: React.DragEvent, index: number) => void;
+} {
+  const editor = useEditor();
+  const [over, setOver] = useState(false);
+  const accept = (item: DragItem | null) => {
+    if (!item) return false;
+    if (shelf === "measure_values") {
+      // Measure Values 卡只放量值
+      const use = item.kind === "field" ? fieldUse(item.field) : usesOn(editor.sheet, item.shelf, item.card)[item.index];
+      return use !== undefined && use !== null && !isSpecial(use) && isMeasure(use, editor.fields);
+    }
+    return true;
+  };
+  const fieldUse = (id: string): FieldUse | null => {
+    if (id === MEASURE_NAMES || id === MEASURE_VALUES)
+      return { field: id, agg: null, date: null, continuous: id === MEASURE_VALUES, table_calc: null };
+    const field = editor.fields.get(id);
+    return field ? defaultUse(field) : null;
+  };
+  const dropAt = (event: React.DragEvent, index: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOver(false);
+    const item = currentDrag();
+    endDrag();
+    if (!accept(item) || !item) return;
+    const copy = event.ctrlKey || event.metaKey || event.altKey;
+    if (item.kind === "field") {
+      const use = fieldUse(item.field);
+      if (!use) return;
+      if (shelf === "filters") {
+        onFilter?.(use);
+        return;
+      }
+      editor.apply(async (sheet) => {
+        let updated = sheet;
+        if (item.field === MEASURE_VALUES && updated.measure_values.length === 0) {
+          // 與 Tableau 相同：Measure Values 卡放入資料源中所有的量值
+          const measures = [...editor.fields.values()]
+            .filter((f) => !f.hidden && f.role === "measure" && f.level !== "table_calc" && (isNumeric(f) || f.level === "aggregate"))
+            .map((f) => defaultUse(f));
+          updated = { ...updated, measure_values: measures };
+        }
+        const [prepared, ready] = await editor.prepare(updated, use);
+        return insertUse(prepared, shelf, ready, index, card);
+      });
+      return;
+    }
+    const source = usesOn(editor.sheet, item.shelf, item.card)[item.index];
+    if (!source) return;
+    if (shelf === "filters") {
+      if (item.shelf !== "filters") onFilter?.(source);
+      return;
+    }
+    editor.apply((sheet) => {
+      if (item.shelf === shelf && item.card === card) {
+        // 同一架上移動位置
+        const uses = [...usesOn(sheet, shelf, card)];
+        const [moved] = uses.splice(item.index, 1);
+        uses.splice(index > item.index ? index - 1 : index, 0, moved);
+        return setUses(sheet, shelf, uses, card);
+      }
+      const removed = copy || item.shelf === "filters" ? sheet : removeUse(sheet, item.shelf, item.index, item.card);
+      return insertUse(removed, shelf, source, index, card);
+    });
+  };
+  return {
+    over,
+    dropAt,
+    handlers: {
+      onDragOver: (e) => {
+        if (!accept(currentDrag())) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? "copy" : "move";
+      },
+      onDragEnter: (e) => {
+        if (!accept(currentDrag())) return;
+        e.preventDefault();
+        setOver(true);
+      },
+      onDragLeave: (e) => {
+        if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) setOver(false);
+      },
+      onDrop: (e) => dropAt(e, Number.MAX_SAFE_INTEGER),
+    },
+  };
+}
+
+// ---------------------------------------------------------------- 膠囊選單
+
+/** 架上膠囊的選單項目。 */
+export function usePillMenu() {
+  const editor = useEditor();
+  const { fields, apply } = editor;
+
+  return (shelf: ShelfName, index: number, card: Card): MenuItem[] => {
+    const sheet = editor.sheet;
+    const use = usesOn(sheet, shelf, card)[index];
+    if (!use) return [];
+    const remove: MenuItem = { label: "移除", action: () => apply((s) => removeUse(s, shelf, index, card)) };
+    if (isSpecial(use)) return [remove];
+    const field = fields.get(use.field);
+    const measure = isMeasure(use, fields);
+    const change = (next: Partial<FieldUse>) => apply((s) => changeUse(s, shelf, index, { ...use, ...next }, card));
+    const items: MenuItem[] = [];
+    const onAxis = shelf === "rows" || shelf === "columns";
+
+    items.push({ label: "篩選…", action: () => editor.openFilter({ use, index: null }) });
+    if (!measure && field) {
+      const by = firstMeasure(sheet, fields);
+      const current = sheet.sorts.find((s) => s.field === use.field);
+      const sort = (kind: "alphabetic" | "by_field", order: "asc" | "desc") =>
+        apply((s) => setSort(s, use.field, { kind, order, by: kind === "by_field" ? by : null, manual_values: [] }));
+      items.push({
+        label: "排序",
+        children: [
+          { label: "遞增（字母）", checked: current?.kind === "alphabetic" && current.order === "asc", action: () => sort("alphabetic", "asc") },
+          { label: "遞減（字母）", checked: current?.kind === "alphabetic" && current.order === "desc", action: () => sort("alphabetic", "desc") },
+          {
+            label: by ? `依 ${pillLabel(by, fields, sheet.table_calcs)} 遞增` : "依量值遞增",
+            disabled: !by,
+            checked: current?.kind === "by_field" && current.order === "asc",
+            action: () => sort("by_field", "asc"),
+          },
+          {
+            label: by ? `依 ${pillLabel(by, fields, sheet.table_calcs)} 遞減` : "依量值遞減",
+            disabled: !by,
+            checked: current?.kind === "by_field" && current.order === "desc",
+            action: () => sort("by_field", "desc"),
+          },
+          { label: "清除排序", disabled: !current, action: () => apply((s) => setSort(s, use.field, null)) },
+        ],
+      });
+    }
+    items.push(SEPARATOR);
+
+    if (isDate(field) && !measure) {
+      // 日期：上半為日期部分（離散），下半為日期截斷（連續）；精確日期
+      for (const [unit, label] of DATE_PARTS)
+        items.push({
+          label: `${label}`,
+          checked: use.date?.kind === "part" && use.date.unit === unit,
+          action: () => change({ date: { kind: "part", unit }, continuous: false }),
+        });
+      items.push(SEPARATOR);
+      for (const [unit, label] of DATE_TRUNCS)
+        items.push({
+          label: `${label}（連續）`,
+          checked: use.date?.kind === "trunc" && use.date.unit === unit,
+          action: () => change({ date: { kind: "trunc", unit }, continuous: true }),
+        });
+      items.push({
+        label: "精確日期",
+        checked: use.date === null,
+        action: () => change({ date: null, continuous: use.continuous }),
+      });
+      items.push(SEPARATOR);
+    }
+
+    if (measure && use.agg !== null) {
+      items.push({
+        label: "量值",
+        children: AGGREGATIONS.map(([agg, label]) => ({
+          label,
+          checked: use.agg === agg,
+          action: () => change({ agg }),
+        })),
+      });
+    }
+    if (!measure && field && field.kind !== "set") {
+      // 維度轉成量值（Tableau 維度膠囊選單的「量值」）
+      const aggs = isNumeric(field) ? AGGREGATIONS : AGGREGATIONS.filter(([a]) => ["count", "countd", "min", "max", "attr"].includes(a));
+      items.push({
+        label: "量值",
+        children: aggs.map(([agg, label]) => ({
+          label,
+          action: () => change({ agg, date: null, continuous: agg !== "attr" }),
+        })),
+      });
+    }
+    if (measure && use.agg !== null && field && field.level === null && field.kind === "column") {
+      items.push({ label: "維度", action: () => change({ agg: null, continuous: false, table_calc: null }) });
+    }
+    if (isNumeric(field) || isDate(field) || measure) {
+      items.push({ label: "離散", checked: !use.continuous, action: () => change({ continuous: false }) });
+      items.push({ label: "連續", checked: use.continuous, action: () => change({ continuous: true }) });
+    }
+
+    if (measure) {
+      items.push(SEPARATOR);
+      const tc = sheet.table_calcs.find((t) => t.id === use.table_calc);
+      items.push({
+        label: "快速表計算",
+        children: [
+          ...QUICK_CALCS.map(([type, label, options]) => ({
+            label,
+            checked: tc?.type === type,
+            action: () =>
+              apply(async (s) => {
+                const id = await editor.newId("tc", `${type} ${field?.caption ?? use.field}`);
+                const calc = newTableCalc(id, type, options);
+                const others = s.table_calcs.filter((t) => t.id !== use.table_calc || t.type === "formula");
+                const updated = { ...s, table_calcs: [...others, calc] };
+                return changeUse(updated, shelf, index, { ...use, table_calc: id }, card);
+              }),
+          })),
+        ],
+      });
+      if (tc && tc.type !== "formula") {
+        items.push({
+          label: "清除表計算",
+          action: () =>
+            apply((s) => changeUse({ ...s, table_calcs: s.table_calcs.filter((t) => t.id !== tc.id) }, shelf, index, { ...use, table_calc: null }, card)),
+        });
+      }
+      if (tc) {
+        items.push({
+          label: "計算方向",
+          children: [
+            ...DIRECTIONS.map(([preset, label]) => ({
+              label,
+              checked: tc.preset === preset,
+              action: () =>
+                apply((s) => ({
+                  ...s,
+                  table_calcs: s.table_calcs.map((t) => (t.id === tc.id ? { ...t, preset, inferred: false } : t)),
+                })),
+            })),
+            { label: "指定維度…", checked: tc.preset === "specific", action: () => editor.openDialog({ kind: "direction", tableCalc: tc.id }) },
+          ],
+        });
+      }
+      items.push({ label: "格式…", action: () => editor.openDialog({ kind: "format", use }) });
+    }
+
+    if (onAxis) {
+      items.push(SEPARATOR);
+      const axisShelf = shelf as "rows" | "columns";
+      const axis = ((sheet.axes as { use: FieldUse; shelf: string; show?: boolean }[] | undefined) ?? []).find(
+        (a) => sameUse(a.use, use) && a.shelf === shelf,
+      );
+      items.push({
+        label: "顯示標題",
+        checked: axis?.show !== false,
+        action: () => apply((s) => toggleHeader(s, use, axisShelf)),
+      });
+      if (use.continuous) items.push({ label: "編輯座標軸…", action: () => editor.openDialog({ kind: "axis", use, shelf: axisShelf }) });
+      const shelfUses = usesOn(sheet, shelf, card);
+      if (measure) {
+        const position = shelfUses.slice(0, index).filter((u) => isMeasure(u, fields)).length;
+        if (position > 0) {
+          const pane = sheet.panes.find((p) => p.axis === shelf && sameUse(p.measure, use));
+          items.push({ label: "雙軸", checked: pane?.dual === true, action: () => apply((s) => toggleDual(s, use, axisShelf)) });
+        }
+      } else if (!use.continuous && index < shelfUses.length - 1) {
+        const on = sheet.subtotals.some((u) => sameUse(u, use));
+        items.push({
+          label: "小計",
+          checked: on,
+          action: () =>
+            apply((s) => ({ ...s, subtotals: on ? s.subtotals.filter((u) => !sameUse(u, use)) : [...s.subtotals, use] })),
+        });
+      }
+    }
+    items.push(SEPARATOR, remove);
+    return items;
+  };
+}
+
+function toggleHeader(sheet: SheetIR, use: FieldUse, shelf: "rows" | "columns"): SheetIR {
+  const axes = ((sheet.axes as Record<string, unknown>[] | undefined) ?? []) as { use: FieldUse; shelf: string; show?: boolean }[];
+  const found = axes.find((a) => sameUse(a.use, use) && a.shelf === shelf);
+  if (found) return { ...sheet, axes: axes.map((a) => (a === found ? { ...a, show: a.show === false } : a)) };
+  return { ...sheet, axes: [...axes, { use, shelf, show: false }] };
+}
+
+/** 雙軸：量值有自己的標記卡（沒有時以共用的標記卡建立），並與前一個量值重疊；與 Tableau 相同，
+ * 標記卡上沒有色彩時把 Measure Names 放到色彩，兩個量值以不同的顏色區分。 */
+function toggleDual(sheet: SheetIR, use: FieldUse, shelf: "rows" | "columns"): SheetIR {
+  const found = sheet.panes.find((p) => p.axis === shelf && sameUse(p.measure, use));
+  const updated = found
+    ? { ...sheet, panes: sheet.panes.map((p) => (p === found ? { ...p, dual: !p.dual } : p)) }
+    : { ...sheet, panes: [...sheet.panes, { measure: use, axis: shelf, dual: true, marks: structuredClone(sheet.marks) }] };
+  const dual = updated.panes.some((p) => p.dual);
+  const colored = [updated.marks, ...updated.panes.map((p) => p.marks)].some((m) => m.color !== null);
+  if (!dual || colored) return updated;
+  const names: FieldUse = { field: MEASURE_NAMES, agg: null, date: null, continuous: false, table_calc: null };
+  return updateCard(updated, "all", (m) => ({ ...m, color: names }));
+}
+
+// ---------------------------------------------------------------- 架
+
+export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: ShelfName; card?: Card }) {
+  const editor = useEditor();
+  const menu = usePillMenu();
+  const { over, handlers, dropAt } = useDropTarget(shelf, card, (use) => editor.openFilter({ use, index: null }));
+  const uses = usesOn(editor.sheet, shelf, card);
+  return (
+    <div className="shelf" data-shelf={shelf}>
+      <span className="shelf-label">{label}</span>
+      <div className={`shelf-drop${over ? " over" : ""}`} {...handlers} data-drop={shelf}>
+        {uses.map((use, i) => (
+          <span key={`${i}:${use.field}`} className="pill-slot" onDragOver={handlers.onDragOver} onDrop={(e) => dropAt(e, i)}>
+            <Pill use={use} shelf={shelf} index={i} card={card} menu={() => menu(shelf, i, card)} />
+          </span>
+        ))}
+        {uses.length === 0 && <span className="shelf-hint">將欄位拖曳到這裡</span>}
+      </div>
+    </div>
+  );
+}
+
+/** 篩選架：每個篩選一個膠囊（編輯、加入至內容、移除）。 */
+export function FiltersShelf() {
+  const editor = useEditor();
+  const { sheet, fields, apply } = editor;
+  const { over, handlers } = useDropTarget("filters", "all", (use) => editor.openFilter({ use, index: null }));
+  const menu = (filter: FilterIR, index: number): MenuItem[] => {
+    if (filter.kind === "tuple") return [{ label: "移除", action: () => apply((s) => removeUse(s, "filters", index)) }];
+    const context = filter.stage === "context";
+    const canContext = filter.stage === "dimension" || filter.stage === "top_n" || context;
+    return [
+      { label: "編輯篩選…", action: () => editor.openFilter({ use: filter.field, index }) },
+      {
+        label: context ? "從內容中移除" : "加入至內容",
+        disabled: !canContext,
+        action: () =>
+          apply((s) => ({
+            ...s,
+            filters: s.filters.map((f, i) =>
+              i === index ? { ...f, stage: context ? (f.kind === "top_n" ? "top_n" : "dimension") : "context" } : f,
+            ),
+          })),
+      },
+      SEPARATOR,
+      { label: "移除", action: () => apply((s) => removeUse(s, "filters", index)) },
+    ];
+  };
+  return (
+    <div className="card filters-card" data-shelf="filters">
+      <div className="card-title">篩選</div>
+      <div className={`card-drop${over ? " over" : ""}`} {...handlers} data-drop="filters">
+        {sheet.filters.map((filter, i) => {
+          const label =
+            filter.kind === "tuple"
+              ? "動作（篩選）"
+              : `${pillLabel(filter.field, fields, sheet.table_calcs)}${filter.kind === "top_n" ? "（頂部）" : filter.kind === "relative_date" ? "（相對日期）" : ""}`;
+          const className = `pill filter${filter.stage === "context" ? " context" : ""}${filter.field?.continuous ? " continuous" : " discrete"}`;
+          return (
+            <Pill
+              key={filter.id}
+              use={filter.field ?? { field: filter.id, agg: null, date: null, continuous: false, table_calc: null }}
+              shelf="filters"
+              index={i}
+              card="all"
+              label={label}
+              className={className}
+              menu={() => menu(filter, i)}
+            />
+          );
+        })}
+        {sheet.filters.length === 0 && <span className="shelf-hint">將欄位拖曳到這裡篩選</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Measure Values 卡（檢視中有 Measure Values 時）。 */
+export function MeasureValuesCard() {
+  const editor = useEditor();
+  const menu = usePillMenu();
+  const { over, handlers, dropAt } = useDropTarget("measure_values", "all");
+  const uses = editor.sheet.measure_values;
+  return (
+    <div className="card" data-shelf="measure_values">
+      <div className="card-title">量值</div>
+      <div className={`card-drop${over ? " over" : ""}`} {...handlers} data-drop="measure_values">
+        {uses.map((use, i) => (
+          <span key={`${i}:${use.field}`} className="pill-slot" onDrop={(e) => dropAt(e, i)} onDragOver={handlers.onDragOver}>
+            <Pill use={use} shelf="measure_values" index={i} card="all" menu={() => menu("measure_values", i, "all")} />
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 標記卡
+
+const SLOTS: [MarkSlot, string][] = [
+  ["color", "色彩"],
+  ["size", "大小"],
+  ["label", "標籤"],
+  ["detail", "詳細資料"],
+  ["tooltip", "工具提示"],
+  ["shape", "形狀"],
+  ["angle", "角度"],
+  ["path", "路徑"],
+];
+
+function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; card: Card }) {
+  const editor = useEditor();
+  const menu = usePillMenu();
+  const shelf = `marks.${slot}` as ShelfName;
+  const { over, handlers, dropAt } = useDropTarget(shelf, card);
+  const uses = usesOn(editor.sheet, shelf, card);
+  return (
+    <div className={`mark-slot${over ? " over" : ""}`} {...handlers} data-drop={shelf}>
+      <span className="mark-slot-label">{label}</span>
+      <span className="mark-slot-pills">
+        {uses.map((use, i) => (
+          <span key={`${i}:${use.field}`} className="pill-slot" onDrop={(e) => dropAt(e, i)} onDragOver={handlers.onDragOver}>
+            <Pill use={use} shelf={shelf} index={i} card={card} menu={() => menu(shelf, i, card)} />
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+export function MarksCard() {
+  const editor = useEditor();
+  const { sheet, card, setCard, fields, apply } = editor;
+  const marks = cardMarks(sheet, card);
+  const tabs = sheet.panes.length > 0;
+  return (
+    <div className="card marks-card" data-shelf="marks">
+      <div className="card-title">標記</div>
+      {tabs && (
+        <div className="mark-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected={card === "all"} className={card === "all" ? "active" : ""} onClick={() => setCard("all")}>
+            全部
+          </button>
+          {sheet.panes.map((pane, i) => (
+            <button
+              type="button"
+              role="tab"
+              key={i}
+              aria-selected={card === i}
+              className={card === i ? "active" : ""}
+              onClick={() => setCard(i)}
+            >
+              {pillLabel(pane.measure, fields, sheet.table_calcs)}
+            </button>
+          ))}
+        </div>
+      )}
+      <select
+        aria-label="標記類型"
+        value={marks.type}
+        onChange={(e) => {
+          const type = e.target.value;
+          apply((s) => updateCard(s, card, (m) => ({ ...m, type })));
+        }}
+      >
+        {MARK_TYPES.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <div className="mark-buttons">
+        <button type="button" onClick={() => editor.openDialog({ kind: "colors", card })}>
+          色彩…
+        </button>
+        <label className="mark-size" title="標記的大小">
+          大小
+          <input
+            type="range"
+            min={0.1}
+            max={2}
+            step={0.05}
+            value={typeof marks.mark_size === "number" ? marks.mark_size : 1}
+            onChange={(e) => {
+              const size = Number(e.target.value);
+              apply((s) => updateCard(s, card, (m) => ({ ...m, mark_size: size })));
+            }}
+          />
+        </label>
+      </div>
+      {SLOTS.map(([slot, label]) => (
+        <MarkSlotRow key={slot} slot={slot} label={label} card={card} />
+      ))}
+    </div>
+  );
+}
