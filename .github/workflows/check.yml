@@ -24,9 +24,9 @@ jobs:
           java-version: "21"
       - name: 安裝相依套件
         run: uv sync --locked --group spark --group services
-      - name: 啟動 BigQuery 模擬器（記憶體上限 3 GB）
+      - name: 啟動 BigQuery 模擬器（記憶體上限 1 GB）
         run: >-
-          docker run -d --name bigquery --memory 3g -p 9050:9050
+          docker run -d --name bigquery --memory 1g -p 9050:9050
           ghcr.io/goccy/bigquery-emulator:latest --project=tmig --dataset=tmig
       - name: 記錄記憶體（背景）
         run: |
@@ -60,7 +60,7 @@ jobs:
                       sys.stdout.write(report.longreprtext[-30000:] + "\n")
                   sys.stdout.flush()
           PY
-          timeout 2400 uv run pytest -q -p instafail -p no:cacheprovider kernel/tests/sqlgen/test_engines.py -k bigquery --durations=0
+          timeout 1200 uv run pytest -q -p instafail -p no:cacheprovider kernel/tests/sqlgen/test_engines.py kernel/tests/data/test_sources.py -k "bigquery" --durations=10
       - name: 記憶體紀錄與模擬器紀錄
         if: always()
         run: |
