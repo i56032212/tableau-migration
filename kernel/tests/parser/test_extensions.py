@@ -1468,8 +1468,8 @@ def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:
     assert sorted(reasons(ir)) == sorted(
         [
             "導覽按鈕的目標視窗找不到",
-            "導覽按鈕的目標「Story」（storyboard）無法移轉",
             "導覽按鈕的目標 dashboard 無法移轉",
+            "導覽按鈕的目標 Story 無法移轉",
             "匯出按鈕的格式 crosstab v0 不支援",
             "按鈕的動作 tabdoc:something-else v0 不支援",
             "dashboard 物件（不是按鈕）v0 不支援",

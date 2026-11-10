@@ -394,12 +394,35 @@ export function DashboardEditor({
               目標
               <select
                 aria-label="按鈕的目標"
-                value={zone.button.target_dashboard ? `d:${zone.button.target_dashboard}` : zone.button.target_worksheet ? `s:${zone.button.target_worksheet}` : ""}
+                value={
+                  zone.button.target_dashboard
+                    ? `d:${zone.button.target_dashboard}`
+                    : zone.button.target_worksheet
+                      ? `s:${zone.button.target_worksheet}`
+                      : zone.button.target_story
+                        ? `t:${zone.button.target_story}`
+                        : ""
+                }
                 onChange={(e) => {
                   const [kind, target] = e.target.value.split(":");
-                  set({ button: { ...zone.button!, action: "navigate", target_dashboard: kind === "d" ? target : null, target_worksheet: kind === "s" ? target : null, zones: [], export: null } });
+                  set({
+                    button: {
+                      ...zone.button!,
+                      action: "navigate",
+                      target_dashboard: kind === "d" ? target : null,
+                      target_worksheet: kind === "s" ? target : null,
+                      target_story: kind === "t" ? target : null,
+                      zones: [],
+                      export: null,
+                    },
+                  });
                 }}
               >
+                {outline!.stories.map((st) => (
+                  <option key={st.id} value={`t:${st.id}`}>
+                    Story：{st.name}
+                  </option>
+                ))}
                 {outline!.dashboards.map((d) => (
                   <option key={d.id} value={`d:${d.id}`}>
                     dashboard：{d.name}

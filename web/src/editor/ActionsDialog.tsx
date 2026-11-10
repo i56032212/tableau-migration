@@ -64,7 +64,13 @@ function draftOf(action: Action | null, dashboard: Dashboard, onBoard: string[])
     parameterField: action?.parameter?.field ?? "",
     aggregation: action?.parameter?.aggregation ?? "attr",
     parameterClearing: action?.parameter?.clearing ?? "keep",
-    targetView: action?.target_dashboard ? `d:${action.target_dashboard}` : action?.target_worksheet ? `s:${action.target_worksheet}` : `d:${dashboard.id}`,
+    targetView: action?.target_dashboard
+      ? `d:${action.target_dashboard}`
+      : action?.target_worksheet
+        ? `s:${action.target_worksheet}`
+        : action?.target_story
+          ? `t:${action.target_story}`
+          : `d:${dashboard.id}`,
     setTarget: action?.set_action?.target ?? "",
     setBehavior: action?.set_action?.behavior ?? "assign",
     setClearing: action?.set_action?.clearing ?? "keep",
@@ -130,6 +136,7 @@ export function ActionsDialog({
       set_action: null,
       target_dashboard: null,
       target_worksheet: null,
+      target_story: null,
     };
     if (draft.kind === "url") {
       // 網址中的 <欄位> 依來源工作表的維度對應成欄位鍵；<參數名稱> 對應成參數
@@ -156,6 +163,7 @@ export function ActionsDialog({
       const [kind, target] = draft.targetView.split(":");
       body.target_dashboard = kind === "d" ? target : null;
       body.target_worksheet = kind === "s" ? target : null;
+      body.target_story = kind === "t" ? target : null;
     } else if (draft.kind === "set") {
       body.set_action = { target: draft.setTarget, behavior: draft.setBehavior, clearing: draft.setClearing };
     }
@@ -398,6 +406,11 @@ export function ActionsDialog({
                 {outline.worksheets.map((w) => (
                   <option key={w.id} value={`s:${w.id}`}>
                     工作表：{w.name}
+                  </option>
+                ))}
+                {outline.stories.map((st) => (
+                  <option key={st.id} value={`t:${st.id}`}>
+                    Story：{st.name}
                   </option>
                 ))}
               </select>

@@ -1283,6 +1283,7 @@ class Button(IRModel):
     action: Literal["navigate", "toggle", "export"]
     target_dashboard: Id | None = Field(default=None, description="navigate：目標 dashboard")
     target_worksheet: Id | None = Field(default=None, description="navigate：目標工作表")
+    target_story: Id | None = Field(default=None, description="navigate：目標 Story")
     zones: list[Id] = Field(
         default_factory=list, description="toggle：顯示或隱藏的區塊（同一個 dashboard 上）"
     )
@@ -1300,9 +1301,13 @@ class Button(IRModel):
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        targets = [t for t in (self.target_dashboard, self.target_worksheet) if t is not None]
+        targets = [
+            t
+            for t in (self.target_dashboard, self.target_worksheet, self.target_story)
+            if t is not None
+        ]
         if (self.action == "navigate") != (len(targets) == 1) or len(targets) > 1:
-            raise ValueError("navigate 按鈕必須、也只能指定一個目標 dashboard 或工作表")
+            raise ValueError("navigate 按鈕必須、也只能指定一個目標 dashboard、工作表或 Story")
         if (self.action == "toggle") != bool(self.zones):
             raise ValueError("只有 toggle 按鈕必須、也只能指定 zones")
         if (self.action == "export") != (self.export is not None):
@@ -1455,6 +1460,13 @@ class StoryPoint(IRModel):
     actions: list[StoryAction] = Field(default_factory=list)
     filters: list[StoryFilter] = Field(default_factory=list)
     selections: list[StorySelection] = Field(default_factory=list)
+    parameters: dict[Id, Scalar] = Field(
+        default_factory=dict, description="故事點記下的參數值：參數 id → 值"
+    )
+    texts: dict[str, list[TextRun]] = Field(
+        default_factory=dict,
+        description="故事點改過的 dashboard 文字物件：區塊 id → 內容（取代區塊原本的文字）",
+    )
 
     @model_validator(mode="after")
     def _one_target(self) -> Self:
@@ -1567,6 +1579,9 @@ class Action(IRModel):
     target_worksheet: Id | None = Field(
         default=None, description="切換動作的目標是工作表時，切換到該工作表"
     )
+    target_story: Id | None = Field(
+        default=None, description="切換動作的目標是 Story 時，切換到該 Story"
+    )
     clearing: Literal["show_all", "exclude_all", "keep"] = Field(
         default="show_all",
         description="清除選取時：顯示所有值、排除所有值、保留篩選的值",
@@ -1584,10 +1599,18 @@ class Action(IRModel):
             raise ValueError("集合動作必須、也只有集合動作能指定 set_action")
         if self.kind != "filter" and self.targets:
             raise ValueError("只有篩選動作有目標工作表")
-        if self.kind == "navigate" and (self.target_dashboard is None) == (
-            self.target_worksheet is None
+        if self.kind == "navigate" and (
+            sum(
+                t is not None
+                for t in (self.target_dashboard, self.target_worksheet, self.target_story)
+            )
+            != 1
         ):
-            raise ValueError("切換動作必須指定 target_dashboard 或 target_worksheet 其中之一")
+            raise ValueError(
+                "切換動作必須指定 target_dashboard、target_worksheet 或 target_story 其中之一"
+            )
+        if self.kind != "navigate" and self.target_story is not None:
+            raise ValueError("只有切換動作能指定 target_story")
         return self
 
 

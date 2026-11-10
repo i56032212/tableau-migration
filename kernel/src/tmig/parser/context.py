@@ -142,12 +142,21 @@ class ParseContext:
     dashboard_ids: dict[str, str] = field(default_factory=dict)
     """dashboard 名稱 → IR id；導覽按鈕可能先參照之後才解析的 dashboard，所以第一次用到時配發。"""
     navigations: list[tuple[etree._Element, Zone]] = field(default_factory=list)
+    story_ids: dict[str, str] = field(default_factory=dict)
+    story_names: set[str] = field(default_factory=set)
+    """workbook 中 Story 的名稱（導覽按鈕與切換動作的目標可能是 Story）。"""
     """導覽到 dashboard 的按鈕：所有 dashboard 解析完後確認目標存在。"""
 
     def dashboard_id(self, name: str) -> str:
         if name not in self.dashboard_ids:
             self.dashboard_ids[name] = self.ids.make("db", name)
         return self.dashboard_ids[name]
+
+    def story_id(self, name: str) -> str:
+        """Story 的 id（動作與按鈕在 Story 解析前就可能參照它）。"""
+        if name not in self.story_ids:
+            self.story_ids[name] = self.ids.make("st", name)
+        return self.story_ids[name]
 
     def flag(self, element: etree._Element, reason: str) -> None:
         """記錄 v0 不支援的元素：報表因此進人工佇列。"""

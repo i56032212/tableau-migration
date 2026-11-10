@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fileUrl } from "./api";
+import { isDesktop } from "./desktop";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
 import { FilterControl, ParameterControl } from "./Controls";
 import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
@@ -86,7 +87,7 @@ interface Props {
   view: ViewState;
   onView: (view: ViewState) => void;
   /** 篩選動作的目標是另一個 dashboard、或切換動作時切換過去 */
-  onNavigate: (target: { dashboard?: string | null; worksheet?: string | null }) => void;
+  onNavigate: (target: { dashboard?: string | null; worksheet?: string | null; story?: string | null }) => void;
   cases: CaseInfo[];
 }
 
@@ -141,7 +142,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
   const navigateTo = (actions: Action[]) => {
     for (const action of actions) {
       if (action.kind === "navigate") {
-        onNavigate({ dashboard: action.target_dashboard, worksheet: action.target_worksheet });
+        onNavigate({ dashboard: action.target_dashboard, worksheet: action.target_worksheet, story: action.target_story });
         return;
       }
     }
@@ -240,7 +241,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
   const isHidden = (zone: Zone) => Boolean(zone.hidden) !== toggled.has(zone.id);
   const onButton = (button: Button) => {
     if (button.action === "navigate") {
-      onNavigate({ dashboard: button.target_dashboard, worksheet: button.target_worksheet });
+      onNavigate({ dashboard: button.target_dashboard, worksheet: button.target_worksheet, story: button.target_story });
     } else if (button.action === "toggle") {
       const next = new Set(toggled);
       for (const id of button.zones) {
@@ -250,6 +251,15 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
       setToggled(next);
     } else if (button.export === "pdf") {
       window.print();
+    } else if (button.export === "image" || button.export === "powerpoint") {
+      // 匯出這個 dashboard（與 Tableau 的匯出按鈕相同，畫面上目前的狀態）
+      const element = dashboardRef.current;
+      if (element) {
+        const kind = button.export;
+        void import("./exporter")
+          .then(({ exportView }) => exportView(element, kind, dashboard.name, isDesktop()))
+          .catch((e: Error) => window.alert(`無法匯出：${e.message}`));
+      }
     }
   };
   const zoneById = new Map<string, Zone>();
@@ -476,8 +486,8 @@ function DashboardButton({
   shown: boolean;
   onClick: (button: Button) => void;
 }) {
-  // 匯出圖片與 PowerPoint 新平台不支援（不影響數字）；PDF 以瀏覽器列印另存
-  const disabled = button.action === "export" && button.export !== "pdf";
+  // 匯出：PDF 以瀏覽器列印另存，圖片與 PowerPoint 由檢視器畫出 dashboard
+  const disabled = false;
   const image = button.action === "toggle" && !shown && button.image_hidden ? button.image_hidden : button.image;
   const label = button.caption ?? (button.export ? EXPORT_LABELS[button.export] : null);
   const title = disabled ? "新平台不支援此匯出" : (button.tooltip ?? label ?? undefined);

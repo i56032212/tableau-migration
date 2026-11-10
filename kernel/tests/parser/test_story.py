@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tmig.ir import IR
+from tmig.ir import IR, iter_zones
 from tmig.planner.state import QueryState, apply_state
 
 from . import builder as b
@@ -329,3 +329,67 @@ def test_story_references_are_checked(tmp_path: Path) -> None:
         "stories[st_tour].points[sp1].actions：動作「act_missing」不存在",
         "stories[st_tour].points[sp1]：工作表「ws_missing」不存在",
     ]
+
+
+def test_parameter_and_text_states(tmp_path: Path) -> None:
+    """故事點記下的參數值（<datasource name='Parameters'>）與改過的 dashboard 文字物件（<dashboard><zone>）。"""
+    board = BOARD.replace(
+        "<zone h='100000' id='3' name='Target' w='50000' x='50000' y='0' />",
+        "<zone h='50000' id='3' name='Target' w='50000' x='50000' y='0' />"
+        "<zone h='50000' id='4' type-v2='text' w='50000' x='50000' y='50000'>"
+        "<formatted-text><run>原本的說明</run></formatted-text></zone>",
+    )
+    deltas = (
+        "<dashboard name='Board'><zone id='4'><formatted-text>"
+        "<run bold='true'>東區 </run><run>&lt;[Parameters].[Parameter 2]&gt;</run>"
+        "</formatted-text></zone></dashboard>"
+        "<datasource name='Parameters'>"
+        "<column name='[Parameter 1]' value='3' />"
+        "<column name='[Parameters].[Parameter 2]' value='&quot;West&quot;' />"
+        "</datasource>"
+    )
+    xml = story_workbook(story(point(1, "West", "Board", deltas)))
+    xml = xml.replace(BOARD, board)
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    (only,) = ir.stories[0].points
+    assert only.parameters == {"p_top_n": 3, "p_region_pick": "West"}
+    runs = only.texts["z4"]
+    assert [(r.text, r.parameter, r.style.bold if r.style else None) for r in runs] == [
+        ("東區 ", None, True),
+        (None, "p_region_pick", None),
+    ]
+
+
+def test_navigation_to_a_story(tmp_path: Path) -> None:
+    """導覽按鈕與切換動作的目標可以是 Story（Story 的視窗類別也是 dashboard）。"""
+    window = "00000000-0000-0000-0000-0000000000B7"
+    button = (
+        "<zone h='10000' id='9' type-v2='dashboard-object' w='10000' x='0' y='0'>"
+        f"<button action='tabdoc:goto-sheet window-id=&quot;{{{window}}}&quot;'>"
+        "<button-visual-state><caption>看故事</caption></button-visual-state></button></zone>"
+    )
+    board = BOARD.replace("</zone>\n      </zones>", f"{button}</zone>\n      </zones>")
+    nav = (
+        "<nav-action caption='Go Tour' name='[Action3]'>"
+        "<activation type='on-select' />"
+        "<source dashboard='Board' type='sheet' worksheet='Source' />"
+        "<params><param name='target' value='Tour' /></params></nav-action>"
+    )
+    xml = story_workbook(story(point(1, "Everything", "Board")), actions=action() + nav)
+    xml = xml.replace(BOARD, board).replace(
+        "<windows />",
+        f"<windows><window class='dashboard' name='Tour'><simple-id uuid='{{{window}}}' /></window></windows>",
+    )
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    zones = {z.id: z for z in iter_zones(ir.dashboards[0].zones)}
+    found = zones["z9"].button
+    assert found is not None
+    assert (found.target_story, found.target_dashboard, found.caption) == (
+        "st_tour",
+        None,
+        "看故事",
+    )
+    go = next(a for a in ir.actions if a.kind == "navigate")
+    assert (go.target_story, go.target_dashboard, go.target_worksheet) == ("st_tour", None, None)

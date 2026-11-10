@@ -233,16 +233,23 @@ async fn pick_open_path(app: AppHandle) -> Option<String> {
     .flatten()
 }
 
-/// 選擇報表套件的存檔位置；取消時回傳 null。
+/// 選擇存檔位置（預設為報表套件；匯出時另指定標題、副檔名與檔案類型的名稱）；取消時回傳 null。
 #[tauri::command]
-async fn pick_save_path(app: AppHandle, default_path: String) -> Option<String> {
+async fn pick_save_path(
+    app: AppHandle,
+    default_path: String,
+    title: Option<String>,
+    extension: Option<String>,
+    label: Option<String>,
+) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let default = PathBuf::from(default_path);
+        let extension = extension.unwrap_or_else(|| "tmigx".to_string());
         let mut dialog = app
             .dialog()
             .file()
-            .set_title("儲存報表套件")
-            .add_filter("報表套件", &["tmigx"]);
+            .set_title(title.unwrap_or_else(|| "儲存報表套件".to_string()))
+            .add_filter(label.unwrap_or_else(|| "報表套件".to_string()), &[extension.as_str()]);
         if let Some(folder) = default.parent().filter(|f| f.is_dir()) {
             dialog = dialog.set_directory(folder);
         }

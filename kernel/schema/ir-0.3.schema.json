@@ -141,6 +141,21 @@
           "description": "切換動作的目標是工作表時，切換到該工作表",
           "title": "Target Worksheet"
         },
+        "target_story": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "切換動作的目標是 Story 時，切換到該 Story",
+          "title": "Target Story"
+        },
         "clearing": {
           "default": "show_all",
           "description": "清除選取時：顯示所有值、排除所有值、保留篩選的值",
@@ -608,6 +623,21 @@
           "default": null,
           "description": "navigate：目標工作表",
           "title": "Target Worksheet"
+        },
+        "target_story": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "navigate：目標 Story",
+          "title": "Target Story"
         },
         "zones": {
           "description": "toggle：顯示或隱藏的區塊（同一個 dashboard 上）",
@@ -4323,6 +4353,46 @@
           },
           "title": "Selections",
           "type": "array"
+        },
+        "parameters": {
+          "description": "故事點記下的參數值：參數 id → 值",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]{0,63}$": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "propertyNames": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元"
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "texts": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/TextRun"
+            },
+            "type": "array"
+          },
+          "description": "故事點改過的 dashboard 文字物件：區塊 id → 內容（取代區塊原本的文字）",
+          "title": "Texts",
+          "type": "object"
         }
       },
       "required": [

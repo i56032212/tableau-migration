@@ -257,7 +257,8 @@ class DashboardParser:
             if kind == "worksheet" and name in ctx.sheets:
                 target = Button(action="navigate", target_worksheet=ctx.sheets[name].id, **style)
                 return Zone(kind="button", button=target, **base)
-            if kind == "dashboard":
+            if kind in ("dashboard", "storyboard"):
+                # Story 的視窗類別也是 dashboard：目標是 Story 時在 Story 解析後改成 target_story
                 target = Button(action="navigate", target_dashboard=ctx.dashboard_id(name), **style)
                 zone = Zone(kind="button", button=target, **base)
                 ctx.navigations.append((element, zone))
@@ -309,62 +310,7 @@ class DashboardParser:
                 zone.kind, zone.button = "blank", None
 
     def _text(self, element: etree._Element) -> tuple[str | None, list[TextRun]]:
-        """文字物件與標題：純文字（舊的寫法，參數保留原樣），與依序的各段（參數換成參數的值、附格式）。
-
-        Tableau 以 Æ 加換行表示段落；<Sheet Name> 為 dashboard 的名稱。只有一段、沒有參數也沒有格式時
-        content 為空（只用 text）。
-        """
-        content: list[TextRun] = []
-        plain: list[str] = []
-        parameters = False
-
-        def add(text: str, style: TextStyle | None) -> None:
-            if not text:
-                return
-            plain.append(text)
-            last = content[-1] if content else None
-            if last is not None and last.text is not None and last.style == style:
-                content[-1] = last.model_copy(update={"text": last.text + text})
-            else:
-                content.append(TextRun(text=text, style=style))
-
-        for run in descendants(child(element, "formatted-text"), "run"):
-            raw = (run.text or "").replace("Æ\n", "\n").replace("Æ", "")
-            style = _style(run)
-            position = 0
-            for match in TEXT_TOKEN.finditer(raw):
-                add(raw[position : match.start()], style)
-                position = match.end()
-                token = match.group(1)
-                if token == "Sheet Name":
-                    add(self.name, style)
-                    continue
-                parts = qualified_parts(token)
-                param = (
-                    self.ctx.parameter(token)
-                    if len(parts) == 2 and parts[0] == "Parameters"
-                    else None
-                )
-                if param is None:
-                    add(match.group(0), style)
-                    continue
-                parameters = True
-                plain.append(match.group(0))
-                content.append(TextRun(parameter=param.id, style=style))
-            add(raw[position:], style)
-        # 去掉開頭與結尾的空白（與 text 相同）
-        while content and content[0].text is not None and not content[0].text.strip():
-            content.pop(0)
-        while content and content[-1].text is not None and not content[-1].text.strip():
-            content.pop()
-        if content and content[0].text is not None:
-            content[0] = content[0].model_copy(update={"text": content[0].text.lstrip()})
-        if content and content[-1].text is not None:
-            content[-1] = content[-1].model_copy(update={"text": content[-1].text.rstrip()})
-        styled = any(r.style is not None for r in content)
-        if not parameters and not styled and len(content) <= 1:
-            content = []
-        return "".join(plain).strip() or None, content
+        return formatted_content(self.ctx, element, self.name)
 
     def _sheet(self, element: etree._Element, name: str | None) -> SheetState | None:
         sheet = self.ctx.sheets.get(name or "")
@@ -512,3 +458,60 @@ def _runs(element: etree._Element) -> str | None:
     texts = [run.text or "" for run in descendants(child(element, "formatted-text"), "run")]
     text = "".join(texts).replace("Æ", "").strip()
     return text or None
+
+
+def formatted_content(
+    ctx: ParseContext, element: etree._Element, sheet_name: str
+) -> tuple[str | None, list[TextRun]]:
+    """文字物件與標題：純文字（舊的寫法，參數保留原樣），與依序的各段（參數換成參數的值、附格式）。
+
+    Tableau 以 Æ 加換行表示段落；<Sheet Name> 為 dashboard 的名稱。只有一段、沒有參數也沒有格式時
+    content 為空（只用 text）。
+    """
+    content: list[TextRun] = []
+    plain: list[str] = []
+    parameters = False
+
+    def add(text: str, style: TextStyle | None) -> None:
+        if not text:
+            return
+        plain.append(text)
+        last = content[-1] if content else None
+        if last is not None and last.text is not None and last.style == style:
+            content[-1] = last.model_copy(update={"text": last.text + text})
+        else:
+            content.append(TextRun(text=text, style=style))
+
+    for run in descendants(child(element, "formatted-text"), "run"):
+        raw = (run.text or "").replace("Æ\n", "\n").replace("Æ", "")
+        style = _style(run)
+        position = 0
+        for match in TEXT_TOKEN.finditer(raw):
+            add(raw[position : match.start()], style)
+            position = match.end()
+            token = match.group(1)
+            if token == "Sheet Name":
+                add(sheet_name, style)
+                continue
+            parts = qualified_parts(token)
+            param = ctx.parameter(token) if len(parts) == 2 and parts[0] == "Parameters" else None
+            if param is None:
+                add(match.group(0), style)
+                continue
+            parameters = True
+            plain.append(match.group(0))
+            content.append(TextRun(parameter=param.id, style=style))
+        add(raw[position:], style)
+    # 去掉開頭與結尾的空白（與 text 相同）
+    while content and content[0].text is not None and not content[0].text.strip():
+        content.pop(0)
+    while content and content[-1].text is not None and not content[-1].text.strip():
+        content.pop()
+    if content and content[0].text is not None:
+        content[0] = content[0].model_copy(update={"text": content[0].text.lstrip()})
+    if content and content[-1].text is not None:
+        content[-1] = content[-1].model_copy(update={"text": content[-1].text.rstrip()})
+    styled = any(r.style is not None for r in content)
+    if not parameters and not styled and len(content) <= 1:
+        content = []
+    return "".join(plain).strip() or None, content

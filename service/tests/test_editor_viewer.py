@@ -351,3 +351,39 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         expect(page.locator(".story-points button.active")).to_have_text("全公司概況")
         assert errors == []
         browser.close()
+
+
+def test_export_image_and_powerpoint(engine: str, tmp_path: Path) -> None:
+    """匯出：畫面上的 dashboard 畫成 PNG，PowerPoint 是一張投影片放這張圖（桌面版以存檔對話框問位置）。"""
+    from playwright.sync_api import Dialog, expect, sync_playwright
+
+    answers = [str(tmp_path / "dashboard.png"), str(tmp_path / "dashboard")]
+
+    def answer(dialog: Dialog) -> None:
+        dialog.accept(answers.pop(0))
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        page.on("dialog", answer)
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/d/db_ee909b0c")
+        page.wait_for_function(
+            "(() => { const items = Array.from(document.querySelectorAll('.worksheet'));"
+            " return items.length > 0 && items.every(e => e.dataset.loading === 'false'); })()"
+        )
+        page.get_by_label("匯出").select_option("image")
+        expect(page.locator(".toast")).to_contain_text("已匯出")
+        png = (tmp_path / "dashboard.png").read_bytes()
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+        assert (width, height) == (2400, 1600)  # 1200×800 的 dashboard，兩倍解析度
+        page.locator(".toast").evaluate("element => element.remove()")
+        page.get_by_label("匯出").select_option("powerpoint")
+        expect(page.locator(".toast")).to_contain_text("已匯出")
+        browser.close()
+    with zipfile.ZipFile(tmp_path / "dashboard.pptx") as archive:
+        names = set(archive.namelist())
+        assert {"ppt/presentation.xml", "ppt/slides/slide1.xml", "ppt/media/image1.png"} <= names
+        assert archive.read("ppt/media/image1.png").startswith(b"\x89PNG")
+        assert archive.testzip() is None

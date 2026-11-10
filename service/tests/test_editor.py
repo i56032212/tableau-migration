@@ -297,3 +297,29 @@ def test_dashboard_story_and_action_api(client: TestClient) -> None:
     assert client.delete(f"/api/edit/demo/actions/{action_id}").status_code == 200
     sheet = client.get("/api/edit/demo/worksheets/ws_region_share_by_year").json()["worksheet"]
     assert all(f.get("action") != action_id for f in sheet["filters"])
+
+
+def test_desktop_export_writes_the_file(client: TestClient, tmp_path: Path) -> None:
+    import base64
+
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    target = tmp_path / "匯出.png"
+    response = client.post(
+        "/api/desktop/export",
+        json={"path": str(target), "content": base64.b64encode(png).decode()},
+    )
+    assert response.status_code == 200, response.text
+    assert target.read_bytes() == png
+    # 副檔名、資料夾與內容不正確時拒絕
+    bad = client.post(
+        "/api/desktop/export",
+        json={"path": str(tmp_path / "x.exe"), "content": base64.b64encode(png).decode()},
+    )
+    assert bad.status_code == 422
+    missing = client.post(
+        "/api/desktop/export",
+        json={"path": str(tmp_path / "nope" / "x.png"), "content": base64.b64encode(png).decode()},
+    )
+    assert missing.status_code == 422
+    garbage = client.post("/api/desktop/export", json={"path": str(target), "content": "%%%"})
+    assert garbage.status_code == 422

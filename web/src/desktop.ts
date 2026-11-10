@@ -21,6 +21,17 @@ function shell(): TauriGlobal | undefined {
   return (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
 }
 
+let desktopMode = false;
+
+/** 桌面版（本機引擎）：匯出等功能以存檔對話框與本機引擎存檔。 */
+export function setDesktopMode(on: boolean): void {
+  desktopMode = on;
+}
+
+export function isDesktop(): boolean {
+  return desktopMode;
+}
+
 /** 選擇要開啟的檔案；取消時為 null。 */
 export async function pickOpenPath(): Promise<string | null> {
   const tauri = shell();
@@ -35,17 +46,21 @@ export async function pickOpenPath(): Promise<string | null> {
   return path?.trim() || null;
 }
 
-/** 選擇報表套件的存檔位置；取消時為 null。 */
-export async function pickSavePath(defaultPath: string): Promise<string | null> {
+/** 選擇存檔位置（預設為報表套件；匯出時指定標題、副檔名與檔案類型）；取消時為 null。 */
+export async function pickSavePath(
+  defaultPath: string,
+  options: { title?: string; extension?: string; label?: string } = {},
+): Promise<string | null> {
   const tauri = shell();
   if (tauri) {
     try {
-      return await tauri.core.invoke<string | null>("pick_save_path", { defaultPath });
+      return await tauri.core.invoke<string | null>("pick_save_path", { defaultPath, ...options });
     } catch (e) {
       console.warn("存檔對話框無法使用，改以輸入路徑", e);
     }
   }
-  const path = window.prompt("報表套件（.tmigx）要存到哪裡？請輸入完整路徑", defaultPath);
+  const what = options.label ? `${options.label}（.${options.extension}）` : "報表套件（.tmigx）";
+  const path = window.prompt(`${what}要存到哪裡？請輸入完整路徑`, defaultPath);
   return path?.trim() || null;
 }
 

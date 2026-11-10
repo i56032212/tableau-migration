@@ -240,11 +240,22 @@ class WorkbookParser:
             if board is not None:
                 dashboards.append(board)
         parsed = {d.id for d in dashboards}
+        ctx.story_names = {el.get("name", "") for el in story_elements}
+        names = {board_id: name for name, board_id in ctx.dashboard_ids.items()}
         for element, zone in ctx.navigations:
             assert zone.button is not None
-            if zone.button.target_dashboard not in parsed:
-                ctx.flag(element, "導覽按鈕的目標 dashboard 無法移轉")
-                zone.kind, zone.button = "blank", None
+            target = zone.button.target_dashboard
+            if target in parsed:
+                continue
+            name = names.get(target or "")
+            if name is not None and name in ctx.story_names:
+                # 目標是 Story（Story 的視窗類別也是 dashboard）
+                zone.button = zone.button.model_copy(
+                    update={"target_dashboard": None, "target_story": ctx.story_id(name)}
+                )
+                continue
+            ctx.flag(element, "導覽按鈕的目標 dashboard 無法移轉")
+            zone.kind, zone.button = "blank", None
 
         actions = self._actions(child(root, "actions"), worksheets, dashboards)
         stories = [
@@ -252,6 +263,23 @@ class WorkbookParser:
             for el in story_elements
             if (story := StoryParser(ctx, el, worksheets, dashboards, actions).parse()) is not None
         ]
+        # 目標是 Story 的按鈕與切換動作：Story 沒有轉成 IR 時不能移轉
+        parsed_stories = {story.id for story in stories}
+        for element, zone in ctx.navigations:
+            story_target = zone.button.target_story if zone.button is not None else None
+            if story_target is not None and story_target not in parsed_stories:
+                ctx.flag(element, "導覽按鈕的目標 Story 無法移轉")
+                zone.kind, zone.button = "blank", None
+        dropped = [a for a in actions if a.target_story and a.target_story not in parsed_stories]
+        for act in dropped:
+            ctx.unsupported.append(
+                Unsupported(
+                    source_ref=act.source_ref,
+                    reason=f"切換動作「{act.caption}」的目標 Story 無法移轉",
+                    element="nav-action",
+                )
+            )
+        actions = [a for a in actions if a not in dropped]
 
         if not ctx.datasources:
             reasons = "；".join(u.reason for u in ctx.unsupported) or "workbook 沒有資料源"
@@ -688,7 +716,12 @@ class WorkbookParser:
         target = params.get("target") or params.get("sheet") or ""
         board = next((d.id for d in dashboards if d.name == target), None)
         sheet = by_name.get(target) if board is None else None
-        if board is None and sheet is None:
+        story = (
+            ctx.story_id(target)
+            if board is None and sheet is None and target in ctx.story_names
+            else None
+        )
+        if board is None and sheet is None and story is None:
             ctx.flag(item, f"切換動作「{caption}」的目標 {target or '（未指定）'} 找不到")
             return None
         return Action(
@@ -701,6 +734,7 @@ class WorkbookParser:
             sources=sources,
             target_dashboard=board,
             target_worksheet=sheet,
+            target_story=story,
             source_ref=xpath(item),
         )
 

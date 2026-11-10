@@ -206,12 +206,21 @@ export function StoryEditor({
                   onBlur={(e) => e.target.value !== p.caption && setPoint(p.id, { caption: e.target.value })}
                 />
               </div>
-              <select aria-label={`故事點 ${i + 1} 顯示的內容`} value={targetOf(p)} onChange={(e) => setPoint(p.id, { ...parseTarget(e.target.value), actions: [], filters: [], selections: [] })}>
+              <select aria-label={`故事點 ${i + 1} 顯示的內容`} value={targetOf(p)} onChange={(e) => setPoint(p.id, { ...parseTarget(e.target.value), actions: [], filters: [], selections: [], parameters: {}, texts: {} })}>
                 {targets}
               </select>
               <div className="row point-actions">
-                {(p.actions.length > 0 || p.filters.length > 0 || p.selections.length > 0) && (
-                  <button type="button" className="link" title="清除記下的篩選與選取" onClick={() => setPoint(p.id, { actions: [], filters: [], selections: [] })}>
+                {(p.actions.length > 0 ||
+                  p.filters.length > 0 ||
+                  p.selections.length > 0 ||
+                  Object.keys(p.parameters ?? {}).length > 0 ||
+                  Object.keys(p.texts ?? {}).length > 0) && (
+                  <button
+                    type="button"
+                    className="link"
+                    title="清除記下的篩選、選取、參數與文字"
+                    onClick={() => setPoint(p.id, { actions: [], filters: [], selections: [], parameters: {}, texts: {} })}
+                  >
                     清除狀態
                   </button>
                 )}

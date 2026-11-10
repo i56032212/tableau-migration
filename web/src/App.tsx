@@ -9,7 +9,10 @@ import {
   openDialog,
   openDocument,
   saveDocument,
+  setDesktopMode,
+  toast,
 } from "./desktop";
+import { exportView } from "./exporter";
 import {
   DesktopTokensButton,
   Modal,
@@ -106,7 +109,10 @@ export function App() {
 /** 桌面版：讓外殼的選單呼叫檢視器，並顯示伺服器的對話框（登入、從伺服器開啟、發布）。 */
 function DesktopCommands() {
   const [dialog, setDialog] = useState<DesktopDialog | null>(null);
-  useEffect(() => installMenuCommands(navigate), []);
+  useEffect(() => {
+    setDesktopMode(true);
+    installMenuCommands(navigate);
+  }, []);
   useEffect(() => {
     const show = (e: Event) => setDialog((e as CustomEvent<DesktopDialog>).detail);
     window.addEventListener(DIALOG_EVENT, show);
@@ -302,9 +308,10 @@ function WorkbookPage({
     navigate(target + window.location.search);
     return null;
   }
-  const onNavigate = (to: { dashboard?: string | null; worksheet?: string | null }) => {
+  const onNavigate = (to: { dashboard?: string | null; worksheet?: string | null; story?: string | null }) => {
     if (to.dashboard) navigate(viewPath(workbook, "d", to.dashboard) + window.location.search);
     else if (to.worksheet) navigate(viewPath(workbook, "s", to.worksheet) + window.location.search);
+    else if (to.story) navigate(viewPath(workbook, "story", to.story) + window.location.search);
   };
 
   return (
@@ -375,6 +382,31 @@ function WorkbookPage({
           <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit-story", story.id))}>
             編輯 Story
           </button>
+        )}
+        {(dashboard || worksheet || story) && (
+          <select
+            aria-label="匯出"
+            value=""
+            onChange={(e) => {
+              const kind = e.target.value;
+              e.target.value = "";
+              if (kind === "pdf") {
+                window.print();
+                return;
+              }
+              const element = document.querySelector<HTMLElement>(".page .dashboard, .page .single-sheet, .page .story");
+              const title = dashboard?.name ?? worksheet?.name ?? story?.name ?? "export";
+              if (!element || (kind !== "image" && kind !== "powerpoint")) return;
+              void exportView(element, kind, title, me.mode === "desktop")
+                .then((path) => path && toast(`已匯出：${path}`))
+                .catch((err: Error) => toast(`無法匯出：${err.message}`, "error"));
+            }}
+          >
+            <option value="">匯出…</option>
+            <option value="image">圖片（PNG）</option>
+            <option value="powerpoint">PowerPoint</option>
+            <option value="pdf">PDF（列印）</option>
+          </select>
         )}
         <div className="cases" role="group" aria-label="篩選組合">
           <button type="button" className={caseName === null ? "active" : ""} onClick={() => navigate(base)}>

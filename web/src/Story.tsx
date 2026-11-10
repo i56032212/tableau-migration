@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DashboardView } from "./Dashboard";
 import { fieldKey, stateFor, type ViewState } from "./state";
-import type { CaseInfo, FilterValue, IR, Story, StoryPoint } from "./types";
+import type { CaseInfo, Dashboard, FilterValue, IR, Story, StoryPoint, Zone } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
 /** 故事點的狀態：記下的篩選取代同一欄位的篩選（套在篩選組合之上），篩選動作與選取以記下的標記為準。 */
@@ -14,9 +14,26 @@ export function pointState(point: StoryPoint, base: ViewState): ViewState {
   return {
     ...base,
     sheetFilters,
+    // 故事點記下的參數值取代目前的值
+    parameters: { ...base.parameters, ...(point.parameters ?? {}) },
     actions: Object.fromEntries(point.actions.map((a) => [a.action, a.marks])),
     selections: Object.fromEntries(point.selections.map((s) => [s.worksheet, s.marks])),
   };
+}
+
+/** 故事點改過的文字物件：換掉 dashboard 上那些區塊的內容。 */
+export function pointDashboard(point: StoryPoint, dashboard: Dashboard): Dashboard {
+  const texts = point.texts ?? {};
+  if (Object.keys(texts).length === 0) return dashboard;
+  const replace = (zones: Zone[]): Zone[] =>
+    zones.map((z) =>
+      texts[z.id]
+        ? { ...z, content: texts[z.id], text: texts[z.id].map((r) => r.text ?? "").join("") }
+        : z.children.length > 0
+          ? { ...z, children: replace(z.children) }
+          : z,
+    );
+  return { ...dashboard, zones: replace(dashboard.zones) };
 }
 
 function initialIndex(story: Story): number {
@@ -30,7 +47,7 @@ interface Props {
   /** 篩選組合的狀態（網址參數）；每個故事點以它為基礎 */
   base: ViewState;
   cases: CaseInfo[];
-  onNavigate: (target: { dashboard?: string | null; worksheet?: string | null }) => void;
+  onNavigate: (target: { dashboard?: string | null; worksheet?: string | null; story?: string | null }) => void;
 }
 
 /**
@@ -47,7 +64,8 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate }: Prop
   const view = changed && changed.point === point && changed.base === base ? changed.view : captured;
   const setView = (next: ViewState) => setChanged({ point, base, view: next });
 
-  const dashboard = point.dashboard ? ir.dashboards.find((d) => d.id === point.dashboard) : undefined;
+  const found = point.dashboard ? ir.dashboards.find((d) => d.id === point.dashboard) : undefined;
+  const dashboard = useMemo(() => (found ? pointDashboard(point, found) : undefined), [found, point]);
   const worksheet = point.worksheet ? ir.worksheets.find((w) => w.id === point.worksheet) : undefined;
   const last = story.points.length - 1;
   const go = (next: number) => setIndex(Math.max(0, Math.min(last, next)));

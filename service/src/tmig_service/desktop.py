@@ -26,6 +26,7 @@ API（都在 /api/desktop 下）：
 
 from __future__ import annotations
 
+import base64
 import getpass
 import hmac
 import json
@@ -221,6 +222,19 @@ class CloseRequest(BaseModel):
     workbook: str
 
 
+class ExportRequest(BaseModel):
+    """匯出的圖片、PowerPoint 或 PDF：檢視器產生內容（base64），引擎寫到作者選的位置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+
+
+EXPORT_SUFFIXES = (".png", ".pptx", ".pdf")
+EXPORT_LIMIT = 200 * 1024 * 1024
+
+
 def desktop_router(documents: Documents) -> APIRouter:
     router = APIRouter(prefix="/api/desktop")
 
@@ -292,6 +306,27 @@ def desktop_router(documents: Documents) -> APIRouter:
             "files": info.files,
             "missing_files": info.missing_files,
         }
+
+    @router.post("/export")
+    def export_file(body: ExportRequest) -> dict[str, Any]:
+        target = _absolute_file(body.path, "匯出的位置")
+        if target.suffix.lower() not in EXPORT_SUFFIXES:
+            raise HTTPException(
+                422, f"匯出的副檔名必須是 {'、'.join(EXPORT_SUFFIXES)}：{target.name}"
+            )
+        if not target.parent.is_dir():
+            raise HTTPException(422, f"資料夾不存在：{target.parent}")
+        try:
+            content = base64.b64decode(body.content, validate=True)
+        except ValueError as exc:
+            raise HTTPException(422, "匯出的內容不正確") from exc
+        if len(content) > EXPORT_LIMIT:
+            raise HTTPException(413, "匯出的檔案太大")
+        try:
+            target.write_bytes(content)
+        except OSError as exc:
+            raise HTTPException(500, f"無法寫入 {target}：{exc}") from exc
+        return {"path": str(target), "size": len(content)}
 
     @router.post("/close")
     def close_document(body: CloseRequest, request: Request) -> dict[str, bool]:

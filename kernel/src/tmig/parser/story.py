@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from lxml import etree
 
+from tmig.ir.integrity import iter_zones
 from tmig.ir.models import (
     Action,
     Dashboard,
@@ -23,11 +24,12 @@ from tmig.ir.models import (
     StoryFilter,
     StoryPoint,
     StorySelection,
+    TextRun,
     TupleFilter,
     Worksheet,
 )
 from tmig.parser.context import ParseContext, SheetState
-from tmig.parser.dashboard import _runs, _size
+from tmig.parser.dashboard import _runs, _size, formatted_content
 from tmig.parser.fields import instance_key, use_from_instance
 from tmig.parser.twbx import child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -52,6 +54,7 @@ class StoryParser:
         self.worksheets = {w.name: w.id for w in worksheets}
         self.sheets_by_id = {w.id: w for w in worksheets}
         self.dashboards = {d.name: d.id for d in dashboards}
+        self.boards = {d.id: d for d in dashboards}
         self.actions = {a.name: a.id for a in actions}
 
     def parse(self) -> Story | None:
@@ -70,7 +73,7 @@ class StoryParser:
         arrows = flipboard is None or flipboard.get("show-nav-arrows") != "false"
         active = f"sp{flipboard.get('active-id')}" if flipboard is not None else None
         return Story(
-            id=ctx.ids.make("st", self.name),
+            id=ctx.story_id(self.name),
             name=self.name,
             title=self._title(),
             size=Size(width=sizing.width, height=sizing.height),
@@ -112,8 +115,15 @@ class StoryParser:
         current = child(element, "currentDeltas")
         deltas = current if current is not None else child(element, "capturedDeltas")
         for sheet_el in children(deltas):
-            if local_name(sheet_el) != "worksheet":
-                self._unsupported(sheet_el, label, f"狀態 <{local_name(sheet_el)}>")
+            tag = local_name(sheet_el)
+            if tag == "datasource":
+                self._parameters(sheet_el, point, label)
+                continue
+            if tag == "dashboard":
+                self._texts(sheet_el, point, label, target)
+                continue
+            if tag != "worksheet":
+                self._unsupported(sheet_el, label, f"狀態 <{tag}>")
                 continue
             sheet = self.ctx.sheets.get(sheet_el.get("name", ""))
             if sheet is None:
@@ -125,9 +135,45 @@ class StoryParser:
                     self._filter(item, sheet, point, label)
                 elif tag == "selection-collection":
                     self._selection(item, sheet, point, label)
+                elif tag == "highlight":
+                    self.ctx.ignore(item, "故事點記下的醒目提示（只影響醒目提示，不影響數字）")
                 else:
                     self._unsupported(item, label, f"狀態 <{tag}>")
         return point
+
+    def _parameters(self, element: etree._Element, point: StoryPoint, label: str) -> None:
+        """故事點記下的參數值：<datasource name='Parameters'><column name='[Parameter 1]' value='…'/>。"""
+        if element.get("name") != "Parameters":
+            self._unsupported(element, label, f"資料源「{element.get('name')}」的狀態")
+            return
+        for column in children(element, "column"):
+            param = self.ctx.parameter(column.get("name", ""))
+            if param is None:
+                self._unsupported(column, label, f"參數 {column.get('name')} 的值")
+                continue
+            try:
+                value = parse_literal(column.get("value", ""), param.datatype)
+            except LiteralError:
+                self._unsupported(
+                    column, label, f"參數「{param.caption}」的值 {column.get('value')}"
+                )
+                continue
+            point.parameters[param.id] = value
+
+    def _texts(self, element: etree._Element, point: StoryPoint, label: str, target: str) -> None:
+        """故事點改過的 dashboard 文字物件：<dashboard><zone id='5'><formatted-text>…。"""
+        board = self.boards.get(point.dashboard or "")
+        if board is None or element.get("name", target) != board.name:
+            self._unsupported(element, label, f"dashboard「{element.get('name')}」的狀態")
+            return
+        ids = {z.id for z in iter_zones(board.zones)}
+        for zone in children(element, "zone"):
+            zone_id = f"z{zone.get('id', '')}"
+            if zone_id not in ids:
+                self.ctx.ignore(zone, "故事點改過的文字物件已不在 dashboard 上")
+                continue
+            text, content = formatted_content(self.ctx, zone, board.name)
+            point.texts[zone_id] = content or ([TextRun(text=text)] if text else [])
 
     def _unsupported(self, element: etree._Element, label: str, what: str) -> None:
         self.ctx.flag(element, f"Story「{self.name}」的故事點「{label}」記下的{what}尚不支援")

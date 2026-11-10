@@ -172,6 +172,7 @@ def check_references(ir: IR) -> list[str]:
     sheets = {ws.id: ws for ws in ir.worksheets}
     actions = {act.id for act in ir.actions}
     boards = {db.id for db in ir.dashboards}
+    stories = {story.id for story in ir.stories}
     for act in ir.actions:
         for name, ids in (("sources", act.sources), ("targets", act.targets)):
             for sid in ids:
@@ -184,6 +185,8 @@ def check_references(ir: IR) -> list[str]:
             errors.append(
                 f"actions[{act.id}].target_worksheet：工作表「{act.target_worksheet}」不存在"
             )
+        if act.target_story is not None and act.target_story not in stories:
+            errors.append(f"actions[{act.id}].target_story：Story「{act.target_story}」不存在")
         if act.parameter is not None and act.parameter.parameter not in params:
             errors.append(f"actions[{act.id}].parameter：參數「{act.parameter.parameter}」不存在")
         if act.set_action is not None:
@@ -312,6 +315,8 @@ def check_references(ir: IR) -> list[str]:
                     errors.append(f"{where}.button：dashboard「{button.target_dashboard}」不存在")
                 if button.target_worksheet is not None and button.target_worksheet not in sheets:
                     errors.append(f"{where}.button：工作表「{button.target_worksheet}」不存在")
+                if button.target_story is not None and button.target_story not in stories:
+                    errors.append(f"{where}.button：Story「{button.target_story}」不存在")
                 for target in button.zones:
                     if target not in zone_ids:
                         errors.append(f"{where}.button：區塊「{target}」不在此 dashboard 上")
@@ -347,5 +352,13 @@ def check_references(ir: IR) -> list[str]:
                 sheet = sheets.get(flt.worksheet)
                 if sheet is not None:
                     check_use(flt.field, sheet.datasource, f"{where}.filters", None)
+            for pid in point.parameters:
+                if pid not in params:
+                    errors.append(f"{where}.parameters：參數「{pid}」不存在")
+            board = next((db for db in ir.dashboards if db.id == point.dashboard), None)
+            zone_ids = {z.id for z in iter_zones(board.zones)} if board is not None else set()
+            for zid in point.texts:
+                if zid not in zone_ids:
+                    errors.append(f"{where}.texts：區塊「{zid}」不在故事點的 dashboard 上")
 
     return errors

@@ -139,6 +139,8 @@ export interface Action {
   set_action?: SetAction | null;
   /** 切換動作的目標工作表 */
   target_worksheet?: string | null;
+  /** 切換動作的目標 Story */
+  target_story?: string | null;
   activation: "select" | "hover" | "menu";
   /** 只在這個 dashboard 上執行；null 表示任何地方都執行 */
   dashboard: string | null;
@@ -175,6 +177,8 @@ export interface Button {
   action: "navigate" | "toggle" | "export";
   target_dashboard: string | null;
   target_worksheet: string | null;
+  /** 導覽到 Story */
+  target_story?: string | null;
   zones: string[];
   export: "pdf" | "image" | "powerpoint" | null;
   caption: string | null;
@@ -302,6 +306,10 @@ export interface StoryPoint {
   actions: StoryAction[];
   filters: StoryFilter[];
   selections: StorySelection[];
+  /** 故事點記下的參數值 */
+  parameters?: Record<string, Scalar>;
+  /** 故事點改過的 dashboard 文字物件：區塊 id → 內容 */
+  texts?: Record<string, ZoneTextRun[]>;
 }
 
 export interface Story {
