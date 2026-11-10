@@ -60,7 +60,7 @@ jobs:
             echo "::error title=一鍵檢查紀錄（最後 120 行）::${msg}"
           fi
 
-  # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL 與 Spark（Databricks 的引擎）實跑；環境不齊全時直接失敗
+  # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL、Spark（Databricks 的引擎）與 MySQL 實跑；環境不齊全時直接失敗
   engines:
     runs-on: ubuntu-latest
     defaults:
@@ -75,7 +75,10 @@ jobs:
           java-version: "21"
       - name: 安裝相依套件（含 pyspark）
         run: uv sync --locked --group spark
+      - name: 啟動執行環境內建的 MySQL（帳號 root／root）
+        run: sudo systemctl start mysql.service
       - name: 方言轉譯與來源資料庫實跑
         env:
           TMIG_REQUIRE_ENGINES: "1"
+          TMIG_TEST_MYSQL: root:root@127.0.0.1:3306
         run: uv run pytest -q kernel/tests/sqlgen/test_dialect.py kernel/tests/sqlgen/test_engines.py

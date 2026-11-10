@@ -15,8 +15,9 @@ dev = [
     "playwright==1.63.0",
     "httpx>=0.28.1",
     "truststore>=0.10",
-    # Live 連線的端到端測試（本機 PostgreSQL；沒有時略過）
+    # Live 連線的端到端測試（本機 PostgreSQL、MySQL；沒有時略過）
     "psycopg[binary]>=3.2",
+    "pymysql>=1.1",
 ]
 # Spark（Databricks 的引擎）方言的實跑測試：uv sync --group spark；需要 Java 17 以上，沒有時略過
 spark = ["pyspark>=3.5,<5"]

@@ -20,6 +20,9 @@ dependencies = [
 postgres = ["psycopg[binary]>=3.2"]
 oracle = ["oracledb>=2.0"]
 databricks = ["databricks-sql-connector>=3.0"]
+sqlserver = ["pymssql>=2.3"]
+mysql = ["pymysql>=1.1"]
+snowflake = ["snowflake-connector-python>=3.12"]
 
 [project.scripts]
 tmig = "tmig.cli:entry"

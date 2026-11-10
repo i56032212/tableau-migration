@@ -4,7 +4,7 @@
 預設為目前目錄的 connections.toml）依 connection_id 提供連線方式：
 
     [connections.oracle_ora_example_com_orclpdb]
-    driver = "oracle"                  # oracle、postgres、databricks、duckdb
+    driver = "oracle"                  # oracle、sqlserver、mysql、snowflake、postgres、databricks、duckdb
     user = "${ORA_SALES_USER}"
     password = "${ORA_SALES_PASSWORD}"
     # host、port、service 省略時取工作簿中的連線資訊
@@ -13,8 +13,19 @@
     driver = "databricks"
     access_token = "${DATABRICKS_TOKEN}"
 
+    [connections.sqlserver_sqlsrv01_salesdb]
+    driver = "sqlserver"
+    user = "${MSSQL_SALES_USER}"
+    password = "${MSSQL_SALES_PASSWORD}"
+
+    [connections.snowflake_acme_snowflakecomputing_com_sales]
+    driver = "snowflake"
+    user = "${SNOWFLAKE_USER}"
+    password = "${SNOWFLAKE_PASSWORD}"
+    warehouse = "REPORTING_WH"         # account 省略時取主機名稱的第一段
+
 - 密碼、權杖一律寫成 ${環境變數}，不能直接寫在設定檔中；環境變數由部署環境或密碼管理服務注入
-- 建議使用唯讀的服務帳號；PostgreSQL 的工作階段另外設為唯讀
+- 建議使用唯讀的服務帳號；PostgreSQL 與 MySQL 的工作階段另外設為唯讀
 - 執行器回傳 Arrow 資料表；小數（DECIMAL／NUMBER）轉成浮點數或整數、含時區的時間轉成 UTC 的
   無時區時間，與萃取匯入 DuckDB 後的型別一致
 """
@@ -39,11 +50,14 @@ from tmig.ir.models import LiveConnection
 
 CONFIG_ENV = "TMIG_CONNECTIONS"
 DEFAULT_CONFIG = "connections.toml"
-DRIVERS = ("oracle", "postgres", "databricks", "duckdb")
+DRIVERS = ("oracle", "postgres", "databricks", "sqlserver", "mysql", "snowflake", "duckdb")
 DRIVER_DIALECTS = {
     "oracle": "oracle",
     "postgres": "postgres",
     "databricks": "databricks",
+    "sqlserver": "tsql",
+    "mysql": "mysql",
+    "snowflake": "snowflake",
     "duckdb": "duckdb",
 }
 SECRET_KEYS = frozenset({"password", "access_token", "token", "client_secret"})
@@ -152,6 +166,12 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return PostgresExecutor.open(connection, params)
     if config.driver == "oracle":
         return OracleExecutor.open(connection, params)
+    if config.driver == "sqlserver":
+        return SqlServerExecutor.open(connection, params)
+    if config.driver == "mysql":
+        return MySQLExecutor.open(connection, params)
+    if config.driver == "snowflake":
+        return SnowflakeExecutor.open(connection, params)
     return DatabricksExecutor.open(connection, params)
 
 
@@ -357,6 +377,166 @@ class DatabricksExecutor:
         self.con.close()
 
 
+class SqlServerExecutor:
+    """SQL Server 與 Azure SQL Database（pymssql）。工作階段設為英文（月份與星期名稱）、
+    星期日為一週的第一天。SQL Server 沒有唯讀的工作階段設定：請使用唯讀的服務帳號。尚未實機驗證。"""
+
+    dialect = "tsql"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> SqlServerExecutor:
+        try:
+            import pymssql  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                "未安裝 SQL Server 驅動：uv sync --extra sqlserver"
+            ) from exc
+        host = params.get("host") or connection.server
+        if not host:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少主機")
+        try:  # pragma: no cover - 需要 SQL Server
+            con = pymssql.connect(
+                server=host,
+                port=str(params.get("port") or connection.port or 1433),
+                user=params.get("user"),
+                password=params.get("password"),
+                database=params.get("database") or connection.database or "",
+                charset="UTF-8",
+                autocommit=True,
+                login_timeout=int(params.get("login_timeout", 30)),
+            )
+            with con.cursor() as cursor:
+                cursor.execute("SET LANGUAGE us_english; SET DATEFIRST 7")
+        except Exception as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                f"無法連上 SQL Server（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:  # pragma: no cover - 需要 SQL Server
+        with self.con.cursor() as cursor:
+            cursor.execute(sql)
+            names = [d[0] for d in cursor.description or []]
+            rows = cursor.fetchall()
+        return rows_to_arrow(names, rows)
+
+    def close(self) -> None:  # pragma: no cover
+        self.con.close()
+
+
+class MySQLExecutor:
+    """MySQL 8.0 以上（PyMySQL）：工作階段設為唯讀、時區為 UTC、月份與星期名稱為英文。"""
+
+    dialect = "mysql"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> MySQLExecutor:
+        try:
+            import pymysql  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 MySQL 驅動：uv sync --extra mysql") from exc
+        kwargs: dict[str, Any] = {
+            "host": params.get("host") or connection.server,
+            "port": int(params.get("port") or connection.port or 3306),
+            "user": params.get("user"),
+            "password": params.get("password") or "",
+            "database": params.get("database") or connection.database,
+            "unix_socket": params.get("socket"),
+        }
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:
+            con = pymysql.connect(charset="utf8mb4", autocommit=True, **kwargs)
+            with con.cursor() as cursor:
+                cursor.execute("SET SESSION TRANSACTION READ ONLY")
+                cursor.execute("SET time_zone = '+00:00'")
+                cursor.execute("SET lc_time_names = 'en_US'")
+        except pymysql.Error as exc:
+            raise SourceConnectionError(
+                f"無法連上 MySQL（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:
+        with self.con.cursor() as cursor:
+            cursor.execute(sql)
+            names = [d[0] for d in cursor.description or []]
+            rows = [tuple(_mysql_value(v) for v in row) for row in cursor.fetchall()]
+        return rows_to_arrow(names, rows)
+
+    def close(self) -> None:
+        self.con.close()
+
+
+def _mysql_value(value: Any) -> Any:
+    """BIT(1) 欄位（布林）以位元組傳回：轉成布林。"""
+    if isinstance(value, bytes) and len(value) == 1:
+        return value != b"\x00"
+    return value
+
+
+class SnowflakeExecutor:
+    """Snowflake（snowflake-connector-python，以 Arrow 取回）：工作階段的時區設為 UTC。尚未實機驗證。"""
+
+    dialect = "snowflake"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> SnowflakeExecutor:
+        try:
+            import snowflake.connector  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 Snowflake 驅動：uv sync --extra snowflake") from exc
+        server = connection.server or ""
+        account = params.get("account") or server.removesuffix(".snowflakecomputing.com")
+        if not account:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少帳戶（account）")
+        kwargs: dict[str, Any] = {
+            "account": account,
+            "user": params.get("user"),
+            "password": params.get("password"),
+            "authenticator": params.get("authenticator"),
+            "token": params.get("token"),
+            "warehouse": params.get("warehouse"),
+            "database": params.get("database") or connection.database,
+            "schema": params.get("schema") or connection.schema_name,
+            "role": params.get("role"),
+        }
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:  # pragma: no cover - 需要 Snowflake
+            con = snowflake.connector.connect(
+                session_parameters={"TIMEZONE": params.get("timezone") or "UTC"}, **kwargs
+            )
+        except Exception as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                f"無法連上 Snowflake（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:  # pragma: no cover - 需要 Snowflake
+        cursor = self.con.cursor()
+        try:
+            cursor.execute(sql)
+            table = cursor.fetch_arrow_all()
+            if table is None:
+                # 沒有資料列時不回傳 Arrow：依欄名建立空的資料表
+                names = [d[0] for d in cursor.description or []]
+                return pa.table({name: pa.array([], pa.null()) for name in names})
+        finally:
+            cursor.close()
+        return normalize_arrow(table)
+
+    def close(self) -> None:  # pragma: no cover
+        self.con.close()
+
+
 # ---------------------------------------------------------------- Arrow
 
 
@@ -410,9 +590,12 @@ __all__ = [
     "DatabricksExecutor",
     "DuckDBExecutor",
     "Executor",
+    "MySQLExecutor",
     "OracleExecutor",
     "PostgresExecutor",
+    "SnowflakeExecutor",
     "SourceConnectionError",
+    "SqlServerExecutor",
     "config_path",
     "executor_for",
     "load_connections",

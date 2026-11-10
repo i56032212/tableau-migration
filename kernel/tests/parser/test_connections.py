@@ -161,11 +161,19 @@ def test_unsupported_connections(tmp_path: Path) -> None:
     assert any("連線類型 exasol 尚不支援" in r for r in reasons(ir))
 
     # 認得的連線類型，但還沒有方言轉譯與執行器
-    mssql = "<connection class='sqlserver' server='crm.example.com' dbname='crm' />"
-    ir = parse(tmp_path, live_datasource(mssql, table), lenient=True)
-    assert any("連線類型 sqlserver 尚無 SQL 轉譯與執行器" in r for r in reasons(ir))
+    teradata = "<connection class='teradata' server='crm.example.com' dbname='crm' />"
+    ir = parse(tmp_path, live_datasource(teradata, table), lenient=True)
+    assert any("連線類型 teradata 尚無 SQL 轉譯與執行器" in r for r in reasons(ir))
     conn = ir.datasources[0].connection
-    assert isinstance(conn, LiveConnection) and conn.dialect == "tsql"
+    assert isinstance(conn, LiveConnection) and conn.dialect == "teradata"
+
+    # SQL Server、MySQL、Snowflake 已有轉譯與執行器
+    for dbclass, dialect in (("sqlserver", "tsql"), ("mysql", "mysql"), ("snowflake", "snowflake")):
+        named = f"<connection class='{dbclass}' server='db.example.com' dbname='crm' />"
+        ir = parse(tmp_path, live_datasource(named, table), lenient=True)
+        assert not any("尚無 SQL 轉譯與執行器" in r for r in reasons(ir))
+        conn = ir.datasources[0].connection
+        assert isinstance(conn, LiveConnection) and conn.dialect == dialect
 
     union = "<relation type='union'><relation name='A' table='[A]' type='table' /></relation>"
     ir = parse(tmp_path, live_datasource(ORACLE, union), lenient=True)

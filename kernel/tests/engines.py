@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from tmig.data.sources import PostgresExecutor, normalize_arrow
+from tmig.data.sources import MySQLExecutor, PostgresExecutor, normalize_arrow
 from tmig.ir import IR, Datasource, ExtractConnection, LiveConnection, TableRelation
 
 REQUIRED = os.environ.get("TMIG_REQUIRE_ENGINES") == "1"
@@ -201,6 +202,150 @@ def pg_load(con: Any, name: str, table: pa.Table, schema: str | None = None) -> 
 
 def postgres_executor(con: Any) -> PostgresExecutor:
     return PostgresExecutor(con)
+
+
+# ---------------------------------------------------------------- MySQL
+
+
+@contextlib.contextmanager
+def mysql_server() -> Iterator[dict[str, Any]]:
+    """回傳 PyMySQL 的連線參數。環境變數 TMIG_TEST_MYSQL（user:password@host:port）提供時直接使用
+    （CI 用執行環境內建的 MySQL）；否則找 mysqld，在暫存目錄建立臨時的伺服器，測試結束後關閉。"""
+    url = os.environ.get("TMIG_TEST_MYSQL")
+    if url:
+        auth, _, address = url.rpartition("@")
+        user, _, password = auth.partition(":")
+        host, _, port = address.partition(":")
+        yield {"host": host, "port": int(port or 3306), "user": user, "password": password}
+        return
+    mysqld = shutil.which("mysqld") or (
+        "/usr/sbin/mysqld" if Path("/usr/sbin/mysqld").is_file() else None
+    )
+    if mysqld is None or sys.platform == "win32":
+        unavailable("找不到 MySQL 的執行檔（mysqld）")
+        return
+    root = Path(tempfile.mkdtemp(prefix="tmig-mysql-"))
+    data, socket_path = root / "data", root / "mysql.sock"
+    base = [mysqld, "--no-defaults", f"--datadir={data}"]
+    if sys.platform != "win32" and os.geteuid() == 0:
+        base.append("--user=root")
+    try:
+        subprocess.run(
+            [*base, "--initialize-insecure"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=180,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        shutil.rmtree(root, ignore_errors=True)
+        unavailable(f"無法初始化臨時的 MySQL：{exc}")
+        return
+    port = _free_port()
+    server = subprocess.Popen(
+        [
+            *base,
+            f"--port={port}",
+            "--bind-address=127.0.0.1",
+            f"--socket={socket_path}",
+            "--mysqlx=OFF",
+            "--skip-log-bin",
+            f"--pid-file={root / 'mysqld.pid'}",
+            f"--log-error={root / 'error.log'}",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    params = {"host": "127.0.0.1", "port": port, "user": "root", "password": ""}
+    try:
+        import pymysql
+    except ImportError:
+        server.terminate()
+        shutil.rmtree(root, ignore_errors=True)
+        unavailable("未安裝 PyMySQL")
+        return
+    for _ in range(240):
+        try:
+            pymysql.connect(**params).close()
+            break
+        except pymysql.Error:
+            if server.poll() is not None:
+                break
+            time.sleep(0.25)
+    else:
+        server.terminate()
+        shutil.rmtree(root, ignore_errors=True)
+        unavailable("臨時的 MySQL 沒有在時間內啟動")
+        return
+    if server.poll() is not None:
+        log = (root / "error.log").read_text(encoding="utf-8", errors="replace")[-1000:]
+        shutil.rmtree(root, ignore_errors=True)
+        unavailable(f"無法啟動臨時的 MySQL：{log}")
+        return
+    try:
+        yield params
+    finally:
+        server.terminate()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            server.wait(timeout=60)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+MYSQL_TYPES = {
+    "int64": "BIGINT",
+    "int32": "INT",
+    "double": "DOUBLE",
+    "float": "FLOAT",
+    "string": "VARCHAR(1024)",
+    "large_string": "VARCHAR(1024)",
+    "bool": "BOOLEAN",
+    "date32[day]": "DATE",
+}
+
+
+def mysql_connect(params: dict[str, Any], database: str = "tmig_test") -> Any:
+    """建立測試的資料庫（utf8mb4_bin：區分大小寫與重音，與 DuckDB 的比較相同）並連線。"""
+    import pymysql
+
+    with (
+        contextlib.closing(pymysql.connect(**params, autocommit=True)) as con,
+        con.cursor() as cursor,
+    ):
+        cursor.execute(f"DROP DATABASE IF EXISTS `{database}`")
+        cursor.execute(f"CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+    return pymysql.connect(**params, database=database, charset="utf8mb4", autocommit=True)
+
+
+def mysql_load(con: Any, name: str, table: pa.Table) -> None:
+    """Arrow 資料表 → MySQL 資料表（名稱與欄名原樣，以反引號包住）。"""
+
+    def kind(field: pa.Field) -> str:
+        if pa.types.is_timestamp(field.type):
+            return "DATETIME(6)"
+        return MYSQL_TYPES[str(field.type)]
+
+    columns = ", ".join(f"`{f.name}` {kind(f)}" for f in table.schema)
+    names = ", ".join(f"`{n}`" for n in table.column_names)
+    marks = ", ".join(["%s"] * len(table.column_names))
+    with con.cursor() as cursor:
+        cursor.execute(f"DROP TABLE IF EXISTS `{name}`")
+        cursor.execute(f"CREATE TABLE `{name}` ({columns}) COLLATE utf8mb4_bin")
+        rows = [tuple(row.values()) for row in table.to_pylist()]
+        for start in range(0, len(rows), 1000):
+            cursor.executemany(
+                f"INSERT INTO `{name}` ({names}) VALUES ({marks})", rows[start : start + 1000]
+            )
+
+
+def mysql_executor(con: Any) -> MySQLExecutor:
+    """與 MySQLExecutor.open 相同的工作階段設定；連線的定序也是 utf8mb4_bin（常值之間的比較區分大小寫）。"""
+    with con.cursor() as cursor:
+        cursor.execute("SET SESSION TRANSACTION READ ONLY")
+        cursor.execute("SET time_zone = '+00:00'")
+        cursor.execute("SET lc_time_names = 'en_US'")
+        cursor.execute("SET collation_connection = 'utf8mb4_bin'")
+    return MySQLExecutor(con)
 
 
 # ---------------------------------------------------------------- Spark
@@ -421,9 +566,19 @@ def _emulate(node: Any) -> Any:
         if isinstance(fmt, exp.Literal) and fmt.name.upper() in CHAR_PARTS:
             return _duck(CHAR_PARTS[fmt.name.upper()], x=node.this.this)
     if isinstance(node, exp.Cast) and node.to.this == exp.DataType.Type.DECIMAL:
-        # Oracle 的 NUMBER(19) 是整數（DuckDB 的日期只能加減 INTEGER）；NUMBER 是十進位的浮點數
-        target = "INTEGER" if len(node.to.expressions) == 1 else "DOUBLE"
+        # Oracle 的 NUMBER(19) 是整數；NUMBER 是十進位的浮點數
+        target = "BIGINT" if len(node.to.expressions) == 1 else "DOUBLE"
         return exp.Cast(this=node.this, to=exp.DataType.build(target))
+    if isinstance(node, exp.Round) and node.args.get("decimals") is not None:
+        # DuckDB 的 ROUND 小數位數只接受 INTEGER
+        node.set("decimals", exp.Cast(this=node.args["decimals"], to=exp.DataType.build("INTEGER")))
+        return node
+    if isinstance(node, exp.Chr):
+        node.set(
+            "expressions",
+            [exp.Cast(this=e, to=exp.DataType.build("INTEGER")) for e in node.expressions],
+        )
+        return node
     if isinstance(node, exp.ToChar):
         fmt = node.args.get("format")
         if fmt is None:
@@ -469,4 +624,187 @@ def _emulate(node: Any) -> Any:
             text = text.replace(oracle, strftime)
         text = text.replace('"', "")
         return _duck(f"try_strptime({{s}}, '{text}')", s=value)
+    return node
+
+
+# ---------------------------------------------------------------- SQL Server（模擬）
+
+
+class TSqlEmulator:
+    """測試用：沒有 SQL Server 實機，把轉譯後的 T-SQL 以 SQLGlot 轉回 DuckDB，SQL Server 特有的語意
+    （FLOAT(53)、BIT、NVARCHAR(MAX)、LEN 不計結尾的空白、浮點數轉整數時捨去、DATETIME2FROMPARTS、
+    VAR／STDEVP 等）依官方文件模擬後在 DuckDB 執行。
+
+    檢查的是轉譯的結構（GROUP BY、TOP、布林值以 BIT 表示、Null 的比較、字串常值）與函式對照的寫法；
+    SQL Server 函式本身的語意依官方文件模擬，仍待實機驗證。
+    """
+
+    dialect = "tsql"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        tree = sqlglot.parse_one(sql, read="tsql")
+        duck = _visit(tree, _emulate_tsql).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+TSQL_AGGREGATES = {"VAR": "var_samp", "VARP": "var_pop", "STDEVP": "stddev_pop"}
+
+
+def _emulate_tsql(node: Any) -> Any:
+    from sqlglot import exp
+
+    if isinstance(node, exp.National):
+        return exp.Literal.string(node.name)
+    if isinstance(node, exp.DataType):
+        if node.this in (exp.DataType.Type.FLOAT, exp.DataType.Type.DOUBLE):
+            return exp.DataType.build("DOUBLE")
+        if node.this in (
+            exp.DataType.Type.NVARCHAR,
+            exp.DataType.Type.VARCHAR,
+            exp.DataType.Type.TEXT,
+        ):
+            return exp.DataType.build("VARCHAR")
+        if node.this == exp.DataType.Type.BIT:
+            return exp.DataType.build("BOOLEAN")
+        return node
+    if isinstance(node, exp.Cast) and node.to.this in (
+        exp.DataType.Type.BIGINT,
+        exp.DataType.Type.INT,
+    ):
+        # SQL Server 的浮點數轉整數是捨去（DuckDB 是四捨五入）；布林值轉整數照常
+        # （欄位與整數的轉型不受影響：產生的 SQL 中浮點數的欄位轉整數一定先捨去）
+        inner = node.this
+        while isinstance(inner, exp.Paren):
+            inner = inner.this
+        if isinstance(inner, (exp.Column, exp.Literal, exp.Cast, exp.Case)):
+            return node
+        return _duck(f"CAST(trunc({{x}}) AS {node.to.sql('duckdb')})", x=node.this)
+    if isinstance(node, exp.Length):
+        return _duck("length(rtrim({x}))", x=node.this)
+    if isinstance(node, exp.Round) and node.args.get("truncate") is not None:
+        return _duck("trunc({x})", x=node.this)
+    if isinstance(node, exp.Anonymous):
+        name = node.name.upper()
+        args = node.expressions
+        if name == "ROUND" and len(args) == 3:
+            return _duck("trunc({x})", x=args[0])
+        if name == "NCHAR":
+            return _duck("chr(CAST({x} AS INTEGER))", x=args[0])
+        if name in TSQL_AGGREGATES:
+            return _duck(f"{TSQL_AGGREGATES[name]}({{x}})", x=args[0])
+        if name == "DATETIME2FROMPARTS":
+            y, m, d, hh, mi, ss, fraction, precision = args
+            return _duck(
+                "make_timestamp(CAST({y} AS BIGINT), CAST({m} AS BIGINT), CAST({d} AS BIGINT), "
+                "CAST({hh} AS BIGINT), CAST({mi} AS BIGINT), "
+                "CAST(trunc({ss}) AS DOUBLE) + CAST(trunc({f}) AS DOUBLE) / pow(10, {p}))",
+                y=y,
+                m=m,
+                d=d,
+                hh=hh,
+                mi=mi,
+                ss=ss,
+                f=fraction,
+                p=precision,
+            )
+    return node
+
+
+# ---------------------------------------------------------------- Snowflake（模擬）
+
+
+class SnowflakeEmulator:
+    """測試用：沒有 Snowflake 實機，把轉譯後的 Snowflake SQL 以 SQLGlot 轉回 DuckDB，Snowflake 特有的函式
+    （REGEXP_INSTR 的參數、TRY_TO_TIMESTAMP_NTZ 的格式等）依官方文件模擬後在 DuckDB 執行。
+
+    檢查的是轉譯的結構與函式對照的寫法；Snowflake 函式本身的語意依官方文件模擬，仍待實機驗證。
+    """
+
+    dialect = "snowflake"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        tree = sqlglot.parse_one(sql, read="snowflake")
+        duck = _visit(tree, _emulate_snowflake).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+SNOWFLAKE_TO_STRFTIME = [
+    ("YYYY", "%Y"),
+    ("HH24", "%H"),
+    ("HH12", "%I"),
+    ("MMMM", "%B"),
+    ("MON", "%b"),
+    ("FF6", "%f"),
+    ("YY", "%y"),
+    ("MM", "%m"),
+    ("DD", "%d"),
+    ("MI", "%M"),
+    ("SS", "%S"),
+    ("AM", "%p"),
+]
+
+
+def _snowflake_format(text: str) -> str:
+    """Snowflake 的日期格式（文字以雙引號包住）→ strftime。"""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == '"':
+            end = text.index('"', i + 1)
+            out.append(text[i + 1 : end].replace("%", "%%"))
+            i = end + 1
+            continue
+        for token, strftime in SNOWFLAKE_TO_STRFTIME:
+            if text.startswith(token, i):
+                out.append(strftime)
+                i += len(token)
+                break
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _emulate_snowflake(node: Any) -> Any:
+    from sqlglot import exp
+
+    if isinstance(node, exp.RegexpInstr) or (
+        isinstance(node, exp.Anonymous) and node.name.upper() == "REGEXP_INSTR"
+    ):
+        subject = node.this if isinstance(node, exp.RegexpInstr) else node.expressions[0]
+        pattern = node.expression if isinstance(node, exp.RegexpInstr) else node.expressions[1]
+        flags = node.args.get("parameters") if isinstance(node, exp.RegexpInstr) else None
+        if flags is None and isinstance(node, exp.Anonymous) and len(node.expressions) > 5:
+            flags = node.expressions[5]
+        option = "i" if flags is not None and "i" in flags.name else "c"
+        return _duck(
+            f"(CASE WHEN regexp_matches({{s}}, {{p}}, '{option}') THEN 1 ELSE 0 END)",
+            s=subject,
+            p=pattern,
+        )
+    if isinstance(node, exp.StrToTime) and node.args.get("safe"):
+        # SQLGlot 已把格式換成 strftime，但沒有去掉包住文字的雙引號
+        fmt = node.args["format"]
+        text = fmt.name.replace('"', "") if isinstance(fmt, exp.Literal) else None
+        if text is not None:
+            return _duck(f"try_strptime({{s}}, '{text}')", s=node.this)
+    if isinstance(node, exp.Anonymous) and node.name.upper() == "TRY_TO_TIMESTAMP_NTZ":
+        value, fmt = node.expressions
+        return _duck(f"try_strptime({{s}}, '{_snowflake_format(fmt.name)}')", s=value)
     return node

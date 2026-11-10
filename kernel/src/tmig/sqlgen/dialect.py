@@ -11,8 +11,9 @@
   不送出可能算錯的 SQL（SQLGlot 對不認得的函式不會報錯，只會原樣輸出）
 - 自訂 SQL 以佔位資料表表示，產生目標方言後才換回原文（原文不經過轉譯）
 
-PostgreSQL（16 以上）與 Spark（Databricks 的引擎，3.4 以上）有實跑測試（tests/sqlgen/test_dialect.py）；
-Oracle（12.2 以上）依官方文件撰寫，尚未在 Oracle 實機驗證，見測試中的轉譯快照。
+PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）與 MySQL（8.0 以上）有實跑測試
+（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）與 Snowflake 依官方文件撰寫，
+尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的語意模擬後執行，並有轉譯快照。
 
 各方言已知與 DuckDB（＝萃取時的結果）不同之處，與 Tableau 直接連該資料庫時相同，不另外處理：
 字串的排序與比較依資料庫的定序；Oracle 的空字串即 Null、ADD_MONTHS 在月底的行為；
@@ -40,11 +41,15 @@ SQLGLOT_NAMES: dict[str, str] = {
     "databricks": "databricks",
     "spark": "spark",
     "oracle": "oracle",
+    "mysql": "mysql",
+    "tsql": "tsql",
+    "snowflake": "snowflake",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
-"""已有轉譯規則的方言；其他方言（SQL Server、MySQL、Snowflake、BigQuery、Teradata、Redshift）尚不支援。"""
+"""已有轉譯規則的方言；其他方言（BigQuery、Teradata、Redshift）尚不支援。"""
 
-PLACEHOLDER = re.compile(r"[\"`]" + re.escape(CUSTOM_SQL_PREFIX) + r"(\d+)[\"`]")
+PLACEHOLDER = re.compile(r"[\"`\[]" + re.escape(CUSTOM_SQL_PREFIX) + r"(\d+)[\"`\]]")
+"""自訂 SQL 的佔位資料表（各方言的識別字引號：雙引號、反引號，SQL Server 的方括號）。"""
 CUSTOM_SQL_PARAMETER = re.compile(
     r"<\s*\[Parameters\]\s*\.\s*\[((?:[^\]]|\]\])+)\]\s*>", re.IGNORECASE
 )
@@ -182,19 +187,25 @@ def sql_literal(value: Scalar, datatype: str, dialect: str) -> str:
     if isinstance(value, bool) or datatype == "boolean":
         if dialect == "oracle":
             return "1" if value else "0"
+        if dialect == "tsql":
+            return f"CAST({1 if value else 0} AS BIT)"
         return "TRUE" if value else "FALSE"
     if datatype in ("integer", "real") and isinstance(value, (int, float)):
         if isinstance(value, float) and not math.isfinite(value):
             return "NULL"
         return repr(int(value)) if datatype == "integer" else repr(float(value))
-    if datatype == "date":
-        return f"DATE {_single_quote(str(value)[:10])}"
-    if datatype == "datetime":
-        return f"TIMESTAMP {_single_quote(str(value).replace('T', ' '))}"
+    if datatype in ("date", "datetime"):
+        text = str(value)[:10] if datatype == "date" else str(value).replace("T", " ")
+        if dialect == "tsql":
+            # SQL Server 沒有 DATE '…' 的常值寫法；ISO 格式的字串轉型不受語言設定影響
+            return f"CAST({_single_quote(text)} AS {'DATE' if datatype == 'date' else 'DATETIME2'})"
+        return f"{'DATE' if datatype == 'date' else 'TIMESTAMP'} {_single_quote(text)}"
     text = str(value)
-    if dialect in ("spark", "databricks"):
-        # Spark 的字串常值以反斜線跳脫
+    if dialect in ("spark", "databricks", "mysql", "snowflake"):
+        # 字串常值以反斜線跳脫
         return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    if dialect == "tsql" and not text.isascii():
+        return "N" + _single_quote(text)
     return _single_quote(text)
 
 
@@ -1475,11 +1486,925 @@ def _qualify_star(select: exp.Select) -> None:
     )
 
 
+# ---------------------------------------------------------------- MySQL
+
+
+class MySQLRewriter(Rewriter):
+    """MySQL 8.0 以上（有實跑測試）。連線時設定工作階段的時區為 UTC、月份與星期名稱為英文（en_US）。
+
+    布林值是 1／0：取回後依輸出欄的型別轉回布林（tmig.data.live）。沒有 MEDIAN、PERCENTILE、CORR、COVAR
+    的彙總函式，列為不支援（與 Tableau 連 MySQL 相同）。字串的比較依資料庫的定序（預設不分大小寫）。
+    """
+
+    name = "MySQL"
+    dialect = "mysql"
+    allowed = frozenset(
+        {
+            exp.Year,
+            exp.Quarter,
+            exp.Month,
+            exp.Day,
+            exp.Hour,
+            exp.Minute,
+            exp.Second,
+            exp.DayOfYear,
+            exp.Monthname,
+            exp.Dayname,
+            exp.Left,
+            exp.Right,
+            exp.Repeat,
+            exp.Unicode,
+            exp.DPipe,
+            exp.Pi,
+            exp.Degrees,
+            exp.Radians,
+            exp.Variance,
+            exp.VariancePop,
+            exp.Mod,
+            exp.IntDiv,
+            exp.NullSafeEQ,
+            exp.CurrentDate,
+            exp.Boolean,
+            exp.Log,
+        }
+    )
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        interval = exp.Interval(this=_paren(amount), unit=exp.Var(this=unit.upper()))
+        return exp.Paren(this=exp.Add(this=_paren(value), expression=interval))
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        return {
+            exp.DayOfWeek: lambda n: exp.Paren(
+                this=exp.Sub(this=_fn("DAYOFWEEK", n.this), expression=_num(1))
+            ),
+            exp.DayOfWeekIso: lambda n: exp.Paren(
+                this=exp.Add(this=_fn("WEEKDAY", n.this), expression=_num(1))
+            ),
+            # 模式 3：ISO 週（星期一開始、第一週含 1 月 4 日）
+            exp.Week: lambda n: _fn("WEEK", n.this, _num(3)),
+            # MySQL 的 ROUND(DOUBLE) 依 C 函式庫（多半是四捨六入五成雙）；轉成 DECIMAL 才是四捨五入
+            exp.Round: lambda n: _cast(
+                _fn(
+                    "ROUND",
+                    _cast(n.this, _type("DECIMAL(65, 30)", "mysql")),
+                    n.args.get("decimals") or _num(0),
+                ),
+                "DOUBLE",
+            ),
+            exp.TimestampTrunc: self.trunc,
+            exp.DateTrunc: self.trunc,
+            exp.DateDiff: lambda n: self.boundary_diff(
+                _unit(n),
+                n.expression,
+                n.this,
+                lambda field, value: _extract(field.upper(), value),
+                lambda start, end: _fn("DATEDIFF", end, start),
+            ),
+            exp.DateFromParts: self.make_date,
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.TimeToUnix: lambda n: exp.Div(
+                this=_fn(
+                    "TIMESTAMPDIFF",
+                    exp.Var(this="MICROSECOND"),
+                    _str("1970-01-01 00:00:00"),
+                    n.this,
+                ),
+                expression=_num(1000000.0),
+            ),
+            exp.TryCast: self.try_cast,
+            exp.Cast: self.cast,
+            exp.Chr: lambda n: _mark(
+                exp.Var(
+                    this=f"CONVERT(CHAR({self._raw(n.expressions[0])} USING utf32) USING utf8mb4)"
+                )
+            ),
+            exp.SplitPart: self.split_part,
+            exp.RegexpLike: lambda n: _fn("REGEXP_LIKE", n.this, n.expression, _str("c")),
+            exp.RegexpExtract: self.regexp_extract,
+            exp.RegexpReplace: self.regexp_replace,
+            exp.Corr: self.no_aggregate,
+            exp.CovarSamp: self.no_aggregate,
+            exp.CovarPop: self.no_aggregate,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            "isoyear": lambda a: exp.IntDiv(
+                this=_fn("YEARWEEK", a[0], _num(3)), expression=_num(100)
+            ),
+            "now": lambda a: _fn("NOW", _num(6)),
+            "try_strptime": self.parse_date,
+        }
+
+    def no_aggregate(self, node: exp.Expr) -> exp.Expr:
+        raise DialectError(f"MySQL 沒有 {_describe(node).removeprefix('函式 ')} 彙總函式")
+
+    def _raw(self, node: exp.Expr) -> str:
+        self.validate(node)
+        return node.sql(dialect="mysql", identify=True)
+
+    def trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        value = node.this
+        formats = {
+            "year": "%Y-01-01",
+            "month": "%Y-%m-01",
+            "day": "%Y-%m-%d",
+            "hour": "%Y-%m-%d %H:00:00",
+            "minute": "%Y-%m-%d %H:%i:00",
+            "second": "%Y-%m-%d %H:%i:%s",
+        }
+        if unit == "quarter":
+            # 該季第一個月的 1 日：年初加上（季 - 1）× 3 個月
+            year_start = _fn("MAKEDATE", _fn("YEAR", value.copy()), _num(1))
+            months = exp.Mul(
+                this=_paren(exp.Sub(this=_fn("QUARTER", value), expression=_num(1))),
+                expression=_num(3),
+            )
+            return _cast(
+                self.add_interval(year_start, "month", months), _type("DATETIME(6)", "mysql")
+            )
+        if unit not in formats:
+            raise DialectError(f"MySQL 的日期截斷不支援單位 {unit}")
+        # 與 DuckDB 相同一律是時間戳記（需要日期時，產生的 SQL 另外轉型）
+        text = _fn("DATE_FORMAT", value, _str(formats[unit]))
+        return _cast(text, _type("DATETIME(6)", "mysql"))
+
+    def make_date(self, node: exp.Expr) -> exp.Expr:
+        """年初加上（月 - 1）個月、再加上（日 - 1）天（MySQL 的 MAKEDATE 是年與一年中的第幾天）。"""
+        y, m, d = (node.args[k] for k in ("year", "month", "day"))
+        start = _fn("MAKEDATE", y, _num(1))
+        months = self.add_interval(start, "month", exp.Sub(this=_paren(m), expression=_num(1)))
+        return self.add_interval(months, "day", exp.Sub(this=_paren(d), expression=_num(1)))
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        day = _cast(
+            self.make_date(exp.DateFromParts(year=y, month=m, day=d)),
+            _type("DATETIME(6)", "mysql"),
+        )
+        micros = _fn(
+            "ROUND",
+            exp.Mul(
+                this=_paren(
+                    exp.Add(
+                        this=exp.Add(
+                            this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                            expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+                        ),
+                        expression=_paren(ss),
+                    )
+                ),
+                expression=_num(1000000),
+            ),
+        )
+        return self.add_interval(day, "microsecond", micros)
+
+    def try_cast(self, node: exp.Expr) -> exp.Expr:
+        """MySQL 沒有 TRY_CAST：字串轉成數字時不合格式的得 0，先以正規表示式檢查；
+        轉成日期、時間時不合格式的本來就是 Null。"""
+        target = node.args["to"]
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT, *INTEGER_TYPES):
+            text = node.this
+            number = _str(
+                r"^[[:space:]]*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?[[:space:]]*$"
+            )
+            valid = _mark(exp.RegexpLike(this=text.copy(), expression=number))
+            return exp.Case(
+                ifs=[exp.If(this=valid, true=self.cast(exp.Cast(this=text, to=target)))]
+            )
+        return self.cast(exp.Cast(this=node.this, to=target))
+
+    def cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        if not isinstance(target, exp.DataType):
+            return node
+        kind = target.this
+        value = node.this
+        if kind == exp.DataType.Type.BOOLEAN:
+            # 數字或布林值 → 布林：不是 0 為真（Null 仍是 Null）
+            return exp.Paren(this=exp.NEQ(this=_paren(value), expression=_num(0)))
+        if kind in INTEGER_TYPES:
+            return _mark(exp.Cast(this=value, to=_type("SIGNED", "mysql")))
+        if kind in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT, exp.DataType.Type.CHAR):
+            return _mark(exp.Cast(this=value, to=_type("CHAR", "mysql")))
+        if kind in TIMESTAMP_TYPES:
+            return _mark(exp.Cast(this=value, to=_type("DATETIME(6)", "mysql")))
+        if kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT, exp.DataType.Type.DATE):
+            return node
+        if kind == exp.DataType.Type.DECIMAL:
+            return node
+        raise DialectError(f"MySQL 不支援轉成 {target.sql('duckdb')} 型別")
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        """SUBSTRING_INDEX 取第 n 段；超過段數時為空字串（與 DuckDB 的 split_part 相同）。"""
+        text, delimiter = node.this, node.args["delimiter"]
+        index = node.args["part_index"]
+        count = exp.Add(
+            this=exp.Div(
+                this=_paren(
+                    exp.Sub(
+                        this=_fn("CHAR_LENGTH", text.copy()),
+                        expression=_fn(
+                            "CHAR_LENGTH", _fn("REPLACE", text.copy(), delimiter.copy(), _str(""))
+                        ),
+                    )
+                ),
+                expression=_fn("CHAR_LENGTH", delimiter.copy()),
+            ),
+            expression=_num(1),
+        )
+        n = _paren(index)
+        inner = _fn("SUBSTRING_INDEX", text, delimiter.copy(), n.copy())
+        positive = _fn("SUBSTRING_INDEX", inner.copy(), delimiter.copy(), _num(-1))
+        negative = _fn("SUBSTRING_INDEX", inner, delimiter.copy(), _num(1))
+        out_of_range = exp.Or(
+            this=exp.EQ(this=n.copy(), expression=_num(0)),
+            expression=exp.GT(this=_fn("ABS", n.copy()), expression=_paren(count)),
+        )
+        return exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.Or(
+                        this=exp.Is(this=text.copy(), expression=exp.Null()),
+                        expression=exp.Is(this=n.copy(), expression=exp.Null()),
+                    ),
+                    true=exp.Null(),
+                ),
+                exp.If(this=out_of_range, true=_str("")),
+                exp.If(this=exp.GT(this=n.copy(), expression=_num(0)), true=positive),
+            ],
+            default=negative,
+        )
+
+    def regexp_extract(self, node: exp.Expr) -> exp.Expr:
+        """MySQL 的 REGEXP_SUBSTR 只取整段符合的文字：取群組時，把符合的文字再以樣式換成該群組。"""
+        group = _literal_int(node.args.get("group"))
+        if group is None:
+            raise DialectError("REGEXP_EXTRACT 的群組不是常值")
+        pattern = node.expression
+        matched = _fn("REGEXP_SUBSTR", node.this, pattern.copy(), _num(1), _num(1), _str("c"))
+        if group == 0:
+            return matched
+        return _fn(
+            "REGEXP_REPLACE", matched, pattern, _str(f"${group}"), _num(1), _num(0), _str("c")
+        )
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        replacement = node.args.get("replacement") or _str("")
+        if not (isinstance(replacement, exp.Literal) and replacement.is_string):
+            raise DialectError("REGEXP_REPLACE 的取代字串不是常值")
+        # ICU 的取代字串與 Java 相同：$1 為群組、\$ 為錢字號
+        text = _str(java_replacement(replacement.name))
+        return _fn("REGEXP_REPLACE", node.this, node.expression, text, _num(1), _num(0), _str("c"))
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：STR_TO_DATE 不符合格式時為 Null。"""
+        fmt = _convert_format(
+            _format_literal(args[1]), MYSQL_FORMAT, lambda t: t.replace("%", "%%")
+        )
+        return _cast(_fn("STR_TO_DATE", args[0], _str(fmt)), _type("DATETIME(6)", "mysql"))
+
+
+MYSQL_FORMAT = {
+    "%Y": "%Y",
+    "%y": "%y",
+    "%m": "%m",
+    "%d": "%d",
+    "%H": "%H",
+    "%I": "%h",
+    "%M": "%i",
+    "%S": "%s",
+    "%p": "%p",
+    "%b": "%b",
+    "%B": "%M",
+    "%j": "%j",
+    "%f": "%f",
+}
+"""strftime 的格式 → MySQL 的 STR_TO_DATE 格式（分鐘是 %i、月份名稱是 %M）。"""
+
+
+# ---------------------------------------------------------------- Snowflake
+
+
+MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _names(number: exp.Expr, names: tuple[str, ...]) -> exp.Expr:
+    """1 起算的編號 → 英文名稱（DuckDB 的 monthname、dayname 是完整的英文名稱）。"""
+    return exp.Case(
+        this=number,
+        ifs=[exp.If(this=_num(i), true=_str(name)) for i, name in enumerate(names, start=1)],
+    )
+
+
+class SnowflakeRewriter(Rewriter):
+    """Snowflake：依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回 DuckDB 模擬執行）。
+
+    連線時把工作階段的時區（TIMEZONE）設為 UTC。識別字一律加引號，與 .twb 中的名稱相同（區分大小寫）。
+    星期與週數一律以 ISO 的函式計算（DAYOFWEEKISO、WEEKISO），不受 WEEK_START 等工作階段參數影響。
+    """
+
+    name = "Snowflake"
+    dialect = "snowflake"
+    allowed = frozenset(
+        {
+            exp.Year,
+            exp.Quarter,
+            exp.Month,
+            exp.Day,
+            exp.Hour,
+            exp.Minute,
+            exp.Second,
+            exp.DayOfYear,
+            exp.DayOfWeekIso,
+            exp.TimestampTrunc,
+            exp.DateTrunc,
+            exp.DateDiff,
+            exp.DateFromParts,
+            exp.Left,
+            exp.Right,
+            exp.Repeat,
+            exp.Unicode,
+            exp.DPipe,
+            exp.SplitPart,
+            exp.Split,
+            exp.ArrayToString,
+            exp.Pi,
+            exp.Degrees,
+            exp.Radians,
+            exp.Median,
+            exp.PercentileCont,
+            exp.Variance,
+            exp.VariancePop,
+            exp.Mod,
+            exp.IntDiv,
+            exp.NullSafeEQ,
+            exp.CurrentDate,
+            exp.Boolean,
+            exp.Log,
+        }
+    )
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        return _fn("DATEADD", exp.Var(this=unit.upper()), amount, value)
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        return {
+            exp.DayOfWeek: lambda n: _fn("MOD", _fn("DAYOFWEEKISO", n.this), _num(7)),
+            exp.Week: lambda n: _fn("WEEKISO", n.this),
+            exp.Round: self.round,
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.Monthname: lambda n: _names(_fn("MONTH", n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(_fn("DAYOFWEEKISO", n.this), DAY_NAMES),
+            exp.TimeToUnix: lambda n: exp.Div(
+                this=_fn("DATE_PART", exp.Var(this="EPOCH_MICROSECOND"), n.this),
+                expression=_num(1000000.0),
+            ),
+            # Snowflake 的 TRY_CAST 只接受字串
+            exp.TryCast: lambda n: _mark(
+                exp.TryCast(this=_fn("TO_VARCHAR", n.this), to=n.args["to"], requires_string=True)
+            ),
+            exp.RegexpLike: self.regexp_like,
+            exp.RegexpExtract: self.regexp_extract,
+            exp.RegexpReplace: lambda n: _fn(
+                "REGEXP_REPLACE",
+                n.this,
+                n.expression,
+                n.args.get("replacement") or _str(""),
+                _num(1),
+                _num(0),
+                _str("c"),
+            ),
+            exp.Length: lambda n: _fn("ARRAY_SIZE", n.this) if _is_array(n.this) else n,
+            exp.Split: lambda n: _array(n),
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            "isoyear": lambda a: _fn("YEAROFWEEKISO", a[0]),
+            "now": lambda a: _cast(_fn("CURRENT_TIMESTAMP"), _type("TIMESTAMP_NTZ", "snowflake")),
+            "try_strptime": self.parse_date,
+            "list_slice": self.list_slice,
+        }
+
+    def round(self, node: exp.Expr) -> exp.Expr:
+        """小數位數以常值寫出（CAST(1 AS INTEGER) → 1）。"""
+        digits = node.args.get("decimals")
+        fixed = _literal_int(digits) if digits is not None else 0
+        if digits is not None and fixed is None:
+            raise DialectError("Snowflake 的 ROUND 小數位數必須是常值")
+        return _fn("ROUND", node.this, _num(fixed or 0))
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        whole = _fn("FLOOR", ss.copy())
+        nanos = _fn(
+            "ROUND",
+            exp.Mul(
+                this=_paren(exp.Sub(this=_paren(ss), expression=whole.copy())),
+                expression=_num(1000000000),
+            ),
+        )
+        return _fn("TIMESTAMP_NTZ_FROM_PARTS", y, m, d, hh, mi, whole, nanos)
+
+    def regexp_like(self, node: exp.Expr) -> exp.Expr:
+        """部分符合（DuckDB 的 regexp_matches）：REGEXP_INSTR > 0（Snowflake 的 REGEXP_LIKE 要整段符合）。
+        Snowflake 不支援樣式中的 (?i)：開頭的 (?i) 改成不分大小寫的參數。"""
+        pattern = node.expression
+        flags = "c"
+        if (
+            isinstance(pattern, exp.Literal)
+            and pattern.is_string
+            and pattern.name.startswith("(?i)")
+        ):
+            pattern, flags = _str(pattern.name[4:]), "i"
+        position = _fn("REGEXP_INSTR", node.this, pattern, _num(1), _num(1), _num(0), _str(flags))
+        return exp.Paren(this=exp.GT(this=position, expression=_num(0)))
+
+    def regexp_extract(self, node: exp.Expr) -> exp.Expr:
+        group = _literal_int(node.args.get("group"))
+        if group is None:
+            raise DialectError("REGEXP_EXTRACT 的群組不是常值")
+        args = [node.this, node.expression, _num(1), _num(1), _str("c" if group == 0 else "ce")]
+        if group > 0:
+            args.append(_num(group))
+        return _fn("REGEXP_SUBSTR", *args)
+
+    def list_slice(self, args: list[exp.Expr]) -> exp.Expr:
+        """DuckDB 的 list_slice（1 起算、含結尾）→ ARRAY_SLICE（0 起算、不含結尾）。"""
+        array, start, end = args
+        if not _is_array(array):
+            raise DialectError("list_slice 只支援 FINDNTH 的寫法")
+        begin = exp.Sub(this=_paren(start), expression=_num(1))
+        return _array(_fn("ARRAY_SLICE", array, begin, end))
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：TRY_TO_TIMESTAMP_NTZ 不符合格式時為 Null。"""
+        fmt = _convert_format(_format_literal(args[1]), SNOWFLAKE_FORMAT, _double_quote)
+        return _fn("TRY_TO_TIMESTAMP_NTZ", args[0], _str(fmt))
+
+
+SNOWFLAKE_FORMAT = {
+    "%Y": "YYYY",
+    "%y": "YY",
+    "%m": "MM",
+    "%d": "DD",
+    "%H": "HH24",
+    "%I": "HH12",
+    "%M": "MI",
+    "%S": "SS",
+    "%p": "AM",
+    "%b": "MON",
+    "%B": "MMMM",
+    "%f": "FF6",
+}
+"""strftime 的格式 → Snowflake 的日期格式（文字以雙引號包住）。"""
+
+
+# ---------------------------------------------------------------- SQL Server
+
+
+TSQL_EPOCH = "CAST('1970-01-01' AS DATETIME2)"
+TSQL_SUNDAY = "CAST('1900-01-07' AS DATE)"
+"""1900-01-07 是星期日：與它相隔的天數除以 7 的餘數就是星期（不受 @@DATEFIRST 影響）。"""
+TSQL_MONDAY = "CAST('1900-01-01' AS DATE)"
+SPLIT_LIMIT = 10
+"""SQL Server 的 SPLIT 以巢狀的 CHARINDEX 取第 n 段：位置是常值且不超過這個數。"""
+
+
+class TSqlRewriter(Rewriter):
+    """SQL Server 2017 以上與 Azure SQL Database：依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回
+    DuckDB 模擬執行）。
+
+    連線時設定 SET LANGUAGE us_english（英文的月份與星期名稱）；星期以與某個星期日相隔的天數計算，
+    不受 @@DATEFIRST 影響。SQL Server 沒有布林型別：查詢結果或運算中的布林值（例如布林維度）列為不支援。
+    非英文字元的字串常值以 N'…' 表示（nvarchar），轉成字串一律是 NVARCHAR(MAX)，中文不會因資料庫的定序
+    變成問號。沒有正規表示式、DATEPARSE、MEDIAN／PERCENTILE 的彙總與 CORR／COVAR，列為不支援
+    （與 Tableau 連 SQL Server 相同）。字串的比較依資料庫的定序（預設不分大小寫）。
+    """
+
+    name = "SQL Server"
+    dialect = "tsql"
+    allowed = frozenset(
+        {
+            exp.Year,
+            exp.Month,
+            exp.Day,
+            exp.Left,
+            exp.Right,
+            exp.Repeat,
+            exp.Unicode,
+            exp.Pi,
+            exp.Mod,
+            exp.IntDiv,
+            exp.Log,
+        }
+    )
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        # DATEADD 的數量是 INT：微秒拆成天、秒與微秒（一天的微秒數超過 INT 的範圍）
+        if unit == "microsecond":
+            total = _paren(amount)
+            days = exp.IntDiv(this=total.copy(), expression=_num(86400000000))
+            seconds = exp.Mod(
+                this=_paren(exp.IntDiv(this=total.copy(), expression=_num(1000000))),
+                expression=_num(86400),
+            )
+            micros = exp.Mod(this=total, expression=_num(1000000))
+            shifted = self._dateadd("day", days, _cast(value, "DATETIME2", "tsql"))
+            return self._dateadd("microsecond", micros, self._dateadd("second", seconds, shifted))
+        if unit in ("hour", "minute", "second"):
+            # DATE 不能加時、分、秒：先轉成 DATETIME2（DuckDB 的結果也是時間戳記）
+            value = _cast(value, "DATETIME2", "tsql")
+        return self._dateadd(unit, amount, value)
+
+    def _dateadd(self, unit: str, amount: exp.Expr, value: exp.Expr) -> exp.Expr:
+        return _fn("DATEADD", exp.Var(this=unit.upper()), amount, value)
+
+    def _part(self, unit: str, value: exp.Expr) -> exp.Expr:
+        return _fn("DATEPART", exp.Var(this=unit.upper()), value)
+
+    def _days_since(self, anchor: str, value: exp.Expr) -> exp.Expr:
+        return _fn("DATEDIFF", exp.Var(this="DAY"), exp.Var(this=anchor), _cast(value, "DATE"))
+
+    def _weekday(self, anchor: str, value: exp.Expr) -> exp.Expr:
+        """與 anchor（星期日或星期一）相隔的天數除以 7 的餘數（0–6）；早於 anchor 時也是 0–6。"""
+        return exp.Paren(
+            this=exp.Mod(
+                this=_paren(
+                    exp.Add(
+                        this=exp.Mod(this=self._days_since(anchor, value), expression=_num(7)),
+                        expression=_num(7),
+                    )
+                ),
+                expression=_num(7),
+            )
+        )
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        def part(unit: str) -> Callable[[exp.Expr], exp.Expr]:
+            return lambda n: self._part(unit, n.this)
+
+        def floated(name: str) -> Callable[[exp.Expr], exp.Expr]:
+            # SQL Server 的 DEGREES、RADIANS 結果與參數同型別（整數參數得整數）
+            return lambda n: _fn(name, _cast(n.this, "DOUBLE"))
+
+        return {
+            exp.Quarter: part("quarter"),
+            exp.Hour: part("hour"),
+            exp.Minute: part("minute"),
+            exp.Second: part("second"),
+            exp.DayOfYear: part("dayofyear"),
+            exp.Week: part("iso_week"),
+            exp.DayOfWeek: lambda n: self._weekday(TSQL_SUNDAY, n.this),
+            exp.DayOfWeekIso: lambda n: exp.Paren(
+                this=exp.Add(this=self._weekday(TSQL_MONDAY, n.this), expression=_num(1))
+            ),
+            exp.TimestampTrunc: self.trunc,
+            exp.DateTrunc: self.trunc,
+            exp.DateDiff: lambda n: _fn(
+                "DATEDIFF_BIG", exp.Var(this=_unit(n).upper()), n.expression, n.this
+            ),
+            exp.DateFromParts: lambda n: _fn(
+                "DATEFROMPARTS", *(n.args[k] for k in ("year", "month", "day"))
+            ),
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.Monthname: lambda n: _fn("DATENAME", exp.Var(this="MONTH"), n.this),
+            exp.Dayname: lambda n: _fn("DATENAME", exp.Var(this="WEEKDAY"), n.this),
+            exp.TimeToUnix: lambda n: exp.Div(
+                this=_cast(
+                    _fn(
+                        "DATEDIFF_BIG",
+                        exp.Var(this="MICROSECOND"),
+                        exp.Var(this=TSQL_EPOCH),
+                        _cast(n.this, "DATETIME2", "tsql"),
+                    ),
+                    "DOUBLE",
+                ),
+                expression=_num(1000000.0),
+            ),
+            exp.CurrentDate: lambda n: _cast(_fn("GETDATE"), "DATE"),
+            exp.TryCast: self.try_cast,
+            exp.Cast: self.cast,
+            exp.DPipe: self.concat,
+            exp.Length: self.length,
+            exp.Substring: self.substring,
+            exp.SplitPart: self.split_part,
+            exp.Chr: lambda n: _fn("NCHAR", n.expressions[0]),
+            exp.Pow: lambda n: _fn("POWER", _cast(n.this, "DOUBLE"), n.expression),
+            exp.Degrees: floated("DEGREES"),
+            exp.Radians: floated("RADIANS"),
+            exp.Avg: lambda n: _mark(exp.Avg(this=_cast(n.this, "DOUBLE"))),
+            # SQL Server 的 ROUND 一定要有小數位數
+            exp.Round: lambda n: _fn("ROUND", n.this, n.args.get("decimals") or _num(0)),
+            exp.Variance: lambda n: _fn("VAR", n.this),
+            exp.VariancePop: lambda n: _fn("VARP", n.this),
+            exp.StddevSamp: lambda n: _fn("STDEV", n.this),
+            exp.StddevPop: lambda n: _fn("STDEVP", n.this),
+            exp.Corr: self.unsupported("CORR"),
+            exp.CovarSamp: self.unsupported("COVAR"),
+            exp.CovarPop: self.unsupported("COVARP"),
+            exp.RegexpLike: self.unsupported("正規表示式"),
+            exp.RegexpExtract: self.unsupported("正規表示式"),
+            exp.RegexpReplace: self.unsupported("正規表示式"),
+            exp.NullSafeEQ: lambda n: exp.Paren(
+                this=exp.Or(
+                    this=exp.EQ(this=n.this.copy(), expression=n.expression.copy()),
+                    expression=exp.And(
+                        this=exp.Is(this=n.this, expression=exp.Null()),
+                        expression=exp.Is(this=n.expression, expression=exp.Null()),
+                    ),
+                )
+            ),
+            exp.Literal: self.literal,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            # ISO 週的年：該週星期四所在的年
+            "isoyear": lambda a: _fn(
+                "YEAR",
+                self._dateadd(
+                    "day",
+                    exp.Sub(this=_num(3), expression=self._weekday(TSQL_MONDAY, a[0].copy())),
+                    _cast(a[0], "DATE"),
+                ),
+            ),
+            "now": lambda a: _cast(_fn("GETDATE"), "DATETIME2", "tsql"),
+        }
+
+    @staticmethod
+    def unsupported(what: str) -> Callable[[exp.Expr], exp.Expr]:
+        def raise_(node: exp.Expr) -> exp.Expr:
+            raise DialectError(f"SQL Server 沒有 {what}")
+
+        return raise_
+
+    def literal(self, node: exp.Expr) -> exp.Expr:
+        """非 ASCII 的字串常值寫成 N'…'（nvarchar）。"""
+        assert isinstance(node, exp.Literal)
+        if node.is_string and not node.name.isascii():
+            return _mark(exp.National(this=node.name))
+        return node
+
+    def trunc(self, node: exp.Expr) -> exp.Expr:
+        """與 DuckDB 相同一律是時間戳記（需要日期時，產生的 SQL 另外轉型）。"""
+        unit = _unit(node)
+        if unit in ("year", "quarter", "month", "day"):
+            return _cast(self._trunc_date(unit, node.this), "DATETIME2", "tsql")
+        return self._trunc_time(unit, node.this)
+
+    def _trunc_date(self, unit: str, value: exp.Expr) -> exp.Expr:
+        if unit == "year":
+            return _fn("DATEFROMPARTS", _fn("YEAR", value), _num(1), _num(1))
+        if unit == "quarter":
+            month = exp.Add(
+                this=exp.Mul(
+                    this=_paren(
+                        exp.Sub(this=self._part("quarter", value.copy()), expression=_num(1))
+                    ),
+                    expression=_num(3),
+                ),
+                expression=_num(1),
+            )
+            return _fn("DATEFROMPARTS", _fn("YEAR", value), month, _num(1))
+        if unit == "month":
+            return _fn("DATEFROMPARTS", _fn("YEAR", value.copy()), _fn("MONTH", value), _num(1))
+        return _cast(value, "DATE")
+
+    def _trunc_time(self, unit: str, value: exp.Expr) -> exp.Expr:
+        seconds = {"hour": 3600, "minute": 60, "second": 1}
+        if unit not in seconds:
+            raise DialectError(f"SQL Server 的日期截斷不支援單位 {unit}")
+        # 當天零時加上整點（分、秒）：DATEDIFF 的秒數在一天之內不會超過 INT
+        midnight = _cast(_cast(value.copy(), "DATE"), "DATETIME2", "tsql")
+        elapsed = _fn("DATEDIFF", exp.Var(this="SECOND"), midnight.copy(), value)
+        whole = exp.Mul(
+            this=_paren(exp.IntDiv(this=elapsed, expression=_num(seconds[unit]))),
+            expression=_num(seconds[unit]),
+        )
+        return self._dateadd("second", whole, midnight)
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        whole = _fn("FLOOR", ss.copy())
+        micros = _fn(
+            "ROUND",
+            exp.Mul(
+                this=_paren(exp.Sub(this=_paren(ss), expression=whole.copy())),
+                expression=_num(1000000),
+            ),
+            _num(0),
+        )
+        return _fn("DATETIME2FROMPARTS", y, m, d, hh, mi, whole, micros, _num(6))
+
+    def try_cast(self, node: exp.Expr) -> exp.Expr:
+        """空字串（或只有空白）轉成數字或日期時，SQL Server 的 TRY_CAST 得 0 或 1900-01-01；改為 Null。"""
+        target = self._target(node.args["to"])
+        trimmed = _fn("NULLIF", _fn("LTRIM", _fn("RTRIM", node.this)), _str(""))
+        return _mark(exp.TryCast(this=trimmed, to=target))
+
+    def cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        if not isinstance(target, exp.DataType):
+            return node
+        kind = target.this
+        value = node.this
+        if kind == exp.DataType.Type.BOOLEAN:
+            raise DialectError("SQL Server 沒有布林型別，轉成布林值的計算尚不支援")
+        if _is_predicate(value) and kind in INTEGER_TYPES:
+            return exp.Case(
+                ifs=[
+                    exp.If(this=value, true=_num(1)),
+                    exp.If(this=exp.Not(this=_paren(value.copy())), true=_num(0)),
+                ]
+            )
+        if kind == exp.DataType.Type.BIGINT and isinstance(value, exp.Sum):
+            # 整數的 SUM 在 SQL Server 是 INT，超過範圍會溢位：先轉成 BIGINT 再加總
+            return _mark(exp.Sum(this=_mark(exp.Cast(this=value.this, to=_type("BIGINT")))))
+        return _mark(exp.Cast(this=value, to=self._target(target)))
+
+    def _target(self, target: exp.Expr) -> exp.DataType:
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT, exp.DataType.Type.CHAR):
+            return _type("NVARCHAR(MAX)", "tsql")
+        if kind in INTEGER_TYPES:
+            return _type("BIGINT") if kind == exp.DataType.Type.BIGINT else _type("INT")
+        if kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT):
+            return _type("FLOAT(53)", "tsql")
+        if kind == exp.DataType.Type.DECIMAL:
+            return target
+        if kind == exp.DataType.Type.DATE:
+            return target
+        if kind in TIMESTAMP_TYPES:
+            return _type("DATETIME2", "tsql")
+        raise DialectError(f"SQL Server 不支援轉成 {target.sql('duckdb')} 型別")
+
+    def concat(self, node: exp.Expr) -> exp.Expr:
+        """字串相加：遇到 Null 得 Null（與 Tableau 相同；CONCAT 把 Null 當成空字串）。
+        連續相加併成一個 CONCAT（每個運算元只出現兩次，不會越接越長）。"""
+        operands: list[exp.Expr] = []
+        for side in (node.this, node.expression):
+            inner = side
+            while isinstance(inner, exp.Paren):
+                inner = inner.this
+            operands += [o.copy() for o in inner.meta.get("concat", [])] or [side]
+        any_null: exp.Expr = exp.Is(this=operands[0].copy(), expression=exp.Null())
+        for operand in operands[1:]:
+            any_null = exp.Or(
+                this=any_null, expression=exp.Is(this=operand.copy(), expression=exp.Null())
+            )
+        case = exp.Case(
+            ifs=[exp.If(this=any_null, true=exp.Null())],
+            default=_fn("CONCAT", *operands),
+        )
+        case.meta["concat"] = [o.copy() for o in operands]
+        return case
+
+    def length(self, node: exp.Expr) -> exp.Expr:
+        """LEN 不計結尾的空白：加上一個字元再減一。"""
+        if _is_array(node.this):
+            raise DialectError("SQL Server 沒有陣列（FINDNTH 等以陣列計算的函式）")
+        padded = self.concat(exp.DPipe(this=node.this, expression=_str(".")))
+        return exp.Paren(this=exp.Sub(this=_fn("LEN", padded), expression=_num(1)))
+
+    def substring(self, node: exp.Expr) -> exp.Expr:
+        """SQL Server 的 SUBSTRING 一定要有長度。"""
+        length = node.args.get("length") or _num(2147483647)
+        return _fn("SUBSTRING", node.this, node.args["start"], length)
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        """第 n 段：逐段以 CHARINDEX 找分隔字元（位置須為常值）；倒數第 n 段把字串反轉後取第 n 段。"""
+        text, delimiter = node.this, node.args["delimiter"]
+        index = _literal_int(node.args.get("part_index"))
+        if index is None or index == 0 or abs(index) > SPLIT_LIMIT:
+            raise DialectError(f"SQL Server 的 SPLIT 只支援 ±1 到 ±{SPLIT_LIMIT} 的常值位置")
+        if not (isinstance(delimiter, exp.Literal) and delimiter.is_string and delimiter.name):
+            raise DialectError("SQL Server 的 SPLIT 只支援常值的分隔字元")
+        if index < 0:
+            reversed_text = _fn("REVERSE", text)
+            reversed_delimiter = _str(delimiter.name[::-1])
+            return _fn("REVERSE", self._nth(reversed_text, reversed_delimiter, -index))
+        return self._nth(text, delimiter, index)
+
+    def _nth(self, text: exp.Expr, delimiter: exp.Expr, index: int) -> exp.Expr:
+        width = _num(len(delimiter.name))
+        rest: exp.Expr = text
+        for _ in range(index - 1):
+            position = _fn("CHARINDEX", delimiter.copy(), rest.copy())
+            rest = exp.Case(
+                ifs=[
+                    exp.If(
+                        this=exp.GT(this=position, expression=_num(0)),
+                        true=_fn(
+                            "SUBSTRING",
+                            rest.copy(),
+                            exp.Add(this=position.copy(), expression=width.copy()),
+                            _num(2147483647),
+                        ),
+                    )
+                ]
+            )
+        end = _fn(
+            "CHARINDEX",
+            delimiter.copy(),
+            _fn("CONCAT", rest.copy(), delimiter.copy()),
+        )
+        part = _fn("LEFT", rest.copy(), exp.Sub(this=end, expression=_num(1)))
+        # 原字串是 Null 得 Null；段數不夠得空字串
+        return exp.Case(
+            ifs=[
+                exp.If(this=exp.Is(this=text.copy(), expression=exp.Null()), true=exp.Null()),
+                exp.If(this=exp.Is(this=rest.copy(), expression=exp.Null()), true=_str("")),
+            ],
+            default=part,
+        )
+
+    def finish(self, tree: exp.Expr) -> None:
+        for select in list(tree.find_all(exp.Select)):
+            _expand_group_ordinals(select)
+        _bit_booleans(tree)
+
+
+def _tsql_condition(node: exp.Expr) -> bool:
+    """節點是否位在條件的位置；簡單 CASE（CASE x WHEN 值 …）的 WHEN 是比較的值，不是條件。"""
+    child, parent = node, node.parent
+    while isinstance(parent, exp.Paren):
+        child, parent = parent, parent.parent
+    if isinstance(parent, exp.If) and child.arg_key == "this":
+        case = parent.parent
+        return not (isinstance(case, exp.Case) and case.args.get("this") is not None)
+    return _condition_position(node)
+
+
+def _bit(predicate: exp.Expr) -> exp.Expr:
+    """值的位置的條件 → BIT：真為 1、假為 0、不明為 Null。"""
+    case = exp.Case(
+        ifs=[
+            exp.If(this=predicate.copy(), true=_num(1)),
+            exp.If(this=exp.Not(this=_paren(predicate.copy())), true=_num(0)),
+        ]
+    )
+    return _mark(exp.Cast(this=case, to=_type("BIT", "tsql")))
+
+
+def _bit_booleans(tree: exp.Expr) -> None:
+    """SQL Server 沒有布林型別：布林值以 BIT 表示。值的位置的條件轉成 BIT，條件位置的 BIT 值與 1 比較，
+    TRUE／FALSE 在條件位置寫成 1 = 1／1 = 0、在值的位置寫成 BIT 常值。"""
+    for node in list(tree.walk()):
+        if (
+            isinstance(node, PREDICATES)
+            and not isinstance(node, exp.Boolean)
+            and node.root() is tree
+            and node.parent is not None
+            and not _tsql_condition(node)
+        ):
+            node.replace(_bit(node))
+    for node in list(tree.walk()):
+        if isinstance(node, (exp.Paren, exp.Boolean)) or node.root() is not tree:
+            continue
+        if node.parent is not None and _tsql_condition(node) and not isinstance(node, PREDICATES):
+            node.replace(_mark(exp.EQ(this=_paren(node.copy()), expression=_num(1))))
+    for node in list(tree.find_all(exp.Boolean)):
+        if node.root() is not tree:
+            continue
+        value = 1 if node.this else 0
+        if _tsql_condition(node):
+            node.replace(_mark(exp.EQ(this=_num(1), expression=_num(value))))
+        else:
+            node.replace(_mark(exp.Cast(this=_num(value), to=_type("BIT", "tsql"))))
+
+
 REWRITERS: dict[str, Rewriter] = {
     "postgres": PostgresRewriter(),
     "databricks": SparkRewriter("Databricks", "databricks"),
     "spark": SparkRewriter(),
     "oracle": OracleRewriter(),
+    "mysql": MySQLRewriter(),
+    "snowflake": SnowflakeRewriter(),
+    "tsql": TSqlRewriter(),
 }
 
 

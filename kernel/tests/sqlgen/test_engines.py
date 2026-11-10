@@ -36,9 +36,15 @@ from tmig.verify.mapping import load_mapping
 
 from ..engines import (
     OracleEmulator,
+    SnowflakeEmulator,
     SparkExecutor,
+    TSqlEmulator,
     as_live,
     extract_tables,
+    mysql_connect,
+    mysql_executor,
+    mysql_load,
+    mysql_server,
     pg_connect,
     pg_load,
     postgres_cluster,
@@ -50,7 +56,9 @@ from .test_expr import AGG_CASES, COLUMNS, ROW_CASES, ROWS, Env
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = sorted(p.parent for p in (ROOT / "fixtures").glob("*/golden.ir.json"))
-ENGINES = ["postgres", "spark", "oracle"]
+ENGINES = ["postgres", "spark", "oracle", "mysql", "tsql", "snowflake"]
+EMULATED = {"oracle", "tsql", "snowflake"}
+"""沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。"""
 ORACLE_UNSUPPORTED = {
     # Oracle 的 SQL 沒有陣列（FINDNTH 以陣列計算）；SPLIT 只支援正整數常值的位置
     "FINDNTH('a-b-c', '-', 2)",
@@ -60,6 +68,45 @@ ORACLE_UNSUPPORTED = {
     "SPLIT('a-b-c', '-', -1)",
 }
 """Oracle 尚不支援的公式；結果是布林值的公式也不支援（Oracle 沒有布林型別）。"""
+NO_ARRAYS = {
+    "FINDNTH('a-b-c', '-', 2)",
+    "FINDNTH('a-b-c', '-', 3)",
+    "FINDNTH([Category], 'u', 2)",
+    "FINDNTH([Customer], 'n', 1)",
+}
+NO_STATISTICS = {
+    "MEDIAN([Sales])",
+    "PERCENTILE([Sales], 0.5)",
+    "CORR([Sales], [Quantity])",
+    "COVAR([Sales], [Quantity])",
+    "COVARP([Sales], [Quantity])",
+}
+NO_REGEX = {
+    "REGEXP_EXTRACT('abc 123', '[a-z]+\\s+(\\d+)')",
+    "REGEXP_EXTRACT([Category], 'ni.')",
+    "REGEXP_EXTRACT([Category], 'z(\\d)')",
+    "REGEXP_EXTRACT_NTH('abc 123', '([a-z]+)\\s+(\\d+)', 2)",
+    "REGEXP_EXTRACT_NTH('abc 123', '([a-z]+)\\s+(\\d+)', 0)",
+    "REGEXP_MATCH([Category], '^Furn')",
+    "REGEXP_MATCH([Category], '^furn')",
+    "REGEXP_MATCH([Category], '(?i)^furn')",
+    "REGEXP_REPLACE('abc 123', '\\s', '-')",
+    "REGEXP_REPLACE('a1b22', '(\\d)', '<$1>')",
+    "REGEXP_REPLACE('a1', '\\d', '\\$')",
+}
+NO_DATEPARSE = {
+    "DATEPARSE('dd.MM.yyyy HH:mm', '05.03.2024 14:07')",
+    "DATEPARSE('MMM d, yyyy', 'Mar 5, 2024')",
+    "DATEPARSE(\"yyyy'年'M'月'd'日'\", '2024年3月5日')",
+    "DATEPARSE('yyyy-MM-dd', 'x')",
+}
+UNSUPPORTED = {
+    # MySQL 沒有陣列，也沒有 MEDIAN、PERCENTILE、CORR、COVAR 的彙總函式
+    "mysql": NO_ARRAYS | NO_STATISTICS,
+    # SQL Server 另外沒有正規表示式與 DATEPARSE
+    "tsql": NO_ARRAYS | NO_STATISTICS | NO_REGEX | NO_DATEPARSE,
+}
+"""各方言尚不支援的公式（與 Tableau 連該資料庫相同，函式本身不存在）。"""
 ORACLE_UNSUPPORTED_SHEETS = {
     # 集合的 IN/OUT 是布林維度，Top N 集合的成員是布林欄位（Oracle 沒有布林型別）
     "ws_top_customers_vs_others",
@@ -101,6 +148,14 @@ def _expression_table() -> pa.Table:
     return pa.Table.from_pylist([dict(zip(COLUMNS, row, strict=True)) for row in ROWS], EXPR_SCHEMA)
 
 
+@pytest.fixture(scope="module")
+def mysql_params() -> Iterator[dict[str, Any]]:
+    """一個 MySQL（臨時的伺服器或 TMIG_TEST_MYSQL），測試的資料庫為 tmig_test。"""
+    with mysql_server() as params:
+        mysql_connect(params).close()
+        yield {**params, "database": "tmig_test"}
+
+
 @pytest.fixture(scope="module", params=ENGINES)
 def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
     # 兩份 fixture 的資料源 id 相同：資料表名稱加上 fixture 名稱
@@ -130,6 +185,34 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
                 OracleEmulator(con),
                 live("oracle", ["SALES"]),
             )
+        finally:
+            con.close()
+        return
+    if request.param in ("tsql", "snowflake"):
+        schema = "dbo" if request.param == "tsql" else "PUBLIC"
+        con = duckdb.connect()
+        con.execute(f'CREATE SCHEMA "{schema}"')
+        con.register("expression_rows", _expression_table())
+        con.execute("CREATE TABLE t AS SELECT * FROM expression_rows")
+        for name, table in tables.items():
+            con.register(f"rows_{name}", table)
+            con.execute(f'CREATE TABLE "{schema}"."{name}" AS SELECT * FROM "rows_{name}"')
+        emulator = TSqlEmulator(con) if request.param == "tsql" else SnowflakeEmulator(con)
+        try:
+            yield Engine(request.param, emulator, live(request.param, [schema]))
+        finally:
+            con.close()
+        return
+    if request.param == "mysql":
+        import pymysql
+
+        params = request.getfixturevalue("mysql_params")
+        con = pymysql.connect(**params, charset="utf8mb4", autocommit=True)
+        mysql_load(con, "t", _expression_table())
+        for name, table in tables.items():
+            mysql_load(con, name, table)
+        try:
+            yield Engine("mysql", mysql_executor(con), live("mysql"))
         finally:
             con.close()
         return
@@ -170,7 +253,7 @@ def _matches(actual: Any, expected: Any) -> bool:
 
 def _expect_unsupported(engine: Engine, formula: str) -> bool:
     if engine.name != "oracle":
-        return False
+        return formula in UNSUPPORTED.get(engine.name, set())
     return (
         formula in ORACLE_UNSUPPORTED
         or analyzer().analyze(parse_formula(formula)).datatype == "boolean"
@@ -264,3 +347,33 @@ def test_domain_queries(engine: Engine, kind: str) -> None:
             domain_sql(extract, ds.id, use, kind),  # type: ignore[arg-type]
         )
         assert remote.rows == local.rows, field
+
+
+def test_mysql_executor_session(mysql_params: dict[str, Any]) -> None:
+    """正式的連線方式（連線設定檔 → open_executor）：工作階段為唯讀、UTC、英文的月份與星期名稱。"""
+    from tmig.data.sources import ConnectionConfig, open_executor
+    from tmig.ir import LiveConnection
+
+    connection = LiveConnection(
+        kind="live",
+        connection_id="mysql_test",
+        dbclass="mysql",
+        dialect="mysql",
+        server=mysql_params["host"],
+        port=mysql_params["port"],
+        database=mysql_params["database"],
+    )
+    raw = {"driver": "mysql", "user": mysql_params["user"], "password": mysql_params["password"]}
+    executor = open_executor(
+        connection, {"mysql_test": ConnectionConfig("mysql_test", "mysql", raw)}
+    )
+    try:
+        row = executor.fetch(
+            "SELECT @@session.time_zone AS tz, @@lc_time_names AS names, "
+            "@@transaction_read_only AS ro, MONTHNAME(DATE '2024-02-01') AS m"
+        ).to_pylist()[0]
+        assert row == {"tz": "+00:00", "names": "en_US", "ro": 1, "m": "February"}
+        with pytest.raises(Exception, match="READ ONLY"):
+            executor.fetch("CREATE TABLE should_fail (x INT)")
+    finally:
+        executor.close()

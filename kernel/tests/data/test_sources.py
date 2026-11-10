@@ -200,7 +200,7 @@ def test_verify_live_fixture(tmp_path: Path) -> None:
 
 
 def connections_ir(tmp_path: Path) -> Path:
-    """三個資料源：Oracle、Databricks 與尚無執行器的 SQL Server。"""
+    """三個資料源：Oracle、Databricks 與尚無執行器的 Teradata。"""
     base = live_features()
     ds = base.datasources[0]
     column = next(f for f in ds.fields if f.column is not None)
@@ -224,9 +224,9 @@ def connections_ir(tmp_path: Path) -> Path:
         ),
         LiveConnection(
             kind="live",
-            connection_id="crm_mssql",
-            dbclass="sqlserver",
-            dialect="tsql",
+            connection_id="crm_td",
+            dbclass="teradata",
+            dialect="teradata",
             server="crm.example.com",
         ),
     ]
@@ -263,7 +263,7 @@ def test_connections_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     assert '[connections.sales_ora]\ndriver = "oracle"\nuser = "${TMIG_SALES_ORA_USER}"' in text
     assert 'password = "${TMIG_SALES_ORA_PASSWORD}"' in text
     assert '[connections.lake]\ndriver = "databricks"\naccess_token = "${TMIG_LAKE_TOKEN}"' in text
-    assert "連線類型 sqlserver 尚無執行器" in text
+    assert "連線類型 teradata 尚無執行器" in text
     # 範本可以直接當成設定檔讀取（憑證都是環境變數）
     out = tmp_path / "connections.toml"
     assert main(["connections", "template", str(path), "--out", str(out)]) == 0
@@ -292,13 +292,13 @@ access_token = "${{TMIG_TEST_MISSING_TOKEN}}"
         "失敗  lake（databricks，adb-1.azuredatabricks.net／main）：環境變數未設定：TMIG_TEST_MISSING_TOKEN"
         in out
     )
-    assert "失敗  crm_mssql（sqlserver，crm.example.com）：連線設定檔中沒有這個連線" in out
+    assert "失敗  crm_td（teradata，crm.example.com）：連線設定檔中沒有這個連線" in out
     assert "共 3 個連線：通過 1、失敗 2" in out
 
 
 def test_connection_statuses_without_connecting(tmp_path: Path) -> None:
     found = collect([load_ir(connections_ir(tmp_path))])
-    assert list(found) == ["crm_mssql", "lake", "sales_ora"]
+    assert list(found) == ["crm_td", "lake", "sales_ora"]
     statuses = check(found, duckdb_configs("sales_ora"), connect=False)
     assert [s.ok for s in statuses] == [False, False, True]
     assert statuses[2].message == "設定齊全（未測試連線）"

@@ -208,7 +208,8 @@ class ExprCompiler:
 
     def _add_days(self, value: str, days: str, datatype: str) -> str:
         if datatype == "date":
-            return f"({value} + CAST({days} AS INTEGER))"
+            # 寫成 interval 再轉回日期：各方言都轉譯得了（例如 MySQL 的日期加整數是把日期當成數字相加）
+            return f"CAST(({value} + to_days(CAST({days} AS INTEGER))) AS DATE)"
         return f"({value} + to_microseconds(CAST(round({days} * 86400000000) AS BIGINT)))"
 
     # ------------------------------------------------------------ 函式
@@ -494,10 +495,11 @@ class ExprCompiler:
                 f"make_date(CAST({a[0]} AS BIGINT), CAST({a[1]} AS BIGINT), CAST({a[2]} AS BIGINT))"
             )
         if name == "MAKEDATETIME":
+            # 日期加上時間在當天經過的微秒數（以 epoch 相減：MySQL、SQL Server、Snowflake 的時間不能直接相減）
             time = f"CAST({a[1]} AS TIMESTAMP)"
-            return (
-                f"(CAST(CAST({a[0]} AS DATE) AS TIMESTAMP) + ({time} - date_trunc('day', {time})))"
-            )
+            midnight = f"CAST(date_trunc('day', {time}) AS TIMESTAMP)"
+            micros = f"CAST(round((epoch({time}) - epoch({midnight})) * 1000000) AS BIGINT)"
+            return f"(CAST(CAST({a[0]} AS DATE) AS TIMESTAMP) + to_microseconds({micros}))"
         if name == "MAKETIME":
             # Tableau 的時間是 1899-12-30 當天的日期時間
             return (
@@ -568,7 +570,7 @@ class ExprCompiler:
             if source in ("integer", "real"):
                 # 數值是天數（1899-12-30 為第 0 天），小數部分是一天中的時間
                 if name == "DATE":
-                    return f"({DAY_ZERO} + CAST(trunc({a[0]}) AS INTEGER))"
+                    return f"CAST(({DAY_ZERO} + to_days(CAST(trunc({a[0]}) AS INTEGER))) AS DATE)"
                 # 天數、一天中的整秒與微秒分開加：每一段的數值都不大（各資料庫的整數範圍都裝得下），
                 # 也不受大數的浮點誤差影響（例如 10:44:59.99999997 進位成 10:45:00）
                 seconds = f"(({a[0]} - floor({a[0]})) * 86400)"
@@ -597,7 +599,7 @@ class ExprCompiler:
         if part == "week":
             offset = f"((dayofweek({value}) - {ws} + 7) % 7)"
             if datatype == "date":
-                return f"(CAST({value} AS DATE) - CAST({offset} AS INTEGER))"
+                return f"CAST((CAST({value} AS DATE) - to_days(CAST({offset} AS INTEGER))) AS DATE)"
             return f"(date_trunc('day', {value}) - to_days(CAST({offset} AS INTEGER)))"
         truncated = f"date_trunc('{part}', {value})"
         return cast(truncated, "date") if datatype == "date" else cast(truncated, "datetime")

@@ -28,6 +28,12 @@ DBCLASS_DRIVERS = {
     "spark": "databricks",
     "postgres": "postgres",
     "greenplum": "postgres",
+    "sqlserver": "sqlserver",
+    "azure_sqldb": "sqlserver",
+    "azure_sql_dw": "sqlserver",
+    "mysql": "mysql",
+    "mariadb": "mysql",
+    "snowflake": "snowflake",
 }
 """Tableau 的連線類型 → 執行器（其他類型尚無執行器）。"""
 
@@ -119,6 +125,9 @@ def template(found: dict[str, FoundConnection]) -> str:
         else:
             lines.append(f'user = "${{{env_name(connection_id, "USER")}}}"')
             lines.append(f'password = "${{{env_name(connection_id, "PASSWORD")}}}"')
+        if driver == "snowflake":
+            lines.append('# warehouse = "…"   # 省略時用帳號的預設 warehouse')
+            lines.append('# role = "…"')
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

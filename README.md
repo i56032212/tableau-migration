@@ -143,7 +143,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 
 ## Live 連線
 
-資料源是 Live 連線的報表（Oracle、Databricks、PostgreSQL），查詢時連到來源資料庫：
+資料源是 Live 連線的報表（Oracle、SQL Server、MySQL、Snowflake、Databricks、PostgreSQL），查詢時連到來源資料庫：
 
 1. `uv run tmig connections template <報表或資料夾> --out connections.toml` 產生連線設定檔範本
 2. 帳號、密碼、權杖在設定檔中一律寫成 `${環境變數}`（直接寫值會被拒絕），由部署環境或密碼管理服務提供；
@@ -151,8 +151,24 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 3. `uv run tmig connections check <報表或資料夾>` 檢查設定、環境變數，並以唯讀查詢測試連線
 4. 之後 `tmig verify`、`tmig query`、`tmig serve` 遇到 Live 連線都會依設定檔連線
 
-連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra databricks`、`--extra postgres`。
-IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
+連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra sqlserver`、`--extra mysql`、`--extra snowflake`、
+`--extra databricks`、`--extra postgres`。IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
+
+各資料庫的轉譯與驗證程度（`kernel/src/tmig/sqlgen/dialect.py`）：
+
+| 資料庫 | 驗證 | 說明 |
+| --- | --- | --- |
+| PostgreSQL 16 以上 | 實跑 | |
+| Databricks／Spark 3.4 以上 | 實跑（本機 Spark） | 工作階段的時區為 UTC |
+| MySQL 8.0 以上（MariaDB 依 MySQL） | 實跑 | 工作階段為唯讀、UTC、英文的月份與星期名稱；布林值是 1／0，取回後轉回布林；沒有 MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH |
+| SQL Server 2017 以上、Azure SQL | 模擬（依官方文件） | 布林值以 BIT 表示；非英文的字串常值為 `N'…'`；星期不受 `@@DATEFIRST` 影響；沒有正規表示式、DATEPARSE、MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH；SPLIT 的位置須為 ±1 到 ±10 的常值 |
+| Snowflake | 模擬（依官方文件） | 工作階段的時區為 UTC；星期與週數以 ISO 的函式計算，不受 WEEK_START 影響 |
+| Oracle 12.2 以上 | 模擬（依官方文件） | 沒有布林值（布林維度等列為不支援） |
+
+「實跑」是公式的每個函式與兩份 fixture 的每張工作表 × 每組篩選都在該資料庫執行，與預期結果比對；「模擬」是轉譯後的
+SQL 以 SQLGlot 轉回 DuckDB、該資料庫特有的函式依官方文件的語意模擬後執行同樣的比對，並有轉譯快照
+（`fixtures/*/sql/<方言>/`）供審核，仍待實機驗證。與 Tableau 直接連該資料庫時相同，字串的比較與排序依資料庫的定序
+（SQL Server、MySQL 預設不分大小寫），轉成字串的小數格式依資料庫。
 
 ### 依檢視者的身分連線
 
@@ -770,7 +786,7 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
 合併集合（XML 的寫法尚未在公開報表中看到）、地圖、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
-Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
+Relationship 模型中同一個彙總用到多張資料表的欄位、BigQuery、Teradata、Redshift 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
 Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、
 標題中的 Table Calculation 值、

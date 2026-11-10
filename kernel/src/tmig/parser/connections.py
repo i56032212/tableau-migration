@@ -51,7 +51,9 @@ DIALECTS: dict[str, Dialect] = {
 }
 """Tableau 的連線類型 → SQLGlot 方言（類型名稱依公開資料整理，待真實報表確認）。"""
 
-EXECUTABLE: frozenset[str] = frozenset({"oracle", "databricks", "spark", "postgres"})
+EXECUTABLE: frozenset[str] = frozenset(
+    {"oracle", "databricks", "spark", "postgres", "tsql", "mysql", "snowflake"}
+)
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
 
 FILE_CLASSES = frozenset({"excel-direct", "textscan", "excel", "csv", "hyper", "dataengine"})
