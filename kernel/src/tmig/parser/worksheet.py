@@ -57,7 +57,12 @@ from tmig.parser.fields import (
     use_from_name,
     value_type,
 )
-from tmig.parser.formats import pane_cell_align, pane_mark_size, worksheet_formats
+from tmig.parser.formats import (
+    pane_cell_align,
+    pane_label_font,
+    pane_mark_size,
+    worksheet_formats,
+)
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -368,6 +373,7 @@ class SheetParser:
             cell_color=sheet_formats.cell_color,
             cell_align=sheet_formats.cell_align,
             field_label_background=sheet_formats.field_label_background,
+            fonts=sheet_formats.fonts,
             fit=ctx.sheet_fits.get(self.name, "standard"),
             source_ref=xpath(el),
         )
@@ -691,6 +697,7 @@ class SheetParser:
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
         marks.label_color = label_color(pane)
         marks.cell_align = pane_cell_align(pane)
+        marks.label_font = pane_label_font(pane)
         marks.mark_size = pane_mark_size(pane)
         return marks, dims
 

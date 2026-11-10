@@ -688,6 +688,7 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "label_font": null,
         "mark_size": null,
         "size": null,
         "label": [
@@ -840,6 +841,7 @@
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "fonts": {},
       "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[1]"
@@ -876,6 +878,7 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "label_font": null,
         "mark_size": null,
         "size": null,
         "label": [],
@@ -984,6 +987,7 @@
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "fonts": {},
       "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[2]"
@@ -1020,6 +1024,7 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "label_font": null,
         "mark_size": null,
         "size": null,
         "label": [
@@ -1122,6 +1127,7 @@
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "fonts": {},
       "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[3]"
@@ -1155,6 +1161,7 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "label_font": null,
         "mark_size": null,
         "size": null,
         "label": [
@@ -1281,6 +1288,7 @@
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "fonts": {},
       "field_label_background": null,
       "fit": "standard",
       "source_ref": "/workbook/worksheets/worksheet[4]"

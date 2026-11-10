@@ -11,6 +11,13 @@
     "measures": {
       "c1": "sum(f_avg_customer_sales)"
     },
+    "title_color": "#333333",
+    "title_font": {
+      "family": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "size": 20.0,
+      "weight": 400,
+      "italic": false
+    },
     "sizing": {
       "rows": {
         "step": 20
@@ -38,11 +45,44 @@
     "contains": "padding"
   },
   "config": {
+    "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
     "view": {
       "stroke": null
     },
     "axis": {
-      "labelLimit": 160
+      "labelLimit": 160,
+      "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "labelFontSize": 12.0,
+      "labelFontWeight": 400,
+      "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "titleFontSize": 12.0,
+      "titleFontWeight": 400,
+      "labelColor": "#555555",
+      "titleColor": "#333333"
+    },
+    "legend": {
+      "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "labelFontSize": 12.0,
+      "labelFontWeight": 400,
+      "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "titleFontSize": 12.0,
+      "titleFontWeight": 600,
+      "labelColor": "#555555",
+      "titleColor": "#333333"
+    },
+    "header": {
+      "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "labelFontSize": 12.0,
+      "labelFontWeight": 400,
+      "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "titleFontSize": 12.0,
+      "titleFontWeight": 400,
+      "labelColor": "#555555",
+      "titleColor": "#333333"
+    },
+    "text": {
+      "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "fontSize": 12.0
     }
   },
   "encoding": {
@@ -59,6 +99,9 @@
       "axis": {
         "ticks": false,
         "zindex": 1,
+        "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "labelFontSize": 12.0,
+        "labelFontWeight": 400,
         "labelAlign": "left",
         "labelPadding": 52,
         "labelLimit": 48,
@@ -70,7 +113,8 @@
         "titleBaseline": "bottom",
         "titleX": -52,
         "titleY": -4,
-        "titleFontSize": 10,
+        "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "titleFontSize": 12.0,
         "titleFontWeight": 600,
         "titleLimit": 48
       },
@@ -105,7 +149,8 @@
     {
       "mark": {
         "type": "text",
-        "fontSize": 10,
+        "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "fontSize": 12.0,
         "lineBreak": "\n",
         "align": "left",
         "dx": 3

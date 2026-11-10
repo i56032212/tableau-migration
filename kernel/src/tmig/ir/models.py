@@ -766,6 +766,21 @@ class TextRun(IRModel):
 HexColor = Annotated[str, Field(pattern=r"^#[0-9a-f]{6}([0-9a-f]{2})?$")]
 """色彩：#rrggbb，可加上不透明度 #rrggbbaa（小寫）。"""
 
+FontElement = Literal[
+    "worksheet", "label", "cell", "field-labels", "title", "legend", "legend-title", "tooltip"
+]
+"""工作表上可以設定字型的元素（Tableau 的 Format > Font）：worksheet 為整張工作表的預設，label 為標題
+成員與座標軸的刻度，cell 為文字表的儲存格，field-labels 為欄位標籤，title 為工作表標題。"""
+
+
+class FontStyle(IRModel):
+    """字型的設定；沒有寫的沿用上一層（活頁簿 → 工作表 → 元素 → 欄位）與 Tableau 的預設。"""
+
+    family: str | None = Field(default=None, description="字型名稱，例如 Tableau Book、Arial")
+    size: float | None = Field(default=None, gt=0, description="字級（pt）")
+    bold: bool | None = None
+    italic: bool | None = None
+
 
 class ColorAssignment(IRModel):
     """離散色彩中指定給一個值的顏色。"""
@@ -817,6 +832,9 @@ class Marks(IRModel):
     )
     stroke: HexColor | None = Field(
         default=None, description="標記的框線顏色（色彩的「效果＞框線」）；None 為沒有框線"
+    )
+    label_font: FontStyle | None = Field(
+        default=None, description="標記標籤的字型（標記卡的 datalabel）；None 依工作表"
     )
     mark_size: float | None = Field(
         default=None,
@@ -921,6 +939,9 @@ class Axis(IRModel):
     )
     align: Literal["left", "center", "right"] | None = Field(
         default=None, description="列標題成員的水平對齊；None 依預設（靠左）"
+    )
+    font: FontStyle | None = Field(
+        default=None, description="標題成員或座標軸刻度的字型（這個欄位的設定）；None 依工作表"
     )
 
 
@@ -1042,6 +1063,10 @@ class Worksheet(IRModel):
         default=None,
         description="文字表儲存格中文字的水平對齊（工作表 <style> 中的設定，標記卡的 cell_align 優先）；"
         "None 依 Tableau 的預設（有標題的文字表數字靠右、文字靠左，只有一格時置中）",
+    )
+    fonts: dict[FontElement, FontStyle] = Field(
+        default_factory=dict,
+        description="各元素的字型（活頁簿的設定在前、工作表的覆寫）；沒有設定的元素依 Tableau 的預設",
     )
     field_label_background: HexColor | None = Field(
         default=None, description="欄位標籤的背景顏色（列標題上方的欄位名稱）；None 為不上色"

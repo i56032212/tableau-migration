@@ -12,6 +12,13 @@
       "c1": "sum(f_sales)",
       "c2": "sum(f_sales)#tc_percent_of_total_sales"
     },
+    "title_color": "#333333",
+    "title_font": {
+      "family": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "size": 20.0,
+      "weight": 400,
+      "italic": false
+    },
     "sizing": {
       "rows": {},
       "columns": {}
@@ -37,11 +44,44 @@
     "contains": "padding"
   },
   "config": {
+    "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
     "view": {
       "stroke": null
     },
     "axis": {
-      "labelLimit": 160
+      "labelLimit": 160,
+      "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "labelFontSize": 12.0,
+      "labelFontWeight": 400,
+      "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "titleFontSize": 12.0,
+      "titleFontWeight": 400,
+      "labelColor": "#555555",
+      "titleColor": "#333333"
+    },
+    "legend": {
+      "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "labelFontSize": 12.0,
+      "labelFontWeight": 400,
+      "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "titleFontSize": 12.0,
+      "titleFontWeight": 600,
+      "labelColor": "#555555",
+      "titleColor": "#333333"
+    },
+    "header": {
+      "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "labelFontSize": 12.0,
+      "labelFontWeight": 400,
+      "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "titleFontSize": 12.0,
+      "titleFontWeight": 400,
+      "labelColor": "#555555",
+      "titleColor": "#333333"
+    },
+    "text": {
+      "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "fontSize": 12.0
     }
   },
   "encoding": {
@@ -96,7 +136,8 @@
     {
       "mark": {
         "type": "text",
-        "fontSize": 10,
+        "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "fontSize": 12.0,
         "lineBreak": "\n",
         "radius": {
           "expr": "min(width, height) * 0.42"

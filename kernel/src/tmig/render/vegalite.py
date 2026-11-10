@@ -50,6 +50,8 @@ from tmig.ir.models import (
     DataField,
     Divider,
     FieldUse,
+    FontElement,
+    FontStyle,
     Marks,
     Pane,
     ParamRef,
@@ -62,6 +64,15 @@ from tmig.ir.models import (
 from tmig.planner.state import use_key
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
 from tmig.render.colors import continuous_scale, discrete_scale
+from tmig.render.fonts import (
+    DEFAULT_SIZE,
+    LABEL_COLOR,
+    SEMIBOLD,
+    TITLE_COLOR,
+    TITLE_SIZE,
+    Font,
+    resolve,
+)
 from tmig.render.format import (
     PERCENT_TABLE_CALCS,
     axis_format,
@@ -292,6 +303,9 @@ class _Builder:
             axis["title"] = title
         if color is not None:
             axis["labelColor"] = color
+        fonted = [i for i in shown if (s := self.axis_of(uses[i], shelf)) is not None and s.font]
+        if fonted:
+            axis.update(self.label_font(uses[fonted[-1]], shelf).axis("label"))
         extent = self.header_extent(uses, shelf)
         if extent is not None:
             # 拖曳調整過的標題寬度（列）或高度（欄）：標題區域固定這個大小，較長的成員截斷
@@ -380,6 +394,8 @@ class _Builder:
             temporal = encoding.get("type") == "temporal"
             if setting.label_color is not None:
                 axis["labelColor"] = _css_color(setting.label_color)
+            if setting.font is not None:
+                axis.update(self.label_font(use, shelf).axis("label"))
             if setting.title is not None:
                 axis["title"] = setting.title or None
             if not setting.show:
@@ -447,6 +463,24 @@ class _Builder:
         elif x is None:
             vl_mark["x"] = {"expr": "width"} if align == "right" else 0
 
+    def font(
+        self,
+        element: FontElement,
+        *layers: FontStyle | None,
+        size: float = DEFAULT_SIZE,
+        weight: int | None = None,
+    ) -> Font:
+        """元素的字型：工作表的預設字型、這個元素的設定，再依序套用 layers（欄位、標記卡的設定）。"""
+        fonts = self.ws.fonts
+        return resolve(
+            fonts.get("worksheet"), fonts.get(element), *layers, size=size, weight=weight
+        )
+
+    def label_font(self, use: FieldUse, shelf: str) -> Font:
+        """標題成員或座標軸刻度的字型：工作表的 label，再套用這個欄位的設定。"""
+        setting = self.axis_of(use, shelf)
+        return self.font("label", setting.font if setting is not None else None)
+
     def text_color(self, marks: Marks | None = None, cell: bool = False) -> str:
         """標記上的文字顏色：標籤的顏色、文字表儲存格的顏色（cell）、工作表的文字顏色，都沒有時為
         預設的深灰色。"""
@@ -504,6 +538,7 @@ class _Builder:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
                 text_field = measures[0].label if measures else None
             vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
+            vl_mark.update(self.font("cell", marks.label_font).mark())
             if marks.color is None and marks.mark_color is None:
                 vl_mark["color"] = self.text_color(marks, cell=True)
             if text_field is not None:
@@ -588,6 +623,7 @@ class _Builder:
                         label_field,
                         marks.color is not None,
                         self.text_color(marks),
+                        self.font("cell", marks.label_font),
                     ),
                 ],
             }, mark
@@ -769,7 +805,7 @@ class _Builder:
         label = {
             "mark": {
                 "type": "text",
-                "fontSize": 10,
+                **self.font("cell", marks.label_font).mark(),
                 "lineBreak": "\n",
                 "radius": {"expr": "min(width, height) * 0.42"},
             },
@@ -826,8 +862,7 @@ class _Builder:
                 "x": {"expr": "width / 2"},
                 "y": {"expr": "height / 2"},
                 "lineBreak": "\n",
-                "fontSize": 14,
-                "fontWeight": "bold",
+                **self.font("cell", holes[0][1].marks.label_font).mark(),
                 "color": self.text_color(holes[0][1].marks),
             },
             "encoding": {"text": {"value": "\n".join(lines)}},
@@ -1063,8 +1098,8 @@ def build_spec(
     if ws.text_color is not None:
         spec["usermeta"]["text_color"] = _css_color(ws.text_color)
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
-    if title_color is not None or ws.text_color is not None:
-        spec["usermeta"]["title_color"] = title_color or _css_color(ws.text_color or TEXT_COLOR)
+    spec["usermeta"]["title_color"] = title_color or _title_color(ws)
+    spec["usermeta"]["title_font"] = _title_font(ws)
     if "vconcat" in body or "hconcat" in body:
         # 多張圖無法自動填滿容器，由檢視器依區塊大小設定每張圖的寬高
         del spec["width"], spec["height"]
@@ -1190,7 +1225,8 @@ def _header_width(builder: _Builder, use: FieldUse, texts: list[str]) -> int:
     if builder.ws.row_style.field_labels:
         texts = [*texts, builder.ch(use).title]
     low, high = HEADER_WIDTH
-    return min(max(_column_width(texts), low), high)
+    size = builder.label_font(use, "rows").size
+    return min(max(_column_width(texts, size), low), high)
 
 
 def _header_align(builder: _Builder, use: FieldUse) -> Literal["left", "center", "right"]:
@@ -1209,10 +1245,12 @@ def _row_header_axis(
     texts = [str(v.get(encoding["field"]) or "") for v in values]
     width = _header_width(builder, use, texts)
     align = _header_align(builder, use)
+    label_font = builder.label_font(use, "rows")
     padding = {"left": width - HEADER_PADDING, "center": width / 2, "right": HEADER_PADDING}
     axis = dict(encoding.get("axis") or {})
     axis.update(
         zindex=1,  # 畫在色帶與欄位標籤的背景之上
+        **label_font.axis("label"),
         ticks=False,
         labelAlign=align,
         labelPadding=padding[align],
@@ -1230,8 +1268,7 @@ def _row_header_axis(
             titleBaseline="bottom",
             titleX=-width + HEADER_PADDING,
             titleY=-4,
-            titleFontSize=10,
-            titleFontWeight=600,
+            **builder.font("field-labels", weight=SEMIBOLD).axis("title"),
             titleLimit=max(width - 2 * HEADER_PADDING, 8),
         )
     encoding["axis"] = axis
@@ -1298,7 +1335,7 @@ def _row_headers(
             "type": "text",
             "align": align,
             "baseline": "middle",
-            "fontSize": 10,
+            **builder.label_font(dims[level], "rows").mark(),
             "limit": max(width - 2 * HEADER_PADDING, 8),
             "color": color,
         }
@@ -1328,10 +1365,9 @@ def _row_headers(
                         "type": "text",
                         "align": "left",
                         "baseline": "bottom",
-                        "fontSize": 10,
-                        "fontWeight": 600,
+                        **builder.font("field-labels", weight=SEMIBOLD).mark(),
                         "limit": max(width - 2 * HEADER_PADDING, 8),
-                        "color": builder.text_color(),
+                        "color": _title_color(builder.ws),
                         "x": offset + HEADER_PADDING,
                         "y": -4,
                     },
@@ -1401,13 +1437,16 @@ def main_encoding(node: dict[str, Any]) -> dict[str, Any] | None:
     return encoding if isinstance(encoding, dict) else None
 
 
-def _column_width(texts: Sequence[Any]) -> int:
-    """離散的欄依內容估計的寬度：最長的標題或儲存格文字（全形字約一個字高、其餘約 0.6 個字高）加上
-    左右的空白，限制在 COLUMN_WIDTH 之間。"""
+def _column_width(texts: Sequence[Any], size: float = 12) -> int:
+    """離散的欄依內容估計的寬度：最長的標題或儲存格文字（全形字約一個字高、其餘約 0.55 個字高，size 為
+    字級的像素）加上左右的空白，限制在 COLUMN_WIDTH 之間。"""
     widest = 0.0
+    wide, narrow = size, size * 0.55
     for text in texts:
         for line in re.split(f"{SEPARATOR}|\n", str(text if text is not None else "")):
-            width = sum(11 if unicodedata.east_asian_width(c) in ("W", "F") else 6.6 for c in line)
+            width = sum(
+                wide if unicodedata.east_asian_width(c) in ("W", "F") else narrow for c in line
+            )
             widest = max(widest, width)
     low, high = COLUMN_WIDTH
     return int(min(max(round(widest + 16), low), high))
@@ -2131,14 +2170,49 @@ def _header_expr(shown: list[int], levels: int, multiline: bool) -> str | None:
 
 
 def _config(ws: Worksheet) -> dict[str, Any]:
-    """Vega-Lite 的 config：工作表的文字顏色套用到座標軸、圖例與分面的標題。"""
-    config: dict[str, Any] = {"view": {"stroke": None}, "axis": {"labelLimit": 160}}
-    if ws.text_color is not None:
-        color = _css_color(ws.text_color)
-        config["axis"].update(labelColor=color, titleColor=color)
-        config["legend"] = {"labelColor": color, "titleColor": color}
-        config["header"] = {"labelColor": color, "titleColor": color}
-    return config
+    """Vega-Lite 的 config：工作表的字型（Tableau 的預設為 9pt）與文字顏色（沒有設定時與 Tableau 相同，
+    刻度與標題成員為灰色、標題較深）套用到座標軸、圖例、分面的標題與文字標記。"""
+    fonts = ws.fonts
+    base = resolve(fonts.get("worksheet"))
+    label = resolve(fonts.get("worksheet"), fonts.get("label"))
+    legend = resolve(fonts.get("worksheet"), fonts.get("legend"))
+    legend_title = resolve(fonts.get("worksheet"), fonts.get("legend-title"), weight=SEMIBOLD)
+    cell = resolve(fonts.get("worksheet"), fonts.get("cell"))
+    label_color = _css_color(ws.text_color) if ws.text_color is not None else LABEL_COLOR
+    title_color = _css_color(ws.text_color) if ws.text_color is not None else TITLE_COLOR
+    colors = {"labelColor": label_color, "titleColor": title_color}
+    return {
+        "font": base.family,
+        "view": {"stroke": None},
+        "axis": {"labelLimit": 160, **label.axis("label"), **base.axis("title"), **colors},
+        "legend": {**legend.axis("label"), **legend_title.axis("title"), **colors},
+        "header": {**label.axis("label"), **base.axis("title"), **colors},
+        "text": {"font": cell.family, "fontSize": cell.size},
+    }
+
+
+def _title_font(ws: Worksheet) -> dict[str, Any]:
+    """工作表標題的字型（檢視器）：標題第一段文字的格式、工作表的 title 設定，沒有時與 Tableau 相同為 15pt；
+    字型名稱沿用工作表的預設字型。另附段落的對齊。"""
+    style = next((r.style for r in ws.title if r.style is not None), None)
+    sheet = ws.fonts.get("worksheet")
+    layers: list[FontStyle | None] = [
+        FontStyle(family=sheet.family) if sheet is not None and sheet.family else None,
+        ws.fonts.get("title"),
+    ]
+    if style is not None:
+        layers.append(
+            FontStyle(family=style.font, size=style.size, bold=style.bold, italic=style.italic)
+        )
+    font = resolve(*layers, size=TITLE_SIZE).css()
+    if style is not None and style.align is not None:
+        font["align"] = style.align
+    return font
+
+
+def _title_color(ws: Worksheet) -> str:
+    """欄位標籤與標題的顏色：工作表的文字顏色，沒有設定時與 Tableau 相同為深灰色。"""
+    return _css_color(ws.text_color) if ws.text_color is not None else TITLE_COLOR
 
 
 def _css_color(color: str) -> str:
@@ -2207,11 +2281,12 @@ def _label_layer(
     field_name: str,
     colored: bool,
     color: str = TEXT_COLOR,
+    font: Font | None = None,
 ) -> dict[str, Any]:
     """標籤：長條在尾端（堆疊時在各段內側），其他標記在點的上方。"""
     stacked = vl_type == "bar" and colored
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
-    mark: dict[str, Any] = {"type": "text", "fontSize": 10, "lineBreak": "\n"}
+    mark: dict[str, Any] = {"type": "text", **(font or resolve()).mark(), "lineBreak": "\n"}
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
     if vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)

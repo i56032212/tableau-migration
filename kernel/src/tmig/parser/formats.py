@@ -27,6 +27,9 @@
   - 色帶：element='table' 的 band-size（每段的列數，0 為不上色），element='pane'／'header' 的
     band-color，以 scope（rows／cols）區分列與欄
   - 標記卡（<pane>）的 <style-rule element='mark'> 的 size：「大小」滑桿的值（沒有寫時為預設）
+  - 字型（Format > Font）：font-family、font-size（pt）、font-weight、font-style，元素為 worksheet（整張
+    工作表）、label（標題成員與刻度；有 field 時為這個欄位）、cell（文字表）、field-labels、title、legend、
+    legend-title、tooltip；活頁簿 <style> 的設定（all 為預設字型）在前；標記標籤為標記卡的 datalabel
   - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
     stroke-color，table-div 的 div-level（第幾層標題之間，0 為不畫），以 scope 區分列與欄；沒有寫時
     Tableau 預設畫（使用者常關掉：公開報表中最常見的寫法是 line-visibility='off'）
@@ -45,7 +48,17 @@ from typing import Literal
 
 from lxml import etree
 
-from tmig.ir.models import Axis, Banding, Divider, FieldUse, Scalar, ShelfStyle, ZoneStyle
+from tmig.ir.models import (
+    Axis,
+    Banding,
+    Divider,
+    FieldUse,
+    FontElement,
+    FontStyle,
+    Scalar,
+    ShelfStyle,
+    ZoneStyle,
+)
 from tmig.parser.colors import hex_color
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import child, children
@@ -70,6 +83,7 @@ class SheetFormats:
     cell_color: str | None = None
     cell_align: Literal["left", "center", "right"] | None = None
     field_label_background: str | None = None
+    fonts: dict[FontElement, FontStyle] = field(default_factory=dict)
 
 
 def worksheet_formats(
@@ -140,11 +154,21 @@ def worksheet_formats(
     bands: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
     dividers: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
 
+    def fonts(element: str | None, item: etree._Element) -> bool:
+        """沒有 field 的字型格式：活頁簿的在前、工作表的覆寫（all 是活頁簿的預設字型）。"""
+        name = item.get("attr") or ""
+        target = FONT_ELEMENTS.get(element or "")
+        if target is None or name not in FONT_ATTRS or item.get("field") is not None:
+            return False
+        result.fonts[target] = font_attr(result.fonts.get(target), name, item.get("value"))
+        return True
+
     # 活頁簿的格式（Format > Workbook）是每張工作表的預設
     for rule in children(workbook_style, "style-rule"):
         for item in children(rule, "format"):
             if item.get("field") is None:
                 lines(rule.get("element"), item)
+                fonts(rule.get("element"), item)
 
     for rule in children(style, "style-rule"):
         element = rule.get("element")
@@ -152,7 +176,13 @@ def worksheet_formats(
             tag = item.tag if isinstance(item.tag, str) else ""
             name, value, scope = item.get("attr"), item.get("value"), item.get("scope")
             ref = item.get("field")
-            if tag == "format" and name == "background-color" and element == "table":
+            if tag == "format" and name in FONT_ATTRS and item.get("data-class") is None:
+                if fonts(element, item):
+                    continue
+                if element == "label" and ref is not None:
+                    for target in targets(ref, scope):
+                        target.font = font_attr(target.font, name or "", value)
+            elif tag == "format" and name == "background-color" and element == "table":
                 result.background = hex_color(value) or result.background
             elif tag == "format" and name == "background-color" and element == "field-labels":
                 result.field_label_background = _opaque(value)
@@ -248,6 +278,52 @@ def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
 
     pane = line("table-div", None)
     return pane, line("header-div", hex_color(raw.get("table-div:stroke-color")))
+
+
+FONT_ELEMENTS: dict[str, FontElement] = {
+    "all": "worksheet",
+    "worksheet": "worksheet",
+    "label": "label",
+    "cell": "cell",
+    "field-labels": "field-labels",
+    "title": "title",
+    "legend": "legend",
+    "legend-title": "legend-title",
+    "tooltip": "tooltip",
+}
+"""<style-rule> 的 element → 字型的元素（活頁簿的 all 是整份報表的預設字型）。"""
+FONT_ATTRS = ("font-family", "font-size", "font-weight", "font-style")
+
+
+def font_attr(font: FontStyle | None, name: str, value: str | None) -> FontStyle:
+    """在字型設定上套用一個格式（font-family、font-size、font-weight、font-style）。"""
+    current = font or FontStyle()
+    if name == "font-family" and value:
+        return current.model_copy(update={"family": value})
+    if name == "font-size":
+        try:
+            size = float(value or "")
+        except ValueError:
+            return current
+        return current.model_copy(update={"size": size}) if 0 < size < 1000 else current
+    if name == "font-weight" and value in ("bold", "normal"):
+        return current.model_copy(update={"bold": value == "bold"})
+    if name == "font-style" and value in ("italic", "normal"):
+        return current.model_copy(update={"italic": value == "italic"})
+    return current
+
+
+def pane_label_font(pane: etree._Element) -> FontStyle | None:
+    """標記卡（<pane>）的標記標籤字型：<style-rule element='datalabel'> 的字型格式。"""
+    font: FontStyle | None = None
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "datalabel":
+            continue
+        for item in children(rule, "format"):
+            name = item.get("attr") or ""
+            if name in FONT_ATTRS and item.get("field") is None:
+                font = font_attr(font, name, item.get("value"))
+    return font
 
 
 def pane_mark_size(pane: etree._Element) -> float | None:

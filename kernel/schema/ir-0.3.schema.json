@@ -459,6 +459,18 @@
           "default": null,
           "description": "列標題成員的水平對齊；None 依預設（靠左）",
           "title": "Align"
+        },
+        "font": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標題成員或座標軸刻度的字型（這個欄位的設定）；None 依工作表"
         }
       },
       "required": [
@@ -1769,6 +1781,65 @@
       "title": "FieldUse",
       "type": "object"
     },
+    "FontStyle": {
+      "additionalProperties": false,
+      "description": "字型的設定；沒有寫的沿用上一層（活頁簿 → 工作表 → 元素 → 欄位）與 Tableau 的預設。",
+      "properties": {
+        "family": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "字型名稱，例如 Tableau Book、Arial",
+          "title": "Family"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "字級（pt）",
+          "title": "Size"
+        },
+        "bold": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bold"
+        },
+        "italic": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Italic"
+        }
+      },
+      "title": "FontStyle",
+      "type": "object"
+    },
     "JoinCondition": {
       "additionalProperties": false,
       "description": "join 條件：左右兩邊以 op 比較。",
@@ -2236,6 +2307,18 @@
           "default": null,
           "description": "標記的框線顏色（色彩的「效果＞框線」）；None 為沒有框線",
           "title": "Stroke"
+        },
+        "label_font": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標記標籤的字型（標記卡的 datalabel）；None 依工作表"
         },
         "mark_size": {
           "anyOf": [
@@ -4937,6 +5020,26 @@
           "default": null,
           "description": "文字表儲存格中文字的水平對齊（工作表 <style> 中的設定，標記卡的 cell_align 優先）；None 依 Tableau 的預設（有標題的文字表數字靠右、文字靠左，只有一格時置中）",
           "title": "Cell Align"
+        },
+        "fonts": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FontStyle"
+          },
+          "description": "各元素的字型（活頁簿的設定在前、工作表的覆寫）；沒有設定的元素依 Tableau 的預設",
+          "propertyNames": {
+            "enum": [
+              "worksheet",
+              "label",
+              "cell",
+              "field-labels",
+              "title",
+              "legend",
+              "legend-title",
+              "tooltip"
+            ]
+          },
+          "title": "Fonts",
+          "type": "object"
         },
         "field_label_background": {
           "anyOf": [

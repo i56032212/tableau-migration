@@ -1,3 +1,4 @@
+import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
@@ -111,6 +112,23 @@ export function applyFit(spec: Spec, fit: FitMode | null | undefined, availableW
   const fillY = height === "container";
   spec.autosize = { type: fillX && fillY ? "fit" : fillX ? "fit-x" : fillY ? "fit-y" : "pad", contains: "padding" };
   return { x: !fillX, y: !fillY };
+}
+
+/** 工作表標題的樣式：後端依標題的格式（沒有時為 Tableau 預設的 15pt）算出的字型、顏色與對齊。 */
+function titleStyle(usermeta: Record<string, any>): React.CSSProperties {
+  const font = usermeta.title_font as
+    | { family: string; size: number; weight: number; italic: boolean; align?: "left" | "center" | "right" }
+    | undefined;
+  if (!font) return { color: usermeta.title_color };
+  return {
+    color: usermeta.title_color,
+    fontFamily: font.family,
+    fontSize: font.size,
+    fontWeight: font.weight,
+    fontStyle: font.italic ? "italic" : undefined,
+    textAlign: font.align,
+    flex: font.align && font.align !== "left" ? "1" : undefined,
+  };
 }
 
 /** 多張圖（同一架上有多個量值）無法自動填滿容器：依區塊大小平分每張圖的寬高。 */
@@ -293,7 +311,7 @@ export function WorksheetView({
     >
       {showTitle ? (
         <div className="worksheet-header">
-          <span className="worksheet-title" style={{ color: usermeta.title_color }}>
+          <span className="worksheet-title" style={titleStyle(usermeta)}>
             {title}
           </span>
           {meta}
