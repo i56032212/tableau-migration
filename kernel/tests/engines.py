@@ -808,3 +808,141 @@ def _emulate_snowflake(node: Any) -> Any:
         value, fmt = node.expressions
         return _duck(f"try_strptime({{s}}, '{_snowflake_format(fmt.name)}')", s=value)
     return node
+
+
+# ---------------------------------------------------------------- Redshift（模擬）
+
+
+class RedshiftEmulator:
+    """測試用：沒有 Redshift 實機，把轉譯後的 Redshift SQL 以 SQLGlot 轉回 DuckDB，Redshift 特有的函式
+    （DATEADD、REGEXP_INSTR／REGEXP_SUBSTR 的參數、TO_CHAR、TO_TIMESTAMP 的格式等）依官方文件模擬後
+    在 DuckDB 執行。
+
+    檢查的是轉譯的結構與函式對照的寫法；Redshift 函式本身的語意依官方文件模擬，仍待實機驗證。
+    """
+
+    dialect = "redshift"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        # SQLGlot 會把 TO_CHAR、TO_TIMESTAMP 的格式換成 strftime（不完全）：保留原文自行轉換
+        sql = re.sub(r"\bTO_CHAR\(", "TMIG_TO_CHAR(", sql)
+        sql = re.sub(r"\bTO_TIMESTAMP\(", "TMIG_TO_TIMESTAMP(", sql)
+        sql = re.sub(r"\bTO_DATE\(", "TMIG_TO_DATE(", sql)
+        tree = sqlglot.parse_one(sql, read="redshift")
+        duck = _visit(tree, _emulate_redshift).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+PG_TO_STRFTIME = [
+    ("YYYY", "%Y"),
+    ("HH24", "%H"),
+    ("HH12", "%I"),
+    ("Month", "%B"),
+    ("Mon", "%b"),
+    ("DDD", "%j"),
+    ("YY", "%y"),
+    ("MM", "%m"),
+    ("DD", "%d"),
+    ("MI", "%M"),
+    ("SS", "%S"),
+    ("US", "%f"),
+    ("AM", "%p"),
+]
+
+
+def _pg_format(text: str) -> str:
+    """PostgreSQL／Redshift 的日期格式（文字以雙引號包住）→ strftime。"""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == '"':
+            end = text.index('"', i + 1)
+            out.append(text[i + 1 : end].replace("%", "%%"))
+            i = end + 1
+            continue
+        for token, strftime in PG_TO_STRFTIME:
+            if text.startswith(token, i):
+                out.append(strftime)
+                i += len(token)
+                break
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _emulate_redshift(node: Any) -> Any:
+    from sqlglot import exp
+
+    def args(n: Any) -> list[Any]:
+        if isinstance(n, exp.Anonymous):
+            return list(n.expressions)
+        return [
+            n.this,
+            n.expression,
+            *[
+                v
+                for k, v in n.args.items()
+                if k not in ("this", "expression") and isinstance(v, exp.Expr)
+            ],
+        ]
+
+    name = node.name.upper() if isinstance(node, exp.Anonymous) else ""
+    if isinstance(node, exp.DataType) and node.this in (
+        exp.DataType.Type.VARCHAR,
+        exp.DataType.Type.TEXT,
+    ):
+        return exp.DataType.build("VARCHAR")  # VARCHAR(MAX)
+    if isinstance(node, exp.RegexpInstr) or name == "REGEXP_INSTR":
+        subject, pattern = args(node)[:2]
+        return _duck(
+            "(CASE WHEN {s} IS NULL OR {p} IS NULL THEN NULL "
+            "WHEN regexp_matches({s}, {p}) THEN 1 ELSE 0 END)",
+            s=subject,
+            p=pattern,
+        )
+    if isinstance(node, exp.RegexpExtract) or name == "REGEXP_SUBSTR":
+        if isinstance(node, exp.RegexpExtract):
+            subject, pattern = node.this, node.expression
+            flags = node.args.get("parameters")
+        else:
+            subject, pattern = node.expressions[0], node.expressions[1]
+            flags = node.expressions[4] if len(node.expressions) > 4 else None
+        group = 1 if flags is not None and "e" in flags.name else 0
+        return _duck(f"regexp_extract({{s}}, {{p}}, {group})", s=subject, p=pattern)
+    if isinstance(node, exp.RegexpReplace) or name == "REGEXP_REPLACE":
+        subject, pattern, replacement = args(node)[:3]
+        return _duck("regexp_replace({s}, {p}, {r}, 'g')", s=subject, p=pattern, r=replacement)
+    if name == "TMIG_TO_CHAR":
+        value, fmt = node.expressions
+        if isinstance(fmt, exp.Literal) and fmt.name == "Month":
+            return _duck("monthname({x})", x=value)
+        if isinstance(fmt, exp.Literal) and fmt.name == "Day":
+            return _duck("dayname({x})", x=value)
+        raise AssertionError(f"模擬器不支援 TO_CHAR 的格式 {fmt.sql()}")
+    if name == "GETDATE":
+        return _duck("current_localtimestamp()")
+    if name == "LOG" and len(node.expressions) == 1:
+        return _duck("log10({x})", x=node.expressions[0])
+    if name == "TMIG_TO_DATE":
+        # 非嚴格模式：超出範圍的月、日進位（2024-13-05 → 2025-01-05）
+        value, fmt = node.expressions
+        assert fmt.name == "YYYY-MM-DD"
+        return _duck(
+            "CAST(make_date(CAST(split_part({x}, '-', 1) AS BIGINT), 1, 1) "
+            "+ to_months(CAST(split_part({x}, '-', 2) AS BIGINT) - 1) "
+            "+ to_days(CAST(split_part({x}, '-', 3) AS BIGINT) - 1) AS DATE)",
+            x=value,
+        )
+    if name == "TMIG_TO_TIMESTAMP":
+        value, fmt = node.expressions
+        return _duck(f"strptime({{x}}, '{_pg_format(fmt.name)}')", x=value)
+    return node

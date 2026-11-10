@@ -4,7 +4,7 @@
 預設為目前目錄的 connections.toml）依 connection_id 提供連線方式：
 
     [connections.oracle_ora_example_com_orclpdb]
-    driver = "oracle"                  # oracle、sqlserver、mysql、snowflake、postgres、databricks、duckdb
+    driver = "oracle"                  # oracle、sqlserver、mysql、snowflake、postgres、redshift、databricks、duckdb
     user = "${ORA_SALES_USER}"
     password = "${ORA_SALES_PASSWORD}"
     # host、port、service 省略時取工作簿中的連線資訊
@@ -50,10 +50,20 @@ from tmig.ir.models import LiveConnection
 
 CONFIG_ENV = "TMIG_CONNECTIONS"
 DEFAULT_CONFIG = "connections.toml"
-DRIVERS = ("oracle", "postgres", "databricks", "sqlserver", "mysql", "snowflake", "duckdb")
+DRIVERS = (
+    "oracle",
+    "postgres",
+    "redshift",
+    "databricks",
+    "sqlserver",
+    "mysql",
+    "snowflake",
+    "duckdb",
+)
 DRIVER_DIALECTS = {
     "oracle": "oracle",
     "postgres": "postgres",
+    "redshift": "redshift",
     "databricks": "databricks",
     "sqlserver": "tsql",
     "mysql": "mysql",
@@ -164,6 +174,8 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return DuckDBExecutor(Path(path))
     if config.driver == "postgres":
         return PostgresExecutor.open(connection, params)
+    if config.driver == "redshift":
+        return RedshiftExecutor.open(connection, params)
     if config.driver == "oracle":
         return OracleExecutor.open(connection, params)
     if config.driver == "sqlserver":
@@ -427,6 +439,70 @@ class SqlServerExecutor:
         self.con.close()
 
 
+class RedshiftExecutor:
+    """Amazon Redshift（redshift_connector）：工作階段的時區設為 UTC。尚未實機驗證。
+
+    設定檔可以用 iam = true 與 cluster_identifier、db_user 等以 IAM 身分連線（依 redshift_connector 的參數）。
+    """
+
+    dialect = "redshift"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> RedshiftExecutor:
+        try:
+            import redshift_connector  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 Redshift 驅動：uv sync --extra redshift") from exc
+        kwargs: dict[str, Any] = {
+            "host": params.get("host") or connection.server,
+            "port": int(params.get("port") or connection.port or 5439),
+            "database": params.get("database") or connection.database,
+            "user": params.get("user"),
+            "password": params.get("password"),
+        }
+        for key in (
+            "iam",
+            "cluster_identifier",
+            "db_user",
+            "region",
+            "access_key_id",
+            "secret_access_key",
+            "profile",
+            "ssl",
+            "sslmode",
+        ):
+            if key in params:
+                kwargs[key] = params[key]
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:  # pragma: no cover - 需要 Redshift
+            con = redshift_connector.connect(**kwargs)
+            con.autocommit = True
+            cursor = con.cursor()
+            cursor.execute(f"SET timezone TO '{params.get('timezone') or 'UTC'}'")
+            cursor.close()
+        except Exception as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                f"無法連上 Redshift（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+    def fetch(self, sql: str) -> pa.Table:  # pragma: no cover - 需要 Redshift
+        cursor = self.con.cursor()
+        try:
+            cursor.execute(sql)
+            names = [d[0] for d in cursor.description or []]
+            rows = cursor.fetchall()
+        finally:
+            cursor.close()
+        return rows_to_arrow(names, rows)
+
+    def close(self) -> None:  # pragma: no cover
+        self.con.close()
+
+
 class MySQLExecutor:
     """MySQL 8.0 以上（PyMySQL）：工作階段設為唯讀、時區為 UTC、月份與星期名稱為英文。"""
 
@@ -593,6 +669,7 @@ __all__ = [
     "MySQLExecutor",
     "OracleExecutor",
     "PostgresExecutor",
+    "RedshiftExecutor",
     "SnowflakeExecutor",
     "SourceConnectionError",
     "SqlServerExecutor",

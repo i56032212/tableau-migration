@@ -152,7 +152,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 4. 之後 `tmig verify`、`tmig query`、`tmig serve` 遇到 Live 連線都會依設定檔連線
 
 連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra sqlserver`、`--extra mysql`、`--extra snowflake`、
-`--extra databricks`、`--extra postgres`。IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
+`--extra databricks`、`--extra postgres`、`--extra redshift`。IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
 
 各資料庫的轉譯與驗證程度（`kernel/src/tmig/sqlgen/dialect.py`）：
 
@@ -164,6 +164,12 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 | SQL Server 2017 以上、Azure SQL | 模擬（依官方文件） | 布林值以 BIT 表示；非英文的字串常值為 `N'…'`；星期不受 `@@DATEFIRST` 影響；沒有正規表示式、DATEPARSE、MEDIAN、PERCENTILE、CORR、COVAR 與 FINDNTH；SPLIT 的位置須為 ±1 到 ±10 的常值 |
 | Snowflake | 模擬（依官方文件） | 工作階段的時區為 UTC；星期與週數以 ISO 的函式計算，不受 WEEK_START 影響 |
 | Oracle 12.2 以上 | 模擬（依官方文件） | 沒有布林值（布林維度等列為不支援） |
+| Amazon Redshift | 模擬（依官方文件） | 工作階段的時區為 UTC；正規表示式以 PCRE 解讀，只能取第 1 個群組、取代字串不能參照群組；沒有陣列（FINDNTH）與 CORR、COVAR；文字轉數字、日期時先以正規表示式檢查（沒有 TRY_CAST） |
+
+Excel、文字檔（CSV 等）沒有萃取時不是連到資料庫：匯入時依 Tableau 讀到的欄名與型別讀進 DuckDB，與萃取相同在本機查詢
+（`kernel/src/tmig/data/file_import.py`）。支援 .xlsx、.xls 與文字檔的單一資料表、join 與 Relationship 模型；
+文字檔依記下的分隔字元、字元集與地區設定解讀數字與日期，不符合型別的值成為 Null 並在匯入結果中列出。資料解譯器、
+聯集（union）、具名範圍尚不支援；檔案的內容是報表封裝時的快照（與 Tableau Server 上的 .twbx 相同）。
 
 「實跑」是公式的每個函式與兩份 fixture 的每張工作表 × 每組篩選都在該資料庫執行，與預期結果比對；「模擬」是轉譯後的
 SQL 以 SQLGlot 轉回 DuckDB、該資料庫特有的函式依官方文件的語意模擬後執行同樣的比對，並有轉譯快照

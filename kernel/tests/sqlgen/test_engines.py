@@ -36,6 +36,7 @@ from tmig.verify.mapping import load_mapping
 
 from ..engines import (
     OracleEmulator,
+    RedshiftEmulator,
     SnowflakeEmulator,
     SparkExecutor,
     TSqlEmulator,
@@ -56,8 +57,8 @@ from .test_expr import AGG_CASES, COLUMNS, ROW_CASES, ROWS, Env
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = sorted(p.parent for p in (ROOT / "fixtures").glob("*/golden.ir.json"))
-ENGINES = ["postgres", "spark", "oracle", "mysql", "tsql", "snowflake"]
-EMULATED = {"oracle", "tsql", "snowflake"}
+ENGINES = ["postgres", "spark", "oracle", "mysql", "tsql", "snowflake", "redshift"]
+EMULATED = {"oracle", "tsql", "snowflake", "redshift"}
 """沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。"""
 ORACLE_UNSUPPORTED = {
     # Oracle 的 SQL 沒有陣列（FINDNTH 以陣列計算）；SPLIT 只支援正整數常值的位置
@@ -100,9 +101,22 @@ NO_DATEPARSE = {
     "DATEPARSE(\"yyyy'年'M'月'd'日'\", '2024年3月5日')",
     "DATEPARSE('yyyy-MM-dd', 'x')",
 }
+NO_CORRELATION = {
+    "CORR([Sales], [Quantity])",
+    "COVAR([Sales], [Quantity])",
+    "COVARP([Sales], [Quantity])",
+}
+REGEX_GROUPS = {
+    "REGEXP_EXTRACT_NTH('abc 123', '([a-z]+)\\s+(\\d+)', 2)",
+    "REGEXP_REPLACE('a1b22', '(\\d)', '<$1>')",
+    "REGEXP_REPLACE('a1', '\\d', '\\$')",
+}
+"""取第 2 個以後的群組、取代字串參照群組（或錢字號）。"""
 UNSUPPORTED = {
     # MySQL 沒有陣列，也沒有 MEDIAN、PERCENTILE、CORR、COVAR 的彙總函式
     "mysql": NO_ARRAYS | NO_STATISTICS,
+    # Redshift 沒有陣列與 CORR、COVAR；正規表示式只能取第 1 個群組、取代字串不能參照群組
+    "redshift": NO_ARRAYS | NO_CORRELATION | REGEX_GROUPS,
     # SQL Server 另外沒有正規表示式與 DATEPARSE
     "tsql": NO_ARRAYS | NO_STATISTICS | NO_REGEX | NO_DATEPARSE,
 }
@@ -188,8 +202,8 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         finally:
             con.close()
         return
-    if request.param in ("tsql", "snowflake"):
-        schema = "dbo" if request.param == "tsql" else "PUBLIC"
+    if request.param in ("tsql", "snowflake", "redshift"):
+        schema = {"tsql": "dbo", "snowflake": "PUBLIC", "redshift": "public"}[request.param]
         con = duckdb.connect()
         con.execute(f'CREATE SCHEMA "{schema}"')
         con.register("expression_rows", _expression_table())
@@ -197,7 +211,11 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         for name, table in tables.items():
             con.register(f"rows_{name}", table)
             con.execute(f'CREATE TABLE "{schema}"."{name}" AS SELECT * FROM "rows_{name}"')
-        emulator = TSqlEmulator(con) if request.param == "tsql" else SnowflakeEmulator(con)
+        emulator = {
+            "tsql": TSqlEmulator,
+            "snowflake": SnowflakeEmulator,
+            "redshift": RedshiftEmulator,
+        }[request.param](con)
         try:
             yield Engine(request.param, emulator, live(request.param, [schema]))
         finally:

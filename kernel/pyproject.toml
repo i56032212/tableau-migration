@@ -26,6 +26,7 @@ databricks = ["databricks-sql-connector>=3.0"]
 sqlserver = ["pymssql>=2.3"]
 mysql = ["pymysql>=1.1"]
 snowflake = ["snowflake-connector-python>=3.12"]
+redshift = ["redshift-connector>=2.1"]
 
 [project.scripts]
 tmig = "tmig.cli:entry"

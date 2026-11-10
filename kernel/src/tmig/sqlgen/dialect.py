@@ -38,6 +38,7 @@ from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
 SQLGLOT_NAMES: dict[str, str] = {
     "duckdb": "duckdb",
     "postgres": "postgres",
+    "redshift": "redshift",
     "databricks": "databricks",
     "spark": "spark",
     "oracle": "oracle",
@@ -46,7 +47,7 @@ SQLGLOT_NAMES: dict[str, str] = {
     "snowflake": "snowflake",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
-"""已有轉譯規則的方言；其他方言（BigQuery、Teradata、Redshift）尚不支援。"""
+"""已有轉譯規則的方言；其他方言尚不支援。"""
 
 PLACEHOLDER = re.compile(r"[\"`\[]" + re.escape(CUSTOM_SQL_PREFIX) + r"(\d+)[\"`\]]")
 """自訂 SQL 的佔位資料表（各方言的識別字引號：雙引號、反引號，SQL Server 的方括號）。"""
@@ -206,6 +207,9 @@ def sql_literal(value: Scalar, datatype: str, dialect: str) -> str:
         return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
     if dialect == "tsql" and not text.isascii():
         return "N" + _single_quote(text)
+    if dialect == "redshift":
+        # Redshift 的字串常值中反斜線是跳脫字元
+        return _single_quote(text.replace("\\", "\\\\"))
     return _single_quote(text)
 
 
@@ -817,6 +821,215 @@ PG_FORMAT = {
     "%j": "DDD",
     "%f": "US",
 }
+
+
+# ---------------------------------------------------------------- Amazon Redshift
+
+
+REDSHIFT_NUMBER = r"^[[:space:]]*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?[[:space:]]*$"
+REDSHIFT_INTEGER = r"^[[:space:]]*[-+]?[0-9]+[[:space:]]*$"
+REDSHIFT_DATE = (
+    r"^[[:space:]]*[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}"
+    r"([ T]([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?)?[[:space:]]*$"
+)
+"""Redshift 沒有 TRY_CAST：轉型前以正規表示式檢查文字（數字、整數、ISO 格式的日期時間）；
+日期另外檢查月與日存在（見 RedshiftRewriter.try_cast）。"""
+
+
+class RedshiftRewriter(PostgresRewriter):
+    """Amazon Redshift：PostgreSQL 8 系的語法加上 Redshift 自己的函式（DATEADD、GETDATE、REGEXP_* 等）。
+    依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回 DuckDB 模擬執行）。
+
+    沒有陣列、IS NOT DISTINCT FROM、TRY_CAST 與 CORR／COVAR；正規表示式以 PCRE 解讀（參數 p），
+    取群組只支援第 1 個群組，取代字串不能參照群組。字串常值中的反斜線要寫成兩個（SQLGlot 處理）。
+    工作階段的時區為 UTC（Redshift 的預設）。
+    """
+
+    name = "Redshift"
+    dialect = "redshift"
+    allowed = (PostgresRewriter.allowed - {exp.NullSafeEQ, exp.ArrayToString, exp.Log}) | {
+        exp.Unicode
+    }
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        """DATEADD 的數量必須是整數：微秒以整數微秒加上。"""
+        if unit == "microsecond":
+            amount = _fn("ROUND", _paren(amount))
+        return _fn("DATEADD", exp.Var(this=unit.upper()), _cast(amount, "BIGINT"), value)
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        base = super().handlers()
+        return {
+            **base,
+            # 星期一為 1（DOW 是星期日為 0）
+            exp.DayOfWeekIso: lambda n: self._iso_dow(n.this),
+            exp.Log: self.log,
+            exp.Round: lambda n: _cast(
+                _fn(
+                    "ROUND",
+                    _cast(n.this, _type("DECIMAL(38, 10)", "redshift")),
+                    _cast(n.args.get("decimals") or _num(0), "INT"),
+                ),
+                "DOUBLE",
+            ),
+            exp.DateFromParts: lambda n: self.make_date(
+                n.args["year"], n.args["month"], n.args["day"]
+            ),
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.Monthname: lambda n: exp.Trim(this=_fn("TO_CHAR", n.this, _str("Month"))),
+            exp.Dayname: lambda n: exp.Trim(this=_fn("TO_CHAR", n.this, _str("Day"))),
+            exp.TryCast: self.try_cast,
+            exp.RegexpLike: lambda n: exp.GT(
+                this=_fn(
+                    "REGEXP_INSTR", n.this, n.expression, _num(1), _num(1), _num(0), _str("p")
+                ),
+                expression=_num(0),
+            ),
+            exp.RegexpExtract: self.regexp_extract,
+            exp.RegexpReplace: self.regexp_replace,
+            exp.Split: self.no_arrays,
+            exp.NullSafeEQ: lambda n: exp.Paren(
+                this=exp.Or(
+                    this=exp.EQ(this=n.this.copy(), expression=n.expression.copy()),
+                    expression=exp.And(
+                        this=exp.Is(this=n.this, expression=exp.Null()),
+                        expression=exp.Is(this=n.expression, expression=exp.Null()),
+                    ),
+                )
+            ),
+            exp.Corr: self.no_aggregate,
+            exp.CovarSamp: self.no_aggregate,
+            exp.CovarPop: self.no_aggregate,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            **super().functions(),
+            # ISO 年：該週星期四所在的年
+            "isoyear": lambda a: _extract(
+                "YEAR",
+                _fn(
+                    "DATEADD",
+                    exp.Var(this="DAY"),
+                    exp.Sub(this=_num(4), expression=self._iso_dow(a[0].copy())),
+                    a[0],
+                ),
+            ),
+            "now": lambda a: _fn("GETDATE"),
+            "list_slice": lambda a: self.no_arrays(a[0]),
+        }
+
+    def _iso_dow(self, value: exp.Expr) -> exp.Expr:
+        dow = _extract("DOW", value)
+        shifted = exp.Mod(this=_paren(exp.Add(this=dow, expression=_num(6))), expression=_num(7))
+        return exp.Paren(this=exp.Add(this=shifted, expression=_num(1)))
+
+    def no_arrays(self, node: exp.Expr) -> exp.Expr:
+        raise DialectError("Redshift 沒有陣列（SPLIT 的負數位置、FINDNTH）")
+
+    def no_aggregate(self, node: exp.Expr) -> exp.Expr:
+        raise DialectError(f"Redshift 沒有 {_describe(node).removeprefix('函式 ')} 彙總函式")
+
+    def log(self, node: exp.Expr) -> exp.Expr:
+        if node.expression is not None and _literal_int(node.this) == 10:
+            return _fn("LOG", node.expression)  # Redshift 的 LOG 以 10 為底
+        raise DialectError("Redshift 只支援以 10 為底的 LOG")
+
+    def make_date(self, y: exp.Expr, m: exp.Expr, d: exp.Expr) -> exp.Expr:
+        """2000-01-01 加上年、月、日的差（Redshift 沒有由年月日組成日期的函式）。"""
+        start = _cast(_str("2000-01-01"), "DATE")
+        years = _fn(
+            "DATEADD",
+            exp.Var(this="YEAR"),
+            _cast(exp.Sub(this=_paren(y), expression=_num(2000)), "INT"),
+            start,
+        )
+        months = _fn(
+            "DATEADD",
+            exp.Var(this="MONTH"),
+            _cast(exp.Sub(this=_paren(m), expression=_num(1)), "INT"),
+            years,
+        )
+        days = _fn(
+            "DATEADD",
+            exp.Var(this="DAY"),
+            _cast(exp.Sub(this=_paren(d), expression=_num(1)), "INT"),
+            months,
+        )
+        return _cast(days, "DATE")
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        day = _cast(self.make_date(y, m, d), "TIMESTAMP")
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+            ),
+            expression=_paren(ss),
+        )
+        whole = exp.Floor(this=_paren(seconds))
+        # 整數秒與剩下的微秒分開加（DATEADD 的數量是 32 位元整數）
+        with_seconds = _fn("DATEADD", exp.Var(this="SECOND"), _cast(whole, "INT"), day)
+        micros = _fn(
+            "ROUND",
+            exp.Mul(
+                this=_paren(exp.Sub(this=_paren(seconds.copy()), expression=whole.copy())),
+                expression=_num(1000000),
+            ),
+        )
+        return _fn("DATEADD", exp.Var(this="MICROSECOND"), _cast(micros, "INT"), with_seconds)
+
+    def try_cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in INTEGER_TYPES:
+            pattern = REDSHIFT_INTEGER
+        elif kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT, exp.DataType.Type.DECIMAL):
+            pattern = REDSHIFT_NUMBER
+        elif kind == exp.DataType.Type.DATE or kind in TIMESTAMP_TYPES:
+            pattern = REDSHIFT_DATE
+        else:
+            raise DialectError(f"Redshift 不支援轉成 {target.sql('duckdb')} 的 TRY_CAST")
+        text = _cast(node.this, "TEXT")
+        valid = _mark(exp.RegexpLike(this=text.copy(), expression=_str(pattern)))
+        value: exp.Expr = text.copy()
+        if pattern == REDSHIFT_DATE:
+            # 月與日要存在：TO_DATE（非嚴格模式）會把 2024-13-05、2024-02-30 進位成別的日期
+            day = _fn(
+                "SPLIT_PART",
+                _fn("SPLIT_PART", exp.Trim(this=text.copy()), _str(" "), _num(1)),
+                _str("T"),
+                _num(1),
+            )
+            parsed = _fn("TO_DATE", day.copy(), _str("YYYY-MM-DD"))
+
+            def part(index: int, field: str) -> exp.Expr:
+                piece = _cast(_fn("SPLIT_PART", day.copy(), _str("-"), _num(index)), "INT")
+                return exp.EQ(this=_extract(field, parsed.copy()), expression=piece)
+
+            exists = exp.And(this=part(2, "MONTH"), expression=part(3, "DAY"))
+            value = exp.Case(ifs=[exp.If(this=exists, true=value)])
+        # 轉型放在 CASE 外面：常值的 CAST 會在規劃查詢時就計算，放在 THEN 裡面擋不住錯誤
+        return exp.Cast(this=exp.Case(ifs=[exp.If(this=valid, true=value)]), to=target)
+
+    def regexp_extract(self, node: exp.Expr) -> exp.Expr:
+        group = _literal_int(node.args.get("group"))
+        if group not in (0, 1):
+            raise DialectError("Redshift 的 REGEXP_EXTRACT 只能取整段或第 1 個群組")
+        flags = "p" if group == 0 else "pe"
+        return _fn("REGEXP_SUBSTR", node.this, node.expression, _num(1), _num(1), _str(flags))
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        replacement = node.args.get("replacement") or _str("")
+        if not (isinstance(replacement, exp.Literal) and replacement.is_string):
+            raise DialectError("REGEXP_REPLACE 的取代字串不是常值")
+        text = replacement.name
+        if "\\" in text or "$" in text:
+            raise DialectError("Redshift 的 REGEXP_REPLACE 取代字串不能參照群組")
+        return _fn("REGEXP_REPLACE", node.this, node.expression, _str(text), _num(1), _str("p"))
 
 
 # ---------------------------------------------------------------- Spark／Databricks
@@ -2414,6 +2627,7 @@ def _bit_booleans(tree: exp.Expr) -> None:
 
 REWRITERS: dict[str, Rewriter] = {
     "postgres": PostgresRewriter(),
+    "redshift": RedshiftRewriter(),
     "databricks": SparkRewriter("Databricks", "databricks"),
     "spark": SparkRewriter(),
     "oracle": OracleRewriter(),

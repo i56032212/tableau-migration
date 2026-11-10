@@ -28,6 +28,7 @@ DBCLASS_DRIVERS = {
     "spark": "databricks",
     "postgres": "postgres",
     "greenplum": "postgres",
+    "redshift": "redshift",
     "sqlserver": "sqlserver",
     "azure_sqldb": "sqlserver",
     "azure_sql_dw": "sqlserver",
