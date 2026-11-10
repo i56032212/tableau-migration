@@ -11,10 +11,11 @@
   不送出可能算錯的 SQL（SQLGlot 對不認得的函式不會報錯，只會原樣輸出）
 - 自訂 SQL 以佔位資料表表示，產生目標方言後才換回原文（原文不經過轉譯）
 
-PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）、MySQL（8.0 以上）、Trino（CI 以 Docker 執行；
-Athena 的 SQL 也在同一台執行）與 BigQuery（CI 以 ZetaSQL 的模擬器執行）有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、
-Snowflake、Redshift 與 Teradata（16.20 以上）依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的
-語意模擬後執行，並有轉譯快照。
+PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上；另以 Spark Thrift Server 走 HiveServer2 協定實跑）、
+MySQL（8.0 以上）、Trino（CI 以 Docker 執行；Athena 的 SQL 也在同一台執行）與 BigQuery（CI 以 ZetaSQL 的模擬器執行）
+有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、Snowflake、Redshift、
+Teradata（16.20 以上）、Hive（2.3 以上）與 Impala（3.3 以上）依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot
+轉回 DuckDB、各自特有的函式依文件的語意模擬後執行，並有轉譯快照。
 
 各方言已知與 DuckDB（＝萃取時的結果）不同之處，與 Tableau 直接連該資料庫時相同，不另外處理：
 字串的排序與比較依資料庫的定序；Oracle 的空字串即 Null、ADD_MONTHS 在月底的行為；
@@ -27,14 +28,28 @@ import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import ClassVar
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.dialects.hive import Hive
 from sqlglot.errors import ParseError
 
 from tmig.ir.models import Scalar
 from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
+
+
+class TmigHive(Hive):
+    """產生 Hive、Impala 的 SQL：Null 也相等的比較寫成 <=>（Hive 0.9 起；IS NOT DISTINCT FROM 到 Hive 3 才有）。
+    SQLGlot 以類別名稱登錄方言（tmighive）；解析與 Hive 相同。"""
+
+    class Generator(Hive.Generator):
+        TRANSFORMS: ClassVar[dict[type[exp.Expr], Callable[..., str]]] = {
+            **Hive.Generator.TRANSFORMS,
+            exp.NullSafeEQ: lambda self, e: self.binary(e, "<=>"),
+        }
+
 
 SQLGLOT_NAMES: dict[str, str] = {
     "duckdb": "duckdb",
@@ -50,6 +65,8 @@ SQLGLOT_NAMES: dict[str, str] = {
     "athena": "athena",
     "bigquery": "bigquery",
     "teradata": "teradata",
+    "hive": "tmighive",
+    "impala": "tmighive",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言尚不支援。"""
@@ -208,9 +225,12 @@ def sql_literal(value: Scalar, datatype: str, dialect: str) -> str:
         if dialect == "tsql":
             # SQL Server 沒有 DATE '…' 的常值寫法；ISO 格式的字串轉型不受語言設定影響
             return f"CAST({_single_quote(text)} AS {'DATE' if datatype == 'date' else 'DATETIME2'})"
+        if dialect in ("hive", "impala"):
+            # 舊版的 Hive、Impala 沒有 DATE '…'、TIMESTAMP '…' 的常值寫法；字串轉型各版本都支援
+            return f"CAST({_single_quote(text)} AS {'DATE' if datatype == 'date' else 'TIMESTAMP'})"
         return f"{'DATE' if datatype == 'date' else 'TIMESTAMP'} {_single_quote(text)}"
     text = str(value)
-    if dialect in ("spark", "databricks", "mysql", "snowflake", "bigquery"):
+    if dialect in ("spark", "databricks", "mysql", "snowflake", "bigquery", "hive", "impala"):
         # 字串常值以反斜線跳脫
         return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
     if dialect == "tsql" and not text.isascii():
@@ -2674,7 +2694,19 @@ class BigQueryRewriter(Rewriter):
             exp.Median: lambda n: self.percentile(n.this, _num(0.5)),
             exp.PercentileCont: lambda n: self.percentile(n.this, n.expression),
             exp.Window: self.window,
+            exp.Div: self.divide,
         }
+
+    def divide(self, node: exp.Expr) -> exp.Expr:
+        """除法的運算元不能是常值 Null（BigQuery 無法決定型別）：轉成 FLOAT64 的 Null。"""
+        for key in ("this", "expression"):
+            operand = node.args.get(key)
+            inner = operand
+            while isinstance(inner, exp.Paren):
+                inner = inner.this
+            if isinstance(inner, exp.Null):
+                node.set(key, _cast(exp.Null(), "FLOAT64", "bigquery"))
+        return node
 
     def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
         return {
@@ -2830,9 +2862,10 @@ class BigQueryRewriter(Rewriter):
         array, start, end = args
         if not _is_array(array):
             raise DialectError("list_slice 只支援 FINDNTH 的寫法")
+        # UNNEST(Null) 沒有列、ARRAY(…) 得空陣列：Null 的陣列保持 Null（與 DuckDB 的 list_slice 相同）
         sliced = _template(
-            "ARRAY(SELECT tmig_e FROM UNNEST({a}) AS tmig_e WITH OFFSET AS tmig_o "
-            "WHERE tmig_o BETWEEN {s} - 1 AND {e} - 1 ORDER BY tmig_o)",
+            "IF({a} IS NULL, NULL, ARRAY(SELECT tmig_e FROM UNNEST({a}) AS tmig_e "
+            "WITH OFFSET AS tmig_o WHERE tmig_o BETWEEN {s} - 1 AND {e} - 1 ORDER BY tmig_o))",
             "bigquery",
             a=array,
             s=start,
@@ -2868,6 +2901,535 @@ class BigQueryRewriter(Rewriter):
 
     def percentile(self, value: exp.Expr, fraction: exp.Expr) -> exp.Expr:
         return _template(BIGQUERY_PERCENTILE, "bigquery", x=value, p=fraction)
+
+
+# ---------------------------------------------------------------- Apache Hive、Impala
+
+
+HIVE_PERCENTILE = (
+    "SORT_ARRAY(COLLECT_LIST({x}))[CAST(FLOOR({pos}) AS INT)] "
+    "+ ({pos} - FLOOR({pos})) "
+    "* (SORT_ARRAY(COLLECT_LIST({x}))[CAST(CEIL({pos}) AS INT)] "
+    "- SORT_ARRAY(COLLECT_LIST({x}))[CAST(FLOOR({pos}) AS INT)])"
+).replace("{pos}", "(CAST({p} AS DOUBLE) * (SIZE(COLLECT_LIST({x})) - 1))")
+"""精確的百分位數（與 DuckDB 的 quantile_cont 相同的線性內插）：Hive 的 percentile 只接受整數、
+percentile_approx 是近似值；不是 Null 的值排序成陣列（0 起算）取前後兩個值內插。"""
+
+
+class HiveRewriter(Rewriter):
+    """Apache Hive 2.3 以上（HiveServer2；Cloudera、Hortonworks、MapR、Amazon EMR 的 Hive）。
+    依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回 DuckDB 模擬執行）。
+
+    - 星期、ISO 年以與 1900-01-01（星期一）相隔的天數計算（DATEDIFF、PMOD）；週數為 WEEKOFYEAR（ISO）
+    - 日期加減：時間單位以秒數加減（TIMESTAMP 與 DOUBLE 互轉），月份以月初的 ADD_MONTHS 加上日數再取月底
+      （Hive 的 ADD_MONTHS 遇到月底時取月底，與 DuckDB 不同）
+    - 截斷以 TRUNC（月、年）、TO_DATE（日）與 DATE_FORMAT（時、分、秒）
+    - 沒有 ATAN2、數字的 TRUNC、陣列的片段：ATAN2 以 ATAN 與象限計算，FINDNTH 列為不支援
+    - 字串串接以 CONCAT；SPLIT 的分隔字元是正規表示式（以 \\Q…\\E 包住）；正規表示式為 Java 的寫法
+    - VARIANCE 是母體變異數：樣本變異數為 VAR_SAMP；MEDIAN、PERCENTILE 以排序後的 COLLECT_LIST 內插
+    - 轉型失敗時為 Null（TRY_CAST 即 CAST）；GROUP BY 不以位置分組；子查詢只能在條件中
+    - 連線時把工作階段的時區設為 UTC（hive.local.time.zone）
+    """
+
+    name = "Hive"
+    dialect = "hive"
+    allowed = frozenset(
+        {
+            exp.Year,
+            exp.Quarter,
+            exp.Month,
+            exp.Day,
+            exp.Pi,
+            exp.Degrees,
+            exp.Radians,
+            exp.Log,
+            exp.Round,
+            exp.Repeat,
+            exp.VariancePop,
+            exp.IntDiv,
+            exp.Mod,
+            exp.NullSafeEQ,
+            exp.CurrentDate,
+            exp.Boolean,
+            exp.RegexpExtract,
+        }
+    )
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit in ("year", "month"):
+            months = (
+                amount if unit == "month" else exp.Mul(this=_paren(amount), expression=_num(12))
+            )
+            return self._add_months(value, months)
+        # 秒數以 DOUBLE 計算：INT 相乘會溢位（Hive 不報錯）
+        factor = {
+            "day": 86400.0,
+            "hour": 3600.0,
+            "minute": 60.0,
+            "second": 1.0,
+            "microsecond": 0.000001,
+        }[unit]
+        seconds = exp.Mul(this=_paren(amount), expression=_num(factor))
+        return self._seconds_later(value, seconds)
+
+    def _timestamp(self, value: exp.Expr) -> exp.Expr:
+        if isinstance(value, exp.Cast) and value.to.this in TIMESTAMP_TYPES:
+            return value
+        return _cast(value, "TIMESTAMP")
+
+    def _epoch(self, value: exp.Expr) -> exp.Expr:
+        """自 1970-01-01 起的秒數（含小數）。"""
+        return _cast(self._timestamp(value), "DOUBLE")
+
+    def _seconds_later(self, value: exp.Expr, seconds: exp.Expr) -> exp.Expr:
+        moved = exp.Add(this=self._epoch(value), expression=_paren(seconds))
+        return _cast(moved, "TIMESTAMP")
+
+    def _add_months(self, value: exp.Expr, months: exp.Expr) -> exp.Expr:
+        """月初加上月數再加回日數，超過月底時取月底；一天中的時間保留。"""
+        first = _fn("ADD_MONTHS", _fn("TRUNC", value.copy(), _str("MM")), _cast(months, "INT"))
+        day = _cast(
+            _fn(
+                "DATE_ADD",
+                first.copy(),
+                exp.Sub(this=exp.Day(this=value.copy()), expression=_num(1)),
+            ),
+            "DATE",
+        )
+        last = _cast(_fn("LAST_DAY", first), "DATE")
+        moved = _fn("LEAST", day, last)
+        midnight = _cast(_fn("TO_DATE", value.copy()), "TIMESTAMP")
+        time_of_day = exp.Sub(this=self._epoch(value), expression=self._epoch(midnight))
+        return self._seconds_later(_cast(moved, "TIMESTAMP"), time_of_day)
+
+    def _days_since(self, value: exp.Expr, origin: str) -> exp.Expr:
+        return _fn("DATEDIFF", _fn("TO_DATE", value), _str(origin))
+
+    def _weekday(self, value: exp.Expr, origin: str) -> exp.Expr:
+        return _fn("PMOD", self._days_since(value, origin), _num(7))
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        def time_part(name: str) -> Callable[[exp.Expr], exp.Expr]:
+            return lambda n: _fn(name, self._timestamp(n.this))
+
+        return {
+            exp.Hour: time_part("HOUR"),
+            exp.Minute: time_part("MINUTE"),
+            exp.Second: time_part("SECOND"),
+            exp.DayOfYear: lambda n: exp.Paren(
+                this=exp.Add(
+                    this=_fn(
+                        "DATEDIFF",
+                        _fn("TO_DATE", n.this.copy()),
+                        _fn("TRUNC", n.this, _str("YYYY")),
+                    ),
+                    expression=_num(1),
+                )
+            ),
+            exp.Week: lambda n: _fn("WEEKOFYEAR", n.this),
+            exp.DayOfWeek: lambda n: self._weekday(n.this, "1900-01-07"),
+            exp.DayOfWeekIso: lambda n: exp.Paren(
+                this=exp.Add(this=self._weekday(n.this, "1900-01-01"), expression=_num(1))
+            ),
+            exp.Monthname: lambda n: _names(exp.Month(this=n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(
+                exp.Paren(
+                    this=exp.Add(this=self._weekday(n.this, "1900-01-01"), expression=_num(1))
+                ),
+                DAY_NAMES,
+            ),
+            exp.TimestampTrunc: self.date_trunc,
+            exp.DateTrunc: self.date_trunc,
+            exp.DateDiff: self.date_diff,
+            exp.DateFromParts: lambda n: self.make_date(
+                n.args["year"], n.args["month"], n.args["day"]
+            ),
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.TimeToUnix: lambda n: self._epoch(n.this),
+            exp.Atan2: self.atan2,
+            exp.Trunc: lambda n: exp.Case(
+                ifs=[
+                    exp.If(
+                        this=exp.LT(this=n.this.copy(), expression=_num(0)),
+                        true=exp.Ceil(this=n.this.copy()),
+                    )
+                ],
+                default=exp.Floor(this=n.this),
+            ),
+            exp.Unicode: lambda n: _fn("ASCII", n.this),
+            exp.DPipe: lambda n: _fn("CONCAT", n.this, n.expression),
+            exp.Left: self.left,
+            exp.Right: self.right,
+            exp.SplitPart: self.split_part,
+            exp.Split: lambda n: _array(_fn("SPLIT", n.this, self._literal_regex(n.expression))),
+            exp.Length: lambda n: _fn("SIZE", n.this) if _is_array(n.this) else n,
+            exp.RegexpReplace: self.regexp_replace,
+            exp.Variance: lambda n: _fn("VAR_SAMP", n.this),
+            exp.TryCast: lambda n: _mark(exp.Cast(this=n.this, to=n.args["to"])),
+            exp.Median: lambda n: self.percentile(n.this, _num(0.5)),
+            exp.PercentileCont: lambda n: self.percentile(n.this, n.expression),
+            exp.DataType: self.datatype,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            "isoyear": lambda a: exp.Year(this=self._thursday(a[0])),
+            "now": lambda a: exp.Var(this="CURRENT_TIMESTAMP"),
+            "try_strptime": self.parse_date,
+            "list_slice": lambda a: self.no_arrays(),
+        }
+
+    def no_arrays(self) -> exp.Expr:
+        raise DialectError(f"{self.name} 沒有取陣列片段的函式（FINDNTH）")
+
+    def _thursday(self, value: exp.Expr) -> exp.Expr:
+        return _fn(
+            "DATE_ADD",
+            _fn("TO_DATE", value.copy()),
+            exp.Sub(this=_num(3), expression=self._weekday(value, "1900-01-01")),
+        )
+
+    def datatype(self, node: exp.Expr) -> exp.Expr:
+        # DuckDB 的 DECIMAL 預設為 (18, 3)；Hive 為 (10, 0)
+        decimal = isinstance(node, exp.DataType) and node.this == exp.DataType.Type.DECIMAL
+        if decimal and not node.expressions:
+            return _type("DECIMAL(18, 3)")
+        return node
+
+    def date_trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        value = node.this
+        if unit == "day":
+            return _cast(_fn("TO_DATE", value), "TIMESTAMP")
+        if unit in ("month", "year"):
+            return _cast(
+                _fn("TRUNC", value, _str("MM" if unit == "month" else "YYYY")), "TIMESTAMP"
+            )
+        if unit == "quarter":
+            months = exp.Mul(
+                this=exp.Paren(
+                    this=exp.Sub(this=exp.Quarter(this=value.copy()), expression=_num(1))
+                ),
+                expression=_num(3),
+            )
+            return _cast(_fn("ADD_MONTHS", _fn("TRUNC", value, _str("YYYY")), months), "TIMESTAMP")
+        formats = {
+            "hour": "yyyy-MM-dd HH:00:00",
+            "minute": "yyyy-MM-dd HH:mm:00",
+            "second": "yyyy-MM-dd HH:mm:ss",
+        }
+        if unit in formats:
+            return _cast(
+                _fn("DATE_FORMAT", self._timestamp(value), _str(formats[unit])), "TIMESTAMP"
+            )
+        raise DialectError(f"{self.name} 的日期截斷不支援單位 {unit}")
+
+    def date_diff(self, node: exp.Expr) -> exp.Expr:
+        def part(field: str, value: exp.Expr) -> exp.Expr:
+            if field in ("hour", "minute", "second"):
+                return _fn(field.upper(), self._timestamp(value))
+            return {"year": exp.Year, "quarter": exp.Quarter, "month": exp.Month}[field](this=value)
+
+        return self.boundary_diff(_unit(node), node.expression, node.this, part, self._day_diff)
+
+    def _day_diff(self, start: exp.Expr, end: exp.Expr) -> exp.Expr:
+        return _fn("DATEDIFF", _fn("TO_DATE", end), _fn("TO_DATE", start))
+
+    def make_date(self, y: exp.Expr, m: exp.Expr, d: exp.Expr) -> exp.Expr:
+        def pad(value: exp.Expr, width: int) -> exp.Expr:
+            return _fn("LPAD", _cast(value, "STRING", "hive"), _num(width), _str("0"))
+
+        text = _fn("CONCAT", pad(y, 4), _str("-"), pad(m, 2), _str("-"), pad(d, 2))
+        return _cast(text, "DATE")
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600.0)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60.0)),
+            ),
+            expression=_paren(ss),
+        )
+        return self._seconds_later(_cast(self.make_date(y, m, d), "TIMESTAMP"), seconds)
+
+    def atan2(self, node: exp.Expr) -> exp.Expr:
+        """ATAN2(y, x)：以 ATAN(y / x) 依象限調整。"""
+        y, x = node.this, node.expression
+        base = exp.Atan(this=exp.Div(this=_paren(y.copy()), expression=_paren(x.copy())))
+        pi = exp.Pi()
+
+        def when(cond: exp.Expr, value: exp.Expr) -> exp.If:
+            return exp.If(this=cond, true=value)
+
+        zero = _num(0)
+        return exp.Case(
+            ifs=[
+                when(exp.GT(this=x.copy(), expression=zero.copy()), base.copy()),
+                when(
+                    exp.And(
+                        this=exp.LT(this=x.copy(), expression=zero.copy()),
+                        expression=exp.GTE(this=y.copy(), expression=zero.copy()),
+                    ),
+                    exp.Add(this=base.copy(), expression=pi.copy()),
+                ),
+                when(
+                    exp.And(
+                        this=exp.LT(this=x.copy(), expression=zero.copy()),
+                        expression=exp.LT(this=y.copy(), expression=zero.copy()),
+                    ),
+                    exp.Sub(this=base.copy(), expression=pi.copy()),
+                ),
+                when(
+                    exp.And(
+                        this=exp.EQ(this=x.copy(), expression=zero.copy()),
+                        expression=exp.GT(this=y.copy(), expression=zero.copy()),
+                    ),
+                    exp.Div(this=pi.copy(), expression=_num(2)),
+                ),
+                when(
+                    exp.And(
+                        this=exp.EQ(this=x.copy(), expression=zero.copy()),
+                        expression=exp.LT(this=y.copy(), expression=zero.copy()),
+                    ),
+                    exp.Neg(this=exp.Paren(this=exp.Div(this=pi.copy(), expression=_num(2)))),
+                ),
+                when(
+                    exp.And(
+                        this=exp.EQ(this=x, expression=zero.copy()),
+                        expression=exp.EQ(this=y, expression=zero.copy()),
+                    ),
+                    _num(0.0),
+                ),
+            ]
+        )
+
+    def left(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        head = _fn("SUBSTR", text.copy(), _num(1), count.copy())
+        if _not_negative(count):
+            return head
+        trimmed = _fn(
+            "SUBSTR",
+            text.copy(),
+            _num(1),
+            _fn("GREATEST", exp.Add(this=exp.Length(this=text), expression=count.copy()), _num(0)),
+        )
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count.copy(), expression=_num(0)), true=trimmed)],
+            default=head,
+        )
+
+    def right(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        start = exp.Add(
+            this=exp.Sub(this=exp.Length(this=text.copy()), expression=_paren(count.copy())),
+            expression=_num(1),
+        )
+        tail = _fn("SUBSTR", text.copy(), _fn("GREATEST", start, _num(1)))
+        if _not_negative(count):
+            return tail
+        trimmed = _fn("SUBSTR", text, exp.Sub(this=_num(1), expression=_paren(count.copy())))
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count, expression=_num(0)), true=trimmed)],
+            default=tail,
+        )
+
+    def _literal_regex(self, delimiter: exp.Expr) -> exp.Expr:
+        """SPLIT 的分隔字元是正規表示式：以 \\Q…\\E 包住（照字面比對）。"""
+        return _fn("CONCAT", _str("\\Q"), delimiter, _str("\\E"))
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        text, delimiter = node.this, node.args["delimiter"]
+        index = node.args["part_index"]
+        fixed = _literal_int(index)
+        if fixed is None or fixed == 0:
+            raise DialectError(f"{self.name} 的 SPLIT 只支援非 0 的常值位置")
+        parts = _fn("SPLIT", text.copy(), self._literal_regex(delimiter.copy()))
+        if fixed > 0:
+            position: exp.Expr = _num(fixed - 1)
+        else:
+            position = exp.Add(this=_fn("SIZE", parts.copy()), expression=_num(fixed))
+        part = _mark(exp.Bracket(this=parts, expressions=[position], offset=0, safe=True))
+        known = exp.And(
+            this=exp.Not(this=exp.Is(this=text, expression=exp.Null())),
+            expression=exp.Not(this=exp.Is(this=delimiter, expression=exp.Null())),
+        )
+        return exp.Coalesce(
+            this=part, expressions=[exp.Case(ifs=[exp.If(this=known, true=_str(""))])]
+        )
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        replacement = node.args.get("replacement") or _str("")
+        if not (isinstance(replacement, exp.Literal) and replacement.is_string):
+            raise DialectError("REGEXP_REPLACE 的取代字串不是常值")
+        return _fn(
+            "REGEXP_REPLACE", node.this, node.expression, _str(java_replacement(replacement.name))
+        )
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：UNIX_TIMESTAMP 不符合格式時為 Null（精確到秒）。"""
+        if "%f" in _format_literal(args[1]):
+            raise DialectError(f"{self.name} 的 DATEPARSE 不支援秒的小數")
+        fmt = _convert_format(_format_literal(args[1]), SPARK_FORMAT, _single_quote)
+        seconds = _fn("UNIX_TIMESTAMP", args[0], _str(fmt))
+        return _cast(_fn("FROM_UNIXTIME", seconds, _str("yyyy-MM-dd HH:mm:ss")), "TIMESTAMP")
+
+    def percentile(self, value: exp.Expr, fraction: exp.Expr) -> exp.Expr:
+        return _template(HIVE_PERCENTILE, "hive", x=value, p=fraction)
+
+    def finish(self, tree: exp.Expr) -> None:
+        for select in list(tree.find_all(exp.Select)):
+            _expand_group_ordinals(select)
+        for node in list(tree.find_all(exp.Exists)):
+            if node.root() is tree and not _condition_position(node):
+                raise DialectError(f"{self.name} 的子查詢只能用在條件中（例如集合的成員）")
+
+
+class ImpalaRewriter(HiveRewriter):
+    """Apache Impala 3.3 以上（Cloudera）。依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回 DuckDB 模擬執行）。
+
+    與 Hive 相同的規則，差異：
+
+    - 時間的加減以 DAYS_ADD、MONTHS_ADD、MICROSECONDS_ADD 等函式（保留一天中的時間）；月份的加減從月初加起，
+      再取不超過月底的日（Impala 的 MONTHS_ADD 遇到月底時取月底，與 DuckDB 不同）
+    - 截斷以 TRUNC（年、季、月、日、時、分）與 DATE_TRUNC（秒）；沒有 DATE_FORMAT
+    - 自 1970-01-01 起的秒數以 UNIX_TIMESTAMP（UTC）加上毫秒；今天為 CURRENT_DATE()、現在為 NOW()
+    - 正規表示式是 RE2（取代字串的群組參照與 DuckDB 相同是 \\1）；REGEXP_EXTRACT 一定要給群組
+    - 有 ATAN2、SPLIT_PART、TRUNCATE、DAYOFYEAR；沒有陣列、精確的 MEDIAN、PERCENTILE 與 CORR、COVAR（列為不支援）
+    - DATEPARSE 的格式不支援月份名稱、上下午與含英文字母的文字（格式中的其他文字照字面比對，不加引號）
+    - LENGTH 計算位元組（非 ASCII 字元與 Tableau 不同）
+    - 連線時把工作階段的時區設為 UTC（TIMEZONE 查詢選項）
+    """
+
+    name = "Impala"
+    dialect = "impala"
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit in ("year", "month"):
+            return super().add_interval(value, unit, amount)
+        if unit in ("second", "microsecond"):
+            factor = 1000000 if unit == "second" else 1
+            micros = _cast(
+                _fn("ROUND", exp.Mul(this=_paren(amount), expression=_num(factor))), "BIGINT"
+            )
+            return _fn("MICROSECONDS_ADD", self._timestamp(value), micros)
+        name = {"day": "DAYS_ADD", "hour": "HOURS_ADD", "minute": "MINUTES_ADD"}[unit]
+        return _fn(name, self._timestamp(value), _cast(amount, "BIGINT"))
+
+    def _seconds_later(self, value: exp.Expr, seconds: exp.Expr) -> exp.Expr:
+        return self.add_interval(value, "second", seconds)
+
+    def _add_months(self, value: exp.Expr, months: exp.Expr) -> exp.Expr:
+        """同一時間的月初加上月數，再加回日數（不超過該月的最後一天）。"""
+        ts = self._timestamp(value)
+        back = _cast(exp.Sub(this=exp.Day(this=ts.copy()), expression=_num(1)), "BIGINT")
+        first = _fn("MONTHS_ADD", _fn("DAYS_SUB", ts.copy(), back), _cast(months, "INT"))
+        day = _fn("LEAST", exp.Day(this=ts), exp.Day(this=_fn("LAST_DAY", first.copy())))
+        return _fn("DAYS_ADD", first, _cast(exp.Sub(this=day, expression=_num(1)), "BIGINT"))
+
+    def _epoch(self, value: exp.Expr) -> exp.Expr:
+        """自 1970-01-01 起的秒數：UNIX_TIMESTAMP 是整數秒（UTC），加上毫秒。"""
+        ts = self._timestamp(value)
+        millis = exp.Div(this=_fn("MILLISECOND", ts.copy()), expression=_num(1000.0))
+        return exp.Paren(this=exp.Add(this=_fn("UNIX_TIMESTAMP", ts), expression=millis))
+
+    def _days_since(self, value: exp.Expr, origin: str) -> exp.Expr:
+        # DATEDIFF 不計一天中的時間
+        return _fn("DATEDIFF", self._timestamp(value), _cast(_str(origin), "TIMESTAMP"))
+
+    def _day_diff(self, start: exp.Expr, end: exp.Expr) -> exp.Expr:
+        return _fn("DATEDIFF", self._timestamp(end), self._timestamp(start))
+
+    def _thursday(self, value: exp.Expr) -> exp.Expr:
+        offset = _cast(
+            exp.Sub(this=_num(3), expression=self._weekday(value.copy(), "1900-01-01")), "BIGINT"
+        )
+        return _fn("DAYS_ADD", _fn("TRUNC", self._timestamp(value), _str("DD")), offset)
+
+    def date_trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        value = self._timestamp(node.this)
+        codes = {
+            "year": "YYYY",
+            "quarter": "Q",
+            "month": "MM",
+            "day": "DD",
+            "hour": "HH",
+            "minute": "MI",
+        }
+        if unit in codes:
+            return _fn("TRUNC", value, _str(codes[unit]))
+        if unit == "second":
+            return _fn("DATE_TRUNC", _str("SECOND"), value)
+        raise DialectError(f"Impala 的日期截斷不支援單位 {unit}")
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        return {
+            **super().handlers(),
+            exp.Atan2: lambda n: _mark(n),
+            exp.Trunc: lambda n: _fn("TRUNCATE", n.this),
+            exp.DayOfYear: lambda n: _fn("DAYOFYEAR", self._timestamp(n.this)),
+            exp.SplitPart: self.split_part,
+            exp.Split: lambda n: self.no_arrays(),
+            exp.RegexpReplace: lambda n: _fn(
+                "REGEXP_REPLACE", n.this, n.expression, n.args.get("replacement") or _str("")
+            ),
+            exp.RegexpExtract: lambda n: _fn(
+                "REGEXP_EXTRACT", n.this, n.expression, n.args.get("group") or _num(0)
+            ),
+            exp.CurrentDate: lambda n: _fn("CURRENT_DATE"),
+            exp.Median: self.no_statistics,
+            exp.PercentileCont: self.no_statistics,
+            exp.Corr: self.no_correlation,
+            exp.CovarSamp: self.no_correlation,
+            exp.CovarPop: self.no_correlation,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {**super().functions(), "now": lambda a: _fn("NOW")}
+
+    def no_statistics(self, node: exp.Expr) -> exp.Expr:
+        raise DialectError("Impala 沒有精確的 MEDIAN、PERCENTILE（只有近似的 APPX_MEDIAN）")
+
+    def no_correlation(self, node: exp.Expr) -> exp.Expr:
+        raise DialectError("Impala 沒有 CORR、COVAR、COVARP")
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        index = _literal_int(node.args["part_index"])
+        if index is None or index < 1:
+            raise DialectError("Impala 的 SPLIT 只支援正整數常值的位置")
+        return _fn(
+            "SPLIT_PART",
+            node.this,
+            node.args["delimiter"],
+            _cast(node.args["part_index"], "BIGINT"),
+        )
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：TO_TIMESTAMP 不符合格式時為 Null（格式中的文字照字面比對，不能含英文字母）。"""
+
+        def literal(text: str) -> str:
+            if re.search(r"[A-Za-z']", text):
+                raise DialectError(f"Impala 的 DATEPARSE 格式不能含英文字母或引號的文字：{text}")
+            return text
+
+        fmt = _convert_format(_format_literal(args[1]), IMPALA_FORMAT, literal)
+        return _fn("TO_TIMESTAMP", args[0], _str(fmt))
+
+
+IMPALA_FORMAT = {
+    "%Y": "yyyy",
+    "%y": "yy",
+    "%m": "MM",
+    "%d": "dd",
+    "%H": "HH",
+    "%M": "mm",
+    "%S": "ss",
+    "%f": "SSSSSS",
+}
+"""strftime 的格式 → Impala 的日期格式（不支援月份名稱與上下午）。"""
 
 
 # ---------------------------------------------------------------- Teradata
@@ -3916,6 +4478,8 @@ REWRITERS: dict[str, Rewriter] = {
     "athena": TrinoRewriter("Athena", "athena"),
     "bigquery": BigQueryRewriter(),
     "teradata": TeradataRewriter(),
+    "hive": HiveRewriter(),
+    "impala": ImpalaRewriter(),
 }
 
 

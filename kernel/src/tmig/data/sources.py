@@ -78,6 +78,9 @@ DRIVERS = (
     "athena",
     "bigquery",
     "teradata",
+    "spark",
+    "hive",
+    "impala",
     "duckdb",
 )
 DRIVER_DIALECTS = {
@@ -93,6 +96,9 @@ DRIVER_DIALECTS = {
     "athena": "athena",
     "bigquery": "bigquery",
     "teradata": "teradata",
+    "spark": "spark",
+    "hive": "hive",
+    "impala": "impala",
     "duckdb": "duckdb",
 }
 SECRET_KEYS = frozenset(
@@ -219,6 +225,8 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return BigQueryExecutor.open(connection, params)
     if config.driver == "teradata":
         return TeradataExecutor.open(connection, params)
+    if config.driver in HIVESERVER2_SESSION:
+        return HiveServer2Executor.open(connection, params, config.driver)
     return DatabricksExecutor.open(connection, params)
 
 
@@ -922,6 +930,95 @@ class TeradataExecutor:
         self.con.close()
 
 
+HIVESERVER2_SESSION = {
+    "spark": "SET spark.sql.session.timeZone=UTC",
+    "hive": "SET hive.local.time.zone=UTC",
+    "impala": "SET TIMEZONE=UTC",
+}
+"""HiveServer2 協定的伺服器：工作階段的時區設為 UTC。"""
+HIVESERVER2_PORTS = {"spark": 10000, "hive": 10000, "impala": 21050}
+
+
+class HiveServer2Executor:
+    """HiveServer2 協定（impyla）：Spark Thrift Server（Tableau 的 Spark SQL 連線）、Apache Hive 與 Impala。
+
+    auth_mechanism 可選 PLAIN（預設；有密碼時為 LDAP）、NOSASL、GSSAPI（Kerberos）、JWT；
+    http_path 有值時以 HTTP 傳輸（例如經過 Knox 閘道）。Spark Thrift Server 有實跑測試，Hive 與 Impala 尚未實機驗證。
+    連線後把工作階段的時區設為 UTC；Hive 2、Impala 3.1 之前沒有這個設定，維持伺服器的時區（伺服器的時區有
+    日光節約時間時，Hive 跨越切換日的時間加減可能差一小時）。
+    """
+
+    def __init__(self, con: Any, dialect: str) -> None:
+        self.con = con
+        self.dialect = dialect
+
+    @classmethod
+    def open(
+        cls, connection: LiveConnection, params: dict[str, Any], driver: str
+    ) -> HiveServer2Executor:
+        try:
+            from impala.dbapi import connect  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError(
+                "未安裝 Hive／Impala／Spark SQL 驅動：uv sync --extra hive"
+            ) from exc
+        host = params.get("host") or connection.server
+        if not host:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少主機")
+        password = params.get("password")
+        mechanism = params.get("auth_mechanism") or ("LDAP" if password else "PLAIN")
+        kwargs: dict[str, Any] = {
+            "host": host,
+            "port": int(params.get("port") or connection.port or HIVESERVER2_PORTS[driver]),
+            "database": params.get("database") or connection.schema_name or connection.database,
+            "auth_mechanism": mechanism,
+            "user": params.get("user"),
+            # PLAIN 一定要有密碼（伺服器不驗證時任何值都可以）
+            "password": password if password or mechanism != "PLAIN" else "tmig",
+            "use_ssl": bool(params.get("use_ssl", False)),
+            "kerberos_service_name": params.get("kerberos_service_name"),
+            "jwt": params.get("token"),
+        }
+        if params.get("http_path"):
+            kwargs["use_http_transport"] = True
+            kwargs["http_path"] = params["http_path"]
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:
+            con = connect(**kwargs)
+            cursor = con.cursor()
+        except Exception as exc:
+            raise SourceConnectionError(
+                f"無法連上 {driver}（{connection.connection_id}）：{exc}"
+            ) from exc
+        try:
+            cursor.execute(HIVESERVER2_SESSION[driver])
+        except Exception as exc:
+            # Hive 2 沒有 hive.local.time.zone、Impala 3.1 之前沒有 TIMEZONE：維持伺服器的時區
+            if driver == "spark":
+                con.close()
+                raise SourceConnectionError(
+                    f"無法設定 {driver}（{connection.connection_id}）的時區：{exc}"
+                ) from exc
+        finally:
+            cursor.close()
+        return cls(con, DRIVER_DIALECTS[driver])
+
+    def fetch(self, sql: str) -> pa.Table:
+        cursor = self.con.cursor()
+        try:
+            cursor.execute(sql)
+            description = cursor.description or []
+            rows = cursor.fetchall()
+        finally:
+            cursor.close()
+        names = [d[0] for d in description]
+        scales = [d[5] if len(d) > 5 and isinstance(d[5], int) else None for d in description]
+        return rows_to_arrow(names, rows, scales)
+
+    def close(self) -> None:
+        self.con.close()
+
+
 def _athena_region(server: str | None) -> str | None:
     """athena.us-east-1.amazonaws.com → us-east-1。"""
     match = re.match(r"athena[.-]([a-z0-9-]+)\.amazonaws\.com", server or "", re.IGNORECASE)
@@ -983,6 +1080,7 @@ __all__ = [
     "DatabricksExecutor",
     "DuckDBExecutor",
     "Executor",
+    "HiveServer2Executor",
     "MySQLExecutor",
     "OracleExecutor",
     "PostgresExecutor",

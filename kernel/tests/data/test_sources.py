@@ -176,6 +176,95 @@ def test_bigquery_executor_options(monkeypatch: pytest.MonkeyPatch) -> None:
         BigQueryExecutor.open(connection.model_copy(update={"database": None}), {})
 
 
+def test_hiveserver2_executor_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HiveServer2 協定：有密碼時為 LDAP、沒有時為 PLAIN；工作階段設為 UTC（Hive 2 等沒有這個設定時略過）。"""
+    import impala.dbapi
+
+    from tmig.data.sources import HiveServer2Executor
+    from tmig.ir import LiveConnection
+
+    calls: list[dict[str, object]] = []
+    statements: list[str] = []
+    refuse: set[str] = set()
+
+    class Cursor:
+        def execute(self, sql: str) -> None:
+            statements.append(sql)
+            if sql in refuse:
+                raise RuntimeError("hive configuration hive.local.time.zone does not exists")
+
+        def close(self) -> None:
+            pass
+
+    class Connection:
+        closed = False
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def close(self) -> None:
+            Connection.closed = True
+
+    def connect(**kwargs: object) -> Connection:
+        calls.append(kwargs)
+        return Connection()
+
+    monkeypatch.setattr(impala.dbapi, "connect", connect)
+
+    def live(dbclass: str, dialect: str, port: int | None = None) -> LiveConnection:
+        return LiveConnection(
+            kind="live",
+            connection_id=f"{dbclass}_x",
+            dbclass=dbclass,
+            dialect=dialect,  # type: ignore[arg-type]
+            server="hadoop.example.com",
+            port=port,
+            schema_name="sales",
+        )
+
+    hive = HiveServer2Executor.open(
+        live("hadoophive", "hive"), {"user": "u", "password": "p"}, "hive"
+    )
+    assert hive.dialect == "hive"
+    assert calls[0] == {
+        "host": "hadoop.example.com",
+        "port": 10000,
+        "database": "sales",
+        "auth_mechanism": "LDAP",
+        "user": "u",
+        "password": "p",
+        "use_ssl": False,
+    }
+    impala_executor = HiveServer2Executor.open(live("hadoophive", "impala"), {}, "impala")
+    assert impala_executor.dialect == "impala"
+    assert (calls[1]["port"], calls[1]["auth_mechanism"], calls[1]["password"]) == (
+        21050,
+        "PLAIN",
+        "tmig",
+    )
+    HiveServer2Executor.open(live("spark", "spark", 10001), {"http_path": "cliservice"}, "spark")
+    assert (calls[2]["port"], calls[2]["use_http_transport"], calls[2]["http_path"]) == (
+        10001,
+        True,
+        "cliservice",
+    )
+    assert statements == [
+        "SET hive.local.time.zone=UTC",
+        "SET TIMEZONE=UTC",
+        "SET spark.sql.session.timeZone=UTC",
+    ]
+    # Hive 2 沒有 hive.local.time.zone：照樣連線；Spark 設定失敗時不連線
+    refuse.update({"SET hive.local.time.zone=UTC", "SET spark.sql.session.timeZone=UTC"})
+    assert HiveServer2Executor.open(live("hadoophive", "hive"), {}, "hive").dialect == "hive"
+    with pytest.raises(SourceConnectionError, match="無法設定 spark"):
+        HiveServer2Executor.open(live("spark", "spark"), {}, "spark")
+    assert Connection.closed
+    with pytest.raises(SourceConnectionError, match="缺少主機"):
+        HiveServer2Executor.open(
+            live("spark", "spark").model_copy(update={"server": None}), {}, "spark"
+        )
+
+
 def test_config_errors(tmp_path: Path) -> None:
     assert load_connections(tmp_path / "missing.toml") == {}
     config = write_config(tmp_path / "bad.toml", '[connections.x]\ndriver = "mssql"\n')
@@ -368,8 +457,8 @@ def test_connections_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     assert set(load_connections(out)) == {"sales_ora", "lake", "crm_td"}
 
 
-def test_connections_template_for_presto_and_athena(tmp_path: Path) -> None:
-    from tmig.data.connection_check import FoundConnection, template
+def test_connections_template_for_other_engines(tmp_path: Path) -> None:
+    from tmig.data.connection_check import FoundConnection, driver_for, template
     from tmig.ir import LiveConnection
 
     def found(connection_id: str, dbclass: str, dialect: str, server: str) -> FoundConnection:
@@ -382,19 +471,47 @@ def test_connections_template_for_presto_and_athena(tmp_path: Path) -> None:
         )
         return FoundConnection(connection, ["報表"])
 
-    text = template(
-        {
-            "presto_x": found("presto_x", "presto", "trino", "trino.example.com"),
-            "athena_x": found("athena_x", "athena", "athena", "athena.us-east-1.amazonaws.com"),
-            "bigquery_x": found("bigquery_x", "bigquery", "bigquery", ""),
-        }
-    )
+    entries = {
+        "presto_x": found("presto_x", "presto", "trino", "trino.example.com"),
+        "athena_x": found("athena_x", "athena", "athena", "athena.us-east-1.amazonaws.com"),
+        "bigquery_x": found("bigquery_x", "bigquery", "bigquery", ""),
+        "spark_x": found("spark_x", "spark", "spark", "spark.example.com"),
+        "spark_db": found("spark_db", "spark", "spark", "adb-1.azuredatabricks.net"),
+        "hive_x": found("hive_x", "hadoophive", "hive", "hive.example.com"),
+        "impala_x": found("impala_x", "hadoophive", "impala", "impala.example.com"),
+    }
+    # Spark SQL 連到 Databricks 時用 Databricks 的驅動；Cloudera Hadoop 連到 Impala 時用 Impala 的規則
+    assert {k: driver_for(v.connection) for k, v in entries.items()} == {
+        "presto_x": "trino",
+        "athena_x": "athena",
+        "bigquery_x": "bigquery",
+        "spark_x": "spark",
+        "spark_db": "databricks",
+        "hive_x": "hive",
+        "impala_x": "impala",
+    }
+    text = template(entries)
     assert '[connections.bigquery_x]\ndriver = "bigquery"\n# credentials_path' in text
     assert '[connections.presto_x]\ndriver = "trino"\nuser = "${TMIG_PRESTO_X_USER}"' in text
     assert '[connections.athena_x]\ndriver = "athena"\ns3_staging_dir = "s3://…/"' in text
     assert 'secret_access_key = "${TMIG_ATHENA_X_SECRET_ACCESS_KEY}"' in text
+    assert '[connections.hive_x]\ndriver = "hive"\nuser = "${TMIG_HIVE_X_USER}"' in text
+    assert '[connections.impala_x]\ndriver = "impala"\nuser = "${TMIG_IMPALA_X_USER}"' in text
+    assert (
+        '[connections.spark_db]\ndriver = "databricks"\naccess_token = "${TMIG_SPARK_DB_TOKEN}"'
+        in text
+    )
+    assert text.count('# auth_mechanism = "LDAP"') == 3
     config = write_config(tmp_path / "connections.toml", text)
-    assert {c.driver for c in load_connections(config).values()} == {"trino", "athena", "bigquery"}
+    assert {c.driver for c in load_connections(config).values()} == {
+        "trino",
+        "athena",
+        "bigquery",
+        "spark",
+        "databricks",
+        "hive",
+        "impala",
+    }
 
 
 def test_connections_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

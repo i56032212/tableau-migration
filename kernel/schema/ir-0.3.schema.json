@@ -2365,6 +2365,8 @@
                 "athena",
                 "bigquery",
                 "teradata",
+                "hive",
+                "impala",
                 "duckdb"
               ],
               "type": "string"

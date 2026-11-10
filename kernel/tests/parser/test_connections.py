@@ -137,6 +137,34 @@ def test_presto_and_athena(tmp_path: Path) -> None:
     )
 
 
+def test_hadoop_connections(tmp_path: Path) -> None:
+    """Cloudera Hadoop 連線依伺服器的類型分成 Hive 與 Impala；Spark SQL 以 HiveServer2 協定連線。"""
+    table = "<relation connection='db.1' name='orders' table='[sales].[orders]' type='table' />"
+
+    def dialect(attributes: str) -> tuple[str | None, str | None]:
+        ir = parse(tmp_path, live_datasource(f"<connection {attributes} />", table))
+        assert reasons(ir) == []
+        conn = ir.datasources[0].connection
+        assert isinstance(conn, LiveConnection)
+        return conn.dialect, conn.schema_name
+
+    hive = "class='hadoophive' port='10000' schema='sales' server='hive.example.com'"
+    assert dialect(hive) == ("hive", "sales")
+    assert dialect(hive.replace("10000", "21050")) == ("impala", "sales")
+    assert dialect(f"{hive} server-type='Impala'") == ("impala", "sales")
+    assert dialect(f"{hive} connection-dialect='impala'") == ("impala", "sales")
+    assert (
+        dialect("class='impala' port='21050' schema='sales' server='impala.example.com'")[0]
+        == "impala"
+    )
+    for dbclass in ("hortonworkshadoophive", "maprhadoophive", "awshadoophive"):
+        assert dialect(hive.replace("hadoophive", dbclass))[0] == "hive"
+    assert (
+        dialect("class='spark' port='10000' schema='sales' server='spark.example.com'")[0]
+        == "spark"
+    )
+
+
 def test_bigquery(tmp_path: Path) -> None:
     """BigQuery 的專案記為資料庫、資料集記為結構描述。"""
     table = "<relation connection='db.1' name='orders' table='[sales].[orders]' type='table' />"

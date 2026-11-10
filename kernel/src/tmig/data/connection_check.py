@@ -25,7 +25,7 @@ from tmig.parser.workbook import parse_workbook
 DBCLASS_DRIVERS = {
     "oracle": "oracle",
     "databricks": "databricks",
-    "spark": "databricks",
+    "spark": "spark",
     "postgres": "postgres",
     "greenplum": "postgres",
     "redshift": "redshift",
@@ -40,8 +40,26 @@ DBCLASS_DRIVERS = {
     "athena": "athena",
     "bigquery": "bigquery",
     "teradata": "teradata",
+    "hadoophive": "hive",
+    "hive": "hive",
+    "hortonworkshadoophive": "hive",
+    "maprhadoophive": "hive",
+    "awshadoophive": "hive",
+    "impala": "impala",
 }
-"""Tableau 的連線類型 → 執行器（其他類型尚無執行器）。"""
+"""Tableau 的連線類型 → 執行器（其他類型尚無執行器）。Spark SQL 連到 Databricks 時用 databricks，
+Cloudera Hadoop 連到 Impala 時用 impala（依連線的方言，見 driver_for）。"""
+DATABRICKS_HOSTS = ("azuredatabricks.net", "cloud.databricks.com", "gcp.databricks.com")
+
+
+def driver_for(connection: LiveConnection) -> str | None:
+    if connection.dialect == "impala":
+        return "impala"
+    if connection.dbclass == "spark" and (connection.server or "").lower().endswith(
+        DATABRICKS_HOSTS
+    ):
+        return "databricks"
+    return DBCLASS_DRIVERS.get(connection.dbclass)
 
 
 @dataclass
@@ -119,7 +137,7 @@ def template(found: dict[str, FoundConnection]) -> str:
         lines.append(
             f"# {connection.dbclass}：{where or '（未標示主機）'}（{'、'.join(entry.workbooks)}）"
         )
-        driver = DBCLASS_DRIVERS.get(connection.dbclass)
+        driver = driver_for(connection)
         if driver is None:
             lines.append(
                 f"# 連線類型 {connection.dbclass} 尚無執行器，這些報表暫時無法以 Live 連線查詢"
@@ -148,6 +166,8 @@ def template(found: dict[str, FoundConnection]) -> str:
         else:
             lines.append(f'user = "${{{env_name(connection_id, "USER")}}}"')
             lines.append(f'password = "${{{env_name(connection_id, "PASSWORD")}}}"')
+        if driver in ("spark", "hive", "impala"):
+            lines.append('# auth_mechanism = "LDAP"   # PLAIN、NOSASL、GSSAPI（Kerberos）、JWT')
         if driver == "trino":
             lines.append('# driver = "presto"   # 伺服器是 PrestoDB（不是 Trino、Starburst）時')
         if driver == "snowflake":

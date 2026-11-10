@@ -51,6 +51,12 @@ DIALECTS: dict[str, Dialect] = {
     "athena": "athena",
     "bigquery": "bigquery",
     "teradata": "teradata",
+    "hadoophive": "hive",
+    "hive": "hive",
+    "hortonworkshadoophive": "hive",
+    "maprhadoophive": "hive",
+    "awshadoophive": "hive",
+    "impala": "impala",
 }
 """Tableau 的連線類型 → SQLGlot 方言（類型名稱依公開資料整理，待真實報表確認）。"""
 
@@ -68,6 +74,8 @@ EXECUTABLE: frozenset[str] = frozenset(
         "athena",
         "bigquery",
         "teradata",
+        "hive",
+        "impala",
     }
 )
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
@@ -131,6 +139,20 @@ def viewer_identity_problems(named: etree._Element, caption: str) -> list[str]:
     return problems
 
 
+IMPALA_PORT = "21050"
+
+
+def _impala_server(named: etree._Element) -> bool:
+    """Cloudera Hadoop 連線連到 Impala（連線的類型或方言標示 Impala，或 Impala 的 HiveServer2 連接埠 21050）。"""
+    if named.get("port") == IMPALA_PORT:
+        return True
+    return any(
+        "impala" in str(value or "").lower()
+        for key, value in named.attrib.items()
+        if "type" in str(key) or "dialect" in str(key)
+    )
+
+
 def connection_id(dbclass: str, server: str | None, database: str | None) -> str:
     """連線代號：類型、主機與資料庫轉成小寫英數字；太長或轉不出來時以雜湊代替。"""
     parts = [p for p in (dbclass, server, database) if p]
@@ -153,6 +175,8 @@ def live_connection(
         ctx.flag(named, f"資料源「{caption}」連的是檔案（{dbclass}），檔案型 Live 連線尚不支援")
         return None
     dialect = DIALECTS.get(dbclass)
+    if dbclass == "hadoophive" and _impala_server(named):
+        dialect = "impala"
     if dialect is None:
         ctx.flag(named, f"資料源「{caption}」的連線類型 {dbclass or '（未標示）'} 尚不支援")
     elif dialect not in EXECUTABLE:

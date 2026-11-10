@@ -1387,3 +1387,239 @@ def _emulate_teradata(node: Any) -> Any:
         # Teradata 的 EXTRACT(SECOND) 含小數秒
         return _duck("(microsecond({x}) / 1000000.0)", x=node.expression)
     return _emulate(node)
+
+
+# ---------------------------------------------------------------- Spark Thrift Server（本機實跑）
+
+
+@contextlib.contextmanager
+def spark_thrift_server() -> Iterator[tuple[Any, int]]:
+    """本機 Spark（Hive 支援）在同一個行程中啟動 Spark Thrift Server（HiveServer2 協定，Tableau 的 Spark SQL
+    連線）；資料表存在暫存目錄的 warehouse，結束後刪除。回傳 SparkSession 與連接埠。"""
+    try:
+        from pyspark.sql import SparkSession  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        unavailable("未安裝 pyspark（uv sync --group spark）")
+        return
+    if shutil.which("java") is None and not os.environ.get("JAVA_HOME"):
+        unavailable("找不到 Java（Spark 需要 Java 17 以上）")
+        return
+    port = _free_port()
+    work = Path(tempfile.mkdtemp(prefix="tmig-thrift-"))
+    try:
+        spark = (
+            SparkSession.builder.master("local[2]")
+            .appName("tmig-thrift")
+            .config("spark.ui.enabled", "false")
+            .config("spark.sql.session.timeZone", "UTC")
+            .config("spark.sql.shuffle.partitions", "2")
+            .config("spark.driver.memory", "1g")
+            .config("spark.sql.warehouse.dir", str(work / "warehouse"))
+            .config(
+                "spark.hadoop.javax.jdo.option.ConnectionURL",
+                f"jdbc:derby:;databaseName={(work / 'metastore').as_posix()};create=true",
+            )
+            .config("hive.server2.thrift.port", str(port))
+            .config("hive.server2.thrift.bind.host", "127.0.0.1")
+            .enableHiveSupport()
+            .getOrCreate()
+        )
+    except Exception as exc:
+        unavailable(f"無法啟動 Spark：{exc}")
+        return
+    spark.sparkContext.setLogLevel("ERROR")
+    jvm: Any = spark._jvm  # pyright: ignore[reportAttributeAccessIssue]
+    # Derby（metastore）的紀錄檔不要寫在目前目錄
+    jvm.java.lang.System.setProperty("derby.stream.error.file", str(work / "derby.log"))
+    session: Any = spark._jsparkSession  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        jvm.org.apache.spark.sql.hive.thriftserver.HiveThriftServer2.startWithContext(
+            session.sqlContext()
+        )
+        yield spark, port
+    finally:
+        spark.stop()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- Hive、Impala（模擬）
+
+
+class HiveEmulator:
+    """測試用：沒有 Hive、Impala 實機，把轉譯後的 SQL 以 SQLGlot 轉回 DuckDB，各自特有的寫法（TIMESTAMP 與
+    DOUBLE 互轉、PMOD、CONCAT 遇到 Null、COLLECT_LIST 略過 Null、Java 的取代字串、*_ADD 函式等）依官方文件的
+    語意模擬後在 DuckDB 執行。檢查的是轉譯的結構與函式對照的寫法，仍待實機驗證。"""
+
+    def __init__(self, con: Any, dialect: str = "hive") -> None:
+        self.con = con
+        self.dialect = dialect
+        con.execute("SET TimeZone = 'UTC'")
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        # SQLGlot 會改寫 TRUNC、UNIX_TIMESTAMP、FROM_UNIXTIME 的格式：保留原文自行處理
+        for name in ("TRUNC", "UNIX_TIMESTAMP", "FROM_UNIXTIME"):
+            sql = re.sub(rf"\b{name}\(", f"TMIG_{name}(", sql)
+        tree = sqlglot.parse_one(sql, read="hive")
+        emulate = _emulate_impala if self.dialect == "impala" else _emulate_hive
+        duck = _visit(tree, emulate).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+def _is_cast(node: Any, *kinds: Any) -> bool:
+    from sqlglot import exp
+
+    while isinstance(node, exp.Paren):
+        node = node.this
+    return isinstance(node, exp.Cast) and node.to.this in kinds
+
+
+def _emulate_hive(node: Any) -> Any:
+    from sqlglot import exp
+
+    timestamps = (exp.DataType.Type.TIMESTAMP, exp.DataType.Type.TIMESTAMPNTZ)
+    name = node.name.upper() if isinstance(node, exp.Anonymous) else ""
+    args = list(node.expressions) if isinstance(node, exp.Anonymous) else []
+    double = isinstance(node, exp.Cast) and node.to.this == exp.DataType.Type.DOUBLE
+    if double and _is_cast(node.this, *timestamps):
+        # TIMESTAMP → 自 1970-01-01 起的秒數
+        epoch = _duck("epoch({x})", x=node.this)
+        epoch.meta["epoch"] = True
+        return epoch
+    if isinstance(node, exp.Cast) and node.to.this in timestamps:
+        inner = node.this
+        while isinstance(inner, exp.Paren):
+            inner = inner.this
+        if isinstance(inner, exp.Add) and inner.this.meta.get("epoch"):
+            return _duck("CAST(to_timestamp({x}) AS TIMESTAMP)", x=inner)
+    if name == "TMIG_TRUNC":
+        unit = {"MM": "month", "YYYY": "year"}[args[1].name.upper()]
+        return _duck(f"CAST(date_trunc('{unit}', {{x}}) AS DATE)", x=args[0])
+    if name == "TMIG_FROM_UNIXTIME":
+        inner = args[0]
+        if isinstance(inner, exp.Anonymous) and inner.name.upper() == "TMIG_UNIX_TIMESTAMP":
+            # FROM_UNIXTIME(UNIX_TIMESTAMP(s, 格式)) 不符合格式時為 Null
+            value, fmt = inner.expressions
+            text = _java_format(fmt.name).replace("'", "''")
+            return _duck(f"try_strptime({{s}}, '{text}')", s=value)
+        raise AssertionError("模擬器只支援 FROM_UNIXTIME(UNIX_TIMESTAMP(…))")
+    if name == "PMOD":
+        return _duck("((({a}) % ({b})) + ({b})) % ({b})", a=args[0], b=args[1])
+    if isinstance(node, exp.Concat):
+        # Hive 的 CONCAT 遇到 Null 得 Null（DuckDB 的 concat 略過 Null）
+        parts = node.expressions
+        tree = parts[0]
+        for part in parts[1:]:
+            tree = exp.DPipe(this=tree, expression=part)
+        return tree
+    if isinstance(node, exp.ArrayAgg):
+        # COLLECT_LIST 略過 Null
+        return _duck("list_filter(list({x}), lambda v: v IS NOT NULL)", x=node.this)
+    if isinstance(node, exp.RegexpReplace):
+        replacement = node.args.get("replacement")
+        if isinstance(replacement, exp.Literal) and replacement.is_string:
+            return _duck(
+                f"regexp_replace({{s}}, {{p}}, '{_java_to_re2(replacement.name)}', 'g')",
+                s=node.this,
+                p=node.expression,
+            )
+    return node
+
+
+JAVA_TO_STRFTIME = [
+    ("yyyy", "%Y"),
+    ("SSSSSS", "%f"),
+    ("MMMM", "%B"),
+    ("MMM", "%b"),
+    ("DDD", "%j"),
+    ("yy", "%y"),
+    ("MM", "%m"),
+    ("dd", "%d"),
+    ("HH", "%H"),
+    ("mm", "%M"),
+    ("ss", "%S"),
+    ("M", "%m"),
+    ("d", "%d"),
+    ("H", "%H"),
+    ("h", "%I"),
+    ("m", "%M"),
+    ("s", "%S"),
+    ("a", "%p"),
+]
+
+
+def _java_format(text: str) -> str:
+    """Java 風格的日期格式（文字以單引號包住）→ strftime。"""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "'":
+            end = text.index("'", i + 1)
+            out.append(text[i + 1 : end].replace("%", "%%"))
+            i = end + 1
+            continue
+        for token, strftime in JAVA_TO_STRFTIME:
+            if text.startswith(token, i):
+                out.append(strftime)
+                i += len(token)
+                break
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _emulate_impala(node: Any) -> Any:
+    from sqlglot import exp
+
+    name = node.name.upper() if isinstance(node, exp.Anonymous) else ""
+    args = list(node.expressions) if isinstance(node, exp.Anonymous) else []
+    adds = {
+        "DAYS_ADD": "to_days",
+        "HOURS_ADD": "to_hours",
+        "MINUTES_ADD": "to_minutes",
+        "MICROSECONDS_ADD": "to_microseconds",
+        "MONTHS_ADD": "to_months",
+    }
+    if name in adds:
+        return _duck(
+            f"CAST({{x}} AS TIMESTAMP) + {adds[name]}(CAST({{n}} AS BIGINT))", x=args[0], n=args[1]
+        )
+    if name == "DAYS_SUB":
+        return _duck("CAST({x} AS TIMESTAMP) - to_days(CAST({n} AS BIGINT))", x=args[0], n=args[1])
+    if name == "TMIG_TRUNC":
+        # Impala 的 TRUNC 傳回 TIMESTAMP
+        unit = {
+            "YYYY": "year",
+            "Q": "quarter",
+            "MM": "month",
+            "DD": "day",
+            "HH": "hour",
+            "MI": "minute",
+        }
+        return _duck(
+            f"CAST(date_trunc('{unit[args[1].name.upper()]}', {{x}}) AS TIMESTAMP)", x=args[0]
+        )
+    if name == "TMIG_UNIX_TIMESTAMP" and len(args) == 1:
+        # UNIX_TIMESTAMP(TIMESTAMP)：自 1970-01-01（UTC）起的整數秒
+        return _duck("CAST(floor(epoch({x})) AS BIGINT)", x=args[0])
+    if name == "MILLISECOND":
+        return _duck("(microsecond({x}) % 1000000) // 1000", x=args[0])
+    if name == "TRUNCATE":
+        return _duck("trunc({x})", x=args[0])
+    if isinstance(node, exp.RegexpReplace):
+        # Impala 的正規表示式是 RE2：取代字串與 DuckDB 相同，一律取代所有符合的地方
+        return _duck(
+            "regexp_replace({s}, {p}, {r}, 'g')",
+            s=node.this,
+            p=node.expression,
+            r=node.args.get("replacement") or exp.Literal.string(""),
+        )
+    if name == "TO_TIMESTAMP":
+        # TO_TIMESTAMP(s, 格式) 不符合格式時為 Null
+        return _duck(f"try_strptime({{s}}, '{_java_format(args[1].name)}')", s=args[0])
+    return _emulate_hive(node)
