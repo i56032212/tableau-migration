@@ -19,7 +19,24 @@ from tmig.formula.analyze import Analyzer
 from tmig.formula.ast import FieldRef, to_json
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.types import FormulaSemanticError
-from tmig.ir import IR, Calc, DataField, Datasource, FieldUse, Marks, Parameter, Worksheet
+from tmig.ir import (
+    IR,
+    Action,
+    Calc,
+    Dashboard,
+    DataField,
+    Datasource,
+    FieldUse,
+    Marks,
+    Parameter,
+    Size,
+    Story,
+    StoryPoint,
+    TupleFilter,
+    Worksheet,
+    Zone,
+    iter_zones,
+)
 from tmig.ir.integrity import check_references
 from tmig.ir.scope import DatasourceScope
 from tmig.render.palettes import PALETTES
@@ -428,6 +445,359 @@ def _references_parameter(node: Any, parameter_id: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- dashboard、Story 與動作
+
+
+def outline(ir: IR) -> dict[str, Any]:
+    """dashboard 與 Story 編輯器的概要：工作表（資料源、篩選與欄列架上的維度）、dashboard、Story、參數、
+    動作與報表中用到的圖片。"""
+    images = sorted(
+        {
+            path
+            for db in ir.dashboards
+            for zone in iter_zones(db.zones)
+            for path in (
+                zone.image,
+                zone.button.image if zone.button else None,
+                zone.button.image_hidden if zone.button else None,
+            )
+            if path
+        }
+    )
+    return {
+        "worksheets": [
+            {
+                "id": ws.id,
+                "name": ws.name,
+                "datasource": ws.datasource,
+                "filters": [
+                    {
+                        "id": f.id,
+                        "kind": f.kind,
+                        "field": f.field.model_dump(mode="json"),
+                        "label": _use_label(ir, ws, f.field),
+                    }
+                    for f in ws.filters
+                    if not isinstance(f, TupleFilter)
+                ],
+                "dimensions": [u.model_dump(mode="json") for u in _view_dims(ir, ws)],
+                "legends": [
+                    channel
+                    for channel, use in (
+                        ("color", ws.marks.color),
+                        ("size", ws.marks.size),
+                        ("shape", ws.marks.shape),
+                    )
+                    if use is not None
+                ],
+            }
+            for ws in ir.worksheets
+        ],
+        "dashboards": [{"id": db.id, "name": db.name} for db in ir.dashboards],
+        "stories": [{"id": st.id, "name": st.name} for st in ir.stories],
+        "parameters": [
+            {"id": p.id, "caption": p.caption, "datatype": p.datatype, "allowed": p.allowed.kind}
+            for p in ir.parameters
+        ],
+        "actions": [a.model_dump(mode="json") for a in ir.actions],
+        "images": images,
+    }
+
+
+def _use_label(ir: IR, ws: Worksheet, use: FieldUse) -> str:
+    """欄位使用的顯示名稱（與膠囊相同，例如 YEAR(Order Date)、SUM(Sales)）。"""
+    ds = next((d for d in ir.datasources if d.id == ws.datasource), None)
+    field = next((f for f in ds.fields if f.id == use.field), None) if ds else None
+    text = field.caption if field is not None else use.field
+    if use.date is not None:
+        text = f"{use.date.unit.upper()}({text})"
+    if use.agg is not None:
+        text = f"{use.agg.upper()}({text})"
+    return text
+
+
+def _view_dims(ir: IR, ws: Worksheet) -> list[FieldUse]:
+    """工作表檢視中的維度（欄列架、標記卡），依序、不重複：篩選動作預設以它們篩選目標。"""
+    ds = next((d for d in ir.datasources if d.id == ws.datasource), None)
+    levels = {f.id: f.calc.level for f in ds.fields if f.calc is not None} if ds else {}
+    found: list[FieldUse] = []
+    for use in [*ws.rows, *ws.columns, *ws.marks.uses()]:
+        if use.field in ("measure_names", "measure_values") or use.agg is not None:
+            continue
+        if use.table_calc is not None or levels.get(use.field) in ("aggregate", "table_calc"):
+            continue
+        if use not in found:
+            found.append(use)
+    return found
+
+
+def replace_dashboard(ir: IR, dashboard: dict[str, Any] | Dashboard) -> tuple[IR, Dashboard]:
+    """換掉 IR 中同 id 的 dashboard（編輯器的每次變更）。"""
+    try:
+        board = (
+            dashboard if isinstance(dashboard, Dashboard) else Dashboard.model_validate(dashboard)
+        )
+    except ValidationError as exc:
+        raise EditError(f"dashboard 的內容不正確：{_first_error(exc)}") from exc
+    if not any(d.id == board.id for d in ir.dashboards):
+        raise EditError(f"找不到 dashboard {board.id}")
+    if any(d.name == board.name and d.id != board.id for d in ir.dashboards):
+        raise EditError(f"已經有名為「{board.name}」的 dashboard")
+    updated = ir.model_copy(
+        update={"dashboards": [board if d.id == board.id else d for d in ir.dashboards]}
+    )
+    return _validated(updated, "dashboard 的參照不正確"), board
+
+
+def add_dashboard(
+    ir: IR, name: str | None, width: int = 1000, height: int = 800
+) -> tuple[IR, Dashboard]:
+    """新增空白的 dashboard：最外層的容器中有一個垂直排列的容器（加入的工作表依序放在其中）。"""
+    taken = {d.name for d in ir.dashboards} | {w.name for w in ir.worksheets}
+    name = (name or "").strip() or _next_name(taken, "儀表板")
+    if name in taken:
+        raise EditError(f"已經有名為「{name}」的 dashboard 或工作表")
+    flow = Zone(
+        id="z2",
+        kind="container",
+        x=0,
+        y=0,
+        w=width,
+        h=height,
+        layout="vertical",
+        source_ref=EDITOR_REF,
+    )
+    root = Zone(
+        id="z1",
+        kind="container",
+        x=0,
+        y=0,
+        w=width,
+        h=height,
+        layout="tiled",
+        children=[flow],
+        source_ref=EDITOR_REF,
+    )
+    board = Dashboard(
+        id=_unique_id(ir, "db_" + _slug(name)),
+        name=name,
+        size=Size(width=width, height=height),
+        zones=[root],
+        source_ref=EDITOR_REF,
+    )
+    updated = ir.model_copy(update={"dashboards": [*ir.dashboards, board]})
+    return _validated(updated, "新增 dashboard 失敗"), board
+
+
+def duplicate_dashboard(ir: IR, dashboard: str) -> tuple[IR, Dashboard]:
+    """複製 dashboard（區塊 id 只需在 dashboard 中唯一，原樣保留）；只在這個 dashboard 上的動作不複製。"""
+    source = next((d for d in ir.dashboards if d.id == dashboard), None)
+    if source is None:
+        raise EditError(f"找不到 dashboard {dashboard}")
+    taken = {d.name for d in ir.dashboards} | {w.name for w in ir.worksheets}
+    name = _next_name(taken, source.name, start=2, template="{base} ({n})")
+    copy = source.model_copy(
+        update={"id": _unique_id(ir, "db_" + _slug(name)), "name": name}, deep=True
+    )
+    updated = ir.model_copy(update={"dashboards": [*ir.dashboards, copy]})
+    return _validated(updated, "複製 dashboard 失敗"), copy
+
+
+def remove_dashboard(ir: IR, dashboard: str) -> IR:
+    """刪除 dashboard：只在它上面執行的動作一併刪除；Story、按鈕或切換動作還在使用時不能刪。"""
+    board = next((d for d in ir.dashboards if d.id == dashboard), None)
+    if board is None:
+        raise EditError(f"找不到 dashboard {dashboard}")
+    removed = {a.id for a in ir.actions if a.dashboard == dashboard}
+    updated = _without_actions(ir, removed).model_copy(
+        update={"dashboards": [d for d in ir.dashboards if d.id != dashboard]}
+    )
+    for story in updated.stories:
+        if any(point.dashboard == dashboard for point in story.points):
+            raise EditError(f"「{board.name}」還在 Story「{story.name}」中使用，不能刪除")
+    return _validated(updated, f"「{board.name}」還在按鈕或動作中使用，不能刪除")
+
+
+def replace_story(ir: IR, story: dict[str, Any] | Story) -> tuple[IR, Story]:
+    try:
+        found = story if isinstance(story, Story) else Story.model_validate(story)
+    except ValidationError as exc:
+        raise EditError(f"Story 的內容不正確：{_first_error(exc)}") from exc
+    if not any(s.id == found.id for s in ir.stories):
+        raise EditError(f"找不到 Story {found.id}")
+    updated = ir.model_copy(
+        update={"stories": [found if s.id == found.id else s for s in ir.stories]}
+    )
+    return _validated(updated, "Story 的參照不正確"), found
+
+
+def add_story(ir: IR, name: str | None) -> tuple[IR, Story]:
+    """新增 Story：第一個故事點顯示第一個 dashboard（沒有時為第一張工作表）。"""
+    taken = {s.name for s in ir.stories} | {d.name for d in ir.dashboards}
+    taken |= {w.name for w in ir.worksheets}
+    name = (name or "").strip() or _next_name(taken, "故事")
+    if name in taken:
+        raise EditError(f"已經有名為「{name}」的 Story、dashboard 或工作表")
+    if ir.dashboards:
+        first = StoryPoint(id="sp1", dashboard=ir.dashboards[0].id)
+        size = ir.dashboards[0].size
+    elif ir.worksheets:
+        first = StoryPoint(id="sp1", worksheet=ir.worksheets[0].id)
+        size = Size(width=1000, height=800)
+    else:
+        raise EditError("報表沒有 dashboard 或工作表")
+    story = Story(
+        id=_unique_id(ir, "story_" + _slug(name)),
+        name=name,
+        title=name,
+        size=Size(width=size.width, height=size.height + 120),
+        points=[first],
+        source_ref=EDITOR_REF,
+    )
+    updated = ir.model_copy(update={"stories": [*ir.stories, story]})
+    return _validated(updated, "新增 Story 失敗"), story
+
+
+def remove_story(ir: IR, story: str) -> IR:
+    found = next((s for s in ir.stories if s.id == story), None)
+    if found is None:
+        raise EditError(f"找不到 Story {story}")
+    updated = ir.model_copy(update={"stories": [s for s in ir.stories if s.id != story]})
+    return _validated(updated, f"刪除「{found.name}」失敗")
+
+
+def upsert_action(ir: IR, data: dict[str, Any]) -> tuple[IR, Action]:
+    """新增或修改動作。篩選動作在每個目標工作表上有一個指向它的多欄位篩選（TupleFilter）：
+    以 fields（欄位鍵，空的表示來源工作表檢視中的所有維度）篩選，清除選取時依 clearing；
+    不再是目標的工作表上的篩選移除。"""
+    action_id = data.get("id")
+    existing = next((a for a in ir.actions if a.id == action_id), None)
+    if action_id is not None and existing is None:
+        raise EditError(f"找不到動作 {action_id}")
+    caption = str(data.get("caption") or "").strip()
+    if not caption:
+        raise EditError("動作需要名稱")
+    fields = [str(k) for k in data.get("fields") or []]
+    body = {k: v for k, v in data.items() if k != "fields"}
+    new_id_value = existing.id if existing else _unique_id(ir, "act_" + _slug(caption))
+    body.update(
+        id=new_id_value,
+        name=existing.name if existing else f"[Action_{new_id_value}]",
+        caption=caption,
+        source_ref=existing.source_ref if existing else EDITOR_REF,
+    )
+    try:
+        action = Action.model_validate(body)
+    except ValidationError as exc:
+        raise EditError(f"動作的內容不正確：{_first_error(exc)}") from exc
+    actions = [action if a.id == action.id else a for a in ir.actions]
+    if existing is None:
+        actions.append(action)
+    updated = ir.model_copy(update={"actions": actions})
+    updated = _sync_action_filters(updated, action, fields)
+    return _validated(updated, "動作的參照不正確"), action
+
+
+def _sync_action_filters(ir: IR, action: Action, keys: list[str]) -> IR:
+    """篩選動作的目標工作表上指向它的篩選：加上缺少的、移除不再是目標的。"""
+    from tmig.planner.state import use_key  # 避免循環匯入
+
+    targets = set(action.targets) if action.kind == "filter" else set()
+    mode: Literal["include", "exclude", "all"] = (
+        "include" if action.clearing == "exclude_all" else "all"
+    )
+    sources = [w for w in ir.worksheets if w.id in action.sources]
+    candidates: list[FieldUse] = []
+    for source in sources:
+        for use in _view_dims(ir, source):
+            if use not in candidates:
+                candidates.append(use)
+    taken = _all_ids(ir)
+    sheets: list[Worksheet] = []
+    for ws in ir.worksheets:
+        filters = list(ws.filters)
+        mine = [f for f in filters if isinstance(f, TupleFilter) and f.action == action.id]
+        if ws.id not in targets:
+            filters = [f for f in filters if f not in mine]
+        else:
+            ds = next(d for d in ir.datasources if d.id == ws.datasource)
+            ids = {f.id for f in ds.fields}
+            chosen = [u for u in candidates if u.field in ids and (not keys or use_key(u) in keys)]
+            if not chosen:
+                raise EditError(f"目標工作表「{ws.name}」與來源工作表沒有共同的欄位")
+            if mine:
+                filters = [
+                    f.model_copy(update={"fields": chosen, "mode": mode, "tuples": []})
+                    if f in mine
+                    else f
+                    for f in filters
+                ]
+            else:
+                base = f"flt_action_{_slug(action.caption)}"[:56]
+                found, n = base, 2
+                while found in taken:
+                    found, n = f"{base}_{n}", n + 1
+                taken.add(found)
+                filters.append(
+                    TupleFilter(
+                        kind="tuple",
+                        id=found,
+                        fields=chosen,
+                        stage="dimension",
+                        mode=mode,
+                        tuples=[],
+                        action=action.id,
+                        source_ref=EDITOR_REF,
+                    )
+                )
+        sheets.append(ws.model_copy(update={"filters": filters}) if filters != ws.filters else ws)
+    return ir.model_copy(update={"worksheets": sheets})
+
+
+def remove_action(ir: IR, action: str) -> IR:
+    """刪除動作與目標工作表上指向它的篩選、故事點記下的選取。"""
+    if not any(a.id == action for a in ir.actions):
+        raise EditError(f"找不到動作 {action}")
+    return _validated(_without_actions(ir, {action}), "刪除動作失敗")
+
+
+def _without_actions(ir: IR, removed: set[str]) -> IR:
+    if not removed:
+        return ir
+    sheets = [
+        ws.model_copy(
+            update={
+                "filters": [
+                    f
+                    for f in ws.filters
+                    if not (isinstance(f, TupleFilter) and f.action in removed)
+                ]
+            }
+        )
+        for ws in ir.worksheets
+    ]
+    stories = [
+        story.model_copy(
+            update={
+                "points": [
+                    point.model_copy(
+                        update={"actions": [a for a in point.actions if a.action not in removed]}
+                    )
+                    for point in story.points
+                ]
+            }
+        )
+        for story in ir.stories
+    ]
+    return ir.model_copy(
+        update={
+            "actions": [a for a in ir.actions if a.id not in removed],
+            "worksheets": sheets,
+            "stories": stories,
+        }
+    )
+
+
 def new_id(ir: IR, prefix: str, text: str) -> str:
     """編輯器新增的實體（篩選、Table Calculation 等）的 id：prefix_文字，與報表中其他 id 不重複。"""
     return _unique_id(ir, f"{prefix}_{_slug(text)}")
@@ -556,15 +926,25 @@ def _reid(ir: IR, sheet: Worksheet) -> Worksheet:
 __all__ = [
     "EditError",
     "FormulaCheck",
+    "add_dashboard",
+    "add_story",
     "add_worksheet",
     "catalog",
     "check_formula",
+    "duplicate_dashboard",
     "duplicate_worksheet",
     "new_id",
+    "outline",
+    "remove_action",
     "remove_calc",
+    "remove_dashboard",
     "remove_parameter",
+    "remove_story",
     "remove_worksheet",
+    "replace_dashboard",
+    "replace_story",
     "replace_worksheet",
+    "upsert_action",
     "upsert_calc",
     "upsert_parameter",
 ]

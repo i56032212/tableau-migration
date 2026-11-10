@@ -33,6 +33,7 @@ export type EditorDialog =
   | { kind: "direction"; tableCalc: string }
   | { kind: "format"; use: FieldUse }
   | { kind: "title" }
+  | { kind: "sheet-format" }
   | { kind: "axis"; use: FieldUse; shelf: "rows" | "columns" }
   | { kind: "reference"; index: number | null; axis: FieldUse | null }
   | { kind: "trend"; card: Card }

@@ -21,7 +21,9 @@ import {
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
+import { DashboardEditor } from "./editor/DashboardEditor";
 import { Editor } from "./editor/Editor";
+import { StoryEditor } from "./editor/StoryEditor";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { WorksheetView } from "./WorksheetView";
@@ -35,7 +37,9 @@ type Route =
   | { page: "sheet"; workbook: string; worksheet: string }
   | { page: "story"; workbook: string; story: string }
   | { page: "datasource"; workbook: string; datasource: string }
-  | { page: "edit"; workbook: string; worksheet: string };
+  | { page: "edit"; workbook: string; worksheet: string }
+  | { page: "edit-dashboard"; workbook: string; dashboard: string }
+  | { page: "edit-story"; workbook: string; story: string };
 
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
@@ -45,13 +49,15 @@ function parseRoute(path: string): Route {
     if (parts[2] === "story" && parts[3]) return { page: "story", workbook: parts[1], story: parts[3] };
     if (parts[2] === "ds" && parts[3]) return { page: "datasource", workbook: parts[1], datasource: parts[3] };
     if (parts[2] === "edit" && parts[3]) return { page: "edit", workbook: parts[1], worksheet: parts[3] };
+    if (parts[2] === "edit-d" && parts[3]) return { page: "edit-dashboard", workbook: parts[1], dashboard: parts[3] };
+    if (parts[2] === "edit-story" && parts[3]) return { page: "edit-story", workbook: parts[1], story: parts[3] };
     return { page: "workbook", workbook: parts[1] };
   }
   return { page: "home" };
 }
 
 /** 檢視（dashboard、工作表、Story）、資料源分頁與編輯器的網址。 */
-function viewPath(workbook: string, kind: "d" | "s" | "story" | "ds" | "edit", id: string): string {
+function viewPath(workbook: string, kind: "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story", id: string): string {
   return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
 }
 
@@ -275,6 +281,8 @@ function WorkbookPage({
   const dashboard = route.page === "dashboard" ? ir.dashboards.find((d) => d.id === route.dashboard) : undefined;
   const worksheet = route.page === "sheet" ? ir.worksheets.find((w) => w.id === route.worksheet) : undefined;
   const editing = route.page === "edit" && me.mode === "desktop" ? route.worksheet : null;
+  const editingDashboard = route.page === "edit-dashboard" && me.mode === "desktop" ? route.dashboard : null;
+  const editingStory = route.page === "edit-story" && me.mode === "desktop" ? route.story : null;
   const story = route.page === "story" ? stories.find((s) => s.id === route.story) : undefined;
   const datasource =
     route.page === "datasource" ? datasources.find((d) => d.id === route.datasource) : undefined;
@@ -318,13 +326,18 @@ function WorkbookPage({
                     ? `ds:${datasource.id}`
                     : editing
                       ? `edit:${editing}`
-                      : ""
+                      : editingDashboard
+                        ? `edit-d:${editingDashboard}`
+                        : editingStory
+                          ? `edit-story:${editingStory}`
+                          : ""
           }
           onChange={(e) => {
             const [kind, id] = e.target.value.split(":");
-            // 編輯中切換工作表時繼續編輯
-            const target = editing && kind === "s" ? "edit" : kind;
-            navigate(viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit", id) + window.location.search);
+            // 編輯中切換到另一個工作表、dashboard 或 Story 時繼續編輯
+            const editingAny = editing || editingDashboard || editingStory;
+            const target = !editingAny ? kind : kind === "s" ? "edit" : kind === "d" ? "edit-d" : kind === "story" ? "edit-story" : kind;
+            navigate(viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story", id) + window.location.search);
           }}
         >
           {datasources.map((d) => (
@@ -333,12 +346,12 @@ function WorkbookPage({
             </option>
           ))}
           {ir.dashboards.map((d) => (
-            <option key={d.id} value={`d:${d.id}`}>
+            <option key={d.id} value={editingDashboard === d.id ? `edit-d:${d.id}` : `d:${d.id}`}>
               dashboard：{d.name}
             </option>
           ))}
           {stories.map((st) => (
-            <option key={st.id} value={`story:${st.id}`}>
+            <option key={st.id} value={editingStory === st.id ? `edit-story:${st.id}` : `story:${st.id}`}>
               Story：{st.name}
             </option>
           ))}
@@ -351,6 +364,16 @@ function WorkbookPage({
         {me.mode === "desktop" && worksheet && (
           <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit", worksheet.id))}>
             編輯工作表
+          </button>
+        )}
+        {me.mode === "desktop" && dashboard && (
+          <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit-d", dashboard.id))}>
+            編輯 dashboard
+          </button>
+        )}
+        {me.mode === "desktop" && story && (
+          <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit-story", story.id))}>
+            編輯 Story
           </button>
         )}
         <div className="cases" role="group" aria-label="篩選組合">
@@ -398,6 +421,34 @@ function WorkbookPage({
           }}
         />
       )}
+      {editingDashboard && (
+        <DashboardEditor
+          key={editingDashboard}
+          workbook={workbook}
+          dashboard={editingDashboard}
+          ir={ir}
+          onChanged={() => setVersion((v) => v + 1)}
+          onOpen={(id) => navigate(viewPath(workbook, "edit-d", id))}
+          onClose={(id) => {
+            setVersion((v) => v + 1);
+            navigate(id ? viewPath(workbook, "d", id) : `/w/${encodeURIComponent(workbook)}`);
+          }}
+        />
+      )}
+      {editingStory && (
+        <StoryEditor
+          key={editingStory}
+          workbook={workbook}
+          story={editingStory}
+          ir={ir}
+          onChanged={() => setVersion((v) => v + 1)}
+          onOpen={(id) => navigate(viewPath(workbook, "edit-story", id))}
+          onClose={(id) => {
+            setVersion((v) => v + 1);
+            navigate(id ? viewPath(workbook, "story", id) : `/w/${encodeURIComponent(workbook)}`);
+          }}
+        />
+      )}
       {worksheet && (
         <div className="single-sheet">
           <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(ir, worksheet.id, view)} />
@@ -408,7 +459,7 @@ function WorkbookPage({
       {route.page === "datasource" && !datasource && (datasources.length > 0 || datasourceError) && (
         <main className="error">{datasourceError ? `無法開啟資料源：${datasourceError}` : "找不到這個資料源"}</main>
       )}
-      {!dashboard && !worksheet && !story && !editing && route.page !== "datasource" && (
+      {!dashboard && !worksheet && !story && !editing && !editingDashboard && !editingStory && route.page !== "datasource" && (
         <main className="error">找不到這個 dashboard、工作表或 Story</main>
       )}
     </div>

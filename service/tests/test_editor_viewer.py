@@ -156,8 +156,10 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         page.wait_for_selector(".filter-dialog .value-list li")
         page.locator(".value-list label", has_text="Corporate").locator("input").uncheck()
         page.locator(".filter-dialog").get_by_role("button", name="確定").click()
+        # 對話框先取得篩選的 id 再套用：關閉後才開始存檔
+        expect(page.locator(".filter-dialog")).to_have_count(0)
+        expect(page.locator('[data-shelf="filters"] .pill', has_text="Segment")).to_be_visible()
         settle(page)
-        assert "Segment" in pills(page, "filters")
         data = table("ws_sales_by_region")
         segment = data["keys"].index("f_segment")
         assert {row[segment] for row in data["raw"]} == {"Consumer", "Home Office"}
@@ -203,6 +205,14 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         assert sheet["panes"][0]["dual"] is True
         assert sheet["marks"]["color"]["field"] == "measure_names"
 
+        # 工作表的格式：列的格線、背景
+        page.get_by_role("button", name="格式…").click()
+        page.locator(".format-dialog fieldset", has_text="列").get_by_label("格線").uncheck()
+        page.locator(".format-dialog").get_by_role("button", name="確定").click()
+        settle(page)
+        sheet = call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+        assert sheet["row_style"]["grid"] is False and sheet["column_style"]["grid"] is True
+
         # 存檔後變更寫進報表套件
         target = tmp_path / "edited.tmigx"
         assert call(engine, "/api/desktop/documents")[0]["modified"] is True
@@ -215,5 +225,129 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         page.get_by_role("button", name="完成").click()
         page.wait_for_url(f"{engine}/w/demo/s/ws_1")
         page.wait_for_selector(".single-sheet .worksheet svg")
+        assert errors == []
+        browser.close()
+
+
+def test_edit_dashboard_and_story(engine: str) -> None:
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('[data-saving="false"]')
+        page.wait_for_timeout(300)
+
+    def board() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/dashboards/db_ee909b0c")["dashboard"]
+
+    def zone_ids(zones: list[dict[str, Any]]) -> list[str]:
+        found: list[str] = []
+        for zone in zones:
+            found.append(zone["id"])
+            found.extend(zone_ids(zone["children"]))
+        return found
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/d/db_ee909b0c")
+        page.get_by_role("button", name="編輯 dashboard").click()
+        page.wait_for_url(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
+
+        # 選取工作表區塊後移除（版面配置與畫面都選得到）
+        page.locator('[data-tree-zone="z10"]').click()
+        expect(page.locator('[data-zone-props="z10"]')).to_be_visible()
+        page.locator(".dash-props").get_by_role("button", name="移除").click()
+        settle(page)
+        assert "z10" not in zone_ids(board()["zones"])
+
+        # 以浮動方式加入文字，拖曳移動
+        page.get_by_label("以浮動方式加入").check()
+        page.locator(".object-buttons").get_by_role("button", name="文字").click()
+        settle(page)
+        floating = board()["zones"][1]
+        assert floating["kind"] == "text"
+        page.get_by_label("文字", exact=True).fill("說明")
+        page.locator(".dash-props .prop-title").click()
+        settle(page)
+        selected = page.locator(".dash-zone.selected")
+        box = selected.bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + 20, box["y"] + 20)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 220, box["y"] + 120, steps=6)
+        page.mouse.up()
+        settle(page)
+        moved = board()["zones"][1]
+        assert moved["text"] == "說明" and moved["x"] > floating["x"] and moved["y"] > floating["y"]
+
+        # 工作表拖到區塊上：並排加入（分割那個區塊）
+        page.get_by_label("以浮動方式加入").uncheck()
+        page.locator('.dash-side [data-sheet="ws_sub_category_profit"]').drag_to(
+            page.locator('[data-overlay="z9"]')
+        )
+        settle(page)
+        sheets = [z for z in zone_ids(board()["zones"])]
+        assert len(sheets) == len(set(sheets))
+        expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(4)
+
+        # 復原（加入的工作表）再重做
+        page.get_by_role("button", name="↶ 復原").click()
+        settle(page)
+        expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(3)
+        page.get_by_role("button", name="↷ 重做").click()
+        settle(page)
+        expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(4)
+
+        # 動作：點選 Sales by Region 的標記篩選 Region Share by Year
+        page.get_by_role("button", name="動作…").click()
+        page.get_by_role("button", name="新增動作").click()
+        page.get_by_label("動作名稱").fill("依區域篩選")
+        page.locator('[aria-label="來源工作表"] label', has_text="Sales by Region").locator(
+            "input"
+        ).check()
+        page.locator('[aria-label="目標工作表"] label', has_text="Region Share by Year").locator(
+            "input"
+        ).check()
+        page.locator(".action-form").get_by_role("button", name="確定").click()
+        expect(page.locator(".modal table.list")).to_contain_text("依區域篩選")
+        page.locator(".modal .dialog-actions").get_by_role("button", name="關閉").click()
+
+        # dashboard 的大小
+        width = page.get_by_label("dashboard 的寬度")
+        page.locator(".dash-canvas").click(position={"x": 5, "y": 5})
+        width.fill("1300")
+        width.press("Tab")
+        settle(page)
+        assert board()["size"]["width"] == 1300
+
+        page.get_by_role("button", name="完成").click()
+        page.wait_for_url(f"{engine}/w/demo/d/db_ee909b0c")
+        page.wait_for_selector(".dashboard [data-zone] svg")
+        actions = call(engine, "/api/edit/demo/outline")["actions"]
+        assert [a["caption"] for a in actions] == ["依區域篩選"]
+
+        # Story：新增後編輯故事點
+        story = call(engine, "/api/edit/demo/stories", {})["story"]
+        page.goto(f"{engine}/w/demo/edit-story/{story['id']}")
+        page.wait_for_selector(
+            ".story-editor .story-preview .dashboard [data-zone] svg", timeout=30000
+        )
+        caption = page.get_by_label("故事點 1 的說明")
+        caption.fill("全公司概況")
+        caption.press("Tab")
+        settle(page)
+        page.get_by_label("新增故事點").select_option("s:ws_monthly_profit")
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
+        assert [p["caption"] for p in saved["points"]] == ["全公司概況", ""]
+        assert saved["points"][1]["worksheet"] == "ws_monthly_profit"
+        page.get_by_role("button", name="完成").click()
+        page.wait_for_url(f"{engine}/w/demo/story/{story['id']}")
+        expect(page.locator(".story-points button.active")).to_have_text("全公司概況")
         assert errors == []
         browser.close()

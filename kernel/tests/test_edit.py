@@ -8,15 +8,25 @@ import pytest
 
 from tmig.edit import (
     EditError,
+    add_dashboard,
+    add_story,
     add_worksheet,
     catalog,
     check_formula,
+    duplicate_dashboard,
     duplicate_worksheet,
     new_id,
+    outline,
+    remove_action,
     remove_calc,
+    remove_dashboard,
     remove_parameter,
+    remove_story,
     remove_worksheet,
+    replace_dashboard,
+    replace_story,
     replace_worksheet,
+    upsert_action,
     upsert_calc,
     upsert_parameter,
 )
@@ -167,3 +177,106 @@ def test_new_id_is_unique(ir: IR) -> None:
     taken = new_id(ir, "ws", "Sales by Region")
     assert taken == "ws_sales_by_region_2"
     assert new_id(ir, "tc", "累計 銷售") == "tc_x"
+
+
+FEATURES = ROOT / "fixtures" / "superstore_features" / "golden.ir.json"
+
+
+def test_outline(ir: IR) -> None:
+    data = outline(ir)
+    sheet = next(w for w in data["worksheets"] if w["id"] == "ws_sales_by_region")
+    assert {f["kind"] for f in sheet["filters"]} == {"categorical", "top_n"}
+    assert [d["field"] for d in sheet["dimensions"]] == ["f_region", "f_category"]
+    assert sheet["legends"] == ["color"]
+    assert data["dashboards"][0]["id"] == "db_ee909b0c"
+    assert data["parameters"][0]["id"] == "p_parameter_1"
+
+
+def test_dashboards(ir: IR) -> None:
+    ir, board = add_dashboard(ir, None)
+    assert board.name == "儀表板 1"
+    root = board.zones[0]
+    assert (root.layout, root.children[0].layout) == ("tiled", "vertical")
+    data = board.model_dump(mode="json")
+    flow = data["zones"][0]["children"][0]
+    flow["children"].append(
+        {
+            "id": "z3",
+            "kind": "worksheet",
+            "x": 0,
+            "y": 0,
+            "w": 1000,
+            "h": 800,
+            "worksheet": "ws_monthly_profit",
+            "source_ref": "/editor",
+        }
+    )
+    ir, board = replace_dashboard(ir, data)
+    assert board.zones[0].children[0].children[0].worksheet == "ws_monthly_profit"
+    bad = board.model_dump(mode="json")
+    bad["zones"][0]["children"][0]["children"][0]["worksheet"] = "ws_nope"
+    with pytest.raises(EditError, match="參照不正確"):
+        replace_dashboard(ir, bad)
+    ir, copy = duplicate_dashboard(ir, board.id)
+    assert copy.name == "儀表板 1 (2)" and copy.zones == board.zones
+    ir = remove_dashboard(ir, copy.id)
+    assert all(d.id != copy.id for d in ir.dashboards)
+
+
+def test_dashboard_in_story_cannot_be_removed() -> None:
+    ir = load_ir(FEATURES)
+    story = ir.stories[0]
+    target = next(p.dashboard for p in story.points if p.dashboard)
+    assert target is not None
+    with pytest.raises(EditError, match="Story"):
+        remove_dashboard(ir, target)
+
+
+def test_stories(ir: IR) -> None:
+    ir, story = add_story(ir, None)
+    assert story.name == "故事 1" and story.points[0].dashboard == "db_ee909b0c"
+    data = story.model_dump(mode="json")
+    data["points"].append({"id": "sp2", "caption": "月利潤", "worksheet": "ws_monthly_profit"})
+    ir, story = replace_story(ir, data)
+    assert [p.caption for p in story.points] == ["", "月利潤"]
+    with pytest.raises(EditError, match="內容不正確"):
+        replace_story(ir, {**data, "points": []})
+    ir = remove_story(ir, story.id)
+    assert ir.stories == []
+
+
+def test_filter_action_keeps_target_filters_in_sync(ir: IR) -> None:
+    from tmig.planner.state import QueryState
+
+    ir, action = upsert_action(
+        ir,
+        {
+            "caption": "依區域篩選",
+            "kind": "filter",
+            "activation": "select",
+            "dashboard": "db_ee909b0c",
+            "sources": ["ws_sales_by_region"],
+            "targets": ["ws_region_share_by_year"],
+            "clearing": "show_all",
+            "fields": ["f_region"],
+        },
+    )
+    target = next(w for w in ir.worksheets if w.id == "ws_region_share_by_year")
+    linked = [f for f in target.filters if getattr(f, "action", None) == action.id]
+    assert len(linked) == 1 and [u.field for u in linked[0].fields] == ["f_region"]  # type: ignore[union-attr]
+    state = QueryState(actions={action.id: [{"f_region": "West"}]})
+    sql = worksheet_sql(ir, "ws_region_share_by_year", state).sql
+    assert "'West'" in sql
+    # 目標改成另一張工作表：原本的篩選移除
+    ir, action = upsert_action(
+        ir,
+        {**action.model_dump(mode="json"), "targets": ["ws_sub_category_profit"], "fields": []},
+    )
+    target = next(w for w in ir.worksheets if w.id == "ws_region_share_by_year")
+    assert not [f for f in target.filters if getattr(f, "action", None) == action.id]
+    other = next(w for w in ir.worksheets if w.id == "ws_sub_category_profit")
+    assert [f for f in other.filters if getattr(f, "action", None) == action.id]
+    ir = remove_action(ir, action.id)
+    other = next(w for w in ir.worksheets if w.id == "ws_sub_category_profit")
+    assert not [f for f in other.filters if getattr(f, "action", None) == action.id]
+    assert ir.actions == []

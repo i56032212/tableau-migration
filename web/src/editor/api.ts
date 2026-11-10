@@ -1,7 +1,7 @@
 // 桌面版編輯器的 API（/api/edit）：資料窗格、工作表、計算欄位與篩選的可選值。
 
 import { request } from "../api";
-import type { Domain, FieldUse } from "../types";
+import type { Action, Dashboard, Domain, FieldUse, Story } from "../types";
 import type { Catalog, CatalogField, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
@@ -15,7 +15,65 @@ export interface FormulaCheck {
   message?: string;
 }
 
+/** dashboard 與 Story 編輯器的概要。 */
+export interface Outline {
+  worksheets: {
+    id: string;
+    name: string;
+    datasource: string;
+    filters: { id: string; kind: string; field: FieldUse; label: string }[];
+    dimensions: FieldUse[];
+    legends: ("color" | "size" | "shape")[];
+  }[];
+  dashboards: { id: string; name: string }[];
+  stories: { id: string; name: string }[];
+  parameters: { id: string; caption: string; datatype: string; allowed: "all" | "list" | "range" }[];
+  actions: Action[];
+  images: string[];
+}
+
 export const editApi = {
+  outline: (workbook: string) => request<Outline>(`${edit(workbook)}/outline`),
+  dashboard: (workbook: string, dashboard: string) =>
+    request<{ dashboard: Dashboard }>(`${edit(workbook)}/dashboards/${part(dashboard)}`).then((r) => r.dashboard),
+  saveDashboard: (workbook: string, dashboard: Dashboard) =>
+    request<{ dashboard: Dashboard }>(`${edit(workbook)}/dashboards/${part(dashboard.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ dashboard }),
+    }).then((r) => r.dashboard),
+  addDashboard: (workbook: string, name?: string, width?: number, height?: number) =>
+    request<{ dashboard: Dashboard }>(`${edit(workbook)}/dashboards`, {
+      method: "POST",
+      body: JSON.stringify({ name: name ?? null, width: width ?? 1000, height: height ?? 800 }),
+    }).then((r) => r.dashboard),
+  duplicateDashboard: (workbook: string, dashboard: string) =>
+    request<{ dashboard: Dashboard }>(`${edit(workbook)}/dashboards/${part(dashboard)}/duplicate`, {
+      method: "POST",
+      body: "{}",
+    }).then((r) => r.dashboard),
+  removeDashboard: (workbook: string, dashboard: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/dashboards/${part(dashboard)}`, { method: "DELETE" }),
+  story: (workbook: string, story: string) =>
+    request<{ story: Story }>(`${edit(workbook)}/stories/${part(story)}`).then((r) => r.story),
+  saveStory: (workbook: string, story: Story) =>
+    request<{ story: Story }>(`${edit(workbook)}/stories/${part(story.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ story }),
+    }).then((r) => r.story),
+  addStory: (workbook: string, name?: string) =>
+    request<{ story: Story }>(`${edit(workbook)}/stories`, {
+      method: "POST",
+      body: JSON.stringify({ name: name ?? null }),
+    }).then((r) => r.story),
+  removeStory: (workbook: string, story: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/stories/${part(story)}`, { method: "DELETE" }),
+  saveAction: (workbook: string, action: Record<string, unknown>) =>
+    request<{ action: Action }>(`${edit(workbook)}/actions`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }).then((r) => r.action),
+  removeAction: (workbook: string, action: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/actions/${part(action)}`, { method: "DELETE" }),
   catalog: (workbook: string) => request<Catalog>(`${edit(workbook)}/catalog`),
   worksheet: (workbook: string, worksheet: string) =>
     request<{ worksheet: SheetIR }>(`${edit(workbook)}/worksheets/${part(worksheet)}`).then((r) => r.worksheet),

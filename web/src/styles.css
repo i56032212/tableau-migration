@@ -330,3 +330,51 @@ textarea.formula { width: 100%; font-family: ui-monospace, "Cascadia Mono", Menl
 .direction-list li { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #f0f1f3; }
 .swatches { display: flex; gap: 2px; flex-wrap: wrap; }
 .swatches span { width: 16px; height: 16px; border-radius: 2px; }
+
+/* 桌面版的 dashboard 與 Story 編輯器 */
+.dash-editor, .story-editor { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); height: calc(100vh - 78px); min-height: 520px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+.dash-editor { grid-template-columns: 240px minmax(0, 1fr) 260px; }
+.story-editor { grid-template-columns: 280px minmax(0, 1fr); }
+.dash-side, .dash-props, .story-point-list { grid-row: 2; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
+.dash-side, .story-point-list { border-right: 1px solid var(--line); }
+.dash-props { border-left: 1px solid var(--line); }
+.object-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+.object-buttons button, .dash-props button:not(.link), .story-point-list button:not(.link) { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer; font: inherit; font-size: 12px; }
+.dash-props button.danger { background: var(--error); border-color: var(--error); color: #fff; }
+.layout-tree { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.layout-tree li { padding: 2px 6px; cursor: pointer; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.layout-tree li:hover { background: #eef2f7; }
+.layout-tree li.selected { background: #dbe7f5; font-weight: 600; }
+.layout-tree li.hidden { color: #a0a6ae; font-style: italic; }
+.dash-canvas { grid-row: 2; overflow: auto; background: #e9ebef; padding: 12px; }
+.dash-scaler { position: relative; }
+.dash-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; box-shadow: 0 1px 6px rgb(0 0 0 / 15%); }
+.dash-stage .dashboard-wrapper { width: 100%; height: 100%; }
+.dash-overlay { position: absolute; inset: 0; }
+.dash-zone { position: absolute; box-sizing: border-box; border: 1px dashed transparent; }
+.dash-zone:hover { border-color: rgb(76 120 168 / 55%); }
+.dash-zone.container { pointer-events: none; }
+.dash-zone.container.selected, .dash-zone.floating { pointer-events: auto; }
+.dash-zone.floating { cursor: move; }
+.dash-zone.selected { border: 2px solid var(--accent); background: rgb(76 120 168 / 6%); }
+.dash-zone-label { position: absolute; left: -2px; top: -20px; background: var(--accent); color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 3px 3px 0 0; white-space: nowrap; }
+.dash-handle { position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px; background: var(--panel); border: 2px solid var(--accent); cursor: nwse-resize; }
+.zone-props { display: flex; flex-direction: column; gap: 8px; }
+.prop-title { display: flex; justify-content: space-between; align-items: center; font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.prop-group { border: 1px solid var(--line); border-radius: 4px; padding: 6px; display: flex; flex-direction: column; gap: 6px; }
+.prop-group legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.zone-props input:not([type]), .zone-props select, .zone-props input[type="number"] { font: inherit; padding: 2px 4px; }
+.zone-props input[type="number"] { width: 64px; }
+.zone-props .position label { display: inline-flex; gap: 4px; align-items: center; }
+.check-list { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.action-form { display: flex; flex-direction: column; gap: 10px; }
+.action-form input.wide { width: min(560px, 70vw); }
+.story-point-list ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.story-point-list li { border: 1px solid var(--line); border-radius: 4px; padding: 6px; display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
+.story-point-list li.selected { border-color: var(--accent); background: #f2f6fb; }
+.story-point-list li input, .story-point-list li select { font: inherit; padding: 2px 4px; flex: 1; min-width: 0; }
+.point-number { font-weight: 600; color: var(--muted); width: 18px; }
+.point-actions { justify-content: flex-end; }
+.story-preview { grid-row: 2; overflow: auto; padding: 12px; background: #e9ebef; }
+.dash-editor .toast, .story-editor .toast { position: absolute; }
+.toolbar > button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }

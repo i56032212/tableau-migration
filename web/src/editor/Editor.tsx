@@ -7,7 +7,18 @@ import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
 import { DataPane } from "./DataPane";
-import { AxisDialog, CalcDialog, ColorsDialog, DirectionDialog, FormatDialog, ParameterDialog, ReferenceDialog, TitleDialog, TrendDialog } from "./Dialogs";
+import {
+  AxisDialog,
+  CalcDialog,
+  ColorsDialog,
+  DirectionDialog,
+  FormatDialog,
+  ParameterDialog,
+  ReferenceDialog,
+  SheetFormatDialog,
+  TitleDialog,
+  TrendDialog,
+} from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
 import {
   type Card,
@@ -369,6 +380,9 @@ export function Editor({
           <button type="button" onClick={() => setDialog({ kind: "title" })}>
             標題…
           </button>
+          <button type="button" onClick={() => setDialog({ kind: "sheet-format" })}>
+            格式…
+          </button>
           <span className="sep" />
           <label className="inline">
             工作表
@@ -474,6 +488,7 @@ export function Editor({
       {dialog?.kind === "direction" && <DirectionDialog tableCalc={dialog.tableCalc} onClose={() => setDialog(null)} />}
       {dialog?.kind === "format" && <FormatDialog use={dialog.use} onClose={() => setDialog(null)} />}
       {dialog?.kind === "title" && <TitleDialog onClose={() => setDialog(null)} />}
+      {dialog?.kind === "sheet-format" && <SheetFormatDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "axis" && <AxisDialog use={dialog.use} shelf={dialog.shelf} onClose={() => setDialog(null)} />}
       {dialog?.kind === "reference" && <ReferenceDialog index={dialog.index} axis={dialog.axis} onClose={() => setDialog(null)} />}
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}

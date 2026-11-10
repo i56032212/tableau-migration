@@ -232,3 +232,68 @@ def test_edits_are_saved_in_package(client: TestClient, tmp_path: Path) -> None:
     assert client.get("/api/desktop/documents").json()[0]["modified"] is False
     with zipfile.ZipFile(target) as archive:
         assert "新的工作表" in archive.read("report.ir.json").decode("utf-8")
+
+
+def test_dashboard_story_and_action_api(client: TestClient) -> None:
+    outline = client.get("/api/edit/demo/outline").json()
+    assert {w["id"] for w in outline["worksheets"]} >= {"ws_sales_by_region", "ws_monthly_profit"}
+    created = client.post("/api/edit/demo/dashboards", json={"name": "新儀表板"}).json()[
+        "dashboard"
+    ]
+    flow = created["zones"][0]["children"][0]
+    flow["children"] = [
+        {
+            "id": "z3",
+            "kind": "worksheet",
+            "x": 4,
+            "y": 4,
+            "w": 992,
+            "h": 792,
+            "worksheet": "ws_monthly_profit",
+            "source_ref": "/editor",
+        }
+    ]
+    saved = client.put(f"/api/edit/demo/dashboards/{created['id']}", json={"dashboard": created})
+    assert saved.status_code == 200, saved.text
+    ir = client.get("/api/workbooks/demo/ir").json()
+    board = next(d for d in ir["dashboards"] if d["id"] == created["id"])
+    assert board["zones"][0]["children"][0]["children"][0]["worksheet"] == "ws_monthly_profit"
+    # Story：新增、加入故事點
+    story = client.post("/api/edit/demo/stories", json={}).json()["story"]
+    story["points"].append({"id": "sp2", "caption": "新儀表板", "dashboard": created["id"]})
+    assert (
+        client.put(f"/api/edit/demo/stories/{story['id']}", json={"story": story}).status_code
+        == 200
+    )
+    # Story 用到的 dashboard 不能刪
+    refused = client.delete(f"/api/edit/demo/dashboards/{created['id']}")
+    assert refused.status_code == 422 and "Story" in refused.json()["detail"]
+    assert client.delete(f"/api/edit/demo/stories/{story['id']}").status_code == 200
+    assert client.delete(f"/api/edit/demo/dashboards/{created['id']}").status_code == 200
+    # 篩選動作：目標工作表加上指向它的篩選，檢視器依選取的標記篩選
+    action = client.post(
+        "/api/edit/demo/actions",
+        json={
+            "action": {
+                "caption": "依區域",
+                "kind": "filter",
+                "activation": "select",
+                "dashboard": "db_ee909b0c",
+                "sources": ["ws_sales_by_region"],
+                "targets": ["ws_region_share_by_year"],
+                "clearing": "show_all",
+                "fields": ["f_region"],
+            }
+        },
+    )
+    assert action.status_code == 200, action.text
+    action_id = action.json()["action"]["id"]
+    state = {"filters": {}, "parameters": {}, "actions": {action_id: [{"f_region": "West"}]}}
+    rendered = client.post(
+        "/api/workbooks/demo/worksheets/ws_region_share_by_year/render", json=state
+    ).json()["table"]
+    region = rendered["keys"].index("f_region")
+    assert {row[region] for row in rendered["raw"]} == {"West"}
+    assert client.delete(f"/api/edit/demo/actions/{action_id}").status_code == 200
+    sheet = client.get("/api/edit/demo/worksheets/ws_region_share_by_year").json()["worksheet"]
+    assert all(f.get("action") != action_id for f in sheet["filters"])

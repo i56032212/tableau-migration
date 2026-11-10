@@ -19,15 +19,25 @@ from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
 from tmig.edit import (
     EditError,
+    add_dashboard,
+    add_story,
     add_worksheet,
     catalog,
     check_formula,
+    duplicate_dashboard,
     duplicate_worksheet,
     new_id,
+    outline,
+    remove_action,
     remove_calc,
+    remove_dashboard,
     remove_parameter,
+    remove_story,
     remove_worksheet,
+    replace_dashboard,
+    replace_story,
     replace_worksheet,
+    upsert_action,
     upsert_calc,
     upsert_parameter,
 )
@@ -78,6 +88,33 @@ class DomainBody(BaseModel):
 class ParameterBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     parameter: dict[str, Any]
+
+
+class DashboardBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dashboard: dict[str, Any]
+
+
+class NewDashboardBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = None
+    width: int = 1000
+    height: int = 800
+
+
+class StoryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    story: dict[str, Any]
+
+
+class NamedBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = None
+
+
+class ActionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: dict[str, Any]
 
 
 class IdBody(BaseModel):
@@ -253,6 +290,79 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     @router.delete("/{workbook}/parameters/{parameter}")
     def delete_parameter(workbook: str, parameter: str, request: Request) -> dict[str, bool]:
         edit(request, workbook, lambda ir: remove_parameter(ir, parameter))
+        return {"ok": True}
+
+    @router.get("/{workbook}/outline")
+    def get_outline(workbook: str, request: Request) -> dict[str, Any]:
+        return outline(workspace(request).get(workbook).ir)
+
+    @router.get("/{workbook}/dashboards/{dashboard}")
+    def get_dashboard(workbook: str, dashboard: str, request: Request) -> dict[str, Any]:
+        ir = workspace(request).get(workbook).ir
+        board = next((d for d in ir.dashboards if d.id == dashboard), None)
+        if board is None:
+            raise HTTPException(404, f"找不到 dashboard「{dashboard}」")
+        return {"dashboard": board.model_dump(mode="json")}
+
+    @router.put("/{workbook}/dashboards/{dashboard}")
+    def put_dashboard(
+        workbook: str, dashboard: str, body: DashboardBody, request: Request
+    ) -> dict[str, Any]:
+        if body.dashboard.get("id") != dashboard:
+            raise HTTPException(422, "dashboard 的 id 與網址不符")
+        board = edit(request, workbook, lambda ir: replace_dashboard(ir, body.dashboard))
+        return {"dashboard": board.model_dump(mode="json")}
+
+    @router.post("/{workbook}/dashboards")
+    def post_dashboard(workbook: str, body: NewDashboardBody, request: Request) -> dict[str, Any]:
+        board = edit(
+            request, workbook, lambda ir: add_dashboard(ir, body.name, body.width, body.height)
+        )
+        return {"dashboard": board.model_dump(mode="json")}
+
+    @router.post("/{workbook}/dashboards/{dashboard}/duplicate")
+    def post_duplicate_dashboard(workbook: str, dashboard: str, request: Request) -> dict[str, Any]:
+        board = edit(request, workbook, lambda ir: duplicate_dashboard(ir, dashboard))
+        return {"dashboard": board.model_dump(mode="json")}
+
+    @router.delete("/{workbook}/dashboards/{dashboard}")
+    def delete_dashboard(workbook: str, dashboard: str, request: Request) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: remove_dashboard(ir, dashboard))
+        return {"ok": True}
+
+    @router.get("/{workbook}/stories/{story}")
+    def get_story(workbook: str, story: str, request: Request) -> dict[str, Any]:
+        ir = workspace(request).get(workbook).ir
+        found = next((s for s in ir.stories if s.id == story), None)
+        if found is None:
+            raise HTTPException(404, f"找不到 Story「{story}」")
+        return {"story": found.model_dump(mode="json")}
+
+    @router.put("/{workbook}/stories/{story}")
+    def put_story(workbook: str, story: str, body: StoryBody, request: Request) -> dict[str, Any]:
+        if body.story.get("id") != story:
+            raise HTTPException(422, "Story 的 id 與網址不符")
+        found = edit(request, workbook, lambda ir: replace_story(ir, body.story))
+        return {"story": found.model_dump(mode="json")}
+
+    @router.post("/{workbook}/stories")
+    def post_story(workbook: str, body: NamedBody, request: Request) -> dict[str, Any]:
+        found = edit(request, workbook, lambda ir: add_story(ir, body.name))
+        return {"story": found.model_dump(mode="json")}
+
+    @router.delete("/{workbook}/stories/{story}")
+    def delete_story(workbook: str, story: str, request: Request) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: remove_story(ir, story))
+        return {"ok": True}
+
+    @router.post("/{workbook}/actions")
+    def post_action(workbook: str, body: ActionBody, request: Request) -> dict[str, Any]:
+        action = edit(request, workbook, lambda ir: upsert_action(ir, body.action))
+        return {"action": action.model_dump(mode="json")}
+
+    @router.delete("/{workbook}/actions/{action}")
+    def delete_action(workbook: str, action: str, request: Request) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: remove_action(ir, action))
         return {"ok": True}
 
     @router.post("/{workbook}/ids")

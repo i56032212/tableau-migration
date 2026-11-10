@@ -956,3 +956,154 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
   );
 }
 
+
+// ---------------------------------------------------------------- 工作表的格式
+
+interface ShelfStyleIR {
+  grid: boolean;
+  axis: boolean;
+  ticks: boolean;
+  field_labels: boolean;
+  cell: number | null;
+  banding: { pane: string | null; header: string | null; size: number; level: number | null } | null;
+  divider: unknown;
+  header_divider: unknown;
+  zero_line: unknown;
+  [key: string]: unknown;
+}
+
+const FONT_FAMILIES = ["Tableau Book", "Tableau Medium", "Tableau Semibold", "Tableau Bold", "Arial", "Microsoft JhengHei", "Segoe UI"];
+
+export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
+  const editor = useEditor();
+  const sheet = editor.sheet;
+  const rows = sheet.row_style as ShelfStyleIR;
+  const cols = sheet.column_style as ShelfStyleIR;
+  const fonts = (sheet.fonts as Record<string, { family?: string | null; size?: number | null; bold?: boolean | null; italic?: boolean | null }> | undefined) ?? {};
+  const [background, setBackground] = useState<string | null>((sheet.background as string | null) ?? null);
+  const [textColor, setTextColor] = useState<string | null>((sheet.text_color as string | null) ?? null);
+  const [family, setFamily] = useState(fonts.worksheet?.family ?? "");
+  const [size, setSize] = useState<string>(fonts.worksheet?.size ? String(fonts.worksheet.size) : "");
+  const [titleSize, setTitleSize] = useState<string>(fonts.title?.size ? String(fonts.title.size) : "");
+  const [rowStyle, setRowStyle] = useState<ShelfStyleIR>(rows);
+  const [colStyle, setColStyle] = useState<ShelfStyleIR>(cols);
+  const save = () => {
+    editor.apply((s: SheetIR) => {
+      const nextFonts = { ...((s.fonts as Record<string, unknown>) ?? {}) } as Record<string, Record<string, unknown>>;
+      const worksheetFont: Record<string, unknown> = { ...(nextFonts.worksheet ?? {}), family: family || null, size: size ? Number(size) : null };
+      if (Object.values(worksheetFont).some((v) => v !== null && v !== undefined)) nextFonts.worksheet = worksheetFont;
+      else delete nextFonts.worksheet;
+      const title: Record<string, unknown> = { ...(nextFonts.title ?? {}), size: titleSize ? Number(titleSize) : null };
+      if (Object.values(title).some((v) => v !== null && v !== undefined)) nextFonts.title = title;
+      else delete nextFonts.title;
+      return { ...s, background, text_color: textColor, fonts: nextFonts, row_style: rowStyle, column_style: colStyle };
+    });
+    onClose();
+  };
+  const shelf = (label: string, value: ShelfStyleIR, set: (v: ShelfStyleIR) => void) => (
+    <fieldset className="prop-group">
+      <legend>{label}</legend>
+      <div className="row">
+        <label>
+          <input type="checkbox" checked={value.grid} onChange={(e) => set({ ...value, grid: e.target.checked })} /> 格線
+        </label>
+        <label>
+          <input type="checkbox" checked={value.axis} onChange={(e) => set({ ...value, axis: e.target.checked })} /> 座標軸線
+        </label>
+        <label>
+          <input type="checkbox" checked={value.ticks} onChange={(e) => set({ ...value, ticks: e.target.checked })} /> 刻度
+        </label>
+        <label>
+          <input type="checkbox" checked={value.field_labels} onChange={(e) => set({ ...value, field_labels: e.target.checked })} /> 欄位標籤
+        </label>
+        <label>
+          <input type="checkbox" checked={value.zero_line !== null} onChange={(e) => set({ ...value, zero_line: e.target.checked ? {} : null })} /> 零線
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={value.divider !== null}
+            onChange={(e) => set({ ...value, divider: e.target.checked ? {} : null, header_divider: e.target.checked ? {} : null })}
+          />{" "}
+          分隔線
+        </label>
+      </div>
+      <div className="row">
+        <label>
+          <input
+            type="checkbox"
+            checked={value.banding !== null}
+            onChange={(e) => set({ ...value, banding: e.target.checked ? { pane: "#f4f4f4", header: "#f4f4f4", size: 1, level: null } : null })}
+          />{" "}
+          色帶
+        </label>
+        {value.banding && (
+          <>
+            <input
+              type="color"
+              aria-label={`${label}色帶的顏色`}
+              value={(value.banding.pane ?? "#f4f4f4").slice(0, 7)}
+              onChange={(e) => set({ ...value, banding: { ...value.banding!, pane: e.target.value, header: e.target.value } })}
+            />
+            <label>
+              每
+              <input
+                type="number"
+                min={1}
+                aria-label={`${label}色帶的大小`}
+                value={value.banding.size}
+                onChange={(e) => set({ ...value, banding: { ...value.banding!, size: Math.max(1, Number(e.target.value)) } })}
+              />
+              列一段
+            </label>
+          </>
+        )}
+      </div>
+    </fieldset>
+  );
+  return (
+    <Modal title="格式：工作表" onClose={onClose} wide>
+      <div className="format-dialog">
+        <div className="row">
+          <label>
+            <input type="checkbox" checked={background !== null} onChange={(e) => setBackground(e.target.checked ? "#ffffff" : null)} /> 背景
+          </label>
+          <input type="color" aria-label="工作表的背景" disabled={background === null} value={(background ?? "#ffffff").slice(0, 7)} onChange={(e) => setBackground(e.target.value)} />
+          <label>
+            <input type="checkbox" checked={textColor !== null} onChange={(e) => setTextColor(e.target.checked ? "#333333" : null)} /> 文字顏色
+          </label>
+          <input type="color" aria-label="工作表的文字顏色" disabled={textColor === null} value={(textColor ?? "#333333").slice(0, 7)} onChange={(e) => setTextColor(e.target.value)} />
+        </div>
+        <div className="row">
+          <label>
+            字型
+            <select aria-label="工作表的字型" value={family} onChange={(e) => setFamily(e.target.value)}>
+              <option value="">預設</option>
+              {FONT_FAMILIES.map((f) => (
+                <option key={f}>{f}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            字級
+            <input type="number" min={6} max={72} aria-label="工作表的字級" placeholder="9" value={size} onChange={(e) => setSize(e.target.value)} />
+          </label>
+          <label>
+            標題字級
+            <input type="number" min={6} max={72} aria-label="標題的字級" placeholder="15" value={titleSize} onChange={(e) => setTitleSize(e.target.value)} />
+          </label>
+        </div>
+        {shelf("列", rowStyle, setRowStyle)}
+        {shelf("欄", colStyle, setColStyle)}
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={save}>
+            確定
+          </button>
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
