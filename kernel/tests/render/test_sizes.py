@@ -13,14 +13,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tmig.ir import Banding, Divider, iter_zones
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import ROW_HEIGHT, apply_fit, main_encoding
 
 from ..parser import builder as b
 from ..parser.builder import instance, ref, worksheet
-from .test_formats import bars, fmt, nested, rule, styled
-from .test_text import CATEGORY, REGION, SALES, db, parse, render
+from .test_formats import MONTH, bars, fmt, nested, rule, styled
+from .test_text import CATEGORY, PROFIT, REGION, SALES, db, parse, render
 
 __all__ = ["db"]  # pytest fixture
 
@@ -371,7 +373,7 @@ def test_default_dividers_are_rendered(tmp_path: Path, db: Path) -> None:
     # 每一列都有不同的 Region｜Category：最後一列以外都是邊界
     edges = json.dumps([v["rows_dim"] for v in values][:-1], ensure_ascii=False)
     assert axis["gridOpacity"]["condition"]["test"] == f"indexof({edges}, datum.value) >= 0"
-    assert main["mark"]["height"] == {"band": 0.9}
+    assert main["mark"]["height"] == {"band": 0.75}
 
     headers = header_layers(spec)
     region, category = (headers[f"__deco__header{i}"]["encoding"]["x"]["value"] - 4 for i in (0, 1))
@@ -424,5 +426,62 @@ def test_banding_is_rendered(tmp_path: Path, db: Path) -> None:
     # 標題的色帶橫跨各層標題的欄（60 + 80）
     assert (header["encoding"]["x"], header["encoding"]["x2"]) == ({"value": -140}, {"value": 0})
     main = body["layer"][0]  # 主圖之後是多層列標題的圖層
-    assert main["mark"]["height"] == {"band": 0.9}
+    assert main["mark"]["height"] == {"band": 0.75}
     assert main["encoding"]["y"]["scale"] == {"type": "band", "paddingInner": 0, "paddingOuter": 0}
+
+
+# ---------------------------------------------------------------- 標記的大小
+
+
+def sized_mark(mark: str, size: str | None = None, rows: str = "", cols: str = "") -> str:
+    """標記卡設定了「大小」（size）的工作表。"""
+    style = (
+        "<style><style-rule element='mark'>"
+        f"<format attr='size' value='{size}' /></style-rule></style>"
+        if size is not None
+        else ""
+    )
+    return worksheet(
+        "Sized",
+        [REGION, SALES, PROFIT, MONTH],
+        rows=rows or ref("none:Region:nk"),
+        cols=cols or ref("sum:Sales:qk"),
+        mark=mark,
+        pane_extra=style,
+    )
+
+
+def test_mark_size_is_parsed(tmp_path: Path) -> None:
+    assert parse(tmp_path, sized_mark("Bar")).worksheets[0].marks.mark_size is None
+    marks = parse(tmp_path, sized_mark("Bar", "1.1424309015274048")).worksheets[0].marks
+    assert marks.mark_size == pytest.approx(1.1424309)
+    assert parse(tmp_path, sized_mark("Bar", "abc")).worksheets[0].marks.mark_size is None
+
+
+def test_bar_thickness(tmp_path: Path, db: Path) -> None:
+    """長條的粗細與 Tableau 相同：沒有設定大小時占列高的 75%，大小 s 時為 s / 2（最多填滿）；
+    列之間沒有額外的空隙（比例以整列計算）。直條的寬度相同。"""
+    spec = render(parse(tmp_path, sized_mark("Bar")), db).spec
+    assert spec["mark"]["height"] == {"band": 0.75}
+    assert spec["encoding"]["y"]["scale"] == {"type": "band", "paddingInner": 0, "paddingOuter": 0}
+    for size, band in (("1", 0.5), ("1.1424309015274048", 0.5712), ("3", 1)):
+        spec = render(parse(tmp_path, sized_mark("Bar", size)), db).spec
+        assert spec["mark"]["height"] == {"band": band}, size
+    vertical = sized_mark("Bar", "1", rows=ref("sum:Sales:qk"), cols=ref("none:Region:nk"))
+    spec = render(parse(tmp_path, vertical), db).spec
+    assert spec["mark"]["width"] == {"band": 0.5} and "height" not in spec["mark"]
+    assert spec["encoding"]["x"]["scale"]["paddingInner"] == 0
+
+
+def test_point_and_line_sizes(tmp_path: Path, db: Path) -> None:
+    """圓點的直徑：預設 10 像素，大小 s 時為 s 倍（Vega 的 size 是外框的面積）；折線預設 3 像素寬。"""
+    scatter = {"rows": ref("sum:Profit:qk"), "cols": ref("sum:Sales:qk")}
+    spec = render(parse(tmp_path, sized_mark("Circle", **scatter)), db).spec
+    assert spec["mark"]["size"] == 100
+    spec = render(parse(tmp_path, sized_mark("Circle", "1.637", **scatter)), db).spec
+    assert spec["mark"]["size"] == pytest.approx(16.37**2, abs=0.01)
+    timeline = {"rows": ref("sum:Sales:qk"), "cols": ref("tmn:Order Date:qk")}
+    spec = render(parse(tmp_path, sized_mark("Line", **timeline)), db).spec
+    assert spec["mark"]["strokeWidth"] == 3
+    spec = render(parse(tmp_path, sized_mark("Line", "2", **timeline)), db).spec
+    assert spec["mark"]["strokeWidth"] == 6

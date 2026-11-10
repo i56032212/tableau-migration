@@ -51,7 +51,8 @@
     "type": "line",
     "tooltip": true,
     "point": "transparent",
-    "color": "#4e79a7"
+    "color": "#4e79a7",
+    "strokeWidth": 3
   },
   "encoding": {
     "y": {

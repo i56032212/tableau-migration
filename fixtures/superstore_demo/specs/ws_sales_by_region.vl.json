@@ -79,6 +79,11 @@
         "titleFontSize": 10,
         "titleFontWeight": 600,
         "titleLimit": 54
+      },
+      "scale": {
+        "type": "band",
+        "paddingInner": 0,
+        "paddingOuter": 0
       }
     },
     "color": {
@@ -120,7 +125,10 @@
     {
       "mark": {
         "type": "bar",
-        "tooltip": true
+        "tooltip": true,
+        "height": {
+          "band": 0.75
+        }
       }
     },
     {

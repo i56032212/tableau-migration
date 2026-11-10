@@ -57,7 +57,7 @@ from tmig.parser.fields import (
     use_from_name,
     value_type,
 )
-from tmig.parser.formats import pane_cell_align, worksheet_formats
+from tmig.parser.formats import pane_cell_align, pane_mark_size, worksheet_formats
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -691,6 +691,7 @@ class SheetParser:
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
         marks.label_color = label_color(pane)
         marks.cell_align = pane_cell_align(pane)
+        marks.mark_size = pane_mark_size(pane)
         return marks, dims
 
     def _color_palette(self, ref: str, use: FieldUse) -> ColorPalette | None:

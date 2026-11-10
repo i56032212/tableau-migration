@@ -61,7 +61,7 @@
         "tooltip": true,
         "color": "#4e79a7",
         "height": {
-          "band": 0.9
+          "band": 0.75
         }
       },
       "encoding": {
@@ -229,7 +229,12 @@
         "y": {
           "field": "rows_dim",
           "type": "ordinal",
-          "sort": null
+          "sort": null,
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          }
         },
         "x": {
           "value": -206
@@ -282,7 +287,12 @@
         "y": {
           "field": "rows_dim",
           "type": "ordinal",
-          "sort": null
+          "sort": null,
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          }
         },
         "x": {
           "value": -91

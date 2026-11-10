@@ -76,6 +76,11 @@
         "titleFontSize": 10,
         "titleFontWeight": 600,
         "titleLimit": 147
+      },
+      "scale": {
+        "type": "band",
+        "paddingInner": 0,
+        "paddingOuter": 0
       }
     },
     "tooltip": [
@@ -98,7 +103,10 @@
       "mark": {
         "type": "bar",
         "tooltip": true,
-        "color": "#4e79a7"
+        "color": "#4e79a7",
+        "height": {
+          "band": 0.75
+        }
       }
     },
     {

@@ -347,6 +347,7 @@ def test_mark_color_opacity_and_border_render(tmp_path: Path, db: Path) -> None:
         "opacity": 0.502,
         "stroke": "#ffffff",
         "strokeWidth": 1,
+        "height": {"band": 0.75},  # Tableau 預設的長條粗細
     }
     # 面積：框線以折線疊在上緣；與 Tableau 相同不畫出點（透明的點仍可停留、點選）
     area = pane_style(

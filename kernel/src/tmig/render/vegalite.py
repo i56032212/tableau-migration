@@ -138,8 +138,14 @@ ROW_HEIGHT = 20
 （以 Tableau 的畫面量測：Logshark 報表的長條圖與文字表）。列數多時在區塊內捲動。"""
 COLUMN_WIDTH = (40, 320)
 """離散的欄依內容估計寬度時的最小與最大值（像素）。"""
-BAR_BAND = 0.9
-"""畫色帶時長條占列高（欄寬）的比例：與沒有色帶時 Vega-Lite 的預設相同。"""
+BAR_BAND = 0.75
+"""長條占列高（欄寬）的比例：Tableau 沒有設定「大小」時的預設（以 Logshark 報表的 Tableau 畫面量測：
+20 像素的列中長條 15 像素，放大的區塊中也是 75%）。設定了大小 s 時為 s / 2（s = 1 為一半、s = 2 填滿）。"""
+POINT_DIAMETER = 10
+"""圓點、形狀與方塊的直徑（像素）：Tableau 大小 1（預設）時的直徑，大小 s 時為 s 倍（同樣以 Tableau 的
+畫面量測：大小 1.637 的圓點直徑 16 像素）。"""
+LINE_WIDTH = 3
+"""折線的寬度（像素）：Tableau 大小 1（預設）時的線寬，大小 s 時為 s 倍（線寬的倍數依圓點推定）。"""
 BAND = "__band_"
 """色帶的資料欄（__band_rows、__band_columns）。"""
 DECO = "__deco"
@@ -566,6 +572,7 @@ class _Builder:
             rect = _mark_style({"type": "rect", "tooltip": True}, marks)
             return {"encoding": encoding, "layer": [{"mark": rect}, text]}, mark
         _mark_style(vl_mark, marks)
+        self.size_mark(vl_mark, encoding, marks)
         if marks.path is not None and vl_mark["type"] in ("line", "area"):
             encoding["order"] = {"field": self.ch(marks.path).name}
         elif mark == "polygon":
@@ -585,6 +592,35 @@ class _Builder:
                 ],
             }, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    def size_mark(self, vl_mark: dict[str, Any], encoding: dict[str, Any], marks: Marks) -> None:
+        """標記卡的「大小」：離散的列（欄）上長條占列高（欄寬）的比例，圓點與形狀的直徑，折線的寬度
+        （依 Tableau 的畫面量測，見 BAR_BAND、POINT_DIAMETER、LINE_WIDTH）。依欄位決定大小時不變。"""
+        size = marks.mark_size
+        kind = vl_mark["type"]
+        if kind == "bar":
+            band = next(
+                (
+                    c
+                    for c in ("y", "x")
+                    if isinstance(encoding.get(c), dict)
+                    and encoding[c].get("type") in ("ordinal", "nominal")
+                ),
+                None,
+            )
+            if band is None or "size" in encoding:
+                return
+            fraction = BAR_BAND if size is None else min(size / 2, 1)
+            vl_mark["height" if band == "y" else "width"] = {"band": round(fraction, 4)}
+            # 比例以整列（欄）計算：列之間沒有 Vega-Lite 預設的空隙
+            scale = dict(encoding[band].get("scale") or {})
+            scale.update(type="band", paddingInner=0, paddingOuter=0)
+            encoding[band]["scale"] = scale
+        elif kind in ("circle", "square", "point") and "size" not in encoding:
+            diameter = POINT_DIAMETER * (size if size is not None else 1)
+            vl_mark["size"] = round(diameter**2, 2)  # Vega 的 size 是外框的面積
+        elif kind == "line" and not vl_mark.get("filled"):
+            vl_mark["strokeWidth"] = round(LINE_WIDTH * (size if size is not None else 1), 2)
 
     def common(self, encoding: dict[str, Any], marks: Marks) -> None:
         """顏色、大小、形狀、詳細資料與工具提示。"""

@@ -818,6 +818,11 @@ class Marks(IRModel):
     stroke: HexColor | None = Field(
         default=None, description="標記的框線顏色（色彩的「效果＞框線」）；None 為沒有框線"
     )
+    mark_size: float | None = Field(
+        default=None,
+        gt=0,
+        description="標記卡「大小」滑桿的值（.twb 的 size）；None 為 Tableau 的預設（長條占列高的 75%）",
+    )
     size: FieldUse | None = None
     label: list[FieldUse] = Field(default_factory=list)
     label_text: list[TextRun] = Field(

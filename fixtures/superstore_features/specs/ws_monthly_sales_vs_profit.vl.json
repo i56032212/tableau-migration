@@ -51,7 +51,8 @@
   "mark": {
     "type": "line",
     "tooltip": true,
-    "point": "transparent"
+    "point": "transparent",
+    "strokeWidth": 3
   },
   "encoding": {
     "y": {

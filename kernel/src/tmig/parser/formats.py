@@ -26,6 +26,7 @@
     field 的 width（列的標題、座標軸寬度）與 height（欄的標題、座標軸高度）
   - 色帶：element='table' 的 band-size（每段的列數，0 為不上色），element='pane'／'header' 的
     band-color，以 scope（rows／cols）區分列與欄
+  - 標記卡（<pane>）的 <style-rule element='mark'> 的 size：「大小」滑桿的值（沒有寫時為預設）
   - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
     stroke-color，table-div 的 div-level（第幾層標題之間，0 為不畫），以 scope 區分列與欄；沒有寫時
     Tableau 預設畫（使用者常關掉：公開報表中最常見的寫法是 line-visibility='off'）
@@ -36,6 +37,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -246,6 +248,22 @@ def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
 
     pane = line("table-div", None)
     return pane, line("header-div", hex_color(raw.get("table-div:stroke-color")))
+
+
+def pane_mark_size(pane: etree._Element) -> float | None:
+    """標記卡（<pane>）的「大小」滑桿：<style-rule element='mark'> 的 size；沒有設定時為 None。"""
+    found: float | None = None
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "mark":
+            continue
+        for item in children(rule, "format"):
+            if item.get("attr") == "size" and item.get("field") is None:
+                try:
+                    value = float(item.get("value") or "")
+                except ValueError:
+                    continue
+                found = value if value > 0 and math.isfinite(value) else found
+    return found
 
 
 def pane_cell_align(pane: etree._Element) -> Literal["left", "center", "right"] | None:

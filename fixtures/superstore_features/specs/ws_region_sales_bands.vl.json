@@ -53,7 +53,10 @@
       "mark": {
         "type": "bar",
         "tooltip": true,
-        "color": "#4e79a7"
+        "color": "#4e79a7",
+        "width": {
+          "band": 0.75
+        }
       },
       "encoding": {
         "y": {
@@ -68,6 +71,11 @@
           "title": "Region",
           "axis": {
             "ticks": false
+          },
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
           }
         },
         "tooltip": [
