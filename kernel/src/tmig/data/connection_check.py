@@ -19,7 +19,7 @@ from tmig.data.sources import (
     open_executor,
     probe_sql,
 )
-from tmig.ir import IR, ExtractConnection, LiveConnection, load_ir
+from tmig.ir import IR, ExtractConnection, FileConnection, LiveConnection, load_ir
 from tmig.parser.workbook import parse_workbook
 
 DBCLASS_DRIVERS = {
@@ -77,6 +77,8 @@ def collect(irs: Iterable[IR]) -> dict[str, FoundConnection]:
         for ds in ir.datasources:
             connection = ds.connection
             label = ir.workbook.name
+            if isinstance(connection, FileConnection):
+                continue  # 檔案在 .twbx 內，不需要連線設定
             if isinstance(connection, ExtractConnection):
                 if connection.source is None or connection.refresh is None:
                     continue

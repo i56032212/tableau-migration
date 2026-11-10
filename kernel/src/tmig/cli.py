@@ -457,8 +457,7 @@ def _cmd_extract_refresh(args: argparse.Namespace) -> int:
     targets = [
         ds
         for ds in ir.datasources
-        if has_local_data(ds.connection)
-        and (args.datasource is None or ds.id == args.datasource)
+        if has_local_data(ds.connection) and (args.datasource is None or ds.id == args.datasource)
     ]
     if not targets:
         print("沒有萃取或檔案型的資料源", file=sys.stderr)
