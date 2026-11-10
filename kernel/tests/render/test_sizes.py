@@ -510,3 +510,19 @@ def test_pie_size(tmp_path: Path, db: Path) -> None:
     )
     arc = render(parse(tmp_path, sized), db).spec["layer"][0]["mark"]
     assert arc["outerRadius"] == {"expr": "min(width, height) * 0.3763"}
+
+
+def test_banding_level_and_column_header_dividers(tmp_path: Path, db: Path) -> None:
+    """色帶的層級（band-level）以前幾層標題的組上色；欄標題區域的分隔線以刻度畫在各組之間。"""
+    level = rule("table", fmt("band-level", "1", scope="rows"))
+    ws = parse(tmp_path, banded(*BANDING_RULES, level)).worksheets[0]
+    assert ws.row_style.banding is not None and ws.row_style.banding.level == 1
+    values = render(parse(tmp_path, banded(*BANDING_RULES, level)), db).spec["data"]["values"]
+    # East（2 列）、North、South（2 列）、West（2 列）隔組上色
+    assert [v["__band_rows"] for v in values] == [False, False, True, False, False, True, True]
+
+    spec = render(parse(tmp_path, nested("cols", mark="Text")), db).spec
+    axis = spec["encoding"]["x"]["axis"]
+    assert (axis["ticks"], axis["tickBand"], axis["tickColor"]) == (True, "extent", "#d4d4d4")
+    assert axis["tickSize"] == 2 * 15 + 4  # 兩行標題的高度
+    assert "indexof(" in axis["tickOpacity"]["condition"]["test"]

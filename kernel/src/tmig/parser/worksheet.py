@@ -60,6 +60,7 @@ from tmig.parser.fields import (
 from tmig.parser.formats import (
     pane_cell_align,
     pane_label_font,
+    pane_label_match,
     pane_mark_size,
     worksheet_formats,
 )
@@ -374,6 +375,7 @@ class SheetParser:
             cell_align=sheet_formats.cell_align,
             field_label_background=sheet_formats.field_label_background,
             fonts=sheet_formats.fonts,
+            label_valign=sheet_formats.label_valign,
             fit=ctx.sheet_fits.get(self.name, "standard"),
             source_ref=xpath(el),
         )
@@ -698,6 +700,7 @@ class SheetParser:
         marks.label_color = label_color(pane)
         marks.cell_align = pane_cell_align(pane)
         marks.label_font = pane_label_font(pane)
+        marks.label_match = pane_label_match(pane)
         marks.mark_size = pane_mark_size(pane)
         return marks, dims
 

@@ -107,7 +107,8 @@ def test_axis_lines_and_colors_are_rendered(tmp_path: Path, db: Path) -> None:
     assert spec["mark"]["clip"] is True
     assert x["axis"]["title"] == "Revenue"
     assert (x["axis"]["domain"], x["axis"]["ticks"]) == (False, False)
-    assert "grid" not in x["axis"]
+    # 格線照畫（零線另以 0 的格線畫出）
+    assert x["axis"]["grid"] is True and "gridOpacity" not in x["axis"]
     # 離散的列標題：欄位標籤不顯示、成員的文字顏色（與 Tableau 相同畫成一欄、靠左、不畫刻度）
     axis = y["axis"]
     assert (axis["title"], axis["labelColor"]) == (None, "#ffcc00")
@@ -142,7 +143,8 @@ def test_hidden_reversed_and_date_range_axes(tmp_path: Path, db: Path) -> None:
     spec = render(ir, db).spec
     x, y = spec["encoding"]["x"], spec["encoding"]["y"]
     # 隱藏的座標軸與 Tableau 相同保留格線
-    assert y["axis"] == {"labels": False, "ticks": False, "domain": False, "title": None}
+    shown = {k: y["axis"][k] for k in ("labels", "ticks", "domain", "title")}
+    assert shown == {"labels": False, "ticks": False, "domain": False, "title": None}
     assert y["scale"] == {"reverse": True}
     start = datetime(2023, 2, 1, tzinfo=UTC).timestamp() * 1000
     assert x["type"] == "temporal"
@@ -293,7 +295,7 @@ def test_hidden_header_levels_in_text_tables(tmp_path: Path, db: Path) -> None:
     assert axis["title"] == "Region"
     shown = render(parse(tmp_path, nested("cols", mark="Text")), db).spec["encoding"]["x"]["axis"]
     assert shown["labelExpr"] == "split(datum.label, '｜')"
-    assert shown["labelPadding"] == 2 + 12
+    assert shown["labelPadding"] == 2 + 15  # 一行 9pt 的字
 
 
 # ---------------------------------------------------------------- 文字表的對齊與欄位標籤
@@ -557,3 +559,76 @@ def test_dashboard_background_and_zone_styles(tmp_path: Path) -> None:
     )
     assert zones["z5"] is None  # 寬度 0 的框線不畫
     assert zones["z6"] is None  # 浮動的區塊沒有寫：沒有外距
+
+
+# ---------------------------------------------------------------- 零線、標籤顏色、標題的位置與方向
+
+
+def test_zero_lines(tmp_path: Path, db: Path) -> None:
+    """零線：沒有設定時與 Tableau 相同畫 1 像素的灰色點線（0 的格線）；關閉、改成實線；格線關閉時只畫零線。"""
+    x = render(parse(tmp_path, bars()), db).spec["encoding"]["x"]["axis"]
+    zero = "datum.value === 0"
+    assert x["gridColor"] == {"condition": {"test": zero, "value": "#cbcbcb"}, "value": "#f0f0f0"}
+    assert x["gridDash"] == {"condition": {"test": zero, "value": [2, 1]}, "value": []}
+    off = bars(rule("zeroline", fmt("line-visibility", "off")))
+    assert "gridDash" not in render(parse(tmp_path, off), db).spec["encoding"]["x"].get("axis", {})
+    solid = bars(
+        rule(
+            "zeroline",
+            fmt("line-pattern-only", "solid", scope="cols"),
+            fmt("stroke-color", "#000000"),
+        ),
+        rule("gridline", fmt("line-visibility", "off")),
+    )
+    ws = parse(tmp_path, solid).worksheets[0]
+    assert ws.column_style.zero_line is not None and ws.column_style.zero_line.pattern == "solid"
+    x = render(parse(tmp_path, solid), db).spec["encoding"]["x"]["axis"]
+    assert x["gridDash"]["condition"]["value"] == []
+    assert x["gridOpacity"] == {"condition": {"test": zero, "value": 1}, "value": 0}
+
+
+def test_label_color_matches_marks(tmp_path: Path, db: Path) -> None:
+    """標記標籤「與標記顏色相符」：依欄位著色時沿用色彩的 encoding，否則為標記的顏色。"""
+    style = (
+        "<style><style-rule element='datalabel'><format attr='color-mode' value='match' />"
+        "</style-rule></style>"
+    )
+    sheet = worksheet(
+        "Bars",
+        [REGION, SALES],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        pane_extra=style,
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.worksheets[0].marks.label_match is True
+    label = render(ir, db).spec["layer"][1]
+    assert label["encoding"]["color"] == {"value": "#4e79a7"}
+    colored = sheet.replace(
+        f"<text column='{ref('sum:Sales:qk')}' />",
+        f"<color column='{ref('none:Region:nk')}' /><text column='{ref('sum:Sales:qk')}' />",
+    )
+    spec = render(parse(tmp_path, colored), db).spec
+    assert spec["layer"][1]["encoding"]["color"] == spec["encoding"]["color"]
+
+
+def test_header_vertical_alignment_and_orientation(tmp_path: Path, db: Path) -> None:
+    """外層的標題成員置中（奇數列的組在中間那一列，偶數列的組畫在中間兩列之間）、置底；直寫的標題。"""
+    centered = nested("rows", rule("label", fmt("vertical-align", "center")))
+    spec = render(parse(tmp_path, centered), db).spec
+    values = spec["data"]["values"]
+    # East、South、West 各兩列（中間兩列之間），North 一列
+    assert [v["__header0"] for v in values] == ["", "", "North", "", "", "", ""]
+    assert [v["__header0_mid"] for v in values] == ["East", "", "", "South", "", "West", ""]
+    mid = next(layer for layer in spec["layer"] if layer.get("name") == "__deco__header0_mid")
+    assert mid["encoding"]["y"]["bandPosition"] == 1
+    bottom = nested("rows", rule("label", fmt("vertical-align", "bottom", "none:Region:nk")))
+    values = render(parse(tmp_path, bottom), db).spec["data"]["values"]
+    assert [v["__header0"] for v in values] == ["", "East", "North", "", "South", "", "West"]
+    rotated = bars(rule("label", fmt("text-orientation", "-90", "none:Region:nk")))
+    ir = parse(tmp_path, rotated)
+    assert [a.angle for a in ir.worksheets[0].axes] == [-90]
+    axis = render(ir, db).spec["encoding"]["y"]["axis"]
+    assert (axis["labelAngle"], axis["labelAlign"]) == (-90, "center")
+    assert axis["minExtent"] < 40  # 一行字的寬度

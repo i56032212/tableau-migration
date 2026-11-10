@@ -836,6 +836,9 @@ class Marks(IRModel):
     label_font: FontStyle | None = Field(
         default=None, description="標記標籤的字型（標記卡的 datalabel）；None 依工作表"
     )
+    label_match: bool = Field(
+        default=False, description="標記標籤的顏色與標記相符（datalabel 的 color-mode='match'）"
+    )
     mark_size: float | None = Field(
         default=None,
         gt=0,
@@ -943,6 +946,13 @@ class Axis(IRModel):
     font: FontStyle | None = Field(
         default=None, description="標題成員或座標軸刻度的字型（這個欄位的設定）；None 依工作表"
     )
+    valign: Literal["top", "center", "bottom"] | None = Field(
+        default=None,
+        description="外層的標題成員在各組中的垂直位置；None 依工作表的設定或預設（上）",
+    )
+    angle: int | None = Field(
+        default=None, description="標題成員的文字方向（度，-90 為由下往上）；None 為橫寫"
+    )
 
 
 class Banding(IRModel):
@@ -952,6 +962,20 @@ class Banding(IRModel):
     pane: HexColor | None = None
     header: HexColor | None = None
     size: int = Field(default=1, ge=1, description="每一段的列（欄）數")
+    level: int | None = Field(
+        default=None,
+        ge=1,
+        description="以前幾層標題的組為單位上色（band-level）；None 或大於層數時為每一列（欄）",
+    )
+
+
+class ZeroLine(IRModel):
+    """零線（格式設定的「線條＞零線」）：連續座標軸的範圍包含 0 時畫在 0 的位置。Tableau 預設畫
+    （1 像素的灰色點線，依 Tableau 的畫面量測）。"""
+
+    color: HexColor = "#cbcbcb"
+    width: int = Field(default=1, ge=1, description="線寬（像素）")
+    pattern: Literal["solid", "dashed", "dotted"] = "dotted"
 
 
 class Divider(IRModel):
@@ -988,6 +1012,9 @@ class ShelfStyle(IRModel):
     )
     header_divider: Divider | None = Field(
         default_factory=Divider, description="標題的分隔線（Tableau 預設畫；None 為不畫）"
+    )
+    zero_line: ZeroLine | None = Field(
+        default_factory=ZeroLine, description="零線（Tableau 預設畫；None 為不畫）"
     )
 
 
@@ -1063,6 +1090,9 @@ class Worksheet(IRModel):
         default=None,
         description="文字表儲存格中文字的水平對齊（工作表 <style> 中的設定，標記卡的 cell_align 優先）；"
         "None 依 Tableau 的預設（有標題的文字表數字靠右、文字靠左，只有一格時置中）",
+    )
+    label_valign: Literal["top", "center", "bottom"] | None = Field(
+        default=None, description="標題成員的垂直對齊（整張工作表的設定）；None 為上"
     )
     fonts: dict[FontElement, FontStyle] = Field(
         default_factory=dict,

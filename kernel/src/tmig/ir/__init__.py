@@ -84,6 +84,7 @@ from tmig.ir.models import (
     UrlField,
     Workbook,
     Worksheet,
+    ZeroLine,
     Zone,
     ZoneStyle,
 )
@@ -172,6 +173,7 @@ __all__ = [
     "UrlField",
     "Workbook",
     "Worksheet",
+    "ZeroLine",
     "Zone",
     "ZoneStyle",
     "check_references",

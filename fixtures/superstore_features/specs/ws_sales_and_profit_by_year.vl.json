@@ -61,7 +61,10 @@
       "titleFontSize": 12.0,
       "titleFontWeight": 400,
       "labelColor": "#555555",
-      "titleColor": "#333333"
+      "titleColor": "#333333",
+      "gridColor": "#f0f0f0",
+      "domainColor": "#f4f4f4",
+      "tickColor": "#f4f4f4"
     },
     "legend": {
       "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
@@ -94,7 +97,34 @@
         "y": {
           "field": "c1",
           "type": "quantitative",
-          "title": "Sales"
+          "title": "Sales",
+          "axis": {
+            "grid": true,
+            "gridColor": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": "#cbcbcb"
+              },
+              "value": "#f0f0f0"
+            },
+            "gridDash": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": [
+                  2,
+                  1
+                ]
+              },
+              "value": []
+            },
+            "gridWidth": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": 1
+              },
+              "value": 1
+            }
+          }
         },
         "x": {
           "field": "c0_label",
@@ -168,7 +198,34 @@
         "y": {
           "field": "c2",
           "type": "quantitative",
-          "title": "Profit"
+          "title": "Profit",
+          "axis": {
+            "grid": true,
+            "gridColor": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": "#cbcbcb"
+              },
+              "value": "#f0f0f0"
+            },
+            "gridDash": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": [
+                  2,
+                  1
+                ]
+              },
+              "value": []
+            },
+            "gridWidth": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": 1
+              },
+              "value": 1
+            }
+          }
         },
         "x": {
           "field": "c0_label",

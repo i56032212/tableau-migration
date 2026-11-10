@@ -60,7 +60,10 @@
       "titleFontSize": 12.0,
       "titleFontWeight": 400,
       "labelColor": "#555555",
-      "titleColor": "#333333"
+      "titleColor": "#333333",
+      "gridColor": "#f0f0f0",
+      "domainColor": "#f4f4f4",
+      "tickColor": "#f4f4f4"
     },
     "legend": {
       "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",

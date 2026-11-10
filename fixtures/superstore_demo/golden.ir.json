@@ -689,6 +689,7 @@
         "opacity": null,
         "stroke": null,
         "label_font": null,
+        "label_match": false,
         "mark_size": null,
         "size": null,
         "label": [
@@ -817,6 +818,11 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "column_style": {
@@ -835,12 +841,18 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "label_valign": null,
       "fonts": {},
       "field_label_background": null,
       "fit": "standard",
@@ -879,6 +891,7 @@
         "opacity": null,
         "stroke": null,
         "label_font": null,
+        "label_match": false,
         "mark_size": null,
         "size": null,
         "label": [],
@@ -963,6 +976,11 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "column_style": {
@@ -981,12 +999,18 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "label_valign": null,
       "fonts": {},
       "field_label_background": null,
       "fit": "standard",
@@ -1025,6 +1049,7 @@
         "opacity": null,
         "stroke": null,
         "label_font": null,
+        "label_match": false,
         "mark_size": null,
         "size": null,
         "label": [
@@ -1103,6 +1128,11 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "column_style": {
@@ -1121,12 +1151,18 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "label_valign": null,
       "fonts": {},
       "field_label_background": null,
       "fit": "standard",
@@ -1162,6 +1198,7 @@
         "opacity": null,
         "stroke": null,
         "label_font": null,
+        "label_match": false,
         "mark_size": null,
         "size": null,
         "label": [
@@ -1264,6 +1301,11 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "column_style": {
@@ -1282,12 +1324,18 @@
           "color": "#d4d4d4",
           "width": 1,
           "level": null
+        },
+        "zero_line": {
+          "color": "#cbcbcb",
+          "width": 1,
+          "pattern": "dotted"
         }
       },
       "background": null,
       "text_color": null,
       "cell_color": null,
       "cell_align": null,
+      "label_valign": null,
       "fonts": {},
       "field_label_background": null,
       "fit": "standard",

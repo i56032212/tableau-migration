@@ -57,6 +57,7 @@ from tmig.ir.models import (
     FontStyle,
     Scalar,
     ShelfStyle,
+    ZeroLine,
     ZoneStyle,
 )
 from tmig.parser.colors import hex_color
@@ -83,6 +84,7 @@ class SheetFormats:
     cell_color: str | None = None
     cell_align: Literal["left", "center", "right"] | None = None
     field_label_background: str | None = None
+    label_valign: Literal["top", "center", "bottom"] | None = None
     fonts: dict[FontElement, FontStyle] = field(default_factory=dict)
 
 
@@ -124,10 +126,15 @@ def worksheet_formats(
         for shelf in [SHELVES[scope]] if scope in SHELVES else list(shelves):
             shelves[shelf] = shelves[shelf].model_copy(update={name: on})
 
+    zeros: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
+
     def lines(element: str | None, item: etree._Element) -> None:
-        """格線、座標軸線與刻度（沒有 field 的格式）；工作表的設定覆寫活頁簿的。"""
+        """格線、座標軸線、刻度與零線（沒有 field 的格式）；工作表的設定覆寫活頁簿的。"""
         name, value, scope = item.get("attr"), item.get("value"), item.get("scope")
-        if element == "gridline":
+        if element == "zeroline" and name:
+            for shelf in [SHELVES[scope]] if scope in SHELVES else list(zeros):
+                zeros[shelf][name] = value or ""
+        elif element == "gridline":
             turn(scope, "grid", _line(name, value))
         elif element == "axis" and name == "tick-color":
             turn(scope, "ticks", not _transparent(value) if hex_color(value) else None)
@@ -209,9 +216,22 @@ def worksheet_formats(
             ):
                 for target in targets(ref, scope):
                     target.align = _align(value)
+            elif tag == "format" and element == "label" and name == "vertical-align":
+                valign = _valign(value)
+                if ref is None:
+                    result.label_valign = valign
+                for target in targets(ref, scope):
+                    target.valign = valign
+            elif tag == "format" and element == "label" and name == "text-orientation":
+                try:
+                    angle: int | None = int(value or "")
+                except ValueError:
+                    angle = None
+                for target in targets(ref, scope):
+                    target.angle = angle if angle not in (None, 0) else None
             elif tag == "format" and element == "worksheet" and name == "display-field-labels":
                 turn(scope, "field_labels", {"false": False, "true": True}.get(value or ""))
-            elif tag == "format" and element in ("gridline", "axis") and ref is None:
+            elif tag == "format" and element in ("gridline", "axis", "zeroline") and ref is None:
                 lines(element, item)
             elif tag == "format" and element in ("cell", "header", "axis") and name in SIZES:
                 sizes(element, name or "", value, ref)
@@ -234,7 +254,12 @@ def worksheet_formats(
     for shelf in shelves:
         pane, header = _dividers(dividers[shelf])
         shelves[shelf] = shelves[shelf].model_copy(
-            update={"banding": _banding(bands[shelf]), "divider": pane, "header_divider": header}
+            update={
+                "banding": _banding(bands[shelf]),
+                "divider": pane,
+                "header_divider": header,
+                "zero_line": _zero_line(zeros[shelf]),
+            }
         )
     result.row_style, result.column_style = shelves["rows"], shelves["columns"]
     return result
@@ -244,7 +269,7 @@ def _banding_format(element: str | None, name: str | None, item: etree._Element)
     """色帶的格式：表的 band-size，窗格與標題的 band-color（總計等 data-class 的不算）。"""
     if item.get("data-class") is not None:
         return False
-    return (element == "table" and name == "band-size") or (
+    return (element == "table" and name in ("band-size", "band-level")) or (
         element in ("pane", "header") and name == "band-color"
     )
 
@@ -256,7 +281,30 @@ def _banding(raw: dict[str, str]) -> Banding | None:
     header = _opaque(raw.get("header:band-color"))
     if size == 0 or (pane is None and header is None):
         return None
-    return Banding(pane=pane, header=header, size=size or 1)
+    level = _int(raw.get("table:band-level"))
+    return Banding(pane=pane, header=header, size=size or 1, level=level if level else None)
+
+
+def _zero_line(raw: dict[str, str]) -> ZeroLine | None:
+    """零線：沒有寫時與 Tableau 相同都畫；line-visibility='off'、stroke-size='0' 或透明時不畫。"""
+    width = _int(raw.get("stroke-size"))
+    color = hex_color(raw.get("stroke-color"))
+    if raw.get("line-visibility") == "off" or (width is not None and width <= 0):
+        return None
+    if color is not None and _transparent(color):
+        return None
+    pattern = raw.get("line-pattern-only")
+    return ZeroLine(
+        color=color or ZeroLine().color,
+        width=width or 1,
+        pattern="solid" if pattern == "solid" else "dashed" if pattern == "dashed" else "dotted",
+    )
+
+
+def _valign(value: str | None) -> Literal["top", "center", "bottom"] | None:
+    if value == "top" or value == "center" or value == "bottom":
+        return value
+    return None
 
 
 def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
@@ -311,6 +359,16 @@ def font_attr(font: FontStyle | None, name: str, value: str | None) -> FontStyle
     if name == "font-style" and value in ("italic", "normal"):
         return current.model_copy(update={"italic": value == "italic"})
     return current
+
+
+def pane_label_match(pane: etree._Element) -> bool:
+    """標記標籤的顏色是否與標記相符（標記卡的 datalabel 的 color-mode='match'）。"""
+    return any(
+        item.get("attr") == "color-mode" and item.get("value") == "match"
+        for rule in children(child(pane, "style"), "style-rule")
+        if rule.get("element") == "datalabel"
+        for item in children(rule, "format")
+    )
 
 
 def pane_label_font(pane: etree._Element) -> FontStyle | None:
