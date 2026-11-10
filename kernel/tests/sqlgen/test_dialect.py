@@ -17,7 +17,13 @@ from tmig.data.executor import QueryResult, execute
 from tmig.data.live import execute_live
 from tmig.data.sources import DuckDBExecutor
 from tmig.ir import load_ir
-from tmig.sqlgen.dialect import DialectError, java_replacement, split, to_dialect
+from tmig.sqlgen.dialect import (
+    SQLGLOT_NAMES,
+    DialectError,
+    java_replacement,
+    split,
+    to_dialect,
+)
 from tmig.sqlgen.query import QueryError, worksheet_sql
 from tmig.verify.cases import case_state, load_cases
 from tmig.verify.run import ensure_data
@@ -120,8 +126,20 @@ DIALECTS = [
     "athena",
     "bigquery",
     "teradata",
+    "hive",
+    "impala",
 ]
-SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift", "athena", "bigquery", "teradata"]
+SNAPSHOT_DIALECTS = [
+    "oracle",
+    "tsql",
+    "snowflake",
+    "redshift",
+    "athena",
+    "bigquery",
+    "teradata",
+    "hive",
+    "impala",
+]
 """沒有實機的方言：轉譯結果以快照審核（BigQuery 在 CI 以模擬器實跑，仍以快照審核）。"""
 SNAPSHOT_SCHEMAS = {
     "oracle": ["SALES"],
@@ -131,6 +149,8 @@ SNAPSHOT_SCHEMAS = {
     "athena": ["AwsDataCatalog", "sales"],
     "bigquery": ["sales-project", "sales"],
     "teradata": ["sales"],
+    "hive": ["sales"],
+    "impala": ["sales"],
 }
 
 
@@ -158,6 +178,8 @@ def test_custom_sql_is_restored(dialect: str) -> None:
         ("athena", "'O''Hare'", "DATE '2024-01-01'"),
         ("bigquery", "'O\\'Hare'", "DATE '2024-01-01'"),
         ("teradata", "'O''Hare'", "DATE '2024-01-01'"),
+        ("hive", "'O\\'Hare'", "CAST('2024-01-01' AS DATE)"),
+        ("impala", "'O\\'Hare'", "CAST('2024-01-01' AS DATE)"),
     ],
 )
 def test_custom_sql_parameters(dialect: str, region: str, since: str) -> None:
@@ -434,7 +456,9 @@ def test_dialect_snapshot(item: tuple[Path, str], dialect: str) -> None:
             sql = f"-- 尚不支援：{exc}"
         else:
             # SQLGlot 的該方言能重新解析（語法正確；SQLGlot 不認得 Teradata 的 CHARACTER SET）
-            sqlglot.parse_one(sql.replace(" CHARACTER SET UNICODE", ""), read=dialect)
+            sqlglot.parse_one(
+                sql.replace(" CHARACTER SET UNICODE", ""), read=SQLGLOT_NAMES[dialect]
+            )
         parts.append(f"-- 取回 {fetch.name}\n{sql}\n")
     text = "\n".join(parts)
     snapshot = directory / "sql" / dialect / f"{worksheet}.sql"

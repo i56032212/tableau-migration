@@ -19,6 +19,7 @@ dev = [
     "psycopg[binary]>=3.2",
     "pymysql>=1.1",
     "trino>=0.333",
+    "impyla>=0.19",
 ]
 # Spark（Databricks 的引擎）方言的實跑測試：uv sync --group spark；需要 Java 17 以上，沒有時略過
 spark = ["pyspark>=3.5,<5"]

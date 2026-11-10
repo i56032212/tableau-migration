@@ -240,6 +240,8 @@ Dialect = Literal[
     "athena",
     "bigquery",
     "teradata",
+    "hive",
+    "impala",
     "duckdb",
 ]
 """SQL 方言（SQLGlot 的方言名稱）。"""
