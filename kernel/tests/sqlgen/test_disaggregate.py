@@ -112,6 +112,7 @@ def test_totals_are_unsupported(tmp_path: Path) -> None:
         "redshift",
         "trino",
         "athena",
+        "bigquery",
     ],
 )
 def test_live_connections_translate(tmp_path: Path, dialect: str) -> None:
@@ -122,5 +123,7 @@ def test_live_connections_translate(tmp_path: Path, dialect: str) -> None:
 
     ir = as_live(scatter(tmp_path), dialect)
     query = worksheet_sql(ir, ir.worksheets[0].id)
+    # BigQuery 的視窗排序不能是常值：不排序
+    numbering = "ROW_NUMBER() OVER ()" if dialect == "bigquery" else "ROW_NUMBER() OVER (ORDER BY"
     for fetch in split(query).fetches:
-        assert "ROW_NUMBER() OVER (ORDER BY" in to_dialect(fetch.sql, dialect)
+        assert numbering in to_dialect(fetch.sql, dialect)

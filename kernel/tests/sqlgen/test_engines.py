@@ -35,6 +35,7 @@ from tmig.verify.compare import compare, dimension_aliases
 from tmig.verify.mapping import load_mapping
 
 from ..engines import (
+    BigQueryEmulator,
     OracleEmulator,
     RedshiftEmulator,
     SnowflakeEmulator,
@@ -42,6 +43,9 @@ from ..engines import (
     TrinoEmulator,
     TSqlEmulator,
     as_live,
+    bigquery_address,
+    bigquery_client,
+    bigquery_load,
     extract_tables,
     mysql_connect,
     mysql_executor,
@@ -71,10 +75,12 @@ ENGINES = [
     "redshift",
     "trino",
     "athena",
+    "bigquery",
 ]
 EMULATED = {"oracle", "tsql", "snowflake", "redshift"}
 """沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。Trino 在 CI 以 Docker 實跑（本機模擬）；
-Athena 的 SQL 也在同一台 Trino 執行（Athena engine 3 以 Trino 為基礎）。"""
+Athena 的 SQL 也在同一台 Trino 執行（Athena engine 3 以 Trino 為基礎）；BigQuery 在 CI 以 BigQuery 模擬器
+（goccy/bigquery-emulator，ZetaSQL）實跑（本機以 DuckDB 模擬）。"""
 ORACLE_UNSUPPORTED = {
     # Oracle 的 SQL 沒有陣列（FINDNTH 以陣列計算）；SPLIT 只支援正整數常值的位置
     "FINDNTH('a-b-c', '-', 2)",
@@ -268,6 +274,37 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
             yield Engine(request.param, executor, live(request.param, ["memory", "default"]))
         finally:
             con.close()
+        return
+    if request.param == "bigquery":
+        schema = ["tmig", "tmig"]
+        address = bigquery_address()
+        if address is None:
+            con = duckdb.connect()
+            con.execute("ATTACH ':memory:' AS tmig")
+            con.execute("CREATE SCHEMA tmig.tmig")
+            con.register("expression_rows", _expression_table())
+            con.execute("CREATE TABLE t AS SELECT * FROM expression_rows")
+            for name, table in tables.items():
+                con.register(f"rows_{name}", table)
+                con.execute(f'CREATE TABLE tmig.tmig."{name}" AS SELECT * FROM "rows_{name}"')
+            try:
+                yield Engine("bigquery", BigQueryEmulator(con), live("bigquery", schema))
+            finally:
+                con.close()
+            return
+        from google.cloud import bigquery
+
+        from tmig.data.sources import BigQueryExecutor
+
+        client = bigquery_client(address)
+        bigquery_load(client, "t", _expression_table())
+        for name, table in tables.items():
+            bigquery_load(client, name, table)
+        config = bigquery.QueryJobConfig(default_dataset="tmig.tmig")
+        try:
+            yield Engine("bigquery", BigQueryExecutor(client, config), live("bigquery", schema))
+        finally:
+            client.close()
         return
     if request.param == "mysql":
         import pymysql

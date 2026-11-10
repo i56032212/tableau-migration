@@ -1119,3 +1119,131 @@ def _emulate_trino(node: Any) -> Any:
                 p=node.expression,
             )
     return node
+
+
+# ---------------------------------------------------------------- BigQuery（CI 以模擬器實跑；本機以 DuckDB 模擬）
+
+
+def bigquery_address() -> str | None:
+    """BigQuery 模擬器（goccy/bigquery-emulator，以 ZetaSQL 實作）的位址（TMIG_TEST_BIGQUERY=主機:連接埠）。"""
+    return service_address("TMIG_TEST_BIGQUERY", "BigQuery 模擬器")
+
+
+def bigquery_client(address: str) -> Any:
+    """連上 BigQuery 模擬器（專案與資料集都是 tmig）；剛啟動時最多等 3 分鐘。"""
+    from google.api_core.client_options import ClientOptions
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud import bigquery
+
+    client = bigquery.Client(
+        "tmig",
+        client_options=ClientOptions(api_endpoint=f"http://{address}"),
+        credentials=AnonymousCredentials(),
+    )
+    deadline = time.monotonic() + 180
+    while True:
+        try:
+            client.create_dataset("tmig", exists_ok=True)
+            return client
+        except Exception as exc:
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"BigQuery 模擬器（{address}）沒有回應：{exc}") from exc
+            time.sleep(2)
+
+
+BIGQUERY_TYPES = {
+    pa.string(): "STRING",
+    pa.large_string(): "STRING",
+    pa.float64(): "FLOAT64",
+    pa.int64(): "INT64",
+    pa.int32(): "INT64",
+    pa.bool_(): "BOOL",
+    pa.date32(): "DATE",
+}
+
+
+def _bigquery_json(value: Any) -> Any:
+    import datetime as dt
+
+    if isinstance(value, dt.datetime):
+        return value.isoformat(sep=" ", timespec="microseconds")
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    return value
+
+
+def bigquery_load(client: Any, name: str, table: pa.Table, batch: int = 500) -> None:
+    """Arrow 資料表 → BigQuery 的 tmig.tmig（沒有時區的時間為 DATETIME）。"""
+    from google.cloud import bigquery
+
+    ref = f"tmig.tmig.{name}"
+    client.delete_table(ref, not_found_ok=True)
+    schema = [
+        bigquery.SchemaField(
+            f.name, "DATETIME" if pa.types.is_timestamp(f.type) else BIGQUERY_TYPES[f.type]
+        )
+        for f in table.schema
+    ]
+    client.create_table(bigquery.Table(ref, schema=schema))
+    rows = [{k: _bigquery_json(v) for k, v in row.items()} for row in table.to_pylist()]
+    for start in range(0, len(rows), batch):
+        errors = client.insert_rows_json(ref, rows[start : start + batch])
+        if errors:
+            raise RuntimeError(f"BigQuery 模擬器寫入 {name} 失敗：{errors[:3]}")
+
+
+class BigQueryEmulator:
+    """測試用：本機沒有 BigQuery 時，把轉譯後的 BigQuery SQL 以 SQLGlot 轉回 DuckDB 執行；BigQuery 特有的寫法
+    （EXTRACT(DAYOFWEEK) 星期日為 1、ISOWEEK、SAFE.PARSE_DATETIME、UNNEST 的 0 起算 OFFSET）依官方文件的語意
+    模擬。CI 另以 BigQuery 模擬器（ZetaSQL）實跑（TMIG_TEST_BIGQUERY）。"""
+
+    dialect = "bigquery"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+        con.execute("SET TimeZone = 'UTC'")
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        tree = sqlglot.parse_one(sql, read="bigquery")
+        duck = _visit(tree, _emulate_bigquery).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+def _emulate_bigquery(node: Any) -> Any:
+    from sqlglot import exp
+
+    if isinstance(node, exp.Extract) and isinstance(node.this, exp.Var):
+        part = node.this.name.upper()
+        if part == "DAYOFWEEK":
+            return _duck("(dayofweek({x}) + 1)", x=node.expression)
+        if part == "ISOWEEK":
+            return _duck("week({x})", x=node.expression)
+    # INT64 轉回 DuckDB 是 BIGINT：DuckDB 的 round 的位數、chr 只接受 INTEGER
+    if isinstance(node, exp.Round) and node.args.get("decimals") is not None:
+        return _duck("round({x}, CAST({d} AS INTEGER))", x=node.this, d=node.args["decimals"])
+    if isinstance(node, exp.Chr):
+        return _duck("chr(CAST({x} AS INTEGER))", x=node.expressions[0])
+    if isinstance(node, exp.SafeFunc) and isinstance(node.this, exp.ParseDatetime):
+        fmt = node.this.args["format"].name.replace("%E*S", "%S.%f")
+        return _duck(f"try_strptime({{s}}, '{fmt}')", s=node.this.this)
+    if isinstance(node, exp.Array) and node.expressions:
+        select = node.expressions[0]
+        source = select.args.get("from_") if isinstance(select, exp.Select) else None
+        unnest = source.this if source is not None else None
+        where = select.args.get("where") if isinstance(select, exp.Select) else None
+        if isinstance(unnest, exp.Unnest) and unnest.args.get("offset") and where is not None:
+            # UNNEST … WITH OFFSET 的位置從 0 起算（DuckDB 的 WITH ORDINALITY 從 1 起算）
+            bounds = where.this
+            assert isinstance(bounds, exp.Between)
+            return _duck(
+                "list_slice({a}, {lo} + 1, {hi} + 1)",
+                a=unnest.expressions[0],
+                lo=bounds.args["low"],
+                hi=bounds.args["high"],
+            )
+    return node

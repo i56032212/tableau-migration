@@ -43,7 +43,7 @@ from tmig.ir.models import (
     SqlRelation,
     TableRelation,
 )
-from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
+from tmig.sqlgen.source import CUSTOM_SQL_PREFIX, datetime_columns_vary
 from tmig.sqlgen.sql import ident
 
 PART_COL = "__part"
@@ -338,12 +338,17 @@ class ModelPlanner:
         raise ModelError(f"邏輯資料表「{self.caption(table)}」內含 join，尚不支援")
 
     def _items(self, tables: list[str]) -> list[tuple[str, str]]:
-        """資料表的實體欄位：（欄位 id、SQL）。"""
-        return [
-            (f.id, f"{ident(self.alias[t])}.{ident(f.column or '')}")
-            for t in tables
-            for f in self.columns[t]
-        ] or [(ONE_COL, "1")]
+        """資料表的實體欄位：（欄位 id、SQL）。BigQuery 的日期時間欄位轉成沒有時區的時間（見
+        tmig.sqlgen.source.datetime_columns_vary）。"""
+        cast = datetime_columns_vary(self.ds.connection)
+        items: list[tuple[str, str]] = []
+        for t in tables:
+            for f in self.columns[t]:
+                sql = f"{ident(self.alias[t])}.{ident(f.column or '')}"
+                if cast and f.datatype == "datetime":
+                    sql = f"CAST({sql} AS TIMESTAMP)"
+                items.append((f.id, sql))
+        return items or [(ONE_COL, "1")]
 
     def _projections(self, tables: list[str]) -> list[str]:
         return [f"{sql} AS {ident(alias)}" for alias, sql in self._items(tables)]

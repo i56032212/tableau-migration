@@ -135,6 +135,21 @@ def test_presto_and_athena(tmp_path: Path) -> None:
     )
 
 
+def test_bigquery(tmp_path: Path) -> None:
+    """BigQuery 的專案記為資料庫、資料集記為結構描述。"""
+    table = "<relation connection='db.1' name='orders' table='[sales].[orders]' type='table' />"
+    bigquery = (
+        "<connection CATALOG='sales-project' EXECCATALOG='billing-project' SCHEMA='sales' "
+        "class='bigquery' connection-dialect='google-sql' project='sales-project' schema='sales' />"
+    )
+    ir = parse(tmp_path, live_datasource(bigquery, table))
+    assert reasons(ir) == []
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection)
+    assert (conn.dialect, conn.database, conn.schema_name) == ("bigquery", "sales-project", "sales")
+    assert conn.relation == TableRelation(kind="table", name="orders", table=["sales", "orders"])
+
+
 def test_join_tree(tmp_path: Path) -> None:
     relation = """
       <relation join='left' type='join'>

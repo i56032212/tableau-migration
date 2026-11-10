@@ -22,6 +22,8 @@ dev = [
 ]
 # Spark（Databricks 的引擎）方言的實跑測試：uv sync --group spark；需要 Java 17 以上，沒有時略過
 spark = ["pyspark>=3.5,<5"]
+# CI 以 Docker 啟動的來源資料庫（BigQuery 模擬器）的用戶端：uv sync --group services
+services = ["google-cloud-bigquery>=3.25"]
 
 [tool.uv]
 package = false

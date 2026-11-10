@@ -38,6 +38,7 @@ DBCLASS_DRIVERS = {
     "presto": "trino",
     "trino": "trino",
     "athena": "athena",
+    "bigquery": "bigquery",
 }
 """Tableau 的連線類型 → 執行器（其他類型尚無執行器）。"""
 
@@ -128,6 +129,12 @@ def template(found: dict[str, FoundConnection]) -> str:
         lines.append(f'driver = "{driver}"')
         if driver == "databricks":
             lines.append(f'access_token = "${{{env_name(connection_id, "TOKEN")}}}"')
+        elif driver == "bigquery":
+            lines.append(
+                '# credentials_path = "/run/secrets/…json"   # 服務帳號金鑰檔；省略時用 Application '
+                "Default Credentials"
+            )
+            lines.append("# maximum_bytes_billed = 10000000000      # 每次查詢最多掃描的位元組")
         elif driver == "athena":
             lines.append('s3_staging_dir = "s3://…/"   # 查詢結果的位置（或改用 work_group）')
             lines.append(

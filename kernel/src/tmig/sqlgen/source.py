@@ -17,6 +17,7 @@ from tmig.ir.models import (
     FileConnection,
     JoinRelation,
     JoinTerm,
+    LiveConnection,
     ModelRelation,
     Relation,
     SqlRelation,
@@ -80,7 +81,10 @@ def datasource_source(ds: Datasource) -> Source:
             raise SourceError(f"欄位「{data_field.caption}」沒有標明所屬的資料表")
         if table not in names:
             raise SourceError(f"欄位「{data_field.caption}」所屬的資料表「{table}」不在關聯樹中")
-        projections.append(f"{ident(table)}.{ident(data_field.column)} AS {ident(data_field.id)}")
+        column = f"{ident(table)}.{ident(data_field.column)}"
+        if data_field.datatype == "datetime" and datetime_columns_vary(connection):
+            column = f"CAST({column} AS TIMESTAMP)"
+        projections.append(f"{column} AS {ident(data_field.id)}")
     if not projections:
         raise SourceError(f"資料源「{ds.caption}」沒有實體欄位")
     return Source(
@@ -88,6 +92,13 @@ def datasource_source(ds: Datasource) -> Source:
         projected=True,
         custom_sql=custom,
     )
+
+
+def datetime_columns_vary(connection: object) -> bool:
+    """BigQuery 的日期時間欄位可能是 DATETIME（沒有時區）或 TIMESTAMP（UTC 的時間點），兩者不能直接比較、
+    加減的函式也不同：base 一律轉成沒有時區的時間（DuckDB 的 TIMESTAMP 即 BigQuery 的 DATETIME，
+    TIMESTAMP 依 UTC 換算，與 Tableau 相同）。"""
+    return isinstance(connection, LiveConnection) and connection.dialect == "bigquery"
 
 
 def model_custom_sql(model: ModelRelation) -> list[str]:

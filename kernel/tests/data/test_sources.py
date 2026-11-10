@@ -141,6 +141,41 @@ def test_athena_executor_options() -> None:
         AthenaExecutor.open(connection, {})
 
 
+def test_bigquery_executor_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """專案取工作簿的連線資訊、預設資料集讓自訂 SQL 可以省略專案；可限制每次查詢掃描的位元組。"""
+    bigquery = pytest.importorskip("google.cloud.bigquery")
+
+    from tmig.data.sources import BigQueryExecutor
+    from tmig.ir import LiveConnection
+
+    calls: list[dict[str, object]] = []
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setattr(bigquery, "Client", Client)
+    connection = LiveConnection(
+        kind="live",
+        connection_id="bigquery_x",
+        dbclass="bigquery",
+        dialect="bigquery",
+        database="sales-project",
+        schema_name="sales",
+    )
+    executor = BigQueryExecutor.open(connection, {"maximum_bytes_billed": "1000"})
+    assert calls[0] == {"project": "sales-project"}
+    assert executor.job_config.maximum_bytes_billed == 1000
+    assert executor.job_config.default_dataset.dataset_id == "sales"
+    executor = BigQueryExecutor.open(
+        connection, {"project": "billing", "endpoint": "http://x:9050"}
+    )
+    assert calls[1]["project"] == "billing" and "client_options" in calls[1]
+    assert executor.job_config.default_dataset.project == "billing"
+    with pytest.raises(SourceConnectionError, match="缺少專案"):
+        BigQueryExecutor.open(connection.model_copy(update={"database": None}), {})
+
+
 def test_config_errors(tmp_path: Path) -> None:
     assert load_connections(tmp_path / "missing.toml") == {}
     config = write_config(tmp_path / "bad.toml", '[connections.x]\ndriver = "mssql"\n')
@@ -351,13 +386,15 @@ def test_connections_template_for_presto_and_athena(tmp_path: Path) -> None:
         {
             "presto_x": found("presto_x", "presto", "trino", "trino.example.com"),
             "athena_x": found("athena_x", "athena", "athena", "athena.us-east-1.amazonaws.com"),
+            "bigquery_x": found("bigquery_x", "bigquery", "bigquery", ""),
         }
     )
+    assert '[connections.bigquery_x]\ndriver = "bigquery"\n# credentials_path' in text
     assert '[connections.presto_x]\ndriver = "trino"\nuser = "${TMIG_PRESTO_X_USER}"' in text
     assert '[connections.athena_x]\ndriver = "athena"\ns3_staging_dir = "s3://…/"' in text
     assert 'secret_access_key = "${TMIG_ATHENA_X_SECRET_ACCESS_KEY}"' in text
     config = write_config(tmp_path / "connections.toml", text)
-    assert {c.driver for c in load_connections(config).values()} == {"trino", "athena"}
+    assert {c.driver for c in load_connections(config).values()} == {"trino", "athena", "bigquery"}
 
 
 def test_connections_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

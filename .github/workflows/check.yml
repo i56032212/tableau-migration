@@ -60,8 +60,8 @@ jobs:
             echo "::error title=一鍵檢查紀錄（最後 120 行）::${msg}"
           fi
 
-  # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL、Spark（Databricks 的引擎）、MySQL 與 Trino（Docker）實跑；
-  # 環境不齊全時直接失敗
+  # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL、Spark（Databricks 的引擎）、MySQL、Trino 與 BigQuery 模擬器
+  # （Docker）實跑；環境不齊全時直接失敗
   engines:
     runs-on: ubuntu-latest
     defaults:
@@ -74,19 +74,26 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: 安裝相依套件（含 pyspark）
-        run: uv sync --locked --group spark
+      - name: 安裝相依套件（含 pyspark 與 BigQuery 用戶端）
+        run: uv sync --locked --group spark --group services
       - name: 啟動執行環境內建的 MySQL（帳號 root／root）
         run: sudo systemctl start mysql.service
       - name: 啟動 Trino（Docker；測試資料放在 memory catalog）
         run: docker run -d --name trino -p 8080:8080 trinodb/trino:479
+      - name: 啟動 BigQuery 模擬器（Docker；goccy/bigquery-emulator，以 ZetaSQL 實作）
+        run: >-
+          docker run -d --name bigquery -p 9050:9050
+          ghcr.io/goccy/bigquery-emulator:latest --project=tmig --dataset=tmig
       - name: 方言轉譯與來源資料庫實跑
         env:
           TMIG_REQUIRE_ENGINES: "1"
           TMIG_REQUIRE_SERVICES: "1"
           TMIG_TEST_MYSQL: root:root@127.0.0.1:3306
           TMIG_TEST_TRINO: 127.0.0.1:8080
+          TMIG_TEST_BIGQUERY: 127.0.0.1:9050
         run: uv run pytest -q kernel/tests/sqlgen/test_dialect.py kernel/tests/sqlgen/test_engines.py
-      - name: 失敗時列出 Trino 的紀錄
+      - name: 失敗時列出 Trino 與 BigQuery 模擬器的紀錄
         if: failure()
-        run: docker logs trino 2>&1 | tail -n 80
+        run: |
+          docker logs trino 2>&1 | tail -n 60
+          docker logs bigquery 2>&1 | tail -n 60

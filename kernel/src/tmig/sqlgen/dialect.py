@@ -11,8 +11,8 @@
   不送出可能算錯的 SQL（SQLGlot 對不認得的函式不會報錯，只會原樣輸出）
 - 自訂 SQL 以佔位資料表表示，產生目標方言後才換回原文（原文不經過轉譯）
 
-PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）、MySQL（8.0 以上）與 Trino（CI 以 Docker 執行；
-Athena 的 SQL 也在同一台執行）有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、
+PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上）、MySQL（8.0 以上）、Trino（CI 以 Docker 執行；
+Athena 的 SQL 也在同一台執行）與 BigQuery（CI 以 ZetaSQL 的模擬器執行）有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、
 Snowflake 與 Redshift 依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot 轉回 DuckDB、各自特有的函式依文件的
 語意模擬後執行，並有轉譯快照。
 
@@ -48,6 +48,7 @@ SQLGLOT_NAMES: dict[str, str] = {
     "snowflake": "snowflake",
     "trino": "trino",
     "athena": "athena",
+    "bigquery": "bigquery",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言尚不支援。"""
@@ -200,12 +201,15 @@ def sql_literal(value: Scalar, datatype: str, dialect: str) -> str:
         return repr(int(value)) if datatype == "integer" else repr(float(value))
     if datatype in ("date", "datetime"):
         text = str(value)[:10] if datatype == "date" else str(value).replace("T", " ")
+        if dialect == "bigquery" and datatype == "datetime":
+            # BigQuery 的 TIMESTAMP 是含時區的時間；沒有時區的是 DATETIME
+            return f"DATETIME {_single_quote(text)}"
         if dialect == "tsql":
             # SQL Server 沒有 DATE '…' 的常值寫法；ISO 格式的字串轉型不受語言設定影響
             return f"CAST({_single_quote(text)} AS {'DATE' if datatype == 'date' else 'DATETIME2'})"
         return f"{'DATE' if datatype == 'date' else 'TIMESTAMP'} {_single_quote(text)}"
     text = str(value)
-    if dialect in ("spark", "databricks", "mysql", "snowflake"):
+    if dialect in ("spark", "databricks", "mysql", "snowflake", "bigquery"):
         # 字串常值以反斜線跳脫
         return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
     if dialect == "tsql" and not text.isascii():
@@ -2524,6 +2528,410 @@ class TrinoRewriter(Rewriter):
         return _template(TRINO_PERCENTILE, "trino", x=value, p=fraction)
 
 
+# ---------------------------------------------------------------- Google BigQuery
+
+
+BIGQUERY_FORMAT = {
+    "%Y": "%Y",
+    "%y": "%y",
+    "%m": "%m",
+    "%d": "%d",
+    "%H": "%H",
+    "%I": "%I",
+    "%M": "%M",
+    "%S": "%S",
+    "%p": "%p",
+    "%b": "%b",
+    "%B": "%B",
+    "%j": "%j",
+}
+"""strftime 的格式 → BigQuery 的 PARSE_DATETIME 格式（秒的小數另外處理）。"""
+
+BIGQUERY_UNITS = {
+    "year": "YEAR",
+    "quarter": "QUARTER",
+    "month": "MONTH",
+    "week": "ISOWEEK",
+    "day": "DAY",
+    "hour": "HOUR",
+    "minute": "MINUTE",
+    "second": "SECOND",
+    "millisecond": "MILLISECOND",
+    "microsecond": "MICROSECOND",
+}
+"""DuckDB 的日期單位 → BigQuery（DuckDB 的週從星期一開始，即 ISOWEEK）。"""
+
+_BIGQUERY_SORTED = "ARRAY_AGG({x} IGNORE NULLS ORDER BY {x})"
+_BIGQUERY_POSITION = "(CAST({p} AS FLOAT64) * (ARRAY_LENGTH(ARRAY_AGG({x} IGNORE NULLS)) - 1))"
+BIGQUERY_PERCENTILE = (
+    f"{_BIGQUERY_SORTED}[SAFE_OFFSET(CAST(FLOOR({_BIGQUERY_POSITION}) AS INT64))] "
+    f"+ ({_BIGQUERY_POSITION} - FLOOR({_BIGQUERY_POSITION})) "
+    f"* ({_BIGQUERY_SORTED}[SAFE_OFFSET(CAST(CEIL({_BIGQUERY_POSITION}) AS INT64))] "
+    f"- {_BIGQUERY_SORTED}[SAFE_OFFSET(CAST(FLOOR({_BIGQUERY_POSITION}) AS INT64))])"
+)
+"""精確的百分位數（與 DuckDB 的 quantile_cont 相同的線性內插）：PERCENTILE_CONT 在 BigQuery 只是視窗函式，
+彙總時以排序後的 ARRAY_AGG 取第 p × (n − 1) 個位置（0 起算）前後兩個值內插。"""
+
+
+class BigQueryRewriter(Rewriter):
+    """Google BigQuery（GoogleSQL）。
+
+    - 沒有時區的時間一律是 DATETIME（DuckDB 的 TIMESTAMP）；Live 連線的 base 把日期時間欄位轉成 DATETIME
+      （BigQuery 的 TIMESTAMP 欄位依 UTC 換算，見 tmig.sqlgen.source），日期加減、截斷與 DATEDIFF 一律以
+      DATETIME_ADD、DATETIME_TRUNC、DATETIME_DIFF 計算（DATE 可以隱含轉成 DATETIME；結果與 DuckDB 相同是時間）
+    - DATETIME_DIFF 計算跨過的單位邊界數，與 DuckDB 的 date_diff 相同
+    - 星期：EXTRACT(DAYOFWEEK) 是星期日為 1；週數、ISO 年為 ISOWEEK、ISOYEAR
+    - 沒有 PI、DEGREES、RADIANS：以 ACOS(-1) 計算
+    - REGEXP_EXTRACT 沒有群組參數（樣式有一個群組時取該群組）：要取的群組以外的群組改成不擷取的 (?:…)
+    - MEDIAN、PERCENTILE 以排序後的 ARRAY_AGG 內插（精確值；APPROX_QUANTILES 是近似值）
+    - DATEPARSE 以 SAFE.PARSE_DATETIME，不符合格式時為 Null
+    """
+
+    name = "BigQuery"
+    dialect = "bigquery"
+    allowed = frozenset(
+        {
+            exp.Year,
+            exp.Quarter,
+            exp.Month,
+            exp.Day,
+            exp.DayOfYear,
+            exp.DayOfWeekIso,
+            exp.Log,
+            exp.Round,
+            exp.Repeat,
+            exp.Unicode,
+            exp.Variance,
+            exp.VariancePop,
+            exp.IntDiv,
+            exp.Mod,
+            exp.NullSafeEQ,
+            exp.CurrentDate,
+            exp.TryCast,
+            exp.DPipe,
+            exp.Boolean,
+            exp.ArrayToString,
+            exp.DateFromParts,
+        }
+    )
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit == "second":
+            # 秒可能有小數：換成微秒
+            amount = _fn("ROUND", exp.Mul(this=_paren(amount), expression=_num(1000000)))
+            unit = "microsecond"
+        interval = exp.Interval(
+            this=_cast(amount, "INT64", "bigquery"), unit=exp.Var(this=BIGQUERY_UNITS[unit])
+        )
+        return self._datetime_result(_fn("DATETIME_ADD", self._datetime(value), _mark(interval)))
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        def time_part(field: str) -> Callable[[exp.Expr], exp.Expr]:
+            return lambda n: _extract(field, self._datetime(n.this))
+
+        return {
+            exp.Hour: time_part("HOUR"),
+            exp.Minute: time_part("MINUTE"),
+            exp.Second: time_part("SECOND"),
+            # EXTRACT(DAYOFWEEK) 是星期日為 1
+            exp.DayOfWeek: lambda n: exp.Paren(
+                this=exp.Sub(this=_extract("DAYOFWEEK", n.this), expression=_num(1))
+            ),
+            exp.Week: lambda n: _extract("ISOWEEK", n.this),
+            exp.TimestampTrunc: self.date_trunc,
+            exp.DateTrunc: self.date_trunc,
+            exp.DateDiff: self.date_diff,
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.TimeToUnix: lambda n: exp.Div(
+                this=_fn("UNIX_MICROS", _fn("TIMESTAMP", self._datetime(n.this))),
+                expression=_num(1000000.0),
+            ),
+            exp.Monthname: lambda n: _names(_extract("MONTH", n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(self._iso_dow(n.this), DAY_NAMES),
+            exp.Pi: lambda n: self._pi(),
+            exp.Degrees: lambda n: exp.Paren(
+                this=exp.Div(
+                    this=exp.Mul(this=_paren(n.this), expression=_num(180)), expression=self._pi()
+                )
+            ),
+            exp.Radians: lambda n: exp.Paren(
+                this=exp.Div(
+                    this=exp.Mul(this=_paren(n.this), expression=self._pi()), expression=_num(180)
+                )
+            ),
+            exp.Left: self.left,
+            exp.Right: self.right,
+            exp.SplitPart: self.split_part,
+            exp.Split: lambda n: _array(_fn("SPLIT", n.this, n.expression)),
+            exp.Length: lambda n: _fn("ARRAY_LENGTH", n.this) if _is_array(n.this) else n,
+            exp.RegexpExtract: self.regexp_extract,
+            exp.RegexpReplace: self.regexp_replace,
+            exp.Median: lambda n: self.percentile(n.this, _num(0.5)),
+            exp.PercentileCont: lambda n: self.percentile(n.this, n.expression),
+            exp.Window: self.window,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            "isoyear": lambda a: _extract("ISOYEAR", a[0]),
+            "now": lambda a: self._datetime_result(_fn("CURRENT_DATETIME")),
+            "try_strptime": self.parse_date,
+            "list_slice": self.list_slice,
+        }
+
+    def _datetime(self, value: exp.Expr) -> exp.Expr:
+        """要以 DATETIME 計算的值：轉成 DATETIME（已知是 DATETIME 的不再轉）。"""
+        if value.meta.get("timestamp") or (
+            isinstance(value, exp.Cast) and value.to.this in TIMESTAMP_TYPES
+        ):
+            return value
+        return self._datetime_result(_cast(value, "DATETIME", "bigquery"))
+
+    def _datetime_result(self, node: exp.Expr) -> exp.Expr:
+        node.meta["timestamp"] = True
+        return node
+
+    def _pi(self) -> exp.Expr:
+        return _fn("ACOS", _num(-1))
+
+    def window(self, node: exp.Expr) -> exp.Expr:
+        """視窗的排序不能是常值：ORDER BY NULL（每一列的編號，順序不拘）改成不排序。"""
+        order = node.args.get("order")
+        if isinstance(order, exp.Order) and all(
+            isinstance(item, exp.Ordered) and isinstance(item.this, exp.Null)
+            for item in order.expressions
+        ):
+            node.set("order", None)
+        return node
+
+    def _iso_dow(self, value: exp.Expr) -> exp.Expr:
+        """星期一為 1、星期日為 7。"""
+        shifted = _fn(
+            "MOD", exp.Add(this=_extract("DAYOFWEEK", value), expression=_num(5)), _num(7)
+        )
+        return exp.Paren(this=exp.Add(this=shifted, expression=_num(1)))
+
+    def date_trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = BIGQUERY_UNITS.get(_unit(node))
+        if unit is None:
+            raise DialectError(f"BigQuery 不支援截斷到 {_unit(node)}")
+        return self._datetime_result(
+            _fn("DATETIME_TRUNC", self._datetime(node.this), exp.Var(this=unit))
+        )
+
+    def date_diff(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        if unit not in ("year", "quarter", "month", "day", "hour", "minute", "second"):
+            raise DialectError(f"BigQuery 的 DATEDIFF 不支援單位 {unit}")
+        return _fn(
+            "DATETIME_DIFF",
+            self._datetime(node.this),
+            self._datetime(node.expression),
+            exp.Var(this=BIGQUERY_UNITS[unit]),
+        )
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        day = self._datetime_result(
+            _fn(
+                "DATETIME",
+                _mark(
+                    exp.DateFromParts(
+                        year=_cast(y, "INT64", "bigquery"),
+                        month=_cast(m, "INT64", "bigquery"),
+                        day=_cast(d, "INT64", "bigquery"),
+                    )
+                ),
+            )
+        )
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+            ),
+            expression=_paren(ss),
+        )
+        return self.add_interval(day, "second", seconds)
+
+    def left(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        head = _mark(exp.Left(this=text.copy(), expression=count.copy()))
+        if _not_negative(count):
+            return head
+        # 數量為負數時去掉右邊的字元（DuckDB 的 left）；BigQuery 的 LEFT 不接受負數
+        trimmed = _mark(
+            exp.Left(
+                this=text.copy(),
+                expression=_fn(
+                    "GREATEST", exp.Add(this=exp.Length(this=text), expression=count), _num(0)
+                ),
+            )
+        )
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count.copy(), expression=_num(0)), true=trimmed)],
+            default=head,
+        )
+
+    def right(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        tail = _mark(exp.Right(this=text.copy(), expression=count.copy()))
+        if _not_negative(count):
+            return tail
+        # 數量為負數時去掉左邊的字元（DuckDB 的 right）
+        trimmed = _mark(
+            exp.Right(
+                this=text.copy(),
+                expression=_fn(
+                    "GREATEST", exp.Add(this=exp.Length(this=text), expression=count), _num(0)
+                ),
+            )
+        )
+        return exp.Case(
+            ifs=[exp.If(this=exp.LT(this=count.copy(), expression=_num(0)), true=trimmed)],
+            default=tail,
+        )
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        text, delimiter = node.this, node.args["delimiter"]
+        index = node.args["part_index"]
+        fixed = _literal_int(index)
+        forward = "SPLIT({s}, {d})[SAFE_ORDINAL({i})]"
+        backward = "ARRAY_REVERSE(SPLIT({s}, {d}))[SAFE_ORDINAL(-{i})]"
+        if fixed is not None and fixed > 0:
+            part = _template(forward, "bigquery", s=text, d=delimiter, i=index)
+        elif fixed is not None and fixed < 0:
+            part = _template(backward, "bigquery", s=text, d=delimiter, i=index)
+        else:
+            part = _template(
+                f"CASE WHEN {{i}} > 0 THEN {forward} WHEN {{i}} < 0 THEN {backward} END",
+                "bigquery",
+                s=text,
+                d=delimiter,
+                i=index,
+            )
+        known = exp.And(
+            this=exp.And(
+                this=exp.Not(this=exp.Is(this=text, expression=exp.Null())),
+                expression=exp.Not(this=exp.Is(this=delimiter, expression=exp.Null())),
+            ),
+            expression=exp.Not(this=exp.Is(this=index, expression=exp.Null())),
+        )
+        return exp.Coalesce(
+            this=part, expressions=[exp.Case(ifs=[exp.If(this=known, true=_str(""))])]
+        )
+
+    def list_slice(self, args: list[exp.Expr]) -> exp.Expr:
+        array, start, end = args
+        if not _is_array(array):
+            raise DialectError("list_slice 只支援 FINDNTH 的寫法")
+        sliced = _template(
+            "ARRAY(SELECT tmig_e FROM UNNEST({a}) AS tmig_e WITH OFFSET AS tmig_o "
+            "WHERE tmig_o BETWEEN {s} - 1 AND {e} - 1 ORDER BY tmig_o)",
+            "bigquery",
+            a=array,
+            s=start,
+            e=end,
+        )
+        return _array(sliced)
+
+    def regexp_extract(self, node: exp.Expr) -> exp.Expr:
+        pattern = node.expression
+        group = _literal_int(node.args.get("group"))
+        if not (isinstance(pattern, exp.Literal) and pattern.is_string) or group is None:
+            raise DialectError("BigQuery 的 REGEXP_EXTRACT 樣式與群組必須是常值")
+        if group > _capture_groups(pattern.name):
+            raise DialectError(f"REGEXP_EXTRACT 的樣式沒有第 {group} 個群組")
+        return _fn("REGEXP_EXTRACT", node.this, _str(_keep_group(pattern.name, group)))
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        # RE2 的取代字串（\1）與 DuckDB 相同；BigQuery 一律取代所有符合的地方
+        return _fn(
+            "REGEXP_REPLACE", node.this, node.expression, node.args.get("replacement") or _str("")
+        )
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：SAFE.PARSE_DATETIME 不符合格式時為 Null（秒的小數 %S.%f 寫成 %E*S）。"""
+        text = _format_literal(args[1])
+        if "%f" in text.replace("%S.%f", ""):
+            raise DialectError("BigQuery 的 DATEPARSE 只支援接在秒後面的小數")
+        parts = text.split("%S.%f")
+        fmt = "%E*S".join(
+            _convert_format(p, BIGQUERY_FORMAT, lambda s: s.replace("%", "%%")) for p in parts
+        )
+        return self._datetime_result(_fn("SAFE.PARSE_DATETIME", _str(fmt), args[0]))
+
+    def percentile(self, value: exp.Expr, fraction: exp.Expr) -> exp.Expr:
+        return _template(BIGQUERY_PERCENTILE, "bigquery", x=value, p=fraction)
+
+
+def _capture_groups(pattern: str) -> int:
+    """正規表示式（RE2）中擷取的群組數。"""
+    return _keep_group(pattern, -1, count=True).count("(") if pattern else 0
+
+
+def _keep_group(pattern: str, keep: int, count: bool = False) -> str:
+    """只保留第 keep 個擷取的群組（0：都不保留），其他的群組改成不擷取的 (?:…)；
+    count=True 時只回傳每個擷取群組一個「(」（計數用）。跳脫字元與字元類別中的括號不算。"""
+    out: list[str] = []
+    i = 0
+    group = 0
+    in_class = False
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "\\":
+            if not count:
+                out.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if in_class:
+            if pattern.startswith("[:", i):
+                end = pattern.find(":]", i + 2)
+                if end >= 0:
+                    if not count:
+                        out.append(pattern[i : end + 2])
+                    i = end + 2
+                    continue
+            if char == "]":
+                in_class = False
+            if not count:
+                out.append(char)
+            i += 1
+            continue
+        if char == "[":
+            in_class = True
+            start = i
+            i += 1
+            if pattern[i : i + 1] == "^":
+                i += 1
+            if pattern[i : i + 1] == "]":
+                i += 1
+            if not count:
+                out.append(pattern[start:i])
+            continue
+        if char == "(":
+            named = pattern.startswith("(?P<", i) or pattern.startswith("(?<", i)
+            if pattern.startswith("(?", i) and not named:
+                if not count:
+                    out.append(char)
+                i += 1
+                continue
+            group += 1
+            opener_end = pattern.index(">", i) + 1 if named else i + 1
+            if count:
+                out.append("(")
+            elif group == keep:
+                out.append(pattern[i:opener_end])
+            else:
+                out.append("(?:")
+            i = opener_end
+            continue
+        if not count:
+            out.append(char)
+        i += 1
+    return "".join(out)
+
+
 # ---------------------------------------------------------------- SQL Server
 
 
@@ -2963,6 +3371,7 @@ REWRITERS: dict[str, Rewriter] = {
     "tsql": TSqlRewriter(),
     "trino": TrinoRewriter(),
     "athena": TrinoRewriter("Athena", "athena"),
+    "bigquery": BigQueryRewriter(),
 }
 
 

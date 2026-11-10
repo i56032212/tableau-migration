@@ -34,6 +34,11 @@
     s3_staging_dir = "s3://query-results-bucket/tableau/"
     # 省略 access_key_id、secret_access_key 時用 AWS 預設的憑證（環境變數、設定檔或 IAM 角色）
 
+    [connections.bigquery_sales_project]
+    driver = "bigquery"
+    credentials_path = "/run/secrets/bigquery-reader.json"   # 省略時用 Application Default Credentials
+    maximum_bytes_billed = 10000000000                       # 每次查詢最多掃描的位元組（可省略）
+
 - 密碼、權杖一律寫成 ${環境變數}，不能直接寫在設定檔中；環境變數由部署環境或密碼管理服務注入
 - 建議使用唯讀的服務帳號；PostgreSQL 與 MySQL 的工作階段另外設為唯讀
 - 執行器回傳 Arrow 資料表；小數（DECIMAL／NUMBER）轉成浮點數或整數、含時區的時間轉成 UTC 的
@@ -71,6 +76,7 @@ DRIVERS = (
     "trino",
     "presto",
     "athena",
+    "bigquery",
     "duckdb",
 )
 DRIVER_DIALECTS = {
@@ -84,6 +90,7 @@ DRIVER_DIALECTS = {
     "trino": "trino",
     "presto": "trino",
     "athena": "athena",
+    "bigquery": "bigquery",
     "duckdb": "duckdb",
 }
 SECRET_KEYS = frozenset(
@@ -206,6 +213,8 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return TrinoExecutor.open(connection, params, presto=config.driver == "presto")
     if config.driver == "athena":
         return AthenaExecutor.open(connection, params)
+    if config.driver == "bigquery":
+        return BigQueryExecutor.open(connection, params)
     return DatabricksExecutor.open(connection, params)
 
 
@@ -772,6 +781,72 @@ class AthenaExecutor:
         self.con.close()
 
 
+class BigQueryExecutor:
+    """Google BigQuery（google-cloud-bigquery，以 Arrow 取回）。
+
+    憑證：credentials_path（服務帳號金鑰檔的路徑；檔案由部署環境提供，不進 git）或 Application Default
+    Credentials（gcloud、工作負載身分）。計費的專案 project 省略時取工作簿的專案；maximum_bytes_billed
+    限制每次查詢掃描的資料量。endpoint 只給模擬器或私人端點用（不驗證身分）。BigQuery 的工作階段時區預設為 UTC。
+    請使用只有讀取權限（BigQuery Data Viewer、Job User）的服務帳號。
+    """
+
+    dialect = "bigquery"
+
+    def __init__(self, client: Any, job_config: Any) -> None:
+        self.client = client
+        self.job_config = job_config
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> BigQueryExecutor:
+        try:
+            from google.cloud import bigquery  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 BigQuery 驅動：uv sync --extra bigquery") from exc
+        project = params.get("project") or connection.database
+        if not project:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少專案（project）")
+        kwargs: dict[str, Any] = {"project": project}
+        try:
+            if params.get("endpoint"):
+                from google.api_core.client_options import (  # pyright: ignore[reportMissingImports]
+                    ClientOptions,
+                )
+                from google.auth.credentials import (  # pyright: ignore[reportMissingImports]
+                    AnonymousCredentials,
+                )
+
+                kwargs["client_options"] = ClientOptions(api_endpoint=params["endpoint"])
+                kwargs["credentials"] = AnonymousCredentials()
+            elif params.get("credentials_path"):
+                from google.oauth2 import service_account  # pyright: ignore[reportMissingImports]
+
+                kwargs["credentials"] = service_account.Credentials.from_service_account_file(
+                    params["credentials_path"]
+                )
+            if params.get("location"):
+                kwargs["location"] = params["location"]
+            client = bigquery.Client(**kwargs)
+        except Exception as exc:  # pragma: no cover - 依環境的憑證
+            raise SourceConnectionError(
+                f"無法連上 BigQuery（{connection.connection_id}）：{exc}"
+            ) from exc
+        job_config = bigquery.QueryJobConfig(use_legacy_sql=False)
+        if params.get("maximum_bytes_billed"):
+            job_config.maximum_bytes_billed = int(params["maximum_bytes_billed"])
+        dataset = params.get("dataset") or connection.schema_name
+        if dataset:
+            # 自訂 SQL 中沒有寫專案與資料集的資料表
+            job_config.default_dataset = dataset if "." in dataset else f"{project}.{dataset}"
+        return cls(client, job_config)
+
+    def fetch(self, sql: str) -> pa.Table:
+        job = self.client.query(sql, job_config=self.job_config)
+        return normalize_arrow(job.to_arrow(create_bqstorage_client=False))
+
+    def close(self) -> None:
+        self.client.close()
+
+
 def _athena_region(server: str | None) -> str | None:
     """athena.us-east-1.amazonaws.com → us-east-1。"""
     match = re.match(r"athena[.-]([a-z0-9-]+)\.amazonaws\.com", server or "", re.IGNORECASE)
@@ -828,6 +903,7 @@ __all__ = [
     "CONFIG_ENV",
     "DRIVER_DIALECTS",
     "AthenaExecutor",
+    "BigQueryExecutor",
     "ConnectionConfig",
     "DatabricksExecutor",
     "DuckDBExecutor",

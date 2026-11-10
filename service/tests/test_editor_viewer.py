@@ -444,7 +444,10 @@ def test_pages_and_disaggregation(engine: str) -> None:
         viewer = page.locator(".single-sheet [data-page-control]")
         viewer.wait_for()
         page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
-        assert viewer.locator("select").input_value() == "1"
+        # 存下的頁（第二頁）在工作表載入後才套用到控制項
+        page.wait_for_function(
+            "() => document.querySelector('.single-sheet [data-page-control] select')?.value === '1'"
+        )
         with page.expect_response(lambda r: r.url.endswith("/render")) as response:
             viewer.get_by_role("button", name="上一頁").click()
         body = json.loads(response.value.request.post_data or "{}")

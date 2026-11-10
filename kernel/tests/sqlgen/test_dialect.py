@@ -118,15 +118,17 @@ DIALECTS = [
     "redshift",
     "trino",
     "athena",
+    "bigquery",
 ]
-SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift", "athena"]
-"""沒有實機的方言：轉譯結果以快照審核。"""
+SNAPSHOT_DIALECTS = ["oracle", "tsql", "snowflake", "redshift", "athena", "bigquery"]
+"""沒有實機的方言：轉譯結果以快照審核（BigQuery 在 CI 以模擬器實跑，仍以快照審核）。"""
 SNAPSHOT_SCHEMAS = {
     "oracle": ["SALES"],
     "tsql": ["dbo"],
     "snowflake": ["PUBLIC"],
     "redshift": ["public"],
     "athena": ["AwsDataCatalog", "sales"],
+    "bigquery": ["sales-project", "sales"],
 }
 
 
@@ -152,6 +154,7 @@ def test_custom_sql_is_restored(dialect: str) -> None:
         ("redshift", "'O''Hare'", "DATE '2024-01-01'"),
         ("trino", "'O''Hare'", "DATE '2024-01-01'"),
         ("athena", "'O''Hare'", "DATE '2024-01-01'"),
+        ("bigquery", "'O\\'Hare'", "DATE '2024-01-01'"),
     ],
 )
 def test_custom_sql_parameters(dialect: str, region: str, since: str) -> None:
@@ -178,6 +181,50 @@ def test_unknown_functions_are_unsupported(dialect: str) -> None:
     for sql in ("SELECT strftime(d, '%Y') FROM t", "SELECT list_value(1, 2) FROM t"):
         with pytest.raises(DialectError):
             to_dialect(sql, dialect)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "group", "expected"),
+    [
+        ("([a-z]+)\\s+(\\d+)", 2, "(?:[a-z]+)\\s+(\\d+)"),
+        ("([a-z]+)\\s+(\\d+)", 0, "(?:[a-z]+)\\s+(?:\\d+)"),
+        # 跳脫的括號、字元類別中的括號、不擷取的群組與旗標不算群組
+        ("\\(x\\)[(]([)]+)(?:a)(?i)(b)", 1, "\\(x\\)[(]([)]+)(?:a)(?i)(?:b)"),
+        ("[[:alpha:](]+(?P<n>\\d)(z)", 2, "[[:alpha:](]+(?:\\d)(z)"),
+    ],
+)
+def test_bigquery_regex_groups(pattern: str, group: int, expected: str) -> None:
+    """BigQuery 的 REGEXP_EXTRACT 沒有群組參數：要取的群組以外改成不擷取的群組。"""
+    from tmig.sqlgen.dialect import _capture_groups, _keep_group
+
+    assert _keep_group(pattern, group) == expected
+    assert _capture_groups(expected) == (1 if group else 0)
+
+
+def test_bigquery_datetime_columns_are_normalized() -> None:
+    """BigQuery 的日期時間欄位可能是 DATETIME 或 TIMESTAMP：base 一律轉成 DATETIME。"""
+    from tmig.sqlgen.source import datasource_source
+
+    directory = Path(__file__).resolve().parents[3] / "fixtures" / "superstore_features"
+    ir = as_live(load_ir(directory / "golden.ir.json"), "bigquery", ["p", "d"])
+    ds = ir.datasources[0]
+    # 出貨日當成日期時間欄位（fixture 中的日期欄位都是 DATE）
+    fields = [
+        f.model_copy(update={"datatype": "datetime"}) if f.id == "f_ship_date" else f
+        for f in ds.fields
+    ]
+    ds = ds.model_copy(update={"fields": fields})
+    source = datasource_source(ds).from_sql
+    assert 'CAST("ds_orders"."Ship Date" AS TIMESTAMP) AS "f_ship_date"' in source
+    for f in (f for f in fields if f.column):
+        plain = f'"ds_orders"."{f.column}" AS "{f.id}"'
+        cast = f'CAST("ds_orders"."{f.column}" AS TIMESTAMP) AS "{f.id}"'
+        assert (cast if f.datatype == "datetime" else plain) in source
+    # 其他方言不轉型
+    other = datasource_source(
+        as_live(load_ir(directory / "golden.ir.json"), "trino").datasources[0]
+    )
+    assert "CAST(" not in other.from_sql
 
 
 def test_unsupported_dialect() -> None:

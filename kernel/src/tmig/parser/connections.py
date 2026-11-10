@@ -66,6 +66,7 @@ EXECUTABLE: frozenset[str] = frozenset(
         "snowflake",
         "trino",
         "athena",
+        "bigquery",
     }
 )
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
@@ -163,6 +164,8 @@ def live_connection(
         or named.get("v-catalog")
         or named.get("dbname")
         or named.get("catalog")
+        or named.get("project")
+        or named.get("CATALOG")
         or None
     )
     port_text = named.get("port") or ""
@@ -177,7 +180,7 @@ def live_connection(
         server=server,
         port=int(port_text) if port_text.isdigit() else None,
         database=database,
-        schema_name=named.get("schema") or None,
+        schema_name=named.get("schema") or named.get("SCHEMA") or None,
         http_path=named.get("v-http-path") or None,
         authentication=named.get("authentication") or None,
         relation=tree,
