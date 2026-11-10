@@ -206,7 +206,7 @@ def test_unsupported_sets(tmp_path: Path) -> None:
             top_n("Percent", extra="").replace("units='records'", "units='percent'"),
             top_n("Row Level", by="[Sales]"),
             group("Odd", "<groupfilter function='intersection' />"),
-            # 合併欄位（nest-group）不是集合：沒有工作表使用時略過
+            # 合併欄位（nest-group）不是集合：轉成字串的計算欄位
             group(
                 "Combined",
                 "<groupfilter function='crossjoin'><groupfilter function='level-members' level='[Region]' />"
@@ -226,7 +226,9 @@ def test_unsupported_sets(tmp_path: Path) -> None:
             "rows 架：[Region] 不是集合，卻使用 IN/OUT",
         ]
     )
-    assert "f_combined" not in {f.id for f in ir.datasources[0].fields}
+    combined = next(f for f in ir.datasources[0].fields if f.id == "f_combined")
+    assert combined.calc is not None
+    assert combined.calc.formula == 'IFNULL(STR([Region]), "Null") + ", " + IFNULL(STR([Category]), "Null")'
 
 
 # ---------------------------------------------------------------- 集合動作

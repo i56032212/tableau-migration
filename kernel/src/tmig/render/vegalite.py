@@ -851,19 +851,34 @@ class _Builder:
         rows_dims: list[FieldUse],
         cols_dims: list[FieldUse],
     ) -> dict[str, Any]:
-        """甜甜圈（J3）：圓餅與疊在上面（雙軸）、詳細程度較粗的標記卡；
-        後者畫成中間的洞，它的標籤（通常是合計）寫在中間。"""
-        holes = [(i, p) for i, p in enumerate(self.ws.panes) if i > 0 and p.dual]
+        """甜甜圈（J3）與多層圓餅：圓餅與疊在上面（雙軸）的標記卡。有角度與顏色的標記卡畫成另一層圓餅
+        （依自己的詳細程度與大小，例如內圈依類別、外圈依子類別），其他的畫成中間的洞，它的標籤（通常是
+        合計）寫在中間。"""
+        dual = [(i, p) for i, p in enumerate(self.ws.panes) if i > 0 and p.dual]
+        rings = [(i, p) for i, p in dual if _is_ring(p.marks)]
+        holes = [(i, p) for i, p in dual if not _is_ring(p.marks)]
+        if 0 in self.pane_values:
+            # 第一層的詳細程度較粗（多層圓餅的內圈）：以它自己的查詢結果畫
+            body = self.with_pane_data(body, self.ws.panes[0])
+        if rings and (rows_dims or cols_dims):
+            self.notes.append("分面的多層圓餅只畫出第一層（不影響數字）")
+            rings = []
+        if rings:
+            layers = [body]
+            for _, pane in rings:
+                layers.append(self.with_pane_data(self.pie(pane.marks, rows_dims, cols_dims), pane))
+            body = {"layer": layers}
         if not holes:
             return body
         # 洞的大小依洞的標記卡的大小（沒有設定時為外圈的六成）
         hole = holes[0][1].marks
-        outer = max((_pie_fraction(p.marks) for p in self.ws.panes if not p.dual), default=0.5)
+        outer = max(
+            (_pie_fraction(p.marks) for p in self.ws.panes if not p.dual or _is_ring(p.marks)),
+            default=0.5,
+        )
         inner = min(_pie_fraction(hole), outer) if hole.mark_size is not None else outer * 0.6
-        for layer in [body, *body.get("layer", [])]:
-            mark = layer.get("mark")
-            if isinstance(mark, dict) and mark.get("type") == "arc":
-                mark["innerRadius"] = {"expr": f"{self.pie_extent} * {round(inner / 2, 4)}"}
+        for mark in _arc_marks(body):
+            mark["innerRadius"] = {"expr": f"{self.pie_extent} * {round(inner / 2, 4)}"}
         if rows_dims or cols_dims:
             self.notes.append("分面的甜甜圈圖中間的標籤尚未畫出（不影響數字）")
             return body
@@ -2976,6 +2991,22 @@ def _take_pane(remaining: list[Pane], use: FieldUse, axis: str) -> Pane | None:
             remaining.remove(pane)
             return pane
     return None
+
+
+def _is_ring(marks: Marks) -> bool:
+    """疊在圓餅上的標記卡畫成另一層圓餅（有角度與顏色），否則畫成中間的洞。"""
+    return marks.type == "pie" and marks.angle is not None and marks.color is not None
+
+
+def _arc_marks(node: dict[str, Any]) -> list[dict[str, Any]]:
+    """規格中所有圓餅（arc）的 mark。"""
+    found: list[dict[str, Any]] = []
+    mark = node.get("mark")
+    if isinstance(mark, dict) and mark.get("type") == "arc":
+        found.append(mark)
+    for child_node in node.get("layer", []):
+        found += _arc_marks(child_node)
+    return found
 
 
 def _pie_marks(ws: Worksheet) -> Marks | None:

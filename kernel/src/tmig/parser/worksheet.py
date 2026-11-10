@@ -731,19 +731,6 @@ class SheetParser:
             result.append(Pane(measure=measure, axis=axis, dual=dual, marks=card))
             pane_dims.append(card_dims)
         if result:
-            assert self.ds is not None
-            ds = self.ds
-            shelf = {
-                use_key(u)
-                for u in [*rows, *cols]
-                if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)
-            }
-            lods = [shelf | {use_key(d) for d in found} for found in pane_dims]
-            if result[0].marks.type == "pie" and any(not lod <= lods[0] for lod in lods[1:]):
-                self.ctx.flag(
-                    panes_el if panes_el is not None else self.el,
-                    "多層圓餅（內圈有外圈沒有的維度）v0 不支援",
-                )
             dims = pane_dims[0]
         return marks, result, dims
 

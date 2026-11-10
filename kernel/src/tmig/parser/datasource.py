@@ -524,7 +524,37 @@ class DatasourceParser:
             if attr(group, "ui-builder") == "filter-group":
                 self._add_set(state, group)
                 continue
-            ctx.ignore(group, "合併欄位等群組（工作表若有使用會另列為不支援）")
+            if attr(group, "ui-builder") == "nest-group":
+                self._add_combined(state, group)
+                continue
+            ctx.ignore(group, "合併集合等群組（工作表若有使用會另列為不支援）")
+
+    def _add_combined(self, state: DsState, group: etree._Element) -> None:
+        """合併欄位（Combined Field）：多個維度的值組合成一個維度，成員與 Tableau 相同寫成「值, 值」
+        （<groupfilter function='crossjoin'> 中各欄位的 level-members）；轉成字串的計算欄位。"""
+        name = group.get("name", "")
+        caption = group.get("caption") or strip_brackets(name)
+        top = child(group, "groupfilter")
+        levels = (
+            [g.get("level", "") for g in children(top, "groupfilter")]
+            if top is not None and top.get("function") == "crossjoin"
+            else []
+        )
+        if len(levels) < 2 or any(level not in state.by_name for level in levels):
+            self.ctx.flag(group, f"合併欄位「{caption}」的組成欄位（{'、'.join(levels)}）無法辨識")
+            return
+        formula = ' + ", " + '.join(f'IFNULL(STR({level}), "Null")' for level in levels)
+        data_field = DataField(
+            id=self.ctx.ids.make("f", caption, name),
+            name=name,
+            caption=caption,
+            role="dimension",
+            datatype="string",
+            column=None,
+            calc=Calc(formula=formula),
+            source_ref=xpath(group),
+        )
+        state.add_field(data_field)
 
     def _add_set(self, state: DsState, group: etree._Element) -> None:
         """集合 → 布林欄位（In／Out）：固定成員轉成公式，Top N 與條件集合在查詢時計算成員。"""

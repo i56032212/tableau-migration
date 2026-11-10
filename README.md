@@ -675,6 +675,10 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 - **色彩**：內建色盤的顏色值依公開整理的資料（見 `kernel/src/tmig/render/palettes.py`），起訖與中心的顏色兩個來源一致，
   中間的顏色未以 Tableau 實機比對；沒有指定顏色的值依它在資料中出現的順序取色盤的顏色（Tableau 依欄位的排序）；
   合併欄位的顏色（多個欄位放在色彩上，`map-pri`）依預設色盤
+- **合併欄位（Combined Field）**：`nest-group` 群組中 crossjoin 的各欄位組合成一個字串維度，成員與 Tableau 相同
+  寫成「值, 值」（Null 寫成 Null）；排序依組合後的字串（Tableau 依各欄位的值，數字與日期的欄位可能不同）
+- **多層圓餅**：疊在圓餅上（雙軸）、有角度與顏色的標記卡畫成另一層圓餅，各自依自己的詳細程度（較粗的另外查詢）
+  與大小畫出，後面的標記卡畫在上面；沒有角度與顏色的標記卡畫成中間的洞。分面的多層圓餅只畫第一層
 - **樣式**：篩選與參數控制項、dashboard 標題物件的字型、依欄位設定的儲存格字型、表頭與窗格的框線、
   欄的欄位標籤的背景（列的有畫）、依欄位設定的儲存格文字顏色與對齊、欄標題的垂直對齊、
   一致或各自的座標軸範圍不移轉（只影響外觀）。標記大小中文字標記的大小、依欄位決定大小時的範圍、連續座標軸（日期）上長條的寬度
@@ -689,8 +693,8 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   （impersonation）的屬性值未確認，含 `imperson` 的值一律列為不符合，其他不認得的值列為需注意。
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
-尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
-合併集合與合併欄位（Combined Field）、地圖、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
+尚未支援（解析時列入 unsupported，報表進人工佇列）：
+合併集合（XML 的寫法尚未在公開報表中看到）、地圖、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
 標題中的 Table Calculation 值、

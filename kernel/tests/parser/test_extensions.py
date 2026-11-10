@@ -420,11 +420,12 @@ def test_donut(tmp_path: Path) -> None:
     assert [u.field for u in hole.marks.label] == ["f_sales"]
 
 
-def test_multi_ring_pie_is_unsupported(tmp_path: Path) -> None:
-    """內圈有外圈沒有的維度（多層圓餅）尚不支援。"""
+def test_multi_ring_pie_is_parsed(tmp_path: Path) -> None:
+    """內圈有外圈沒有的維度（多層圓餅）：各標記卡各自的詳細程度（查詢時較粗的另外查詢）。"""
     sheet = donut_sheet(f"<color column='{ref('none:Category:nk')}' />")
-    ir = parse(tmp_path, b.workbook(worksheets=sheet), lenient=True)
-    assert reasons(ir) == ["多層圓餅（內圈有外圈沒有的維度）v0 不支援"]
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    assert ir.worksheets[0].panes[1].marks.color is not None
 
 
 # ---------------------------------------------------------------- J3 圓餅、形狀、路徑

@@ -295,6 +295,53 @@ def test_donut_spec() -> None:
     assert len(spec["data"]["values"]) == 3
 
 
+def test_multi_level_pie() -> None:
+    """多層圓餅：疊在上面的標記卡有角度與顏色時畫成另一層圓餅，各自依自己的詳細程度（內圈依類別、
+    外圈依類別與子類別）與大小。"""
+    from tmig.ir import FieldUse
+
+    worksheet_id = "ws_category_donut"
+    ir = features()
+    ws = next(w for w in ir.worksheets if w.id == worksheet_id)
+    outer, inner = ws.panes
+    sub_category = next(
+        f.id for ds in ir.datasources for f in ds.fields if f.caption == "Sub-Category"
+    )
+    # 底層：類別與子類別（較大）；上層：只依類別（較小，畫在中間）
+    outer_marks = outer.marks.model_copy(
+        update={"detail": [FieldUse(field=sub_category)], "mark_size": 1.8, "label": []}
+    )
+    inner_marks = outer.marks.model_copy(update={"mark_size": 1.0, "label": []})
+    panes = [
+        outer.model_copy(update={"marks": outer_marks}),
+        inner.model_copy(update={"marks": inner_marks}),
+    ]
+    ir = ir.model_copy(
+        update={
+            "worksheets": [
+                w.model_copy(update={"panes": panes}) if w.id == worksheet_id else w
+                for w in ir.worksheets
+            ]
+        }
+    )
+    database = FEATURES / "data" / "ds_orders.duckdb"
+    query = worksheet_sql(ir, worksheet_id)
+    queries = pane_sql(ir, worksheet_id, query)
+    assert list(queries) == [1]  # 上層較粗，另外查詢
+    pane_results = {i: (q.columns, execute(database, q.sql)) for i, q in queries.items()}
+    rendered = build_spec(
+        ir, worksheet_id, query.columns, execute(database, query.sql), None, pane_results
+    )
+    spec = rendered.spec
+    assert spec is not None
+    assert [e.message for e in validator().iter_errors(spec)] == []
+    bottom, top = spec["layer"]
+    assert bottom["mark"]["outerRadius"] == {"expr": "min(width, height) * 0.45"}
+    assert top["mark"]["outerRadius"] == {"expr": "min(width, height) * 0.25"}
+    assert len(spec["data"]["values"]) == 17  # 底層：每個子類別一塊
+    assert len(top["data"]["values"]) == 3  # 上層：每個類別一塊
+
+
 def test_totals_draw_coarser_panes_at_worksheet_detail() -> None:
     """有總計時，較粗的標記卡不另外查詢（總計只依工作表的詳細程度查詢），長條也畫出總計。"""
     worksheet_id = "ws_region_sales_and_segment_profit"
