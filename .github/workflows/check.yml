@@ -9,59 +9,7 @@ env:
   PYTHONIOENCODING: utf-8
 
 jobs:
-  check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-      - name: 安裝相依套件
-        run: uv sync --locked
-      - name: 建置檢視器
-        working-directory: web
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-      - name: 檢查提交的 web/dist 與原始碼一致
-        if: runner.os == 'Linux'
-        run: git diff --exit-code -- web/dist || (echo "web/dist 過期：在 web/ 執行 pnpm build 後提交" && exit 1)
-      - name: 安裝 Chromium（端到端測試）
-        run: uv run playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
-      - name: 一鍵檢查
-        run: |
-          set -o pipefail
-          uv run python scripts/check.py 2>&1 | tee check.log
-      - name: 測試摘要
-        if: always()
-        run: |
-          if [ -f check.log ]; then
-            line=$(grep -E "[0-9]+ (passed|failed|error)" check.log | tail -n 1)
-            echo "::notice title=pytest 摘要（${{ runner.os }}）::${line}"
-          fi
-      - name: 失敗時把檢查紀錄的結尾寫成註記
-        if: failure()
-        run: |
-          if [ -f check.log ]; then
-            msg=$(tail -n 120 check.log | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
-            echo "::error title=一鍵檢查紀錄（最後 120 行）::${msg}"
-          fi
-
-  # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL、Spark（Databricks 的引擎）、MySQL、Trino 與 BigQuery 模擬器
-  # （Docker）實跑；環境不齊全時直接失敗
+  # 暫時的診斷分支：只跑 BigQuery 模擬器的實跑，觀察記憶體與失敗原因
   engines:
     runs-on: ubuntu-latest
     defaults:
@@ -74,26 +22,47 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: 安裝相依套件（含 pyspark 與 BigQuery 用戶端）
+      - name: 安裝相依套件
         run: uv sync --locked --group spark --group services
-      - name: 啟動執行環境內建的 MySQL（帳號 root／root）
-        run: sudo systemctl start mysql.service
-      - name: 啟動 Trino（Docker；測試資料放在 memory catalog）
-        run: docker run -d --name trino -p 8080:8080 trinodb/trino:479
-      - name: 啟動 BigQuery 模擬器（Docker；goccy/bigquery-emulator，以 ZetaSQL 實作）
+      - name: 啟動 BigQuery 模擬器（記憶體上限 3 GB）
         run: >-
-          docker run -d --name bigquery -p 9050:9050
+          docker run -d --name bigquery --memory 3g -p 9050:9050
           ghcr.io/goccy/bigquery-emulator:latest --project=tmig --dataset=tmig
-      - name: 方言轉譯與來源資料庫實跑
-        env:
-          TMIG_REQUIRE_ENGINES: "1"
-          TMIG_REQUIRE_SERVICES: "1"
-          TMIG_TEST_MYSQL: root:root@127.0.0.1:3306
-          TMIG_TEST_TRINO: 127.0.0.1:8080
-          TMIG_TEST_BIGQUERY: 127.0.0.1:9050
-        run: uv run pytest -q kernel/tests/sqlgen/test_dialect.py kernel/tests/sqlgen/test_engines.py
-      - name: 失敗時列出 Trino 與 BigQuery 模擬器的紀錄
-        if: failure()
+      - name: 記錄記憶體（背景）
         run: |
-          docker logs trino 2>&1 | tail -n 60
-          docker logs bigquery 2>&1 | tail -n 60
+          cat > "$RUNNER_TEMP/memory.sh" <<'SH'
+          while true; do
+            echo "== $(date +%T)"
+            free -m | grep Mem
+            docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}'
+            ps -eo rss=,args= --sort=-rss | head -4 | cut -c1-120
+            sleep 15
+          done
+          SH
+          nohup bash "$RUNNER_TEMP/memory.sh" > "$RUNNER_TEMP/memory.log" 2>&1 &
+      - name: BigQuery 模擬器實跑（失敗立即列出）
+        env:
+          TMIG_REQUIRE_SERVICES: "1"
+          TMIG_TEST_BIGQUERY: 127.0.0.1:9050
+          PYTHONPATH: ${{ runner.temp }}
+        run: |
+          cat > "$RUNNER_TEMP/instafail.py" <<'PY'
+          import sys, time
+          START = {}
+          def pytest_runtest_logstart(nodeid, location):
+              START[nodeid] = time.monotonic()
+              sys.stdout.write(f"\n>>> {time.strftime('%T')} START {nodeid}\n"); sys.stdout.flush()
+          def pytest_runtest_logreport(report):
+              if report.when == "call" or report.failed:
+                  took = time.monotonic() - START.get(report.nodeid, time.monotonic())
+                  sys.stdout.write(f"\n<<< {time.strftime('%T')} {report.outcome} {report.nodeid} ({report.when}, {took:.0f}s)\n")
+                  if report.failed:
+                      sys.stdout.write(report.longreprtext[-30000:] + "\n")
+                  sys.stdout.flush()
+          PY
+          timeout 2400 uv run pytest -q -p instafail -p no:cacheprovider kernel/tests/sqlgen/test_engines.py -k bigquery --durations=0
+      - name: 記憶體紀錄與模擬器紀錄
+        if: always()
+        run: |
+          cat "$RUNNER_TEMP/memory.log" | tail -n 400
+          docker logs bigquery 2>&1 | tail -n 150
