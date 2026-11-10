@@ -526,8 +526,20 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 下列 Tableau 語意依文件與公開範例 .twb 推定，示範報表的獨立計算也採用同樣的理解，
 所以只有用真實報表、以 Tableau 匯出的結果比對，才能確認：
 
-- **Table Calculation 的計算方向**：`ordering-type='Columns'` 視為 Table (down)、`'Rows'` 視為 Table (across)，
-  標記卡上的維度列入定址；未寫計算方向時依預設 Table (across)，IR 標記為推定（`inferred`）
+- **Table Calculation 的計算方向**：`ordering-type='Columns'` 視為 Table (down)、`'Rows'` 視為 Table (across)、
+  `Table`／`TableCol` 為表格（橫向再縱向／縱向再橫向）、`RowInPane`／`ColumnInPane` 為窗格（橫向／縱向）、
+  `Pane`／`PaneCol` 為窗格（橫向再縱向／縱向再橫向）、`CellInPane` 為儲存格，標記卡上的維度一律列入定址；
+  窗格的方向只定址窗格內變化的維度（架上最後是離散維度時為它，最後是連續的座標軸時為結尾連續的維度），
+  儲存格只定址標記卡上的維度；未寫計算方向時依預設 Table (across)，IR 標記為推定（`inferred`）。
+  指定維度時，寫欄位名稱的定址這個欄位在檢視中的所有實例，寫欄位實例（例如 `[yr:Order Date:ok]`）的只定址
+  這個實例；「計算層級」（`level-address`）把定址中更內層的維度改為分割（年增率：每一季各自與前一年比），
+  「重新開始間隔」（`level-break`）把它與它之前的維度改為分割（年初至今）
+- **其他快速 Table Calculation**：百分位數（`PctRank`）為 `RANK_PERCENTILE`，與 Tableau 文件的例子相同
+  （6、9、9、14 遞增為 0、0.67、0.67、1，Null 不計入）；百分比（`PctValue`，Percent From）為
+  `ZN(x) / LOOKUP(ZN(x), …)`（依差異百分比的寫法推定）；差異類的比較對象 `diff-options='Fixed'` 時，address 為
+  `%first%`／`%last%`（或沒有寫）視為第一個／最後一個、其他值視為定址欄位的成員（公開報表中看到 2017、2019 等
+  年份），寫法依公開資料推定；複合成長率（`Compounded`）為 `POWER(ZN(x) / 比較對象, ZN(1 / 相隔的標記數)) - 1`
+  （第一個為 0）；比較對象也可以由參數決定（`Parameter`：相對位置或成員，查詢時代入參數目前的值）
 - **巢狀 Table Calculation**：視窗函式不能巢狀，內層（被參照的 Table Calculation 計算欄位，或寫在另一個
   Table Calculation 函式參數中的函式）先算成欄位，外層再引用。被參照的計算欄位依欄位實例上
   `<table-calc field=…>` 的巢狀計算方向計算，沒有這項設定時與外層相同（依公開資料推定）；
@@ -592,8 +604,15 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   Tableau 匯出這類工作表的格式待真實報表確認；甜甜圈中間的洞大小固定，分面的甜甜圈中間的標籤尚未畫出
 - **參考線**：值在新平台以圖上標記的值計算（平均、總和、最小、最大、中位數、百分位數以線性內插、
   平均 ± 標準差的倍數）；窗格為欄列架上的離散維度，但各架最內層若是離散維度則不算（它切出的是儲存格）。
-  合計（Total）只在量值為 SUM、COUNT、MIN、MAX 時畫出；參考區間只畫兩端的線、不畫底色，
-  分布的百分比、分位數、信賴區間與盒鬚圖不畫；同一條參考線有多個範圍時不顯示標籤
+  合計（Total）只在量值為 SUM、COUNT、MIN、MAX 時畫出；同一條參考線有多個範圍時不顯示標籤。
+  參考區間（兩條以 `paired-id` 配對的參考線）之間塗上底色；分布（百分位數、標準差、分位數、平均值與中位數的
+  信賴區間、彙總值的百分比）的各值之間由內往外塗上由淺到深的灰色，`fill-above`／`fill-below` 延伸到窗格的邊緣，
+  底色畫在標記之下、線畫在標記之上。預設的格式依 Logshark 報表文件中 Tableau 的截圖量測（參考線為 2 像素的
+  灰色實線、標籤寫在窗格左側線的上方；分布不畫線，標準差 2 到 3 之間 #f6f6f6、以上 #dddddd），
+  工作表上依參考線 id 設定的線條顏色、粗細、樣式、底色與標籤的數字格式照樣套用；參考區間的預設底色、
+  分布的配色（`palette`）與中位數信賴區間的算法（以二項分配取對稱的順序統計量）依公開資料推定。
+  盒鬚圖每個範圍以線性內插的四分位數畫出兩種灰色的盒子（中位數上下），鬚延伸到 1.5 倍四分位距內最遠的值
+  （或最小、最大值），可以隱藏鬚以內的標記；盒子的顏色與寬度依公開資料推定
 - **趨勢線**：與 Tableau 相同依窗格與顏色（「允許依色彩」）分組，以轉換後的最小平方法配適五種模型（線性、對數、
   指數、乘冪、2–8 次多項式；對數與乘冪不納入 X ≤ 0、指數與乘冪不納入 Y ≤ 0 的標記），可以通過原點、排除分組的因子；
   線畫在各組資料的範圍內、顏色與標記相同（或依格式設定），信賴區間為平均值的 95% 信賴區間（上下兩條虛線，
@@ -664,8 +683,7 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：多層圓餅（內圈有外圈沒有的維度）、
-合併集合與合併欄位（Combined Field）、地圖、LOD 的維度本身含 LOD、百分位數與百分比等其他快速
-Table Calculation、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
+合併集合與合併欄位（Combined Field）、地圖、LOD 的維度本身含 LOD、尚未實作的函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
 總計的 Total Using、總計中的 Table Calculation 或與量值篩選並用、標題中的 Table Calculation 值、

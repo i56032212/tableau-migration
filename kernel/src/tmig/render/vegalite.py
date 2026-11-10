@@ -84,7 +84,7 @@ from tmig.render.format import (
     parse_format,
 )
 from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
-from tmig.render.trends import fit_model, format_p, format_r2
+from tmig.render.trends import fit_model, format_p, format_r2, t_quantile
 from tmig.sqlgen.query import (
     COLUMN_ORDER,
     GRAND_TOTAL,
@@ -2286,11 +2286,31 @@ COMPUTATION_NAMES = {
     "median": "Median",
     "percentile": "Percentile",
     "stdev": "Std. Dev.",
+    "quantiles": "Quantiles",
+    "confidence": "Confidence Interval",
+    "median_confidence": "Median Confidence Interval",
 }
 SCOPE_NAMES = {"table": "Table", "pane": "Pane", "cell": "Cell"}
-REF_COLOR = "#444"
+REF_COLOR = "#b4b4b4"
+"""參考線的預設顏色與粗細（依 Logshark 報表文件中 Tableau 的截圖量測：2 像素的灰線）。"""
+REF_WIDTH = 2
+REF_LABEL_COLOR = "#555555"
+BAND_COLOR = "#e0e0e0"
+"""參考區間（兩條參考線之間）預設的底色。"""
+SHADES = ("#f6f6f6", "#dddddd")
+"""分布的底色：最內側到最外側（依截圖量測：標準差 2 到 3 之間 #f6f6f6、3 以上 #dddddd）。"""
+BOX_COLORS = ("#e6e6e6", "#cfcfcf")
+"""盒鬚圖的盒子：中位數以下、以上兩種灰色（依公開資料推定）。"""
+WHISKER_COLOR = "#999999"
 REF = "__ref"
 """參考線的資料欄與圖層名稱前綴；檢視器選取標記時略過這些圖層。"""
+
+
+@dataclass(frozen=True)
+class _Constant:
+    """參考線的值是常數或參數：數值，或時間軸上的時間（UTC 毫秒）。"""
+
+    value: float
 
 
 def _with_reference_lines(
@@ -2299,10 +2319,10 @@ def _with_reference_lines(
     values: list[dict[str, Any]],
     params: dict[str, Scalar],
 ) -> dict[str, Any]:
-    """參考線圖層：每一列資料寫入所屬範圍的參考值（__ref…），再以 rule 或 tick 畫出。
+    """參考線、參考區間、分布與盒鬚圖：每一列資料寫入所屬範圍的值（__ref…），再畫出。
 
     範圍：整張表；窗格＝欄列架上的離散維度，但各架最內層若是離散維度則不算（它切出的是儲存格）；
-    儲存格＝欄列架上所有的離散維度。
+    儲存格＝欄列架上所有的離散維度。線畫在標記之上；底色（參考區間、分布、盒鬚圖）畫在標記之下。
     """
     ws, notes = builder.ws, builder.notes
     encoding = body.get("encoding") if "mark" in body or "layer" in body else None
@@ -2310,7 +2330,9 @@ def _with_reference_lines(
         notes.append("多個量值、圓餅等圖表上的參考線尚未畫出（不影響數字）")
         return body
     scopes = _scope_keys(builder)
-    layers: list[dict[str, Any]] = []
+    behind: list[dict[str, Any]] = []
+    front: list[dict[str, Any]] = []
+    drawn: dict[str, tuple[str, str]] = {}
     for n, line in enumerate(ws.reference_lines):
         axis = builder.channels.get(use_key(line.axis))
         position = next(
@@ -2324,7 +2346,18 @@ def _with_reference_lines(
         if axis is None or position is None:
             notes.append(f"參考線 {line.id} 的量值不在座標軸上，沒有畫出")
             continue
-        source = _reference_source(line, builder.channels, params)
+        group_keys = scopes[line.scope]
+        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for record in values:
+            if record.get(TOTAL):
+                continue  # 總計的列與欄不畫參考線，也不納入計算
+            groups.setdefault(tuple(record.get(k) for k in group_keys), []).append(record)
+        place = _Placement(encoding, position, group_keys, len(groups))
+        if line.kind == "boxplot":
+            _box_plot(n, line, axis.name, groups, place, behind, body)
+            continue
+        temporal = encoding[position].get("type") == "temporal"
+        source = _reference_source(line, builder.channels, params, temporal)
         if source is None:
             notes.append(f"參考線 {line.id} 的值不在查詢結果中，沒有畫出")
             continue
@@ -2333,97 +2366,285 @@ def _with_reference_lines(
             if agg not in ("sum", "count", "min", "max"):
                 notes.append(f"參考線 {line.id} 的合計需要重新彙總整體資料，沒有畫出")
                 continue
-        group_keys = scopes[line.scope]
-        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-        for record in values:
-            if record.get(TOTAL):
-                continue  # 總計的列與欄不畫參考線，也不納入計算
-            groups.setdefault(tuple(record.get(k) for k in group_keys), []).append(record)
-        params_of_line: list[float | None] = (
-            list(line.factors)
-            if line.formula == "stdev"
-            else list(line.percentiles)
-            if line.formula == "percentile"
-            else [None]
-        )
-        names = [f"{REF}{n}_{i}" for i in range(len(params_of_line))]
-        first: list[float] = []
+        count = len(_reference_values(line, [1.0, 2.0, 3.0], "x"))
+        names = [f"{REF}{n}_{i}" for i in range(count)]
+        first: list[float | None] = []
         for members in groups.values():
             numbers = (
                 [float(v) for m in members if _is_number(v := m.get(source))]
                 if isinstance(source, str)
                 else []
             )
-            for name, extra in zip(names, params_of_line, strict=True):
-                value = _reference_value(line, numbers, source, extra)
-                if value is not None and name == names[0]:
-                    first.append(value)
+            computed = _reference_values(line, numbers, source)
+            if not first:
+                first = list(computed)
+            for name, value in zip(names, computed, strict=True):
                 for m in members:
                     m[name] = value
-        other = "y" if position == "x" else "x"
-        other_enc = encoding.get(other)
-        title = encoding[position].get("title")
-        per_mark = (
-            len(groups) > 1
-            and other_enc is not None
-            and other_enc.get("type") in ("nominal", "ordinal")
-        )
-        for name in names:
-            measure = {"field": name, "type": "quantitative", "title": title}
-            if per_mark:
-                # 離散軸：每個標記位置畫一段短線，同一範圍的短線連成該範圍的參考線
-                layers.append(
-                    {
-                        "name": name,
-                        "transform": [{"calculate": "-1", "as": ROW}],
-                        "mark": {"type": "tick", "color": REF_COLOR, "thickness": 1.5},
-                        "encoding": {position: measure, other: other_enc},
-                    }
-                )
-                continue
-            rule: dict[str, Any] = {position: {**measure, "aggregate": "max"}}
-            if len(groups) > 1:
-                rule["detail"] = [{"field": k, "type": "nominal"} for k in group_keys]
-            layers.append(
-                {
-                    "name": name,
-                    "mark": {"type": "rule", "color": REF_COLOR, "strokeDash": [5, 3]},
-                    "encoding": rule,
-                }
-            )
-        label = _reference_label(line, axis, first)
-        if label and len(groups) == 1 and len(names) == 1:
-            place: dict[str, Any] = (
-                {"y": {"value": 0}, "align": "left", "dx": 3, "dy": 0}
-                if position == "x"
-                else {"x": {"value": "width"}, "align": "right", "dx": 0, "dy": -3}
-            )
-            layers.append(
-                {
-                    "name": f"{REF}{n}_label",
-                    "mark": {
-                        "type": "text",
-                        "color": REF_COLOR,
-                        "align": place.pop("align"),
-                        "baseline": "bottom" if position == "y" else "top",
-                        "dx": place.pop("dx"),
-                        "dy": place.pop("dy"),
-                    },
-                    "encoding": {
-                        position: {
-                            "field": names[0],
-                            "type": "quantitative",
-                            "aggregate": "max",
-                            "title": title,
-                        },
-                        **place,
-                        "text": {"value": label},
-                    },
-                }
-            )
-    if not layers:
+        drawn[line.id] = (names[0], position)
+        style = _line_style(line)
+        if style is not None:
+            for name in names:
+                front.append(place.line(name, style))
+        if line.kind == "distribution":
+            for i in range(len(names) - 1):
+                shade = _shade(i + 1, len(names) - 1 + line.fill_above + line.fill_below)
+                behind.append(place.fill(f"{REF}{n}_fill{i}", names[i], names[i + 1], shade))
+        top = len(names) - 1 + line.fill_above + line.fill_below
+        if line.fill_above and (line.above_color is None or not line.above_color.endswith("00")):
+            color = _css_color(line.above_color) if line.above_color else _shade(top, top)
+            behind.append(place.fill(f"{REF}{n}_above", names[-1], "end", color))
+        if line.fill_below and (line.below_color is None or not line.below_color.endswith("00")):
+            color = _css_color(line.below_color) if line.below_color else _shade(top, top)
+            behind.append(place.fill(f"{REF}{n}_below", names[0], "start", color))
+        partner = drawn.get(line.paired) if line.paired else None
+        if partner is not None and partner[1] == position:
+            # 參考區間：兩條參考線之間塗上底色（後一條畫的時候兩條都算好了）
+            color = _css_color(line.fill_color) if line.fill_color else BAND_COLOR
+            behind.append(place.fill(f"{REF}{n}_band", partner[0], names[0], color))
+        if len(groups) == 1:
+            for i, text in _reference_labels(line, axis, first, temporal):
+                front.append(place.label(f"{names[i]}_label", names[i], text))
+    if not behind and not front:
         return body
-    return {"layer": [body, *layers]}
+    return {"layer": [*behind, body, *front]}
+
+
+class _Placement:
+    """參考線圖層在另一軸上的位置：離散軸且有多個範圍時每個標記位置各畫一段（同一範圍連成一條），
+    否則橫跨整個窗格（多個範圍時依範圍分組）。"""
+
+    def __init__(
+        self, encoding: dict[str, Any], position: str, group_keys: list[str], groups: int
+    ) -> None:
+        self.position = position
+        self.other = "y" if position == "x" else "x"
+        self.other_enc = encoding.get(self.other)
+        self.title = encoding[position].get("title")
+        self.kind = encoding[position].get("type", "quantitative")
+        self.scale = encoding[position].get("scale")
+        self.group_keys = group_keys
+        self.discrete = isinstance(self.other_enc, dict) and self.other_enc.get("type") in (
+            "nominal",
+            "ordinal",
+        )
+        self.per_mark = groups > 1 and self.discrete
+
+    def field(self, name: str) -> dict[str, Any]:
+        out: dict[str, Any] = {"field": name, "type": self.kind, "title": self.title}
+        if self.scale is not None:
+            out["scale"] = self.scale
+        return out
+
+    def summary(self, fields: list[str], by_position: bool) -> list[dict[str, Any]]:
+        """每個範圍一列（by_position 時離散軸的每個位置一列）：各值取最大（同一範圍的值都相同）。"""
+        keys = list(self.group_keys)
+        if by_position and isinstance(self.other_enc, dict) and self.other_enc["field"] not in keys:
+            keys.append(self.other_enc["field"])
+        return [
+            {
+                "aggregate": [{"op": "max", "field": f, "as": f} for f in fields],
+                "groupby": keys,
+            }
+        ]
+
+    def line(self, name: str, style: dict[str, Any]) -> dict[str, Any]:
+        if self.per_mark:
+            # 離散軸：每個標記位置畫一段短線，同一範圍的短線連成該範圍的參考線
+            return {
+                "name": name,
+                "transform": [{"calculate": "-1", "as": ROW}],
+                "mark": {
+                    "type": "tick",
+                    "thickness": style.get("strokeWidth", REF_WIDTH),
+                    "color": style["color"],
+                },
+                "encoding": {self.position: self.field(name), self.other: self.other_enc},
+            }
+        enc: dict[str, Any] = {self.position: {**self.field(name), "aggregate": "max"}}
+        if self.group_keys:
+            enc["detail"] = [{"field": k, "type": "nominal"} for k in self.group_keys]
+        return {"name": name, "mark": {"type": "rule", **style}, "encoding": enc}
+
+    def fill(self, name: str, low: str, high: str, color: str) -> dict[str, Any]:
+        """low 到 high 之間的底色；high 為 start、end 時延伸到窗格的下緣（左緣）、上緣（右緣）。"""
+        fields = [f for f in (low, high) if f not in ("start", "end")]
+        edge: dict[str, dict[str, Any]] = {
+            "start": {"value": "height" if self.position == "y" else 0},
+            "end": {"value": 0 if self.position == "y" else "width"},
+        }
+        enc: dict[str, Any] = {
+            self.position: self.field(low),
+            f"{self.position}2": edge.get(high, {"field": high}),
+        }
+        if self.per_mark and isinstance(self.other_enc, dict):
+            enc[self.other] = self.other_enc
+        return {
+            "name": name,
+            "transform": self.summary(fields, self.per_mark),
+            "mark": {"type": "rect", "color": color, "tooltip": False},
+            "encoding": enc,
+        }
+
+    def label(self, name: str, field_name: str, text: str) -> dict[str, Any]:
+        """標籤：與 Tableau 相同寫在窗格的左側、線的上方（縱向的參考線寫在上方、線的右側）。"""
+        place: dict[str, Any] = (
+            {"y": {"value": 0}, "align": "left", "dx": 3, "dy": 0}
+            if self.position == "x"
+            else {"x": {"value": 0}, "align": "left", "dx": 3, "dy": -3}
+        )
+        return {
+            "name": name,
+            "mark": {
+                "type": "text",
+                "color": REF_LABEL_COLOR,
+                "align": place.pop("align"),
+                "baseline": "bottom" if self.position == "y" else "top",
+                "dx": place.pop("dx"),
+                "dy": place.pop("dy"),
+            },
+            "encoding": {
+                self.position: {**self.field(field_name), "aggregate": "max"},
+                **place,
+                "text": {"value": text},
+            },
+        }
+
+    def box(self, name: str, low: str, high: str, color: str) -> dict[str, Any]:
+        """盒鬚圖的盒子：離散軸時占每個位置的一半寬，否則畫在窗格中間。"""
+        enc: dict[str, Any] = {self.position: self.field(low), f"{self.position}2": {"field": high}}
+        mark: dict[str, Any] = {"type": "bar", "color": color, "tooltip": False}
+        if self.discrete and isinstance(self.other_enc, dict):
+            enc[self.other] = self.other_enc
+            mark["width" if self.other == "x" else "height"] = {"band": 0.5}
+        else:
+            size = "width" if self.other == "x" else "height"
+            enc[self.other] = {"value": {"expr": f"{size} * 0.4"}}
+            enc[f"{self.other}2"] = {"value": {"expr": f"{size} * 0.6"}}
+            mark["type"] = "rect"
+        return {
+            "name": name,
+            "transform": self.summary([low, high], self.discrete),
+            "mark": mark,
+            "encoding": enc,
+        }
+
+    def whisker(self, name: str, low: str, high: str) -> dict[str, Any]:
+        enc: dict[str, Any] = {self.position: self.field(low), f"{self.position}2": {"field": high}}
+        if self.discrete and isinstance(self.other_enc, dict):
+            enc[self.other] = {**self.other_enc, "bandPosition": 0.5}
+        else:
+            size = "width" if self.other == "x" else "height"
+            enc[self.other] = {"value": {"expr": f"{size} / 2"}}
+        return {
+            "name": name,
+            "transform": self.summary([low, high], self.discrete),
+            "mark": {"type": "rule", "color": WHISKER_COLOR, "tooltip": False},
+            "encoding": enc,
+        }
+
+    def cap(self, name: str, field_name: str) -> dict[str, Any]:
+        """鬚的兩端：短的橫線（離散軸時占位置寬的四分之一）。"""
+        enc: dict[str, Any] = {self.position: self.field(field_name)}
+        if self.discrete and isinstance(self.other_enc, dict):
+            enc[self.other] = {**self.other_enc, "bandPosition": 0.375}
+            enc[f"{self.other}2"] = {"field": self.other_enc["field"], "bandPosition": 0.625}
+        else:
+            size = "width" if self.other == "x" else "height"
+            enc[self.other] = {"value": {"expr": f"{size} * 0.45"}}
+            enc[f"{self.other}2"] = {"value": {"expr": f"{size} * 0.55"}}
+        return {
+            "name": name,
+            "transform": self.summary([field_name], self.discrete),
+            "mark": {"type": "rule", "color": WHISKER_COLOR, "tooltip": False},
+            "encoding": enc,
+        }
+
+
+def _box_plot(
+    n: int,
+    line: ReferenceLine,
+    field_name: str,
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]],
+    place: _Placement,
+    behind: list[dict[str, Any]],
+    body: dict[str, Any],
+) -> None:
+    """盒鬚圖：每個範圍的四分位數（線性內插）畫成兩種灰色的盒子（中位數上下），鬚延伸到 1.5 倍四分位距內
+    最遠的值（或最小、最大值），畫在標記之下；設定隱藏底下的標記時只顯示鬚以外的標記（離群值）。"""
+    names = {k: f"{REF}{n}_{k}" for k in ("q1", "median", "q3", "low", "high")}
+    outlier = f"{REF}{n}_out"
+    for members in groups.values():
+        numbers = sorted(float(v) for m in members if _is_number(v := m.get(field_name)))
+        if not numbers:
+            continue
+        q1, median, q3 = (_percentile(numbers, p) for p in (25, 50, 75))
+        if line.whiskers == "minmax":
+            low, high = numbers[0], numbers[-1]
+        else:
+            reach = 1.5 * (q3 - q1)
+            low = min(v for v in numbers if v >= q1 - reach)
+            high = max(v for v in numbers if v <= q3 + reach)
+        stats = {"q1": q1, "median": median, "q3": q3, "low": low, "high": high}
+        for m in members:
+            for key, name in names.items():
+                m[name] = stats[key]
+            value = m.get(field_name)
+            m[outlier] = _is_number(value) and (value < low or value > high)
+    behind += [
+        place.whisker(f"{REF}{n}_whisker_low", names["low"], names["q1"]),
+        place.whisker(f"{REF}{n}_whisker_high", names["q3"], names["high"]),
+        place.box(f"{REF}{n}_box_low", names["q1"], names["median"], BOX_COLORS[0]),
+        place.box(f"{REF}{n}_box_high", names["median"], names["q3"], BOX_COLORS[1]),
+        place.cap(f"{REF}{n}_cap_low", names["low"]),
+        place.cap(f"{REF}{n}_cap_high", names["high"]),
+    ]
+    encoding = body.get("encoding")
+    if line.hide_marks and isinstance(encoding, dict):
+        encoding["opacity"] = {
+            "condition": {"test": f"datum[{json.dumps(outlier)}]", "value": 1},
+            "value": 0,
+        }
+
+
+def _line_style(line: ReferenceLine) -> dict[str, Any] | None:
+    """線的格式；不畫線時為 None。預設：參考線畫（2 像素的灰色實線），分布與參考區間不畫。"""
+    visible = line.line_visible
+    if visible is None:
+        visible = line.kind == "line" and line.paired is None
+    if not visible:
+        return None
+    style: dict[str, Any] = {
+        "color": _css_color(line.line_color) if line.line_color else REF_COLOR,
+        "strokeWidth": line.line_width or REF_WIDTH,
+    }
+    if line.line_pattern == "dashed":
+        style["strokeDash"] = [6, 3]
+    elif line.line_pattern == "dotted":
+        width = style["strokeWidth"]
+        style["strokeDash"] = [width, width]
+    return style
+
+
+def _shade(level: int, levels: int) -> str:
+    """分布的第 level 層底色（1 為最內側）：由淺到深內插 SHADES。"""
+    if levels <= 1:
+        return SHADES[0]
+    t = (level - 1) / (levels - 1)
+    low, high = (int(c[1:], 16) for c in SHADES)
+    channels = []
+    for shift in (16, 8, 0):
+        a, b = (low >> shift) & 255, (high >> shift) & 255
+        channels.append(round(a + (b - a) * t))
+    return "#" + "".join(f"{c:02x}" for c in channels)
+
+
+def _percentile(ordered: list[float], percent: float) -> float:
+    """線性內插的百分位數（與 Tableau 的 PERCENTILE 相同）；ordered 已排序且非空。"""
+    position = (len(ordered) - 1) * percent / 100
+    low = math.floor(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
 
 
 def _scope_keys(builder: _Builder) -> dict[str, list[str]]:
@@ -2447,24 +2668,62 @@ def _is_number(value: Any) -> TypeGuard[int | float]:
 
 
 def _reference_source(
-    line: ReferenceLine, channels: dict[str, Channel], params: dict[str, Scalar]
-) -> str | float | None:
-    """參考線的值來源：資料欄名（以標記的值計算），或常數、參數的值。"""
+    line: ReferenceLine, channels: dict[str, Channel], params: dict[str, Scalar], temporal: bool
+) -> str | _Constant | None:
+    """參考線的值來源：資料欄名（以標記的值計算），或常數、參數的值（時間軸上為 UTC 毫秒）。"""
     if isinstance(line.value, ParamRef):
         value = params.get(line.value.parameter)
-        return float(value) if _is_number(value) else None
-    if line.formula == "constant" or line.value is None:
-        return float(line.constant) if _is_number(line.constant) else None
-    ch = channels.get(use_key(line.value))
-    return ch.name if ch is not None else None
+    elif line.formula == "constant" or line.value is None:
+        value = line.constant
+    else:
+        ch = channels.get(use_key(line.value))
+        return ch.name if ch is not None else None
+    if _is_number(value):
+        return _Constant(float(value))
+    number = _axis_value(value, temporal) if temporal else None
+    return _Constant(number) if number is not None else None
 
 
-def _reference_value(
-    line: ReferenceLine, numbers: list[float], source: str | float, extra: float | None
-) -> float | None:
-    """一個範圍的參考值；extra 為百分位數或標準差倍數。"""
-    if not isinstance(source, str):
-        return source
+def _reference_values(
+    line: ReferenceLine, numbers: list[float], source: str | _Constant
+) -> list[float | None]:
+    """一個範圍的參考值（分布為多個值，由小到大的順序與設定相同）。"""
+    if isinstance(source, _Constant):
+        return [source.value]
+    formula = line.formula
+    if line.percentages:
+        base = _single_value(line, numbers)
+        return [None if base is None else base * p / 100 for p in line.percentages]
+    if formula == "percentile":
+        return [_percentile(sorted(numbers), p) if numbers else None for p in line.percentiles]
+    if formula == "stdev":
+        enough = len(numbers) >= (2 if line.sample else 1)
+        if not enough:
+            return [None for _ in line.factors]
+        sd = statistics.stdev(numbers) if line.sample else statistics.pstdev(numbers)
+        mean = statistics.fmean(numbers)
+        return [mean + f * sd for f in line.factors]
+    if formula == "quantiles":
+        tiles = line.tiles or 4
+        ordered = sorted(numbers)
+        return [_percentile(ordered, 100 * i / tiles) if ordered else None for i in range(1, tiles)]
+    if formula == "confidence":
+        # 平均值的信賴區間：平均 ± t × 標準誤（樣本標準差）
+        if len(numbers) < 2:
+            return [None, None]
+        mean = statistics.fmean(numbers)
+        margin = (
+            t_quantile(0.5 + line.probability / 200, len(numbers) - 1)
+            * statistics.stdev(numbers)
+            / math.sqrt(len(numbers))
+        )
+        return [mean - margin, mean + margin]
+    if formula == "median_confidence":
+        return list(_median_interval(sorted(numbers), line.probability / 100))
+    return [_single_value(line, numbers)]
+
+
+def _single_value(line: ReferenceLine, numbers: list[float]) -> float | None:
     if not numbers:
         return None
     formula = line.formula
@@ -2479,36 +2738,68 @@ def _reference_value(
         return max(numbers)
     if formula == "median":
         return statistics.median(numbers)
-    if formula == "percentile":
-        ordered = sorted(numbers)
-        position = (len(ordered) - 1) * (50.0 if extra is None else extra) / 100
-        low = math.floor(position)
-        high = min(low + 1, len(ordered) - 1)
-        return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
-    if formula == "stdev":
-        if len(numbers) < (2 if line.sample else 1):
-            return None
-        sd = statistics.stdev(numbers) if line.sample else statistics.pstdev(numbers)
-        return statistics.fmean(numbers) + (extra or 0.0) * sd
     return None
 
 
-def _reference_label(line: ReferenceLine, axis: Channel, values: list[float]) -> str:
-    """只有一條線時的標籤；自動與值都顯示依量值格式化的值。"""
+def _median_interval(ordered: list[float], level: float) -> tuple[float | None, float | None]:
+    """中位數的信賴區間（不假設分配：以二項分配找對稱的順序統計量，涵蓋機率至少為 level）。"""
+    n = len(ordered)
+    if n < 2:
+        return None, None
+    best: tuple[int, int] | None = None
+    for j in range(n // 2, -1, -1):
+        k = n - 1 - j
+        coverage = math.fsum(math.comb(n, i) for i in range(j + 1, k + 1)) / 2**n
+        if coverage >= level:
+            best = (j, k)
+            break
+    if best is None:
+        return ordered[0], ordered[-1]
+    return ordered[best[0]], ordered[best[1]]
+
+
+def _reference_labels(
+    line: ReferenceLine, axis: Channel, values: list[float | None], temporal: bool
+) -> list[tuple[int, str]]:
+    """標籤（只有一個範圍時）：參考線一個、分布每個值一個；回傳 (第幾個值, 文字)。自動的標籤：
+    參考線為值，分布為各值的名稱（例如 2 Standard Deviations，與 Tableau 的截圖相同）。"""
     if line.label == "none" or not values:
-        return ""
-    text = format_value(values[0], "real", axis.format, None)
+        return []
     computation = COMPUTATION_NAMES[line.formula]
-    if line.label == "computation":
-        return computation
-    if line.label == "custom":
-        return (
-            (line.label_text or "")
-            .replace("<Value>", text)
-            .replace("<Computation>", computation)
-            .replace("<Scope>", SCOPE_NAMES[line.scope])
-        )
-    return text
+    labels: list[tuple[int, str]] = []
+    for i, value in enumerate(values):
+        if value is None:
+            continue
+        if temporal:
+            text = datetime.fromtimestamp(value / 1000, UTC).date().isoformat()
+        else:
+            text = format_value(value, "real", line.label_format or axis.format, None)
+        part = _distribution_name(line, i) if line.kind == "distribution" else computation
+        if line.label == "computation" or (
+            line.label == "automatic" and line.kind == "distribution"
+        ):
+            labels.append((i, part))
+        elif line.label == "custom":
+            custom = (line.label_text or "").replace("<Value>", text).replace("<Computation>", part)
+            labels.append((i, custom.replace("<Scope>", SCOPE_NAMES[line.scope])))
+        else:
+            labels.append((i, text))
+    return labels
+
+
+def _distribution_name(line: ReferenceLine, i: int) -> str:
+    """分布中第 i 個值的名稱（自動標籤）：例如 2 Standard Deviations、25th Percentile。"""
+    if line.percentages:
+        return f"{line.percentages[i]:g}% of {COMPUTATION_NAMES[line.formula]}"
+    if line.formula == "stdev":
+        return f"{line.factors[i]:g} Standard Deviations"
+    if line.formula == "percentile":
+        p = line.percentiles[i]
+        suffix = "th" if 10 <= p % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(int(p) % 10, "th")
+        return f"{p:g}{suffix} Percentile"
+    if line.formula == "quantiles":
+        return f"Quantile {i + 1}"
+    return ("Lower " if i == 0 else "Upper ") + COMPUTATION_NAMES[line.formula]
 
 
 def _table_calc_type(ws: Worksheet, use: FieldUse) -> str | None:

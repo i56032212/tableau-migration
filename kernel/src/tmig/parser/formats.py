@@ -408,6 +408,23 @@ def pane_trend_line(pane: etree._Element) -> tuple[TrendLine | None, str | None]
     return trend, None
 
 
+def reference_styles(styles: list[etree._Element | None]) -> dict[str, dict[str, str]]:
+    """參考線的格式（<style-rule element='refline'|'refband'>，在工作表或標記卡的 <style>）：參考線 id →
+    {「refline:屬性」或「refband:屬性」: 值}；沒有 id 的格式套用到所有參考線（id 為 *）。"""
+    found: dict[str, dict[str, str]] = {}
+    for style in styles:
+        for rule in children(style, "style-rule"):
+            element = rule.get("element")
+            if element not in ("refline", "refband"):
+                continue
+            for item in children(rule, "format"):
+                if item.get("scope"):
+                    continue  # 依架設定的格式（例如 rows 的線條）只影響座標軸的線
+                key = item.get("id") or "*"
+                found.setdefault(key, {})[f"{element}:{item.get('attr')}"] = item.get("value") or ""
+    return found
+
+
 def pane_label_match(pane: etree._Element) -> bool:
     """標記標籤的顏色是否與標記相符（標記卡的 datalabel 的 color-mode='match'）。"""
     return any(

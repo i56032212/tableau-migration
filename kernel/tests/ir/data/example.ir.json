@@ -302,6 +302,9 @@
           "addressing": [
             "f_region"
           ],
+          "instances": [],
+          "level": null,
+          "restart": null,
           "inferred": false,
           "options": {},
           "nested": [],

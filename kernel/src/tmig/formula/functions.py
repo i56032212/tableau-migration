@@ -472,9 +472,21 @@ def _rank(name: str) -> Checker:
 
 
 def _lookup(name: str) -> Checker:
+    """LOOKUP(expr, offset)：位移為整數常值或整數運算式（例如 FIRST()、LAST()、整數參數）。"""
+
     def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
-        int_literal(nodes[1], name, pos)
+        if not (isinstance(nodes[1], LiteralNode) and nodes[1].kind == "integer"):
+            _need(args[1].datatype == "integer", f"{name} 的位移必須是整數", pos)
         return args[0].datatype
+
+    return check
+
+
+def _rank_percentile(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        if len(nodes) == 2:
+            string_literal(nodes[1], name, ("asc", "desc"), pos)
+        return "real"
 
     return check
 
@@ -615,6 +627,7 @@ _TABLE_CALC: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("RANK_DENSE", 1, 2, _rank),
     ("RANK_MODIFIED", 1, 2, _rank),
     ("RANK_UNIQUE", 1, 2, _rank),
+    ("RANK_PERCENTILE", 1, 2, _rank_percentile),
     ("LOOKUP", 2, 2, _lookup),
 ]
 

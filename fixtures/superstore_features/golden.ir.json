@@ -2401,6 +2401,9 @@
           "addressing": [
             "f_category"
           ],
+          "instances": [],
+          "level": null,
+          "restart": null,
           "inferred": false,
           "options": {},
           "nested": [],
@@ -4024,6 +4027,9 @@
           "addressing": [
             "f_order_date"
           ],
+          "instances": [],
+          "level": null,
+          "restart": null,
           "inferred": false,
           "options": {
             "offset": -1
@@ -4038,6 +4044,9 @@
           "addressing": [
             "f_order_date"
           ],
+          "instances": [],
+          "level": null,
+          "restart": null,
           "inferred": false,
           "options": {
             "offset": -1
@@ -4305,13 +4314,30 @@
             "table_calc": null
           },
           "formula": "average",
+          "kind": "line",
           "constant": null,
           "percentiles": [],
           "factors": [],
+          "percentages": [],
+          "tiles": null,
+          "probability": 95.0,
           "sample": true,
           "scope": "pane",
           "label": "custom",
           "label_text": "Avg <Value>",
+          "label_format": null,
+          "paired": null,
+          "fill_above": false,
+          "fill_below": false,
+          "line_visible": null,
+          "line_color": null,
+          "line_width": null,
+          "line_pattern": null,
+          "fill_color": null,
+          "above_color": null,
+          "below_color": null,
+          "whiskers": "standard",
+          "hide_marks": false,
           "source_ref": "/workbook/worksheets/worksheet[21]/table/panes/pane/reference-line[1]"
         },
         {
@@ -4325,13 +4351,30 @@
           },
           "value": null,
           "formula": "constant",
+          "kind": "line",
           "constant": 100000.0,
           "percentiles": [],
           "factors": [],
+          "percentages": [],
+          "tiles": null,
+          "probability": 95.0,
           "sample": true,
           "scope": "table",
           "label": "custom",
           "label_text": "目標 <Value>",
+          "label_format": null,
+          "paired": null,
+          "fill_above": false,
+          "fill_below": false,
+          "line_visible": null,
+          "line_color": null,
+          "line_width": null,
+          "line_pattern": null,
+          "fill_color": null,
+          "above_color": null,
+          "below_color": null,
+          "whiskers": "standard",
+          "hide_marks": false,
           "source_ref": "/workbook/worksheets/worksheet[21]/table/panes/pane/reference-line[2]"
         }
       ],
@@ -4465,13 +4508,30 @@
             "table_calc": null
           },
           "formula": "median",
+          "kind": "line",
           "constant": null,
           "percentiles": [],
           "factors": [],
+          "percentages": [],
+          "tiles": null,
+          "probability": 95.0,
           "sample": true,
           "scope": "table",
           "label": "value",
           "label_text": null,
+          "label_format": null,
+          "paired": null,
+          "fill_above": false,
+          "fill_below": false,
+          "line_visible": null,
+          "line_color": null,
+          "line_width": null,
+          "line_pattern": null,
+          "fill_color": null,
+          "above_color": null,
+          "below_color": null,
+          "whiskers": "standard",
+          "hide_marks": false,
           "source_ref": "/workbook/worksheets/worksheet[22]/table/panes/pane/reference-line[1]"
         },
         {
@@ -4491,16 +4551,33 @@
             "table_calc": null
           },
           "formula": "stdev",
+          "kind": "distribution",
           "constant": null,
           "percentiles": [],
           "factors": [
             -1.0,
             1.0
           ],
+          "percentages": [],
+          "tiles": null,
+          "probability": 95.0,
           "sample": false,
           "scope": "table",
           "label": "none",
           "label_text": null,
+          "label_format": null,
+          "paired": null,
+          "fill_above": false,
+          "fill_below": false,
+          "line_visible": null,
+          "line_color": null,
+          "line_width": null,
+          "line_pattern": null,
+          "fill_color": null,
+          "above_color": null,
+          "below_color": null,
+          "whiskers": "standard",
+          "hide_marks": false,
           "source_ref": "/workbook/worksheets/worksheet[22]/table/panes/pane/reference-line[2]"
         }
       ],
@@ -4641,6 +4718,9 @@
           "addressing": [
             "f_order_date"
           ],
+          "instances": [],
+          "level": null,
+          "restart": null,
           "inferred": false,
           "options": {
             "aggregation": "avg",
@@ -4658,6 +4738,9 @@
           "addressing": [
             "f_order_date"
           ],
+          "instances": [],
+          "level": null,
+          "restart": null,
           "inferred": false,
           "options": {
             "aggregation": "sum",

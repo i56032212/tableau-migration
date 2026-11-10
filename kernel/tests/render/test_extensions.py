@@ -143,14 +143,18 @@ def test_reference_lines_per_pane_and_constant() -> None:
         assert v["__ref0_0"] == pytest.approx(sum(members) / len(members))
         assert v["__ref1_0"] == 100000
     named = layers(spec)
-    assert set(named) == {"__ref0_0", "__ref1_0", "__ref1_label"}
+    assert set(named) == {"__ref0_0", "__ref1_0", "__ref1_0_label"}
     assert named["__ref0_0"]["mark"]["type"] == "tick"
     assert named["__ref0_0"]["encoding"]["x"]["field"] == "__ref0_0"
     assert named["__ref0_0"]["encoding"]["y"]["field"] == "rows_dim"
     assert named["__ref0_0"]["transform"] == [{"calculate": "-1", "as": "__row"}]  # 不參與選取
     assert named["__ref1_0"]["mark"]["type"] == "rule"
-    assert named["__ref1_label"]["encoding"]["text"] == {"value": "目標 100,000"}
+    assert named["__ref1_0_label"]["encoding"]["text"] == {"value": "目標 100,000"}
+    # 標籤與 Tableau 相同寫在窗格的左側
+    assert named["__ref1_0_label"]["mark"]["align"] == "left"
     assert spec["layer"][0]["mark"]["type"] == "bar"
+    # 預設與 Tableau 相同為 2 像素的灰色實線
+    assert named["__ref1_0"]["mark"] == {"type": "rule", "color": "#b4b4b4", "strokeWidth": 2}
 
 
 def test_reference_line_median_and_stdev() -> None:
@@ -165,8 +169,16 @@ def test_reference_line_median_and_stdev() -> None:
         pytest.approx(mean + sd),
     )
     named = layers(spec)
-    assert set(named) == {"__ref0_0", "__ref0_label", "__ref1_0", "__ref1_1"}
-    assert named["__ref0_label"]["encoding"]["text"]["value"] == f"{first['__ref0_0']:,.0f}"
+    # 標準差的分布：平均 ± 1 個標準差之間塗上底色、不畫線（與 Tableau 的預設相同），畫在長條之下
+    assert set(named) == {"__ref0_0", "__ref0_0_label", "__ref1_fill0"}
+    assert named["__ref0_0_label"]["encoding"]["text"]["value"] == f"{first['__ref0_0']:,.0f}"
+    band = named["__ref1_fill0"]
+    assert spec["layer"][0] is band
+    assert band["mark"]["type"] == "rect"
+    assert (band["encoding"]["y"]["field"], band["encoding"]["y2"]["field"]) == (
+        "__ref1_0",
+        "__ref1_1",
+    )
 
 
 def render_lines(tmp_path: Path, db: Path, sheet: str, **parameters: Any) -> Any:

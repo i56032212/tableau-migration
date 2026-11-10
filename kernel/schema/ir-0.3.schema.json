@@ -2697,6 +2697,14 @@
           "title": "Addressing",
           "type": "array"
         },
+        "instances": {
+          "description": "定址的欄位實例，依序；有值時以它為準（同一個欄位有多個實例時只定址其中幾個，例如窗格的計算只定址最內層的月、不含年）",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Instances",
+          "type": "array"
+        },
         "inferred": {
           "default": false,
           "title": "Inferred",
@@ -3083,7 +3091,7 @@
     },
     "ReferenceLine": {
       "additionalProperties": false,
-      "description": "參考線：在量值軸上畫出常數、參數或標記值的彙總（平均、總和、最小、最大、中位數、百分位數），\n或平均 ± 標準差的倍數。只影響圖表，不影響數字。",
+      "description": "參考線、參考區間、分布與盒鬚圖（分析的「參考線」）：在量值軸上畫出常數、參數或標記值的彙總\n（平均、總和、最小、最大、中位數），或一組值的分布（百分位數、平均 ± 標準差的倍數、分位數、\n信賴區間、彙總值的百分比），分布的各值之間塗上底色。兩條參考線以 paired 配成參考區間（之間塗上\n底色）。kind 為 boxplot 時是盒鬚圖。只影響圖表，不影響數字。",
       "properties": {
         "id": {
           "description": "工作表內的編號，例如 refline0",
@@ -3121,9 +3129,23 @@
             "max",
             "median",
             "percentile",
-            "stdev"
+            "stdev",
+            "quantiles",
+            "confidence",
+            "median_confidence"
           ],
           "title": "Formula",
+          "type": "string"
+        },
+        "kind": {
+          "default": "line",
+          "description": "參考線（一個值）、分布（多個值，之間塗上底色）或盒鬚圖",
+          "enum": [
+            "line",
+            "distribution",
+            "boxplot"
+          ],
+          "title": "Kind",
           "type": "string"
         },
         "constant": {
@@ -3165,6 +3187,36 @@
           "title": "Factors",
           "type": "array"
         },
+        "percentages": {
+          "description": "彙總值的百分比分布（例如平均的 50%、100%），每個百分比各一個值",
+          "items": {
+            "type": "number"
+          },
+          "title": "Percentages",
+          "type": "array"
+        },
+        "tiles": {
+          "anyOf": [
+            {
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "formula 為 quantiles 時的分位數個數",
+          "title": "Tiles"
+        },
+        "probability": {
+          "default": 95,
+          "description": "信賴區間的信賴水準（%）",
+          "exclusiveMaximum": 100,
+          "exclusiveMinimum": 0,
+          "title": "Probability",
+          "type": "number"
+        },
         "sample": {
           "default": true,
           "description": "標準差為樣本（true）或母體",
@@ -3204,6 +3256,158 @@
           "default": null,
           "description": "label 為 custom 時的文字，<Value> 代入值",
           "title": "Label Text"
+        },
+        "label_format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標籤中值的數字格式（Tableau 的格式字串）；None 依量值的格式",
+          "title": "Label Format"
+        },
+        "paired": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "參考區間：與這條參考線（id）之間塗上底色（paired-id）",
+          "title": "Paired"
+        },
+        "fill_above": {
+          "default": false,
+          "description": "最大的值以上塗上底色（fill-above）",
+          "title": "Fill Above",
+          "type": "boolean"
+        },
+        "fill_below": {
+          "default": false,
+          "description": "最小的值以下塗上底色（fill-below）",
+          "title": "Fill Below",
+          "type": "boolean"
+        },
+        "line_visible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "畫出線；None 依預設（參考線畫、分布與參考區間不畫）",
+          "title": "Line Visible"
+        },
+        "line_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Color"
+        },
+        "line_width": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Width"
+        },
+        "line_pattern": {
+          "anyOf": [
+            {
+              "enum": [
+                "solid",
+                "dashed",
+                "dotted"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Pattern"
+        },
+        "fill_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "參考區間與分布的底色（refband 的 fill-color）；None 依預設的灰色",
+          "title": "Fill Color"
+        },
+        "above_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "fill-above 的顏色",
+          "title": "Above Color"
+        },
+        "below_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "fill-below 的顏色",
+          "title": "Below Color"
+        },
+        "whiskers": {
+          "default": "standard",
+          "description": "盒鬚圖的鬚：standard 延伸到 1.5 倍四分位距內最遠的值，minmax 到最小與最大值",
+          "enum": [
+            "standard",
+            "minmax"
+          ],
+          "title": "Whiskers",
+          "type": "string"
+        },
+        "hide_marks": {
+          "default": false,
+          "description": "盒鬚圖隱藏底下的標記（離群值除外，boxplot-mark-exclusion）",
+          "title": "Hide Marks",
+          "type": "boolean"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
@@ -4187,8 +4391,10 @@
             "running_total",
             "percent_of_total",
             "rank",
+            "percentile",
             "difference",
             "percent_difference",
+            "percent_from",
             "moving",
             "formula"
           ],
@@ -4221,6 +4427,38 @@
           },
           "title": "Addressing",
           "type": "array"
+        },
+        "instances": {
+          "description": "定址的欄位實例，依序；有值時以它為準（同一個欄位有多個實例時只定址其中幾個，例如窗格的計算只定址最內層的月、不含年）",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Instances",
+          "type": "array"
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "「計算層級」（level-address）：定址中比它更內層的維度改為分割，例如年增率在年的層級"
+        },
+        "restart": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "「重新開始間隔」（level-break）：定址中它與它之前的維度改為分割，例如年初至今"
         },
         "inferred": {
           "default": false,

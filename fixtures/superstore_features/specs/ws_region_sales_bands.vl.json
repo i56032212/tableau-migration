@@ -93,6 +93,41 @@
   },
   "layer": [
     {
+      "name": "__ref1_fill0",
+      "transform": [
+        {
+          "aggregate": [
+            {
+              "op": "max",
+              "field": "__ref1_0",
+              "as": "__ref1_0"
+            },
+            {
+              "op": "max",
+              "field": "__ref1_1",
+              "as": "__ref1_1"
+            }
+          ],
+          "groupby": []
+        }
+      ],
+      "mark": {
+        "type": "rect",
+        "color": "#f6f6f6",
+        "tooltip": false
+      },
+      "encoding": {
+        "y": {
+          "field": "__ref1_0",
+          "type": "quantitative",
+          "title": "Sales"
+        },
+        "y2": {
+          "field": "__ref1_1"
+        }
+      }
+    },
+    {
       "mark": {
         "type": "bar",
         "tooltip": true,
@@ -164,11 +199,8 @@
       "name": "__ref0_0",
       "mark": {
         "type": "rule",
-        "color": "#444",
-        "strokeDash": [
-          5,
-          3
-        ]
+        "color": "#b4b4b4",
+        "strokeWidth": 2
       },
       "encoding": {
         "y": {
@@ -180,65 +212,27 @@
       }
     },
     {
-      "name": "__ref0_label",
+      "name": "__ref0_0_label",
       "mark": {
         "type": "text",
-        "color": "#444",
-        "align": "right",
+        "color": "#555555",
+        "align": "left",
         "baseline": "bottom",
-        "dx": 0,
+        "dx": 3,
         "dy": -3
       },
       "encoding": {
         "y": {
           "field": "__ref0_0",
           "type": "quantitative",
-          "aggregate": "max",
-          "title": "Sales"
+          "title": "Sales",
+          "aggregate": "max"
         },
         "x": {
-          "value": "width"
+          "value": 0
         },
         "text": {
           "value": "590,011"
-        }
-      }
-    },
-    {
-      "name": "__ref1_0",
-      "mark": {
-        "type": "rule",
-        "color": "#444",
-        "strokeDash": [
-          5,
-          3
-        ]
-      },
-      "encoding": {
-        "y": {
-          "field": "__ref1_0",
-          "type": "quantitative",
-          "title": "Sales",
-          "aggregate": "max"
-        }
-      }
-    },
-    {
-      "name": "__ref1_1",
-      "mark": {
-        "type": "rule",
-        "color": "#444",
-        "strokeDash": [
-          5,
-          3
-        ]
-      },
-      "encoding": {
-        "y": {
-          "field": "__ref1_1",
-          "type": "quantitative",
-          "title": "Sales",
-          "aggregate": "max"
         }
       }
     }

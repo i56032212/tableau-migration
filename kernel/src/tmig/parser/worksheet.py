@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import re
+from dataclasses import dataclass
 from typing import Literal
 
 from lxml import etree
@@ -45,7 +46,7 @@ from tmig.ir.models import (
     TupleFilter,
     Worksheet,
 )
-from tmig.parser.colors import color_encodings, label_color, mark_style, parse_color
+from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
 from tmig.parser.context import DsState, FilterKind, ParseContext, SheetState
 from tmig.parser.datasource import add_calc_field, analyze_calcs
 from tmig.parser.fields import (
@@ -63,6 +64,7 @@ from tmig.parser.formats import (
     pane_label_match,
     pane_mark_size,
     pane_trend_line,
+    reference_styles,
     worksheet_formats,
 )
 from tmig.parser.refs import qualified_parts
@@ -100,16 +102,29 @@ ENCODINGS = ("color", "size", "text", "lod", "tooltip", "shape", "wedge-size", "
 ORDERING: dict[str, TableCalcPreset] = {
     "Columns": "table_down",
     "Rows": "table_across",
+    "Table": "table_across_then_down",
+    "TableCol": "table_down_then_across",
+    "ColumnInPane": "pane_down",
+    "RowInPane": "pane_across",
+    "Pane": "pane_across_then_down",
+    "PaneCol": "pane_down_then_across",
+    "CellInPane": "cell",
     "Field": "specific",
 }
+"""ordering-type → 計算方向（Tableau 的 Rows 是「表格（橫向）」：沿著一列計算）。"""
 QUICK_TYPES = {
     "CumTotal": "running_total",
     "PctTotal": "percent_of_total",
     "Rank": "rank",
+    "PctRank": "percentile",
     "Difference": "difference",
     "PctDiff": "percent_difference",
+    "PctValue": "percent_from",
     "WindowTotal": "moving",
 }
+DIFFERENCE_TYPES = ("difference", "percent_difference", "percent_from")
+FIXED_ENDS = {"%first%": "first", "first": "first", "%last%": "last", "last": "last"}
+"""「相對於」第一個、最後一個的寫法（依公開資料推定）；其他值為定址欄位的成員。"""
 MOVING_AGGS = frozenset(
     {"sum", "avg", "min", "max", "median", "count", "stdev", "stdevp", "var", "varp"}
 )
@@ -207,8 +222,24 @@ IGNORED_ELEMENTS = {
     "show-full-range": "顯示缺少的值（沒有資料的分組或日期）：新平台只顯示有資料的標記",
 }
 REFERENCE_FORMULAS = frozenset(
-    {"constant", "average", "sum", "total", "min", "max", "median", "percentile", "stdev"}
+    {
+        "constant",
+        "average",
+        "sum",
+        "total",
+        "min",
+        "max",
+        "median",
+        "percentile",
+        "stdev",
+        "quantiles",
+        "confidence",
+        "median_confidence",
+    }
 )
+DISTRIBUTIONS = frozenset({"percentile", "stdev", "quantiles", "confidence", "median_confidence"})
+"""分布（多個值，之間塗上底色）的計算方式；百分比（reference-line-value 的 percentage）也是分布。"""
+LINE_PATTERNS = {"solid": "solid", "dashed": "dashed", "dotted": "dotted", "dash-dot": "dashed"}
 REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
 REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
 KNOWN_UNSUPPORTED = {
@@ -343,7 +374,7 @@ class SheetParser:
         filters, kinds = self._filters(view)
         self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
-        reference_lines = self._reference_lines(child(table, "panes"))
+        reference_lines = self._reference_lines(child(table, "panes"), child(table, "style"))
         formats = self._formats(child(table, "style"), [*rows, *cols])
         sheet_formats = worksheet_formats(
             child(table, "style"), self.resolve, rows, cols, child(ctx.package.root, "style")
@@ -505,28 +536,41 @@ class SheetParser:
                 uses.append(use)
         return uses
 
-    def _reference_lines(self, panes_el: etree._Element | None) -> list[ReferenceLine]:
+    def _reference_lines(
+        self, panes_el: etree._Element | None, table_style: etree._Element | None
+    ) -> list[ReferenceLine]:
+        panes = children(panes_el, "pane")
+        styles = reference_styles([table_style, *(child(p, "style") for p in panes)])
         lines: list[ReferenceLine] = []
-        for pane in children(panes_el, "pane"):
+        for pane in panes:
             for element in children(pane, "reference-line"):
-                line = self._reference_line(element, len(lines))
+                line = self._reference_line(element, len(lines), styles)
                 if line is not None:
                     lines.append(line)
-        return lines
+        ids = {line.id for line in lines}
+        # 參考區間的另一條線沒有解析出來時，只畫這一條
+        return [
+            line
+            if line.paired is None or line.paired in ids
+            else line.model_copy(update={"paired": None})
+            for line in lines
+        ]
 
-    def _reference_line(self, element: etree._Element, index: int) -> ReferenceLine | None:
-        """參考線：常數、參數或標記值的彙總；新平台畫不出來的種類記為不影響數字。"""
+    def _reference_line(
+        self, element: etree._Element, index: int, styles: dict[str, dict[str, str]]
+    ) -> ReferenceLine | None:
+        """參考線、參考區間、分布與盒鬚圖：常數、參數或標記值的彙總；新平台畫不出來的種類記為不影響數字。"""
         ctx = self.ctx
         formula = element.get("formula", "")
+        formula = "median_confidence" if formula == "medianconfidence" else formula
         scope = REFERENCE_SCOPES.get(element.get("scope", ""))
-        if formula not in REFERENCE_FORMULAS or scope is None:
+        boxplot = element.get("boxplot-whisker-type") is not None
+        if (formula not in REFERENCE_FORMULAS and not boxplot) or scope is None:
             ctx.ignore(
                 element,
                 f"參考線、參考區間或分布（{formula}，{element.get('scope')}）新平台不畫（不影響數字）",
             )
             return None
-        if element.get("paired-id") or element.get("paired-distribution-id"):
-            ctx.ignore(element, "參考區間的底色新平台不畫，只畫兩端的參考線（不影響數字）")
         axis = self.resolve(instance_key(element.get("axis-column", "")))
         if isinstance(axis, str) or axis.field in SPECIAL_FIELDS:
             ctx.ignore(element, "Measure Values 軸上的參考線新平台不畫（不影響數字）")
@@ -553,12 +597,21 @@ class SheetParser:
                 return None
             value = found
         details = children(element, "reference-line-value")
-        if any(d.get("percentage") for d in details):
-            ctx.ignore(element, "百分比分布（彙總值的幾成）新平台不畫（不影響數字）")
-            return None
         percentiles: list[float] = []
         factors: list[float] = []
+        percentages: list[float] = []
+        tiles: int | None = None
+        probability = 95.0
         try:
+            percentages = [float(d.get("percentage", "")) for d in details if d.get("percentage")]
+            if formula == "quantiles":
+                tiles = int(element.get("tile-count") or 4)
+                if tiles < 2:
+                    raise ValueError(tiles)
+            if formula in ("confidence", "median_confidence"):
+                probability = float(element.get("probability") or 95)
+                if not 0 < probability < 100:
+                    raise ValueError(probability)
             if formula == "percentile":
                 percentiles = [
                     float(d.get("percentile", "")) for d in details if d.get("percentile")
@@ -572,21 +625,51 @@ class SheetParser:
                 if element.get("symmetric") == "true":
                     factors = sorted({abs(f) for f in factors} | {-abs(f) for f in factors})
         except ValueError:
-            ctx.flag(element, "參考線的百分位數或標準差倍數無法解析")
+            ctx.flag(element, "參考線的百分位數、標準差倍數、百分比、分位數或信賴水準無法解析")
             return None
         label = element.get("label-type", "automatic")
+        line_id = element.get("id") or f"refline{index}"
+        style = {**styles.get("*", {}), **styles.get(line_id, {})}
+        kind = (
+            "boxplot"
+            if boxplot
+            else "distribution"
+            if formula in DISTRIBUTIONS or percentages
+            else "line"
+        )
+        visible = style.get("refline:line-visibility") or style.get("refband:line-visibility")
+        width = style.get("refline:stroke-size") or style.get("refband:stroke-size")
+        pattern = style.get("refline:line-pattern-only") or style.get("refline:line-pattern")
+        pattern = pattern or style.get("refband:line-pattern-only")
         return ReferenceLine(
-            id=element.get("id") or f"refline{index}",
+            id=line_id,
             axis=axis,
             value=value,
-            formula=formula,  # type: ignore[arg-type]
+            formula=formula if formula in REFERENCE_FORMULAS else "median",  # type: ignore[arg-type]
+            kind=kind,  # type: ignore[arg-type]
             constant=constant,
             percentiles=percentiles,
             factors=factors,
+            percentages=percentages,
+            tiles=tiles,
+            probability=probability,
             sample=element.get("type") != "population",
             scope=scope,  # type: ignore[arg-type]
             label=label if label in REFERENCE_LABELS else "automatic",  # type: ignore[arg-type]
             label_text=element.get("label") if label == "custom" else None,
+            label_format=style.get("refline:text-format") or None,
+            paired=element.get("paired-id") or None,
+            fill_above=element.get("fill-above") == "true",
+            fill_below=element.get("fill-below") == "true",
+            line_visible=None if not visible else visible != "off" and width != "0",
+            line_color=hex_color(style.get("refline:stroke-color")),
+            line_width=int(width) if width and width.isdigit() and int(width) > 0 else None,
+            line_pattern=LINE_PATTERNS.get(pattern or ""),  # type: ignore[arg-type]
+            fill_color=hex_color(style.get("refband:fill-color")),
+            above_color=hex_color(style.get("refline:fill-above")),
+            below_color=hex_color(style.get("refline:fill-below")),
+            whiskers="minmax" if element.get("boxplot-whisker-type") == "minmax" else "standard",
+            hide_marks=element.get("boxplot-mark-exclusion") == "true",
             source_ref=xpath(element),
         )
 
@@ -1029,6 +1112,8 @@ class SheetParser:
         ds = self.ds
         row_dims = [u for u in rows if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)]
         col_dims = [u for u in cols if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)]
+        # 窗格內變化的維度（窗格的計算方向只定址這些）
+        self._pane_dims = (self._inner(rows), self._inner(cols))
         result: list[TableCalc] = []
         # 依工作表相依清單的順序處理；只出現在篩選上的 Table Calculation 也要先建立
         for key, inst in self.instances.items():
@@ -1078,9 +1163,12 @@ class SheetParser:
         direction = self._direction(calc_el, row_dims, col_dims, mark_dims)
         if direction is None:
             return None
-        preset, addressing, inferred = direction
         return NestedTableCalc(
-            field=field_id, preset=preset, addressing=addressing, inferred=inferred
+            field=field_id,
+            preset=direction.preset,
+            addressing=direction.addressing,
+            instances=direction.instances,
+            inferred=direction.inferred,
         )
 
     def _default_formula_calc(
@@ -1115,7 +1203,8 @@ class SheetParser:
         assert self.ds is not None
         ds = self.ds
         type_attr = calc_el.get("type")
-        if type_attr is None:
+        if type_attr in (None, "None", "Custom"):
+            # 沒有寫類型或 Custom：計算欄位本身的 Table Calculation 公式的計算方向
             if ds.levels.get(use.field) != "table_calc":
                 self.ctx.ignore(calc_el, "非 Table Calculation 欄位上的計算方向設定，不影響數字")
                 return None
@@ -1161,33 +1250,132 @@ class SheetParser:
                 return None
             options["rank_type"] = rank_type
             options["direction"] = "asc" if len(parts) > 1 and parts[1] == "Ascending" else "desc"
-        if calc_type in ("difference", "percent_difference"):
-            # 與前一個（address -1）或其他相對位置的值比較；與第一個、最後一個比較尚不支援
-            mode = calc_el.get("diff-options", "Relative")
-            values = [text_of(v) for v in children(child(calc_el, "address"), "value")]
-            if mode != "Relative" or len(values) != 1 or not re.fullmatch(r"-?\d+", values[0]):
-                self.ctx.flag(
-                    calc_el,
-                    f"差異計算的比較對象（{mode}：{'、'.join(values) or '未指定'}）v0 不支援",
-                )
-                return None
-            options["offset"] = int(values[0])
+        if calc_type == "percentile":
+            # 百分位數（RANK_PERCENTILE）：rank-options 的方向，預設遞增
+            parts = [p.strip() for p in calc_el.get("rank-options", "").split(",")]
+            options["direction"] = "desc" if "Descending" in parts else "asc"
         direction = self._direction(calc_el, row_dims, col_dims, mark_dims)
         if direction is None:
             return None
-        preset, addressing, inferred = direction
+        if calc_type in DIFFERENCE_TYPES and not self._difference(calc_el, direction, options):
+            return None
+        level = self._level_ref(calc_el, "level-address")
+        restart = self._level_ref(calc_el, "level-break")
+        if level is False or restart is False:
+            return None
         caption = ds.field_by_id(use.field).caption
         tc_id = self.ctx.ids.make("tc", f"{calc_type} {caption}", f"{calc_type} {use.field}")
         use.table_calc = tc_id
         return TableCalc(
             id=tc_id,
             type=calc_type,  # type: ignore[arg-type]
-            preset=preset,
-            addressing=addressing,
-            inferred=inferred,
+            preset=direction.preset,
+            addressing=direction.addressing,
+            instances=direction.instances,
+            level=level,
+            restart=restart,
+            inferred=direction.inferred,
             options=options,
             source_ref=xpath(calc_el),
         )
+
+    def _difference(
+        self, calc_el: etree._Element, direction: Direction, options: dict[str, Scalar]
+    ) -> bool:
+        """差異、差異百分比與百分比（Percent From）的比較對象：diff-options 為 Relative 時 address 是相對位置
+        （-1 為前一個）；Fixed 時是第一個、最後一個或定址欄位的某個成員。Compounded 為複合成長率。"""
+        assert self.ds is not None
+        flags = [f.strip() for f in calc_el.get("diff-options", "Relative").split(",") if f.strip()]
+        mode = flags[0] if flags else "Relative"
+        values = [text_of(v) for v in children(child(calc_el, "address"), "value")]
+        if "Compounded" in flags:
+            options["compounded"] = True
+        if "Parameter" in flags:
+            # 比較對象由參數決定：Relative 時參數是相對位置，Fixed 時是定址欄位的成員
+            ref = values[0].strip() if len(values) == 1 else ""
+            parts = qualified_parts(ref) if ref else []
+            if len(parts) != 2 or parts[0] != "Parameters" or mode not in ("Relative", "Fixed"):
+                self.ctx.flag(calc_el, f"差異計算的比較對象參數（{'、'.join(values)}）無法辨識")
+                return False
+            if mode == "Fixed" and len(direction.addressed) != 1:
+                self.ctx.flag(calc_el, "差異計算與參數指定的成員比較時，定址的欄位必須只有一個")
+                return False
+            options["parameter"] = ref
+            if mode == "Fixed":
+                options["relative_to"] = "member"
+                options["member_field"] = use_key(direction.addressed[0])
+            return True
+        if mode == "Relative":
+            if len(values) != 1 or not re.fullmatch(r"-?\d+", values[0]):
+                self.ctx.flag(
+                    calc_el,
+                    f"差異計算的比較對象（相對位置：{'、'.join(values) or '未指定'}）無法辨識",
+                )
+                return False
+            options["offset"] = int(values[0])
+            return True
+        if mode != "Fixed" or len(values) > 1:
+            self.ctx.flag(
+                calc_el, f"差異計算的比較對象（{mode}：{'、'.join(values) or '未指定'}）尚不支援"
+            )
+            return False
+        end = FIXED_ENDS.get(values[0].strip().lower()) if values else "first"
+        if end is not None:
+            options["relative_to"] = end
+            return True
+        # 定址欄位的某個成員（例如與 2019 年比較）：只有一個定址的欄位時
+        targets = direction.addressed
+        if len(targets) != 1:
+            self.ctx.flag(calc_el, f"差異計算與成員 {values[0]} 比較時，定址的欄位必須只有一個")
+            return False
+        target = targets[0]
+        try:
+            member = parse_literal(values[0], value_type(self.ds.field_by_id(target.field), target))
+        except LiteralError:
+            self.ctx.flag(calc_el, f"差異計算的比較成員「{values[0]}」無法辨識")
+            return False
+        options["relative_to"] = "member"
+        options["member"] = member
+        options["member_field"] = use_key(target)
+        return True
+
+    def _level_ref(
+        self, calc_el: etree._Element, attr_name: str
+    ) -> FieldUse | Literal[False] | None:
+        """「計算層級」（level-address）與「重新開始間隔」（level-break）的欄位：欄位名稱（所有實例）或
+        欄位實例；找不到時列為不支援並回傳 False。"""
+        ref = calc_el.get(attr_name)
+        if not ref:
+            return None
+        assert self.ds is not None
+        data_field = self.ds.by_name.get(instance_key(ref))
+        if data_field is not None:
+            return FieldUse(field=data_field.id)
+        resolved = self.resolve(ref)
+        if isinstance(resolved, str):
+            self.ctx.flag(calc_el, f"Table Calculation 的 {attr_name} 欄位 {ref}：{resolved}")
+            return False
+        return FieldUse(field=resolved.field, date=resolved.date, continuous=resolved.continuous)
+
+    def _inner(self, shelf: list[FieldUse]) -> list[FieldUse]:
+        """這一架在窗格內變化的維度：最後是離散維度時為它（它切出儲存格，外層的維度切出窗格）；最後是
+        連續的維度（座標軸）時為結尾連續的維度；最後是量值或 Measure Names 時沒有。"""
+        assert self.ds is not None
+        ds = self.ds
+
+        def is_dim(u: FieldUse) -> bool:
+            return u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)
+
+        if not shelf or not is_dim(shelf[-1]):
+            return []
+        if not shelf[-1].continuous:
+            return [shelf[-1]]
+        inner: list[FieldUse] = []
+        for u in reversed(shelf):
+            if not is_dim(u) or not u.continuous:
+                break
+            inner.insert(0, u)
+        return inner
 
     def _direction(
         self,
@@ -1195,8 +1383,11 @@ class SheetParser:
         row_dims: list[FieldUse],
         col_dims: list[FieldUse],
         mark_dims: list[FieldUse],
-    ) -> tuple[TableCalcPreset, list[str], bool] | None:
-        """計算方向：(預設方向, 定址欄位, 是否推定)；設定認不得時列為不支援並回傳 None。"""
+    ) -> Direction | None:
+        """計算方向；設定認不得時列為不支援並回傳 None。
+
+        表格的方向定址欄（列）架上所有的維度；窗格的方向只定址窗格內變化的維度（見 _inner）；儲存格只定址
+        標記卡上的維度。標記卡上的維度一律在定址的最後（與 Tableau 相同）。"""
         ordering = calc_el.get("ordering-type")
         inferred = ordering is None
         preset: TableCalcPreset
@@ -1209,13 +1400,31 @@ class SheetParser:
                 calc_el, f"Table Calculation 的計算方向 ordering-type={ordering} v0 不支援"
             )
             return None
-        if preset == "table_down":
-            return preset, _field_ids(row_dims + mark_dims), inferred
-        if preset == "table_across":
-            return preset, _field_ids(col_dims + mark_dims), inferred
+        inner_rows, inner_cols = getattr(self, "_pane_dims", ([], []))
+        shelves: dict[TableCalcPreset, list[FieldUse]] = {
+            "table_across": col_dims,
+            "table_down": row_dims,
+            "table_across_then_down": col_dims + row_dims,
+            "table_down_then_across": row_dims + col_dims,
+            "pane_across": inner_cols,
+            "pane_down": inner_rows,
+            "pane_across_then_down": inner_cols + inner_rows,
+            "pane_down_then_across": inner_rows + inner_cols,
+            "cell": [],
+        }
+        if preset in shelves:
+            addressed = _unique_uses(shelves[preset] + mark_dims)
+            # 表格的方向定址各欄位所有的實例；窗格與儲存格只定址其中一部分，記下實例
+            exact = preset.startswith("pane") or preset == "cell"
+            return Direction(
+                preset, _field_ids(addressed), addressed if exact else [], inferred, addressed
+            )
         refs = [r for r in [calc_el.get("ordering-field")] if r]
         refs += [o.get("field", "") for o in children(calc_el, "order")]
+        view = _unique_uses(row_dims + col_dims + mark_dims)
         addressing: list[str] = []
+        addressed: list[FieldUse] = []
+        partial = False
         for ref in refs:
             found = self._field_ref(ref)
             if found is None:
@@ -1223,10 +1432,23 @@ class SheetParser:
                 return None
             if found not in addressing:
                 addressing.append(found)
+            assert self.ds is not None
+            if self.ds.by_name.get(instance_key(ref)) is not None:
+                # 欄位名稱：這個欄位在檢視中的所有實例（例如年、月）
+                matches = [u for u in view if u.field == found]
+            else:
+                resolved = self.resolve(ref)
+                matches = (
+                    [u for u in view if use_key(u) == use_key(resolved)]
+                    if not isinstance(resolved, str)
+                    else []
+                )
+                partial = partial or any(u.field == found and u not in matches for u in view)
+            addressed += [u for u in matches if u not in addressed]
         if not addressing:
             self.ctx.flag(calc_el, "指定維度的 Table Calculation 沒有列出定址欄位")
             return None
-        return preset, addressing, inferred
+        return Direction(preset, addressing, addressed if partial else [], inferred, addressed)
 
     def _field_ref(self, ref: str) -> str | None:
         """[ds].[Region]（欄位名稱）或 [ds].[none:Region:nk]（欄位實例）→ 欄位 id。"""
@@ -1529,6 +1751,28 @@ def _pane_signature(pane: etree._Element) -> tuple[str, tuple[tuple[str, str], .
         (local_name(e), e.get("column", "")) for e in children(child(pane, "encodings"))
     )
     return mark, encodings
+
+
+@dataclass(frozen=True)
+class Direction:
+    """解析後的計算方向：instances 只在需要區分同一欄位的實例時有值；addressed 為定址的實例（檢視中）。"""
+
+    preset: TableCalcPreset
+    addressing: list[str]
+    instances: list[FieldUse]
+    inferred: bool
+    addressed: list[FieldUse]
+
+
+def _unique_uses(uses: list[FieldUse]) -> list[FieldUse]:
+    result: list[FieldUse] = []
+    keys: set[str] = set()
+    for use in uses:
+        key = use_key(use)
+        if key not in keys:
+            keys.add(key)
+            result.append(use)
+    return result
 
 
 def _field_ids(uses: list[FieldUse]) -> list[str]:

@@ -586,7 +586,9 @@ def test_reference_lines_render(server: str) -> None:
         assert count("ws_sub_category_sales", "tick") == 17  # 每個子類別一段
         median = specs["ws_region_sales_bands"]["data"]["values"][0]["__ref0_0"]
         assert f"{median:,.0f}" in texts("ws_region_sales_bands")
-        assert count("ws_region_sales_bands", "rule mark") == 3  # 中位數與平均 ± 1 個標準差
+        # 中位數的線；平均 ± 1 個標準差的分布與 Tableau 的預設相同只塗底色、不畫線
+        assert count("ws_region_sales_bands", "rule mark") == 1
+        assert count("ws_region_sales_bands", "rect mark") == 1
         assert errors == []
         browser.close()
 

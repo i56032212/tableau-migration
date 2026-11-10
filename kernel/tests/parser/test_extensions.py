@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tmig.ir import IR, CategoricalFilter, iter_zones
+from tmig.ir import IR, CategoricalFilter, FieldUse, iter_zones
 from tmig.parser.workbook import parse_workbook
 
 from . import builder as b
@@ -827,9 +827,93 @@ def test_difference_quick_calcs(tmp_path: Path) -> None:
         encodings=f"<text column='{ref('pcdf:sum:Sales:qk')}' />",
     )
     ir = parse(tmp_path, b.workbook(worksheets=sheet), lenient=True)
-    assert reasons(ir) == ["差異計算的比較對象（Absolute：First）v0 不支援"]
+    assert reasons(ir) == ["差異計算的比較對象（Absolute：First）尚不支援"]
     (tc,) = ir.worksheets[0].table_calcs
     assert (tc.type, tc.preset, tc.options) == ("difference", "table_down", {"offset": -1})
+
+
+def test_more_quick_calcs_and_directions(tmp_path: Path) -> None:
+    """百分位數、百分比、與成員比較的差異、複合成長率；窗格與儲存格的方向、計算層級與重新開始間隔。"""
+
+    def calc_instance(prefix: str, body: str) -> str:
+        return instance("[Sales]", "Sum", f"[{prefix}:sum:Sales:qk]", "quantitative", body)
+
+    month = instance("[Order Date]", "Month", "[mn:Order Date:ok]", "ordinal")
+    year = instance("[Order Date]", "Year", "[yr:Order Date:ok]", "ordinal")
+    date = f"[{b.DS}].[Order Date]"
+    calcs = [
+        calc_instance(
+            "pcrk",
+            "<table-calc ordering-type='Rows' rank-options='Competition,Descending' type='PctRank' />",
+        ),
+        calc_instance(
+            "pcva",
+            "<table-calc diff-options='Fixed' ordering-field='[federated.test01].[none:Region:nk]' "
+            "ordering-type='Field' type='PctValue'><address><value>East</value></address></table-calc>",
+        ),
+        calc_instance(
+            "pcdf",
+            "<table-calc diff-options='Fixed,Compounded' ordering-type='Rows' type='PctDiff'>"
+            "<address><value>%first%</value></address></table-calc>",
+        ),
+        calc_instance(
+            "cum", "<table-calc aggregation='Sum' ordering-type='RowInPane' type='CumTotal' />"
+        ),
+        calc_instance(
+            "diff",
+            f"<table-calc diff-options='Relative' level-address='{ref('yr:Order Date:ok')}' "
+            f"level-break='{date}' ordering-field='{date}' ordering-type='Field' type='Difference'>"
+            "<address><value>-1</value></address></table-calc>",
+        ),
+    ]
+    encodings = "".join(
+        f"<tooltip column='{ref(f'{p}:sum:Sales:qk')}' />"
+        for p in ("pcrk", "pcva", "pcdf", "cum", "diff")
+    )
+    sheet = worksheet(
+        "S",
+        [*BASIC, month, year, *calcs],
+        rows=ref("none:Region:nk"),
+        cols=f"({ref('yr:Order Date:ok')} / {ref('mn:Order Date:ok')})",
+        mark="Text",
+        encodings=encodings,
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    calcs_by_type = {tc.type: tc for tc in ir.worksheets[0].table_calcs}
+    assert calcs_by_type["percentile"].options == {"direction": "desc"}
+    member = calcs_by_type["percent_from"]
+    assert member.options == {"relative_to": "member", "member": "East", "member_field": "f_region"}
+    compounded = calcs_by_type["percent_difference"]
+    assert compounded.options == {"compounded": True, "relative_to": "first"}
+    pane = calcs_by_type["running_total"]
+    assert pane.preset == "pane_across"
+    assert [(u.field, u.date and u.date.unit) for u in pane.instances] == [
+        ("f_order_date", "month")
+    ]
+    level = calcs_by_type["difference"]
+    assert (
+        level.level is not None and level.level.date is not None and level.level.date.unit == "year"
+    )
+    assert level.restart == FieldUse(field="f_order_date")
+    # 以參數決定比較對象：相對位置
+    sheet = worksheet(
+        "S",
+        [
+            *BASIC,
+            calc_instance(
+                "diff",
+                "<table-calc diff-options='Relative,Parameter' ordering-type='Rows' type='Difference'>"
+                "<address><value>[Parameters].[Parameter 1]</value></address></table-calc>",
+            ),
+        ],
+        rows=ref("none:Region:nk"),
+        cols=ref("diff:sum:Sales:qk"),
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    (tc,) = ir.worksheets[0].table_calcs
+    assert tc.options == {"parameter": "[Parameters].[Parameter 1]"}
 
 
 # ---------------------------------------------------------------- L2 網址、參數與切換動作
@@ -1075,19 +1159,98 @@ def test_reference_lines(tmp_path: Path) -> None:
     assert constant.value is None
     assert param.value is not None and param.value.model_dump() == {"parameter": "p_top_n"}
     assert median.value is not None and median.value.model_dump()["field"] == "f_profit"
-    assert any("參考區間的底色" in u.reason for u in ir.ignored)
+    lines_by_id = {line.id: line for line in ir.worksheets[0].reference_lines}
+    assert [lines_by_id[f"refline{i}"].kind for i in range(7)] == [
+        "line",
+        "line",
+        "line",
+        "distribution",
+        "distribution",
+        "line",
+        "line",
+    ]
+    # 參考區間：refline5 與 refline6 之間塗上底色（refline6 沒有寫 paired-id 也一樣）
+    assert lines_by_id["refline5"].paired == "refline6"
+    assert ir.ignored == []
+
+
+def test_reference_distributions_bands_and_box_plots(tmp_path: Path) -> None:
+    """分位數、信賴區間、百分比分布、盒鬚圖與線條、底色的格式（<table><style> 中依 id 的 refline、refband）。"""
+    lines = "".join(
+        [
+            refline(0, "quantiles", extra=" tile-count='4' fill-above='true'"),
+            refline(1, "confidence", extra=" probability='90' paired-distribution-id='refline2'"),
+            refline(
+                2,
+                "average",
+                values="<reference-line-value percentage='50' /><reference-line-value percentage='100' />",
+            ),
+            refline(3, "medianconfidence", extra=" probability='95'"),
+            refline(
+                4,
+                "average",
+                "per-cell",
+                extra=" boxplot-mark-exclusion='true' boxplot-whisker-type='minmax'",
+            ),
+        ]
+    )
+    style = (
+        "<style><style-rule element='refline'>"
+        "<format attr='stroke-color' id='refline2' value='#898989' />"
+        "<format attr='line-pattern-only' id='refline2' value='dotted' />"
+        "<format attr='stroke-size' id='refline2' value='3' />"
+        "<format attr='text-format' id='refline2' value='n#,##0' />"
+        "<format attr='fill-above' id='refline0' value='#ff000080' />"
+        "<format attr='line-visibility' id='refline1' value='off' />"
+        "</style-rule><style-rule element='refband'>"
+        "<format attr='fill-color' id='refline0' value='#123456' />"
+        "</style-rule></style>"
+    )
+    sheet = worksheet(
+        "Lines",
+        BASIC,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        pane_extra=lines,
+    ).replace("<style />", style, 1)
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == [] and ir.ignored == []
+    quantiles, confidence, percentages, median, box = ir.worksheets[0].reference_lines
+    assert (quantiles.formula, quantiles.kind, quantiles.tiles) == ("quantiles", "distribution", 4)
+    assert (quantiles.fill_above, quantiles.above_color, quantiles.fill_color) == (
+        True,
+        "#ff000080",
+        "#123456",
+    )
+    assert (confidence.formula, confidence.probability, confidence.line_visible) == (
+        "confidence",
+        90.0,
+        False,
+    )
+    assert (percentages.kind, percentages.percentages) == ("distribution", [50.0, 100.0])
+    assert (percentages.line_color, percentages.line_pattern, percentages.line_width) == (
+        "#898989",
+        "dotted",
+        3,
+    )
+    assert percentages.label_format == "n#,##0"
+    assert median.formula == "median_confidence"
+    assert (box.kind, box.whiskers, box.hide_marks, box.scope) == (
+        "boxplot",
+        "minmax",
+        True,
+        "cell",
+    )
 
 
 def test_reference_lines_not_drawn(tmp_path: Path) -> None:
-    """新平台畫不出來的參考線、區間與分布記為略過（不影響數字），找不到參數則不支援。"""
+    """新平台畫不出來的參考線記為略過（不影響數字），找不到參數則不支援。"""
     lines = "".join(
         [
-            refline(0, "quantiles", extra=" tile-count='4'"),
-            refline(1, "confidence", extra=" probability='95'"),
-            refline(2, "average", values="<reference-line-value percentage='60' />"),
             refline(3, "average", axis="Multiple Values"),
             refline(4, "average", value="[Parameters].[Nope]"),
             refline(5, "percentile", values="<reference-line-value percentile='150' />"),
+            refline(6, "mode"),
         ]
     )
     sheet = worksheet(
@@ -1101,12 +1264,10 @@ def test_reference_lines_not_drawn(tmp_path: Path) -> None:
     assert ir.worksheets[0].reference_lines == []
     assert reasons(ir) == [
         "參考線的參數 [Parameters].[Nope] 找不到",
-        "參考線的百分位數或標準差倍數無法解析",
+        "參考線的百分位數、標準差倍數、百分比、分位數或信賴水準無法解析",
     ]
     ignored = [u.reason for u in ir.ignored]
-    assert "參考線、參考區間或分布（quantiles，per-table）新平台不畫（不影響數字）" in ignored
-    assert "參考線、參考區間或分布（confidence，per-table）新平台不畫（不影響數字）" in ignored
-    assert "百分比分布（彙總值的幾成）新平台不畫（不影響數字）" in ignored
+    assert "參考線、參考區間或分布（mode，per-table）新平台不畫（不影響數字）" in ignored
     assert "Measure Values 軸上的參考線新平台不畫（不影響數字）" in ignored
 
 

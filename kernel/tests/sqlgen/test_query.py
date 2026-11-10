@@ -101,7 +101,7 @@ def by_region(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
     return {r["f_region"]: r[key] for r in rows}
 
 
-def approx(value: dict[str, Any]) -> dict[str, Any]:
+def approx(value: dict[Any, Any]) -> dict[Any, Any]:
     return {k: pytest.approx(v) if isinstance(v, float) else v for k, v in value.items()}
 
 
@@ -412,6 +412,10 @@ TC_CALCS = "".join(
         calc("Calculation_47", "Window Count", "WINDOW_COUNT(SUM([Sales]))", "integer"),
         calc("Calculation_48", "Window Min", "WINDOW_MIN(SUM([Sales]), -1, 0)"),
         calc("Calculation_49", "Window Max", "WINDOW_MAX(SUM([Sales]), 0, 1)"),
+        calc("Calculation_50", "Pct Rank", "RANK_PERCENTILE(COUNTD([Order ID]), 'desc')"),
+        calc("Calculation_51", "Pct Rank Asc", "RANK_PERCENTILE(SUM([Sales]))"),
+        calc("Calculation_52", "Lookup First", "LOOKUP(SUM([Sales]), FIRST())"),
+        calc("Calculation_53", "Lookup Last", "LOOKUP(SUM([Sales]), LAST() - 1)"),
     ]
 )
 
@@ -557,6 +561,238 @@ def test_moving_calculations(run: Run) -> None:
         "South": 800,
         "West": 800,  # 視窗超出範圍時只取現有的標記
     }
+
+
+def fixed_instance(kind: str, name: str, value: str, options: str = "Fixed") -> str:
+    return instance(
+        "[Sales]",
+        "Sum",
+        f"[{name}:sum:Sales:qk]",
+        "quantitative",
+        f"<table-calc diff-options='{options}' ordering-type='Columns' type='{kind}'>"
+        f"<address><value>{value}</value></address></table-calc>",
+    )
+
+
+def test_percentile_and_percent_from(run: Run) -> None:
+    """百分位數（RANK_PERCENTILE，預設遞增）與百分比（Percent From：與前一個的比值）。"""
+    # 依 Region 排序：East 350、North 60、South 100、West 800
+    inst = [
+        quick("PctRank", "pcrk", " rank-options='Competition,Ascending'"),
+        diff_instance("PctValue", "pcva", -1),
+    ]
+    enc = f"<text column='{ref('pcrk:sum:Sales:qk')}' /><tooltip column='{ref('pcva:sum:Sales:qk')}' />"
+    rows = tc_rows(run, inst, enc)
+    assert by_region(rows, "sum(f_sales)#tc_percentile_sales") == approx(
+        {"East": 2 / 3, "North": 0.0, "South": 1 / 3, "West": 1.0}
+    )
+    assert by_region(rows, "sum(f_sales)#tc_percent_from_sales") == approx(
+        {"East": None, "North": 60 / 350, "South": 100 / 60, "West": 8.0}
+    )
+
+
+def test_rank_percentile_and_lookup_positions(run: Run) -> None:
+    """RANK_PERCENTILE 與 Tableau 文件的例子相同（6、9、9、14 → 0、0.67、0.67、1）；LOOKUP 的位移可以是運算式。"""
+    numbers = (50, 51, 52, 53)
+    inst = [tc_instance(n) for n in numbers]
+    enc = "".join(f"<tooltip column='{ref(f'usr:Calculation_{n}:qk')}' />" for n in numbers)
+    rows = tc_rows(run, inst, enc)
+    by = {r["f_region"]: r for r in rows}
+
+    def col(caption: str) -> dict[str, Any]:
+        key = next(k for k in rows[0] if k.endswith(f"#tc_formula_{caption}"))
+        return {region: by[region][key] for region in by}
+
+    # 訂單數：East 2、South 2、West 2、North 1；遞減時 2 的個數為 3 → (3 - 1) / 3
+    assert col("pct_rank") == approx({"East": 2 / 3, "North": 1.0, "South": 2 / 3, "West": 2 / 3})
+    assert col("pct_rank_asc") == approx({"East": 2 / 3, "North": 0.0, "South": 1 / 3, "West": 1.0})
+    assert col("lookup_first") == {"East": 350, "North": 350, "South": 350, "West": 350}
+    # LAST() - 1：每一列都指向倒數第二個標記（South）
+    assert col("lookup_last") == {"East": 100, "North": 100, "South": 100, "West": 100}
+
+
+def test_difference_relative_to_first_last_and_member(run: Run) -> None:
+    """與第一個、最後一個或某個成員比較（diff-options='Fixed'）與複合成長率（Compounded）。"""
+    # 依 Region 排序：East 350、North 60、South 100、West 800
+    inst = [
+        fixed_instance("Difference", "diff", "%first%"),
+        fixed_instance("PctDiff", "pcdf", "%last%"),
+        fixed_instance("PctValue", "pcva", "South"),
+    ]
+    enc = (
+        f"<text column='{ref('diff:sum:Sales:qk')}' /><tooltip column='{ref('pcdf:sum:Sales:qk')}' />"
+        f"<tooltip column='{ref('pcva:sum:Sales:qk')}' />"
+    )
+    rows = tc_rows(run, inst, enc)
+    assert by_region(rows, "sum(f_sales)#tc_difference_sales") == {
+        "East": 0.0,
+        "North": -290.0,
+        "South": -250.0,
+        "West": 450.0,
+    }
+    assert by_region(rows, "sum(f_sales)#tc_percent_difference_sales") == approx(
+        {"East": -450 / 800, "North": -740 / 800, "South": -700 / 800, "West": 0.0}
+    )
+    assert by_region(rows, "sum(f_sales)#tc_percent_from_sales") == approx(
+        {"East": 3.5, "North": 0.6, "South": 1.0, "West": 8.0}
+    )
+    # 複合成長率：(x / 第一個) ^ (1 / 相隔的標記數) - 1，第一個為 0
+    rows = tc_rows(
+        run,
+        [fixed_instance("PctDiff", "pcdf", "%first%", "Fixed,Compounded")],
+        f"<text column='{ref('pcdf:sum:Sales:qk')}' />",
+    )
+    assert by_region(rows, "sum(f_sales)#tc_percent_difference_sales") == approx(
+        {
+            "East": 0.0,
+            "North": 60 / 350 - 1,
+            "South": (100 / 350) ** (1 / 2) - 1,
+            "West": (800 / 350) ** (1 / 3) - 1,
+        }
+    )
+
+
+def test_difference_target_from_parameter(run: Run) -> None:
+    """比較對象由參數決定：Fixed 時參數是成員（Region Pick），Relative 時是相對位置（Top N）。"""
+    inst = [
+        fixed_instance("PctValue", "pcva", "[Parameters].[Parameter 2]", "Fixed,Parameter"),
+        fixed_instance("Difference", "diff", "[Parameters].[Parameter 1]", "Relative,Parameter"),
+    ]
+    enc = f"<text column='{ref('pcva:sum:Sales:qk')}' /><tooltip column='{ref('diff:sum:Sales:qk')}' />"
+    rows = tc_rows(run, inst, enc)
+    assert by_region(rows, "sum(f_sales)#tc_percent_from_sales") == approx(
+        {"East": 1.0, "North": 60 / 350, "South": 100 / 350, "West": 800 / 350}
+    )
+    # Top N 的預設值 5 超出分割範圍
+    assert set(by_region(rows, "sum(f_sales)#tc_difference_sales").values()) == {None}
+    state = QueryState(parameters={"p_region_pick": "West", "p_top_n": -2})
+    rows = run(region_sheet(inst, encodings=enc), TC_CALCS, state=state)
+    assert by_region(rows, "sum(f_sales)#tc_percent_from_sales") == approx(
+        {"East": 350 / 800, "North": 60 / 800, "South": 100 / 800, "West": 1.0}
+    )
+    assert by_region(rows, "sum(f_sales)#tc_difference_sales") == {
+        "East": None,
+        "North": None,
+        "South": -250.0,
+        "West": 740.0,
+    }
+
+
+MONTH_PART = instance("[Order Date]", "Month", "[mn:Order Date:ok]", "ordinal")
+
+
+def month_table(table_calc: str, name: str = "calc", kind: str = "CumTotal") -> list[str]:
+    """欄為年 / 月（離散）的文字表：2023 年 1–3 月 150、200、300；2024 年 1–3 月 500、80、80。"""
+    return [
+        MONTH_PART,
+        instance("[Sales]", "Sum", f"[{name}:sum:Sales:qk]", "quantitative", table_calc),
+    ]
+
+
+def run_months(run: Run, table_calc: str, name: str = "calc") -> dict[tuple[int, int], Any]:
+    sheet = region_sheet(
+        month_table(table_calc, name),
+        rows="",
+        cols=f"({ref('yr:Order Date:ok')} / {ref('mn:Order Date:ok')})",
+        mark="Text",
+        encodings=f"<text column='{ref(f'{name}:sum:Sales:qk')}' />",
+    )
+    rows = run(sheet, TC_CALCS)
+    key = next(k for k in rows[0] if k.startswith("sum(f_sales)#"))
+    return {(r["year(f_order_date)"], r["month(f_order_date)"]): r[key] for r in rows}
+
+
+def test_pane_and_table_directions(run: Run) -> None:
+    """表格（橫向）沿著年與月累計；窗格（橫向）只定址最內層的月，每年重新累計。"""
+    table = run_months(run, "<table-calc aggregation='Sum' ordering-type='Rows' type='CumTotal' />")
+    assert list(table.values()) == [150, 350, 650, 1150, 1230, 1310]
+    pane = run_months(
+        run, "<table-calc aggregation='Sum' ordering-type='RowInPane' type='CumTotal' />"
+    )
+    assert list(pane.values()) == [150, 350, 650, 500, 580, 660]
+    # 表格（橫向再縱向）在只有欄時與表格（橫向）相同；儲存格每個標記各自一組
+    across = run_months(
+        run, "<table-calc aggregation='Sum' ordering-type='Table' type='CumTotal' />"
+    )
+    assert list(across.values()) == list(table.values())
+    cell = run_months(
+        run, "<table-calc aggregation='Sum' ordering-type='CellInPane' type='CumTotal' />"
+    )
+    assert list(cell.values()) == [150, 200, 300, 500, 80, 80]
+
+
+def test_specific_dimensions_at_level_and_restarting(run: Run) -> None:
+    """指定維度：欄位實例只定址這個實例；計算層級（level-address）在年的層級比較（年增率）；
+    重新開始間隔（level-break）每年重新累計（年初至今）。"""
+    field = f"[{b.DS}].[Order Date]"
+    year = ref("yr:Order Date:ok")
+    yoy = run_months(
+        run,
+        f"<table-calc diff-options='Relative' level-address='{year}' ordering-field='{field}' "
+        "ordering-type='Field' type='PctDiff'><address><value>-1</value></address></table-calc>",
+    )
+    assert yoy == approx(
+        {
+            (2023, 1): None,
+            (2023, 2): None,
+            (2023, 3): None,
+            (2024, 1): (500 - 150) / 150,
+            (2024, 2): (80 - 200) / 200,
+            (2024, 3): (80 - 300) / 300,
+        }
+    )
+    ytd = run_months(
+        run,
+        f"<table-calc aggregation='Sum' level-break='{year}' ordering-field='{field}' "
+        "ordering-type='Field' type='CumTotal' />",
+    )
+    assert list(ytd.values()) == [150, 350, 650, 500, 580, 660]
+    # 只定址年（欄位實例）：每個月份各自跨年累計
+    by_year = run_months(
+        run,
+        f"<table-calc aggregation='Sum' ordering-field='{year}' ordering-type='Field' type='CumTotal' />",
+    )
+    assert by_year == {
+        (2023, 1): 150,
+        (2023, 2): 200,
+        (2023, 3): 300,
+        (2024, 1): 650,
+        (2024, 2): 280,
+        (2024, 3): 380,
+    }
+
+
+def test_cell_direction_uses_marks_card(run: Run) -> None:
+    """儲存格：只定址標記卡上的維度（每個地區內各類別占地區的比例）。"""
+    inst = [
+        instance(
+            "[Sales]",
+            "Sum",
+            "[pcto:sum:Sales:qk]",
+            "quantitative",
+            "<table-calc ordering-type='CellInPane' type='PctTotal' />",
+        )
+    ]
+    sheet = region_sheet(
+        inst,
+        cols=ref("pcto:sum:Sales:qk"),
+        encodings=f"<color column='{ref('none:Category:nk')}' />",
+    )
+    rows = run(sheet, TC_CALCS)
+    result = {
+        (r["f_region"], r["f_category"]): r["sum(f_sales)#tc_percent_of_total_sales"] for r in rows
+    }
+    assert result == approx(
+        {
+            ("East", "Furniture"): 150 / 350,
+            ("East", "Technology"): 200 / 350,
+            ("North", "Office"): 1.0,
+            ("South", "Furniture"): 0.8,
+            ("South", "Office"): 0.2,
+            ("West", "Furniture"): 300 / 800,
+            ("West", "Technology"): 500 / 800,
+        }
+    )
 
 
 def test_table_across_with_rows_only_is_one_partition_per_mark(run: Run) -> None:

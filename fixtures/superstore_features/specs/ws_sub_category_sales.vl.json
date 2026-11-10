@@ -195,8 +195,8 @@
       ],
       "mark": {
         "type": "tick",
-        "color": "#444",
-        "thickness": 1.5
+        "thickness": 2,
+        "color": "#b4b4b4"
       },
       "encoding": {
         "x": {
@@ -239,11 +239,8 @@
       "name": "__ref1_0",
       "mark": {
         "type": "rule",
-        "color": "#444",
-        "strokeDash": [
-          5,
-          3
-        ]
+        "color": "#b4b4b4",
+        "strokeWidth": 2
       },
       "encoding": {
         "x": {
@@ -255,10 +252,10 @@
       }
     },
     {
-      "name": "__ref1_label",
+      "name": "__ref1_0_label",
       "mark": {
         "type": "text",
-        "color": "#444",
+        "color": "#555555",
         "align": "left",
         "baseline": "top",
         "dx": 3,
@@ -268,8 +265,8 @@
         "x": {
           "field": "__ref1_0",
           "type": "quantitative",
-          "aggregate": "max",
-          "title": "Sales"
+          "title": "Sales",
+          "aggregate": "max"
         },
         "y": {
           "value": 0

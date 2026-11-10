@@ -34,6 +34,7 @@ from tmig.formula.ast import (
     LiteralNode,
     Lod,
     Node,
+    Unary,
     children,
     strip_positions,
 )
@@ -1283,16 +1284,11 @@ class WorksheetQuery:
             name = RANK_FUNCTIONS[str(tc.options.get("rank_type", "competition"))]
             direction = str(tc.options.get("direction", "desc"))
             return Call(0, name, (base, LiteralNode(0, "string", direction)))
-        if tc.type in ("difference", "percent_difference"):
-            # 與 Tableau 轉成計算欄位時相同：ZN(x) - LOOKUP(ZN(x), -1)，百分比再除以 ABS(LOOKUP(...))
-            offset = tc.options.get("offset", -1)
-            assert isinstance(offset, int)
-            zn = Call(0, "ZN", (base,))
-            other = Call(0, "LOOKUP", (zn, LiteralNode(0, "integer", offset)))
-            diff = Binary(0, "-", zn, other)
-            if tc.type == "difference":
-                return diff
-            return Binary(0, "/", diff, Call(0, "ABS", (other,)))
+        if tc.type == "percentile":
+            direction = str(tc.options.get("direction", "asc"))
+            return Call(0, "RANK_PERCENTILE", (base, LiteralNode(0, "string", direction)))
+        if tc.type in ("difference", "percent_difference", "percent_from"):
+            return self._difference(tc, base)
         if tc.type == "moving":
             # 與 Tableau 轉成計算欄位時相同：WINDOW_AVG(x, -2, 0)；視窗超出分割範圍時取現有的標記，
             # 設定「不足時為 Null」則為 Null
@@ -1311,6 +1307,78 @@ class WorksheetQuery:
             )
             return If(0, ((complete, window),), None)
         raise QueryError(f"快速 Table Calculation 類型 {tc.type} 尚不支援", unsupported=True)
+
+    def _difference(self, tc: TableCalc, base: Node) -> Node:
+        """差異、差異百分比與百分比（Percent From）：與 Tableau 轉成計算欄位時相同，
+        ZN(x) - LOOKUP(ZN(x), -1)、差異百分比再除以 ABS(LOOKUP(...))、百分比為 ZN(x) / LOOKUP(...)。
+
+        比較對象：相對位置（offset）、第一個（LOOKUP(ZN(x), FIRST())）、最後一個，或定址欄位的某個成員
+        （WINDOW_MAX(IF ATTR(欄位) = 成員 THEN ZN(x) END)）。複合成長率（compounded）：
+        POWER(ZN(x) / 比較對象, ZN(1 / 距離)) - 1，距離為與比較對象相隔的標記數。"""
+        zn = Call(0, "ZN", (base,))
+        relative_to = tc.options.get("relative_to")
+        distance: Node
+        if relative_to in ("first", "last"):
+            position = Call(0, "FIRST" if relative_to == "first" else "LAST", ())
+            other: Node = Call(0, "LOOKUP", (zn, position))
+            distance = Unary(0, "-", position)
+        elif relative_to == "member":
+            key = str(tc.options.get("member_field"))
+            target = next((u for u in self._view_uses() if use_key(u) == key), None)
+            if target is None:
+                raise QueryError(f"差異計算的比較欄位 {key} 不在檢視中")
+            member = (
+                self._parameter_node(str(tc.options["parameter"]))
+                if "parameter" in tc.options
+                else _literal_node(tc.options.get("member"), self.dim_datatype(target))
+            )
+            test = Binary(0, "=", Call(0, "ATTR", (self.dim_node(target),)), member)
+            other = Call(0, "WINDOW_MAX", (If(0, ((test, zn),), None),))
+            at = Call(0, "WINDOW_MAX", (If(0, ((test, Call(0, "INDEX", ())),), None),))
+            distance = Binary(0, "-", Call(0, "INDEX", ()), at)
+        elif "parameter" in tc.options:
+            # 相對位置由參數決定（例如與前 N 期比較）
+            position = self._parameter_node(str(tc.options["parameter"]))
+            other = Call(0, "LOOKUP", (zn, position))
+            distance = Call(0, "ABS", (position,))
+        else:
+            offset = tc.options.get("offset", -1)
+            assert isinstance(offset, int)
+            other = Call(0, "LOOKUP", (zn, LiteralNode(0, "integer", offset)))
+            distance = LiteralNode(0, "integer", abs(offset))
+        if tc.options.get("compounded"):
+            ratio = Binary(0, "/", zn, other)
+            exponent = Call(0, "ZN", (Binary(0, "/", LiteralNode(0, "integer", 1), distance),))
+            return Binary(0, "-", Call(0, "POWER", (ratio, exponent)), LiteralNode(0, "integer", 1))
+        if tc.type == "percent_from":
+            return Binary(0, "/", zn, other)
+        diff = Binary(0, "-", zn, other)
+        if tc.type == "difference":
+            return diff
+        return Binary(0, "/", diff, Call(0, "ABS", (other,)))
+
+    def _parameter_node(self, ref: str) -> Node:
+        """[Parameters].[名稱] → 公式的參數參照（查詢時代入目前的值）。"""
+        try:
+            return parse_formula(ref)
+        except FormulaSyntaxError as exc:
+            raise QueryError(f"參數參照 {ref} 無法解析：{exc}") from exc
+
+    def _view_uses(self) -> list[FieldUse]:
+        ws = self.worksheet
+        uses = [*ws.rows, *ws.columns, *ws.marks.uses()]
+        for pane in ws.panes:
+            uses += pane.marks.uses()
+        return uses
+
+    def dim_node(self, use: FieldUse) -> Node:
+        """維度（含日期部分、截斷）的運算式語法樹。"""
+        ref = self.field_node(use.field)
+        if use.date is None:
+            return ref
+        unit = LiteralNode(0, "string", use.date.unit)
+        name = "DATEPART" if use.date.kind == "part" else "DATETRUNC"
+        return Call(0, name, (unit, ref))
 
     def _check_measure(self, m: Measure) -> None:
         try:
@@ -1872,8 +1940,24 @@ class WorksheetQuery:
         sort_cols: dict[str, tuple[str, str]],
     ) -> _Window:
         addressing: list[Dim] = []
-        for field_id in tc.addressing:
-            addressing += [d for d in dims if d.use.field == field_id and d not in addressing]
+        if tc.instances:
+            # 只定址同一欄位的部分實例（例如窗格的計算只定址月、不含年）
+            for key in (use_key(u) for u in tc.instances):
+                addressing += [d for d in dims if d.key == key and d not in addressing]
+        else:
+            for field_id in tc.addressing:
+                addressing += [d for d in dims if d.use.field == field_id and d not in addressing]
+        if isinstance(tc, TableCalc):
+            if tc.level is not None:
+                # 計算層級：定址中比它更內層的維度改為分割（例如在年的層級比較，每一季各自與前一年比）
+                hits = [i for i, d in enumerate(addressing) if _same_level(d, tc.level)]
+                if hits:
+                    addressing = addressing[: hits[-1] + 1]
+            if tc.restart is not None:
+                # 重新開始間隔：定址中它與它之前的維度改為分割（例如每年重新累計）
+                hits = [i for i, d in enumerate(addressing) if _same_level(d, tc.restart)]
+                if hits:
+                    addressing = addressing[hits[-1] + 1 :]
         partition = [ident(d.col) for d in dims if d not in addressing]
         order: list[str] = []
         for d in addressing:
@@ -2159,7 +2243,7 @@ class WorksheetQuery:
             return f"({size} - row_number() {over()})"
         if name == "SIZE":
             return f"count(*) OVER ({partition})" if partition else "count(*) OVER ()"
-        if name.startswith("RANK"):
+        if name.startswith("RANK") and name != "RANK_PERCENTILE":
             value = arg(0)
             direction = "DESC"
             if len(node.args) == 2:
@@ -2182,14 +2266,41 @@ class WorksheetQuery:
             else:
                 fn = f"count(*) OVER ({rank_partition} {ordering} RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
             return f"(CASE WHEN ({value}) IS NULL THEN NULL ELSE CAST({fn} AS BIGINT) END)"
+        if name == "RANK_PERCENTILE":
+            # (不大於自己的值的個數 - 1) / (個數 - 1)；Null 不計入（與 Tableau 文件的例子相同：
+            # 6、9、9、14 → 0、0.67、0.67、1）
+            value = arg(0)
+            direction = "ASC"
+            literal_node = node.args[1] if len(node.args) == 2 else None
+            if isinstance(literal_node, LiteralNode) and str(literal_node.value).lower() == "desc":
+                direction = "DESC"
+            parts = [*window.partition, f"(({value}) IS NULL)"]
+            rank_partition = f"PARTITION BY {', '.join(parts)}"
+            upto = (
+                f"count(*) OVER ({rank_partition} ORDER BY {value} {direction} "
+                "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+            )
+            size = f"count(*) OVER ({rank_partition})"
+            return (
+                f"(CASE WHEN ({value}) IS NULL THEN NULL "
+                f"ELSE CAST({upto} - 1 AS DOUBLE) / NULLIF({size} - 1, 0) END)"
+            )
         if name == "LOOKUP":
             offset = node.args[1]
-            assert isinstance(offset, LiteralNode)
-            n = int(offset.value)
-            if n == 0:
-                return arg(0)
-            fn = "lag" if n < 0 else "lead"
-            return f"{fn}({arg(0)}, {abs(n)}) {over()}"
+            if isinstance(offset, LiteralNode):
+                n = int(offset.value)
+                if n == 0:
+                    return arg(0)
+                fn = "lag" if n < 0 else "lead"
+                return f"{fn}({arg(0)}, {abs(n)}) {over()}"
+            # 位移為運算式（例如 FIRST()、LAST()、參數）：每一列各自的位移
+            n_sql = arg(1)
+            value = arg(0)
+            return (
+                f"(CASE WHEN ({n_sql}) IS NULL THEN NULL WHEN ({n_sql}) <= 0 "
+                f"THEN lag({value}, CAST(greatest(-({n_sql}), 0) AS BIGINT)) {over()} "
+                f"ELSE lead({value}, CAST(greatest({n_sql}, 0) AS BIGINT)) {over()} END)"
+            )
         raise QueryError(f"Table Calculation 函式 {name} 尚不支援", unsupported=True)
 
     def _integer(self, sql: str, node: Call) -> str:
@@ -2222,6 +2333,28 @@ class WorksheetQuery:
 
 
 # ---------------------------------------------------------------- 條件
+
+
+def _same_level(d: Dim, use: FieldUse) -> bool:
+    """計算層級、重新開始間隔的欄位：欄位名稱比對所有實例，欄位實例（例如年）只比對這個實例。"""
+    if use.date is None:
+        return d.use.field == use.field
+    return d.key == use_key(use)
+
+
+def _literal_node(value: Scalar, datatype: str) -> Node:
+    """查詢時代入的常值（差異計算的比較成員）。"""
+    if value is None:
+        return LiteralNode(0, "null", None)
+    if isinstance(value, bool):
+        return LiteralNode(0, "boolean", value)
+    if isinstance(value, int) and datatype != "real":
+        return LiteralNode(0, "integer", value)
+    if isinstance(value, int | float):
+        return LiteralNode(0, "real", float(value))
+    if datatype in ("date", "datetime"):
+        return LiteralNode(0, datatype, str(value))  # type: ignore[arg-type]
+    return LiteralNode(0, "string", str(value))
 
 
 def _noop(flt: Filter) -> bool:

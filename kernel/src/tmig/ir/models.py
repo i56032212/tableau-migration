@@ -654,8 +654,10 @@ TableCalcType = Literal[
     "running_total",
     "percent_of_total",
     "rank",
+    "percentile",
     "difference",
     "percent_difference",
+    "percent_from",
     "moving",
     "formula",
 ]
@@ -694,6 +696,11 @@ class NestedTableCalc(IRModel):
     field: Id = Field(description="被參照的 Table Calculation 計算欄位")
     preset: TableCalcPreset
     addressing: list[Id] = Field(default_factory=list, description="解析後的計算方向欄位，依序")
+    instances: list[FieldUse] = Field(
+        default_factory=list,
+        description="定址的欄位實例，依序；有值時以它為準（同一個欄位有多個實例時只定址其中幾個，"
+        "例如窗格的計算只定址最內層的月、不含年）",
+    )
     inferred: bool = False
 
 
@@ -704,6 +711,19 @@ class TableCalc(IRModel):
     type: TableCalcType
     preset: TableCalcPreset = Field(description="Tableau 的計算方向設定")
     addressing: list[Id] = Field(default_factory=list, description="解析後的計算方向欄位，依序")
+    instances: list[FieldUse] = Field(
+        default_factory=list,
+        description="定址的欄位實例，依序；有值時以它為準（同一個欄位有多個實例時只定址其中幾個，"
+        "例如窗格的計算只定址最內層的月、不含年）",
+    )
+    level: FieldUse | None = Field(
+        default=None,
+        description="「計算層級」（level-address）：定址中比它更內層的維度改為分割，例如年增率在年的層級",
+    )
+    restart: FieldUse | None = Field(
+        default=None,
+        description="「重新開始間隔」（level-break）：定址中它與它之前的維度改為分割，例如年初至今",
+    )
     inferred: bool = Field(default=False, description="計算方向是否依 Tableau 預設規則推定")
     options: dict[str, Scalar] = Field(default_factory=dict, description="例如 rank 的方式與方向")
     nested: list[NestedTableCalc] = Field(
@@ -880,8 +900,10 @@ class Pane(IRModel):
 
 
 class ReferenceLine(IRModel):
-    """參考線：在量值軸上畫出常數、參數或標記值的彙總（平均、總和、最小、最大、中位數、百分位數），
-    或平均 ± 標準差的倍數。只影響圖表，不影響數字。"""
+    """參考線、參考區間、分布與盒鬚圖（分析的「參考線」）：在量值軸上畫出常數、參數或標記值的彙總
+    （平均、總和、最小、最大、中位數），或一組值的分布（百分位數、平均 ± 標準差的倍數、分位數、
+    信賴區間、彙總值的百分比），分布的各值之間塗上底色。兩條參考線以 paired 配成參考區間（之間塗上
+    底色）。kind 為 boxplot 時是盒鬚圖。只影響圖表，不影響數字。"""
 
     id: str = Field(min_length=1, description="工作表內的編號，例如 refline0")
     axis: FieldUse = Field(description="畫在哪個量值的軸上")
@@ -889,8 +911,22 @@ class ReferenceLine(IRModel):
         default=None, description="計算的量值；參數時為參數的值；formula 為 constant 時為 None"
     )
     formula: Literal[
-        "constant", "average", "sum", "total", "min", "max", "median", "percentile", "stdev"
+        "constant",
+        "average",
+        "sum",
+        "total",
+        "min",
+        "max",
+        "median",
+        "percentile",
+        "stdev",
+        "quantiles",
+        "confidence",
+        "median_confidence",
     ]
+    kind: Literal["line", "distribution", "boxplot"] = Field(
+        default="line", description="參考線（一個值）、分布（多個值，之間塗上底色）或盒鬚圖"
+    )
     constant: Scalar = None
     percentiles: list[Annotated[float, Field(ge=0, le=100)]] = Field(
         default_factory=list,
@@ -900,11 +936,43 @@ class ReferenceLine(IRModel):
         default_factory=list,
         description="formula 為 stdev 時，平均加上幾倍標準差（例如 -1、1），每個倍數各畫一條線",
     )
+    percentages: list[float] = Field(
+        default_factory=list,
+        description="彙總值的百分比分布（例如平均的 50%、100%），每個百分比各一個值",
+    )
+    tiles: int | None = Field(default=None, ge=2, description="formula 為 quantiles 時的分位數個數")
+    probability: float = Field(default=95, gt=0, lt=100, description="信賴區間的信賴水準（%）")
     sample: bool = Field(default=True, description="標準差為樣本（true）或母體")
     scope: Literal["table", "pane", "cell"]
     label: Literal["none", "automatic", "value", "computation", "custom"] = "automatic"
     label_text: str | None = Field(
         default=None, description="label 為 custom 時的文字，<Value> 代入值"
+    )
+    label_format: str | None = Field(
+        default=None, description="標籤中值的數字格式（Tableau 的格式字串）；None 依量值的格式"
+    )
+    paired: str | None = Field(
+        default=None, description="參考區間：與這條參考線（id）之間塗上底色（paired-id）"
+    )
+    fill_above: bool = Field(default=False, description="最大的值以上塗上底色（fill-above）")
+    fill_below: bool = Field(default=False, description="最小的值以下塗上底色（fill-below）")
+    line_visible: bool | None = Field(
+        default=None, description="畫出線；None 依預設（參考線畫、分布與參考區間不畫）"
+    )
+    line_color: HexColor | None = None
+    line_width: int | None = Field(default=None, ge=1)
+    line_pattern: Literal["solid", "dashed", "dotted"] | None = None
+    fill_color: HexColor | None = Field(
+        default=None, description="參考區間與分布的底色（refband 的 fill-color）；None 依預設的灰色"
+    )
+    above_color: HexColor | None = Field(default=None, description="fill-above 的顏色")
+    below_color: HexColor | None = Field(default=None, description="fill-below 的顏色")
+    whiskers: Literal["standard", "minmax"] = Field(
+        default="standard",
+        description="盒鬚圖的鬚：standard 延伸到 1.5 倍四分位距內最遠的值，minmax 到最小與最大值",
+    )
+    hide_marks: bool = Field(
+        default=False, description="盒鬚圖隱藏底下的標記（離群值除外，boxplot-mark-exclusion）"
     )
     source_ref: SourceRef
 
