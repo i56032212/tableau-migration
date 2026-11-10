@@ -165,6 +165,24 @@ def test_hadoop_connections(tmp_path: Path) -> None:
     )
 
 
+def test_db2_and_hana(tmp_path: Path) -> None:
+    """IBM Db2 與 SAP HANA 的連線：資料庫、結構描述照記；有方言轉譯與執行器。"""
+    table = "<relation connection='db.1' name='orders' table='[SALES].[ORDERS]' type='table' />"
+    for xml, dialect, database in (
+        (
+            "<connection class='db2' dbname='SAMPLE' port='50000' server='db2.example.com' />",
+            "db2",
+            "SAMPLE",
+        ),
+        ("<connection class='saphana' port='30015' server='hana.example.com' />", "hana", None),
+    ):
+        ir = parse(tmp_path, live_datasource(xml, table))
+        assert reasons(ir) == []
+        conn = ir.datasources[0].connection
+        assert isinstance(conn, LiveConnection)
+        assert (conn.dialect, conn.database) == (dialect, database)
+
+
 def test_bigquery(tmp_path: Path) -> None:
     """BigQuery 的專案記為資料庫、資料集記為結構描述。"""
     table = "<relation connection='db.1' name='orders' table='[sales].[orders]' type='table' />"

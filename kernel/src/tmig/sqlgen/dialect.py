@@ -14,7 +14,8 @@
 PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上；另以 Spark Thrift Server 走 HiveServer2 協定實跑）、
 MySQL（8.0 以上）、Trino（CI 以 Docker 執行；Athena 的 SQL 也在同一台執行）與 BigQuery（CI 以 ZetaSQL 的模擬器執行）
 有實跑測試（tests/sqlgen/test_engines.py）；Oracle（12.2 以上）、SQL Server（2017 以上）、Snowflake、Redshift、
-Teradata（16.20 以上）、Hive（2.3 以上）與 Impala（3.3 以上）依官方文件撰寫，尚未實機驗證：轉譯後的 SQL 以 SQLGlot
+Teradata（16.20 以上）、Hive（2.3 以上）、Impala（3.3 以上）、Db2（11.5 以上）與 SAP HANA（2.0）依官方文件撰寫，
+尚未實機驗證：轉譯後的 SQL 以 SQLGlot
 轉回 DuckDB、各自特有的函式依文件的語意模擬後執行，並有轉譯快照。
 
 各方言已知與 DuckDB（＝萃取時的結果）不同之處，與 Tableau 直接連該資料庫時相同，不另外處理：
@@ -33,6 +34,8 @@ from typing import ClassVar
 import sqlglot
 from sqlglot import exp
 from sqlglot.dialects.hive import Hive
+from sqlglot.dialects.oracle import Oracle
+from sqlglot.dialects.postgres import Postgres
 from sqlglot.errors import ParseError
 
 from tmig.ir.models import Scalar
@@ -48,6 +51,42 @@ class TmigHive(Hive):
         TRANSFORMS: ClassVar[dict[type[exp.Expr], Callable[..., str]]] = {
             **Hive.Generator.TRANSFORMS,
             exp.NullSafeEQ: lambda self, e: self.binary(e, "<=>"),
+        }
+
+
+class TmigDb2(Oracle):
+    """產生 Db2 的 SQL：以 SQLGlot 的 Oracle 寫法為基礎（雙引號、FETCH FIRST n ROWS ONLY、資料表別名），
+    型別改成 Db2 的名稱。SQLGlot 以類別名稱登錄方言（tmigdb2）；解析與 Oracle 相同。"""
+
+    class Generator(Oracle.Generator):
+        TYPE_MAPPING: ClassVar = {
+            **Oracle.Generator.TYPE_MAPPING,
+            exp.DataType.Type.TINYINT: "SMALLINT",
+            exp.DataType.Type.INT: "INTEGER",
+            exp.DataType.Type.BIGINT: "BIGINT",
+            exp.DataType.Type.DECIMAL: "DECIMAL",
+            exp.DataType.Type.DOUBLE: "DOUBLE",
+            exp.DataType.Type.FLOAT: "DOUBLE",
+            exp.DataType.Type.VARCHAR: "VARCHAR",
+            exp.DataType.Type.NVARCHAR: "VARCHAR",
+            exp.DataType.Type.TEXT: "VARCHAR",
+        }
+
+
+class TmigHana(Postgres):
+    """產生 SAP HANA 的 SQL：以 SQLGlot 的 PostgreSQL 寫法為基礎（雙引號、LIMIT），型別改成 HANA 的名稱。
+    SQLGlot 以類別名稱登錄方言（tmighana）；解析與 PostgreSQL 相同。"""
+
+    class Generator(Postgres.Generator):
+        TYPE_MAPPING: ClassVar = {
+            **Postgres.Generator.TYPE_MAPPING,
+            exp.DataType.Type.TINYINT: "SMALLINT",
+            exp.DataType.Type.DOUBLE: "DOUBLE",
+            exp.DataType.Type.FLOAT: "DOUBLE",
+            exp.DataType.Type.VARCHAR: "NVARCHAR",
+            exp.DataType.Type.NVARCHAR: "NVARCHAR",
+            exp.DataType.Type.TEXT: "NVARCHAR",
+            exp.DataType.Type.TIMESTAMPNTZ: "TIMESTAMP",
         }
 
 
@@ -67,6 +106,8 @@ SQLGLOT_NAMES: dict[str, str] = {
     "teradata": "teradata",
     "hive": "tmighive",
     "impala": "tmighive",
+    "db2": "tmigdb2",
+    "hana": "tmighana",
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言尚不支援。"""
@@ -225,8 +266,8 @@ def sql_literal(value: Scalar, datatype: str, dialect: str) -> str:
         if dialect == "tsql":
             # SQL Server 沒有 DATE '…' 的常值寫法；ISO 格式的字串轉型不受語言設定影響
             return f"CAST({_single_quote(text)} AS {'DATE' if datatype == 'date' else 'DATETIME2'})"
-        if dialect in ("hive", "impala"):
-            # 舊版的 Hive、Impala 沒有 DATE '…'、TIMESTAMP '…' 的常值寫法；字串轉型各版本都支援
+        if dialect in ("hive", "impala", "db2"):
+            # 舊版的 Hive、Impala 與 Db2 沒有 DATE '…'、TIMESTAMP '…' 的常值寫法；字串轉型都支援
             return f"CAST({_single_quote(text)} AS {'DATE' if datatype == 'date' else 'TIMESTAMP'})"
         return f"{'DATE' if datatype == 'date' else 'TIMESTAMP'} {_single_quote(text)}"
     text = str(value)
@@ -4037,6 +4078,957 @@ def _keep_group(pattern: str, keep: int, count: bool = False) -> str:
     return "".join(out)
 
 
+# ---------------------------------------------------------------- IBM Db2
+
+
+DB2_TEXT = "VARCHAR(4000)"
+DB2_EPOCH_DAYS = 719163
+"""DAYS('1970-01-01')：DAYS() 是自 0001-01-01 起的第幾天（0001-01-01 為 1）。"""
+DB2_FORMAT = {
+    "%Y": "YYYY",
+    "%y": "YY",
+    "%m": "MM",
+    "%d": "DD",
+    "%H": "HH24",
+    "%I": "HH12",
+    "%M": "MI",
+    "%S": "SS",
+    "%p": "AM",
+    "%b": "MON",
+    "%B": "MONTH",
+    "%j": "DDD",
+    "%f": "FF6",
+}
+"""strftime 的格式 → Db2 的 TIMESTAMP_FORMAT（格式中的文字只能是分隔字元）。"""
+DB2_SEPARATORS = set("-./,':; ()")
+
+
+def _units() -> exp.Expr:
+    """字串函式的單位：以字元（Unicode 的碼位）計算；預設的 OCTETS 以位元組計算，中文會被切斷。"""
+    return exp.Var(this="CODEUNITS32")
+
+
+class Db2Rewriter(OracleRewriter):
+    """IBM Db2 for Linux、UNIX and Windows 11.5 以上：依官方文件撰寫，尚未實機驗證
+    （測試以 SQLGlot 轉回 DuckDB 模擬執行）。
+
+    沿用 Oracle 的規則（沒有布林值：查詢結果中的布林值列為不支援；PERCENTILE_CONT WITHIN GROUP、MEDIAN、
+    FETCH FIRST），差異：
+
+    - 字串以字元計算：SUBSTRING、CHARACTER_LENGTH、LOCATE_IN_STRING、LEFT、RIGHT 加上 CODEUNITS32
+      （預設以位元組計算，中文會被切斷）；|| 遇到 Null 得 Null
+    - 日期加減以 ADD_DAYS、ADD_HOURS、ADD_MINUTES、ADD_SECONDS；月份從同一時間的月初以 ADD_MONTHS 加起，
+      再取不超過月底的日（Db2 的 ADD_MONTHS 遇到月底時取月底，與 DuckDB 不同）
+    - 天數差以 DAYS() 相減（DATE 相減得到的是 yyyymmdd 格式的期間）；自 1970 年起的秒數以 DAYS、
+      MIDNIGHT_SECONDS 與 MICROSECOND 計算
+    - 星期、週數為 DAYOFWEEK、DAYOFWEEK_ISO、WEEK_ISO；ISO 年取該週的星期四；截斷以 TRUNC（TRUNC_TIMESTAMP）
+    - ATAN2 的參數順序是 (x, y)；沒有 PI：以 ACOS(-1)；LOG 是自然對數
+    - DATEPARSE 以 TIMESTAMP_FORMAT，先以依格式產生的正規表示式檢查（不符合時報錯）；文字轉數字、日期也
+      先以正規表示式檢查（沒有 TRY_CAST）
+    - Null 也相等的比較為 IS NOT DISTINCT FROM；SELECT 沒有 FROM 時補上 SYSIBM.SYSDUMMY1
+    - 取消彙總的列編號為 ROW_NUMBER() OVER ()（Db2 的視窗排序不能是常值 Null）
+    """
+
+    name = "Db2"
+    dialect = "db2"
+    allowed = frozenset({exp.Median, exp.Mod, exp.NullSafeEQ, exp.Repeat})
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit in ("year", "month"):
+            months = (
+                amount if unit == "month" else exp.Mul(this=_paren(amount), expression=_num(12))
+            )
+            return self._add_months(value, months)
+        if unit == "day":
+            return _fn("ADD_DAYS", value, _cast(amount, "INTEGER"))
+        if unit in ("hour", "minute"):
+            return _fn(f"ADD_{unit.upper()}S", self._timestamp(value), _cast(amount, "INTEGER"))
+        if unit == "microsecond":
+            amount = exp.Div(this=_paren(amount), expression=_num(1000000.0))
+        # ADD_SECONDS 的秒數可以有小數（到微秒）
+        seconds = _cast(amount, "DECIMAL(31, 6)", "tmigdb2")
+        return _fn("ADD_SECONDS", self._timestamp(value), seconds)
+
+    def _timestamp(self, value: exp.Expr) -> exp.Expr:
+        if isinstance(value, exp.Cast) and value.to.this in TIMESTAMP_TYPES:
+            return value
+        return _cast(value, "TIMESTAMP")
+
+    def _add_months(self, value: exp.Expr, months: exp.Expr) -> exp.Expr:
+        """同一時間的月初加上月數，再加回日數（不超過該月的最後一天）。"""
+        back = exp.Sub(this=_num(1), expression=_fn("DAY", value.copy()))
+        first = _fn("ADD_MONTHS", _fn("ADD_DAYS", value.copy(), back), _cast(months, "INTEGER"))
+        day = _fn("LEAST", _fn("DAY", value), _fn("DAY", _fn("LAST_DAY", first.copy())))
+        return _fn("ADD_DAYS", first, exp.Sub(this=day, expression=_num(1)))
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        def native(name: str) -> Callable[[exp.Expr], exp.Expr]:
+            return lambda n: _fn(name, n.this)
+
+        return {
+            **super().handlers(),
+            exp.Quarter: native("QUARTER"),
+            exp.Hour: native("HOUR"),
+            exp.Minute: native("MINUTE"),
+            exp.Second: native("SECOND"),
+            exp.DayOfYear: native("DAYOFYEAR"),
+            exp.Week: native("WEEK_ISO"),
+            exp.DayOfWeek: lambda n: exp.Paren(
+                this=exp.Sub(this=_fn("DAYOFWEEK", n.this), expression=_num(1))
+            ),
+            exp.DayOfWeekIso: native("DAYOFWEEK_ISO"),
+            exp.Monthname: lambda n: _names(_fn("MONTH", n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(_fn("DAYOFWEEK_ISO", n.this), DAY_NAMES),
+            exp.Log: self.log,
+            exp.Round: lambda n: _cast(
+                _fn(
+                    "ROUND",
+                    _cast(n.this, "DECIMAL(31, 10)", "tmigdb2"),
+                    _cast(n.args.get("decimals") or _num(0), "INTEGER"),
+                ),
+                "DOUBLE",
+            ),
+            exp.Trunc: lambda n: _fn("TRUNC", n.this, n.args.get("decimals") or _num(0)),
+            exp.Atan2: lambda n: _fn("ATAN2", n.expression, n.this),
+            exp.IntDiv: lambda n: _cast(
+                _fn(
+                    "TRUNC",
+                    exp.Div(this=_cast(n.this, "DOUBLE"), expression=_paren(n.expression)),
+                    _num(0),
+                ),
+                "BIGINT",
+            ),
+            exp.Unicode: lambda n: _fn("ASCII", n.this),
+            exp.TimestampTrunc: self.trunc,
+            exp.DateTrunc: self.trunc,
+            exp.TimeToUnix: self.epoch,
+            exp.Substring: self.substring,
+            exp.Length: lambda n: _fn("CHARACTER_LENGTH", n.this, _units()),
+            exp.StrPosition: self.position,
+            exp.Left: self.left,
+            exp.Right: self.right,
+            exp.Repeat: lambda n: _mark(n),
+            exp.Variance: lambda n: _fn("VARIANCE_SAMP", n.this),
+            exp.VariancePop: lambda n: _fn("VARIANCE", n.this),
+            exp.StddevPop: lambda n: _fn("STDDEV", n.this),
+            exp.CovarSamp: lambda n: _fn("COVARIANCE_SAMP", n.this, n.expression),
+            exp.CovarPop: lambda n: _fn("COVARIANCE", n.this, n.expression),
+            exp.Corr: lambda n: _fn("CORRELATION", n.this, n.expression),
+            exp.NullSafeEQ: lambda n: _mark(n),
+            exp.RegexpExtract: lambda n: _fn(
+                "REGEXP_SUBSTR",
+                n.this,
+                n.expression,
+                _num(1),
+                _num(1),
+                _str("c"),
+                n.args.get("group") or _num(0),
+            ),
+            exp.RegexpReplace: self.regexp_replace,
+            exp.CurrentDate: lambda n: exp.Var(this="CURRENT_DATE"),
+            exp.DPipe: lambda n: _mark(n),
+            exp.Window: self.window,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            **super().functions(),
+            "isoyear": lambda a: _fn("YEAR", self._thursday(a[0])),
+            "now": lambda a: exp.Var(this="CURRENT_TIMESTAMP"),
+        }
+
+    def _thursday(self, value: exp.Expr) -> exp.Expr:
+        """ISO 週的星期四（決定 ISO 年）。"""
+        return _fn(
+            "ADD_DAYS",
+            value.copy(),
+            exp.Sub(this=_num(4), expression=_fn("DAYOFWEEK_ISO", value)),
+        )
+
+    def log(self, node: exp.Expr) -> exp.Expr:
+        if node.expression is None:
+            raise DialectError("Db2 的 LOG 需要底數")
+        # SQLGlot 的 Log(this=底數, expression=真數)；Db2 的 LOG 是自然對數
+        return exp.Div(this=_fn("LN", node.expression), expression=_fn("LN", node.this))
+
+    def trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        formats = {
+            "year": "YYYY",
+            "quarter": "Q",
+            "month": "MM",
+            "day": "DD",
+            "hour": "HH24",
+            "minute": "MI",
+        }
+        if unit in formats:
+            return _fn("TRUNC", node.this, _str(formats[unit]))
+        if unit == "second":
+            ts = self._timestamp(node.this)
+            return _fn("ADD_SECONDS", _fn("TRUNC", ts.copy(), _str("MI")), _fn("SECOND", ts))
+        raise DialectError(f"Db2 的日期截斷不支援單位 {unit}")
+
+    def date_diff(self, node: exp.Expr) -> exp.Expr:
+        def part(field: str, value: exp.Expr) -> exp.Expr:
+            if field in ("year", "month", "day"):
+                return _extract(field.upper(), value)
+            return _fn(field.upper(), value)
+
+        return self.boundary_diff(
+            _unit(node),
+            node.expression,
+            node.this,
+            part,
+            lambda start, end: exp.Sub(this=_fn("DAYS", end), expression=_fn("DAYS", start)),
+        )
+
+    def make_date(self, node: exp.Expr) -> exp.Expr:
+        y, m, d = (node.args[k] for k in ("year", "month", "day"))
+
+        def pad(value: exp.Expr, width: int) -> exp.Expr:
+            text = _cast(_cast(value, "INTEGER"), "VARCHAR(11)", "tmigdb2")
+            return _fn("LPAD", text, _num(width), _str("0"))
+
+        def concat(left: exp.Expr, right: exp.Expr) -> exp.Expr:
+            return _mark(exp.DPipe(this=left, expression=right))
+
+        text = concat(concat(concat(concat(pad(y, 4), _str("-")), pad(m, 2)), _str("-")), pad(d, 2))
+        return _mark(exp.Cast(this=text, to=_type("DATE")))
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        day = self.make_date(exp.DateFromParts(year=y, month=m, day=d))
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+            ),
+            expression=_paren(ss),
+        )
+        return self.add_interval(_cast(day, "TIMESTAMP"), "second", seconds)
+
+    def epoch(self, node: exp.Expr) -> exp.Expr:
+        ts = self._timestamp(node.this)
+        days = exp.Sub(this=_fn("DAYS", ts.copy()), expression=_num(DB2_EPOCH_DAYS))
+        micros = exp.Div(this=_fn("MICROSECOND", ts.copy()), expression=_num(1000000.0))
+        return exp.Paren(
+            this=exp.Add(
+                this=exp.Add(
+                    this=exp.Mul(this=_paren(days), expression=_num(86400)),
+                    expression=_fn("MIDNIGHT_SECONDS", ts),
+                ),
+                expression=micros,
+            )
+        )
+
+    def substring(self, node: exp.Expr) -> exp.Expr:
+        start = node.args.get("start") or _num(1)
+        length = node.args.get("length")
+        if length is None:
+            return _fn("SUBSTRING", node.this, start, _units())
+        return _fn("SUBSTRING", node.this, start, length, _units())
+
+    def position(self, node: exp.Expr) -> exp.Expr:
+        start = node.args.get("position") or _num(1)
+        return _fn("LOCATE_IN_STRING", node.this, node.args["substr"], start, _num(1), _units())
+
+    def left(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        head = _fn("LEFT", text.copy(), _fn("GREATEST", count.copy(), _num(0)), _units())
+        if _not_negative(count):
+            return head
+        # 負數：去掉結尾的字元
+        keep = _fn(
+            "GREATEST",
+            exp.Add(this=_fn("CHARACTER_LENGTH", text.copy(), _units()), expression=count.copy()),
+            _num(0),
+        )
+        return exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.LT(this=count.copy(), expression=_num(0)),
+                    true=_fn("LEFT", text, keep, _units()),
+                )
+            ],
+            default=head,
+        )
+
+    def right(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        length = _fn("CHARACTER_LENGTH", text.copy(), _units())
+        tail = _fn(
+            "RIGHT",
+            text.copy(),
+            _fn("LEAST", _fn("GREATEST", count.copy(), _num(0)), length.copy()),
+            _units(),
+        )
+        if _not_negative(count):
+            return tail
+        keep = _fn("GREATEST", exp.Add(this=length, expression=count.copy()), _num(0))
+        return exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.LT(this=count.copy(), expression=_num(0)),
+                    true=_fn("RIGHT", text, keep, _units()),
+                )
+            ],
+            default=tail,
+        )
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        delimiter = node.args.get("delimiter")
+        index = _literal_int(node.args.get("part_index"))
+        if not (isinstance(delimiter, exp.Literal) and delimiter.is_string):
+            raise DialectError("Db2 的 SPLIT 只支援常值的分隔字元")
+        if index is None or index < 1:
+            raise DialectError("Db2 的 SPLIT 只支援正整數常值的位置")
+        escaped = re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", delimiter.name)
+        pattern = f"(.*?)({escaped}|$)"
+        return _fn(
+            "REGEXP_SUBSTR", node.this, _str(pattern), _num(1), _num(index), _str("c"), _num(1)
+        )
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        replacement = node.args.get("replacement") or _str("")
+        if not (isinstance(replacement, exp.Literal) and replacement.is_string):
+            raise DialectError("REGEXP_REPLACE 的取代字串不是常值")
+        # Db2 的正規表示式是 ICU：取代字串的群組參照是 $1（與 Java 相同）
+        return _fn(
+            "REGEXP_REPLACE", node.this, node.expression, _str(java_replacement(replacement.name))
+        )
+
+    def window(self, node: exp.Expr) -> exp.Expr:
+        """ROW_NUMBER() OVER (ORDER BY NULL) → OVER ()：Db2 的排序不能是沒有型別的 Null。"""
+        order = node.args.get("order")
+        if order is not None and all(
+            isinstance(o, exp.Ordered) and isinstance(o.this, exp.Null) for o in order.expressions
+        ):
+            node.set("order", None)
+        return node
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：TIMESTAMP_FORMAT 不符合格式時報錯，先以依格式產生的正規表示式檢查。"""
+        fmt = _format_literal(args[1])
+
+        def literal(text: str) -> str:
+            if not set(text) <= DB2_SEPARATORS:
+                raise DialectError(f"Db2 的 DATEPARSE 格式中只能有分隔字元：{text}")
+            return text
+
+        pattern = "^" + _strftime_regex(fmt).replace("\\d", "[0-9]") + "$"
+        parsed = _fn(
+            "TIMESTAMP_FORMAT", args[0].copy(), _str(_convert_format(fmt, DB2_FORMAT, literal))
+        )
+        matches = _mark(exp.RegexpLike(this=args[0], expression=_str(pattern)))
+        return exp.Case(ifs=[exp.If(this=matches, true=parsed)])
+
+    def try_cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in INTEGER_TYPES:
+            pattern = REDSHIFT_INTEGER
+        elif kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT, exp.DataType.Type.DECIMAL):
+            pattern = REDSHIFT_NUMBER
+        elif kind == exp.DataType.Type.DATE or kind in TIMESTAMP_TYPES:
+            pattern = DB2_DATE
+        else:
+            raise DialectError(f"Db2 不支援轉成 {target.sql('duckdb')} 的 TRY_CAST")
+        text = _cast(node.this, DB2_TEXT, "tmigdb2")
+        valid = _mark(
+            exp.RegexpLike(this=text.copy(), expression=_str(pattern.replace("[[:space:]]", "\\s")))
+        )
+        value: exp.Expr = exp.Trim(this=text)
+        if pattern == DB2_DATE:
+            # 只有日期的文字補上時間；月與日不存在時（2024-02-30）Db2 報錯，與 TRY_CAST 不同，仍待實機確認
+            value = _fn("TIMESTAMP", value)
+        return exp.Case(
+            ifs=[exp.If(this=valid, true=_mark(exp.Cast(this=value, to=self._target(target))))]
+        )
+
+    def cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        if not isinstance(target, exp.DataType):
+            return node
+        kind = target.this
+        if kind == exp.DataType.Type.BOOLEAN:
+            raise DialectError("Db2 的查詢結果沒有布林值，轉成布林值的計算尚不支援")
+        value = node.this
+        if _is_predicate(value) and kind in INTEGER_TYPES:
+            return exp.Case(
+                ifs=[
+                    exp.If(this=value, true=_num(1)),
+                    exp.If(this=exp.Not(this=_paren(value.copy())), true=_num(0)),
+                ]
+            )
+        return _mark(exp.Cast(this=value, to=self._target(target)))
+
+    def _target(self, target: exp.Expr) -> exp.DataType:
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT, exp.DataType.Type.CHAR):
+            return _type(DB2_TEXT, "tmigdb2")
+        if kind in INTEGER_TYPES:
+            return _type("BIGINT")
+        if kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT):
+            return _type("DOUBLE")
+        if kind == exp.DataType.Type.DECIMAL:
+            return target if target.expressions else _type("DECIMAL(18, 3)")
+        if kind == exp.DataType.Type.DATE:
+            return target
+        if kind in TIMESTAMP_TYPES:
+            return _type("TIMESTAMP")
+        raise DialectError(f"Db2 不支援轉成 {target.sql('duckdb')} 型別")
+
+    def finish(self, tree: exp.Expr) -> None:
+        for select in list(tree.find_all(exp.Select)):
+            _expand_group_ordinals(select)
+            _qualify_star(select)
+            if select.args.get("from_") is None and select.args.get("from") is None:
+                select.set(
+                    "from_",
+                    exp.From(
+                        this=exp.Table(
+                            this=exp.to_identifier("SYSDUMMY1"), db=exp.to_identifier("SYSIBM")
+                        )
+                    ),
+                )
+        for boolean in list(tree.find_all(exp.Boolean)):
+            if boolean.root() is tree:
+                _replace_boolean(boolean)
+        for node in tree.walk():
+            if isinstance(node, PREDICATES) and not _condition_position(node):
+                raise DialectError(
+                    "Db2 的查詢結果沒有布林值：查詢結果或運算中的布林值（例如布林維度、ISNULL、CONTAINS 的結果）尚不支援"
+                )
+
+
+DB2_DATE = (
+    r"^\s*[0-9]{4}-(0?[1-9]|1[0-2])-(0?[1-9]|[12][0-9]|3[01])"
+    r"([ T]([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?)?\s*$"
+)
+"""文字轉日期時間前的檢查（ISO 格式）。"""
+
+
+# ---------------------------------------------------------------- SAP HANA
+
+
+HANA_TEXT = "NVARCHAR(5000)"
+HANA_FORMAT = {
+    "%Y": "YYYY",
+    "%y": "YY",
+    "%m": "MM",
+    "%d": "DD",
+    "%H": "HH24",
+    "%I": "HH12",
+    "%M": "MI",
+    "%S": "SS",
+    "%p": "AM",
+    "%b": "MON",
+    "%B": "MONTH",
+    "%f": "FF6",
+}
+"""strftime 的格式 → HANA 的 TO_TIMESTAMP（格式中的文字只能是分隔字元）。"""
+HANA_SEPARATORS = set("-./,:; ")
+
+
+class HanaRewriter(Rewriter):
+    """SAP HANA 2.0（SPS05 以上，含 HANA Cloud）：依官方文件撰寫，尚未實機驗證（測試以 SQLGlot 轉回 DuckDB
+    模擬執行）。
+
+    - 布林值：比較等條件不能直接當成值，查詢結果中的布林值寫成 CASE WHEN … THEN TRUE WHEN NOT … THEN FALSE END；
+      條件中的 TRUE／FALSE 換成 1 = 1／1 = 0；Null 也相等的比較寫成 = 或兩者皆 Null
+    - 日期加減以 ADD_DAYS、ADD_MONTHS（月底的行為與 DuckDB 相同）、ADD_SECONDS；天數差為 DAYS_BETWEEN；
+      截斷以月初、年初的日期與時、分、秒相加；自 1970 年起的秒數以 NANO100_BETWEEN
+    - 星期為 WEEKDAY（星期一為 0）；ISO 週數與年取自 ISOWEEK（'2024-W05'）；季以月份計算（QUARTER 是文字）
+    - 字串以字元計算；LOCATE 的參數是（字串、要找的字）；沒有 REPEAT：以 RPAD
+    - 正規表示式（PCRE）：LIKE_REGEXPR、SUBSTRING_REGEXPR、REPLACE_REGEXPR（樣式須為常值）
+    - ATAN2 為 (y, x)；沒有 PI：以 ACOS(-1)；LOG(底數, 真數)
+    - DATEPARSE 以 TO_TIMESTAMP，先以依格式產生的正規表示式檢查（不符合時報錯）；文字轉數字、日期也先以
+      正規表示式檢查（沒有 TRY_CAST）
+    - 沒有 COVAR、COVARP；SELECT 沒有 FROM 時補上 DUMMY；GROUP BY 不以位置分組
+    - 取消彙總的列編號為 ROW_NUMBER() OVER ()
+    """
+
+    name = "SAP HANA"
+    dialect = "hana"
+    allowed = frozenset({exp.Median, exp.Year, exp.Month, exp.Boolean})
+
+    def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
+        if unit in ("year", "month"):
+            months = (
+                amount if unit == "month" else exp.Mul(this=_paren(amount), expression=_num(12))
+            )
+            return _fn("ADD_MONTHS", value, _cast(months, "INTEGER"))
+        if unit == "day":
+            return _fn("ADD_DAYS", value, _cast(amount, "INTEGER"))
+        factor = {"hour": 3600, "minute": 60, "second": 1, "microsecond": 0.000001}[unit]
+        seconds = amount if factor == 1 else exp.Mul(this=_paren(amount), expression=_num(factor))
+        return _fn(
+            "ADD_SECONDS", self._timestamp(value), _cast(seconds, "DECIMAL(31, 7)", "tmighana")
+        )
+
+    def _timestamp(self, value: exp.Expr) -> exp.Expr:
+        if isinstance(value, exp.Cast) and value.to.this in TIMESTAMP_TYPES:
+            return value
+        return _cast(value, "TIMESTAMP")
+
+    def _date(self, value: exp.Expr) -> exp.Expr:
+        if isinstance(value, exp.Cast) and value.to.this == exp.DataType.Type.DATE:
+            return value
+        return _cast(value, "DATE")
+
+    def handlers(self) -> dict[type[exp.Expr], Callable[[exp.Expr], exp.Expr]]:
+        def native(name: str) -> Callable[[exp.Expr], exp.Expr]:
+            return lambda n: _fn(name, n.this)
+
+        def iso_week(value: exp.Expr, start: int, length: int) -> exp.Expr:
+            return _cast(
+                _fn("SUBSTRING", _fn("ISOWEEK", value), _num(start), _num(length)), "INTEGER"
+            )
+
+        acos = lambda: _fn("ACOS", _num(-1))  # noqa: E731
+
+        return {
+            exp.Day: native("DAYOFMONTH"),
+            exp.Quarter: lambda n: exp.Paren(
+                this=exp.Add(
+                    this=_cast(
+                        _fn(
+                            "FLOOR",
+                            exp.Div(
+                                this=exp.Paren(
+                                    this=exp.Sub(this=_fn("MONTH", n.this), expression=_num(1))
+                                ),
+                                expression=_num(3.0),
+                            ),
+                        ),
+                        "INTEGER",
+                    ),
+                    expression=_num(1),
+                )
+            ),
+            exp.Hour: lambda n: _fn("HOUR", self._timestamp(n.this)),
+            exp.Minute: lambda n: _fn("MINUTE", self._timestamp(n.this)),
+            exp.Second: lambda n: _cast(
+                _fn("FLOOR", _fn("SECOND", self._timestamp(n.this))), "INTEGER"
+            ),
+            exp.DayOfYear: native("DAYOFYEAR"),
+            exp.Week: lambda n: iso_week(n.this, 7, 2),
+            exp.DayOfWeek: lambda n: _fn(
+                "MOD", exp.Add(this=_fn("WEEKDAY", n.this), expression=_num(1)), _num(7)
+            ),
+            exp.DayOfWeekIso: lambda n: exp.Paren(
+                this=exp.Add(this=_fn("WEEKDAY", n.this), expression=_num(1))
+            ),
+            exp.Monthname: lambda n: _names(_fn("MONTH", n.this), MONTH_NAMES),
+            exp.Dayname: lambda n: _names(
+                exp.Paren(this=exp.Add(this=_fn("WEEKDAY", n.this), expression=_num(1))), DAY_NAMES
+            ),
+            exp.TimestampTrunc: self.date_trunc,
+            exp.DateTrunc: self.date_trunc,
+            exp.DateDiff: self.date_diff,
+            exp.DateFromParts: lambda n: self.make_date(
+                n.args["year"], n.args["month"], n.args["day"]
+            ),
+            exp.TimestampFromParts: self.make_timestamp,
+            exp.TimeToUnix: lambda n: exp.Paren(
+                this=exp.Div(
+                    this=_fn(
+                        "NANO100_BETWEEN",
+                        _cast(_str("1970-01-01 00:00:00"), "TIMESTAMP"),
+                        self._timestamp(n.this),
+                    ),
+                    expression=_num(10000000.0),
+                )
+            ),
+            exp.Log: lambda n: (
+                _fn("LOG", n.this, n.expression) if n.expression is not None else self.no_base()
+            ),
+            exp.Round: lambda n: _fn(
+                "ROUND", n.this, _cast(n.args.get("decimals") or _num(0), "INTEGER")
+            ),
+            exp.Trunc: lambda n: _toward_zero(n.this),
+            exp.Pow: lambda n: _fn("POWER", n.this, n.expression),
+            exp.Mod: lambda n: _fn("MOD", n.this, n.expression),
+            exp.IntDiv: lambda n: _cast(
+                _toward_zero(
+                    exp.Div(this=_cast(n.this, "DOUBLE"), expression=_paren(n.expression))
+                ),
+                "BIGINT",
+            ),
+            exp.Pi: lambda n: acos(),
+            exp.Degrees: lambda n: exp.Paren(
+                this=exp.Div(
+                    this=exp.Mul(this=_paren(n.this), expression=_num(180)), expression=acos()
+                )
+            ),
+            exp.Radians: lambda n: exp.Paren(
+                this=exp.Div(
+                    this=exp.Mul(this=_paren(n.this), expression=acos()), expression=_num(180)
+                )
+            ),
+            exp.Unicode: native("UNICODE"),
+            exp.Chr: lambda n: _fn("NCHAR", *n.expressions),
+            exp.Substring: lambda n: _fn(
+                "SUBSTRING",
+                n.this,
+                n.args.get("start") or _num(1),
+                *([n.args["length"]] if n.args.get("length") else []),
+            ),
+            exp.Length: native("LENGTH"),
+            exp.StrPosition: lambda n: _fn(
+                "LOCATE", n.this, n.args["substr"], n.args.get("position") or _num(1)
+            ),
+            exp.Left: self.left,
+            exp.Right: self.right,
+            exp.Repeat: lambda n: _fn(
+                "RPAD",
+                _str(""),
+                _fn(
+                    "GREATEST",
+                    exp.Mul(this=_fn("LENGTH", n.this.copy()), expression=_paren(n.args["times"])),
+                    _num(0),
+                ),
+                n.this,
+            ),
+            exp.SplitPart: self.split_part,
+            exp.PercentileCont: lambda n: _mark(
+                exp.WithinGroup(
+                    this=_fn("PERCENTILE_CONT", n.expression),
+                    expression=_mark(exp.Order(expressions=[_mark(exp.Ordered(this=n.this))])),
+                )
+            ),
+            exp.Variance: native("VAR_SAMP"),
+            exp.VariancePop: native("VAR_POP"),
+            exp.CovarSamp: self.no_covariance,
+            exp.CovarPop: self.no_covariance,
+            exp.NullSafeEQ: lambda n: exp.Paren(
+                this=exp.Or(
+                    this=exp.EQ(this=n.this.copy(), expression=n.expression.copy()),
+                    expression=exp.Paren(
+                        this=exp.And(
+                            this=exp.Is(this=n.this, expression=exp.Null()),
+                            expression=exp.Is(this=n.expression, expression=exp.Null()),
+                        )
+                    ),
+                )
+            ),
+            exp.RegexpExtract: self.regexp_extract,
+            exp.RegexpReplace: self.regexp_replace,
+            exp.TryCast: self.try_cast,
+            exp.Cast: self.cast,
+            exp.CurrentDate: lambda n: exp.Var(this="CURRENT_DATE"),
+            exp.DPipe: lambda n: _mark(n),
+            exp.Window: self.window,
+        }
+
+    def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
+        return {
+            "isoyear": lambda a: _cast(_fn("LEFT", _fn("ISOWEEK", a[0]), _num(4)), "INTEGER"),
+            "now": lambda a: exp.Var(this="CURRENT_TIMESTAMP"),
+            "try_strptime": self.parse_date,
+        }
+
+    def no_base(self) -> exp.Expr:
+        raise DialectError("SAP HANA 的 LOG 需要底數")
+
+    def no_covariance(self, node: exp.Expr) -> exp.Expr:
+        raise DialectError("SAP HANA 沒有 COVAR、COVARP")
+
+    def date_trunc(self, node: exp.Expr) -> exp.Expr:
+        unit = _unit(node)
+        value = node.this
+        if unit in ("year", "month", "quarter"):
+            day = _fn("DAYOFYEAR" if unit == "year" else "DAYOFMONTH", value.copy())
+            first = _fn("ADD_DAYS", self._date(value.copy()), exp.Sub(this=_num(1), expression=day))
+            if unit == "quarter":
+                back = _fn("MOD", exp.Sub(this=_fn("MONTH", value), expression=_num(1)), _num(3))
+                first = _fn("ADD_MONTHS", first, exp.Neg(this=_paren(back)))
+            return _cast(first, "TIMESTAMP")
+        if unit == "day":
+            return _cast(self._date(value), "TIMESTAMP")
+        if unit not in ("hour", "minute", "second"):
+            raise DialectError(f"SAP HANA 的日期截斷不支援單位 {unit}")
+        ts = self._timestamp(value)
+        seconds: exp.Expr = exp.Mul(this=_fn("HOUR", ts.copy()), expression=_num(3600))
+        if unit in ("minute", "second"):
+            seconds = exp.Add(
+                this=seconds, expression=exp.Mul(this=_fn("MINUTE", ts.copy()), expression=_num(60))
+            )
+        if unit == "second":
+            seconds = exp.Add(this=seconds, expression=_fn("FLOOR", _fn("SECOND", ts.copy())))
+        midnight = _cast(self._date(ts), "TIMESTAMP")
+        return _fn("ADD_SECONDS", midnight, seconds)
+
+    def date_diff(self, node: exp.Expr) -> exp.Expr:
+        handlers = self.handlers()
+
+        def part(field: str, value: exp.Expr) -> exp.Expr:
+            if field in ("year", "month"):
+                return _extract(field.upper(), value)
+            kind = {
+                "quarter": exp.Quarter,
+                "hour": exp.Hour,
+                "minute": exp.Minute,
+                "second": exp.Second,
+            }
+            return handlers[kind[field]](kind[field](this=value))
+
+        return self.boundary_diff(
+            _unit(node),
+            node.expression,
+            node.this,
+            part,
+            lambda start, end: _fn("DAYS_BETWEEN", self._date(start), self._date(end)),
+        )
+
+    def make_date(self, y: exp.Expr, m: exp.Expr, d: exp.Expr) -> exp.Expr:
+        def pad(value: exp.Expr, width: int) -> exp.Expr:
+            return _fn("LPAD", _fn("TO_VARCHAR", _cast(value, "INTEGER")), _num(width), _str("0"))
+
+        def concat(left: exp.Expr, right: exp.Expr) -> exp.Expr:
+            return _mark(exp.DPipe(this=left, expression=right))
+
+        text = concat(concat(concat(concat(pad(y, 4), _str("-")), pad(m, 2)), _str("-")), pad(d, 2))
+        return _fn("TO_DATE", text, _str("YYYY-MM-DD"))
+
+    def make_timestamp(self, node: exp.Expr) -> exp.Expr:
+        keys = ("year", "month", "day", "hour", "min", "sec")
+        y, m, d, hh, mi, ss = (node.args.get(k) or _num(0) for k in keys)
+        seconds = exp.Add(
+            this=exp.Add(
+                this=exp.Mul(this=_paren(hh), expression=_num(3600)),
+                expression=exp.Mul(this=_paren(mi), expression=_num(60)),
+            ),
+            expression=_paren(ss),
+        )
+        return self.add_interval(_cast(self.make_date(y, m, d), "TIMESTAMP"), "second", seconds)
+
+    def left(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        head = _fn("LEFT", text.copy(), _fn("GREATEST", count.copy(), _num(0)))
+        if _not_negative(count):
+            return head
+        keep = _fn(
+            "GREATEST", exp.Add(this=_fn("LENGTH", text.copy()), expression=count.copy()), _num(0)
+        )
+        return exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.LT(this=count.copy(), expression=_num(0)), true=_fn("LEFT", text, keep)
+                )
+            ],
+            default=head,
+        )
+
+    def right(self, node: exp.Expr) -> exp.Expr:
+        text, count = node.this, node.expression
+        tail = _fn("RIGHT", text.copy(), _fn("GREATEST", count.copy(), _num(0)))
+        if _not_negative(count):
+            return tail
+        keep = _fn(
+            "GREATEST", exp.Add(this=_fn("LENGTH", text.copy()), expression=count.copy()), _num(0)
+        )
+        return exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.LT(this=count.copy(), expression=_num(0)),
+                    true=_fn("RIGHT", text, keep),
+                )
+            ],
+            default=tail,
+        )
+
+    def _raw(self, node: exp.Expr) -> str:
+        """改寫並驗證過的子運算式 → HANA SQL（用在 SQLGlot 沒有語法節點的寫法）。"""
+        self.validate(node)
+        return node.sql(dialect="tmighana", identify=True)
+
+    def _pattern(self, node: exp.Expr, what: str) -> str:
+        if not (isinstance(node, exp.Literal) and node.is_string):
+            raise DialectError(f"SAP HANA 的 {what} 樣式必須是常值")
+        return _single_quote(node.name)
+
+    def split_part(self, node: exp.Expr) -> exp.Expr:
+        delimiter = node.args.get("delimiter")
+        index = _literal_int(node.args.get("part_index"))
+        if not (isinstance(delimiter, exp.Literal) and delimiter.is_string):
+            raise DialectError("SAP HANA 的 SPLIT 只支援常值的分隔字元")
+        if index is None or index < 1:
+            raise DialectError("SAP HANA 的 SPLIT 只支援正整數常值的位置")
+        escaped = re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", delimiter.name)
+        pattern = _single_quote(f"(.*?)({escaped}|$)")
+        text = self._raw(node.this)
+        # 沒有第 n 段時 SUBSTRING_REGEXPR 為 Null；DuckDB 的 split_part 為空字串（字串不是 Null 時）
+        part = exp.Var(this=f"SUBSTRING_REGEXPR({pattern} IN {text} OCCURRENCE {index} GROUP 1)")
+        known = exp.Not(this=exp.Is(this=node.this.copy(), expression=exp.Null()))
+        return exp.Coalesce(
+            this=part, expressions=[exp.Case(ifs=[exp.If(this=known, true=_str(""))])]
+        )
+
+    def regexp_extract(self, node: exp.Expr) -> exp.Expr:
+        group = _literal_int(node.args.get("group") or _num(0))
+        if group is None:
+            raise DialectError("SAP HANA 的 REGEXP_EXTRACT 群組必須是常值")
+        pattern = self._pattern(node.expression, "REGEXP_EXTRACT")
+        suffix = f" GROUP {group}" if group else ""
+        return exp.Var(this=f"SUBSTRING_REGEXPR({pattern} IN {self._raw(node.this)}{suffix})")
+
+    def regexp_replace(self, node: exp.Expr) -> exp.Expr:
+        replacement = node.args.get("replacement") or _str("")
+        if not (isinstance(replacement, exp.Literal) and replacement.is_string):
+            raise DialectError("REGEXP_REPLACE 的取代字串不是常值")
+        pattern = self._pattern(node.expression, "REGEXP_REPLACE")
+        # HANA 的取代字串以 \1 參照群組（與 DuckDB 相同）
+        text = self._raw(node.this)
+        return exp.Var(
+            this=f"REPLACE_REGEXPR({pattern} IN {text} WITH {_single_quote(replacement.name)} OCCURRENCE ALL)"
+        )
+
+    def window(self, node: exp.Expr) -> exp.Expr:
+        """ROW_NUMBER() OVER (ORDER BY NULL) → OVER ()。"""
+        order = node.args.get("order")
+        if order is not None and all(
+            isinstance(o, exp.Ordered) and isinstance(o.this, exp.Null) for o in order.expressions
+        ):
+            node.set("order", None)
+        return node
+
+    def parse_date(self, args: list[exp.Expr]) -> exp.Expr:
+        """DATEPARSE：TO_TIMESTAMP 不符合格式時報錯，先以依格式產生的正規表示式檢查。"""
+        fmt = _format_literal(args[1])
+
+        def literal(text: str) -> str:
+            if not set(text) <= HANA_SEPARATORS:
+                raise DialectError(f"SAP HANA 的 DATEPARSE 格式中只能有分隔字元：{text}")
+            return text
+
+        pattern = "^" + _strftime_regex(fmt).replace("\\d", "[0-9]") + "$"
+        parsed = _fn(
+            "TO_TIMESTAMP", args[0].copy(), _str(_convert_format(fmt, HANA_FORMAT, literal))
+        )
+        matches = _mark(exp.RegexpLike(this=args[0], expression=_str(pattern)))
+        return exp.Case(ifs=[exp.If(this=matches, true=parsed)])
+
+    def try_cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in INTEGER_TYPES:
+            pattern = REDSHIFT_INTEGER
+        elif kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT, exp.DataType.Type.DECIMAL):
+            pattern = REDSHIFT_NUMBER
+        elif kind == exp.DataType.Type.DATE or kind in TIMESTAMP_TYPES:
+            pattern = HANA_DATE
+        else:
+            raise DialectError(f"SAP HANA 不支援轉成 {target.sql('duckdb')} 的 TRY_CAST")
+        text = _cast(node.this, HANA_TEXT, "tmighana")
+        valid = _mark(exp.RegexpLike(this=text.copy(), expression=_str(pattern)))
+        value: exp.Expr = exp.Trim(this=text)
+        return exp.Case(
+            ifs=[exp.If(this=valid, true=_mark(exp.Cast(this=value, to=self._target(target))))]
+        )
+
+    def cast(self, node: exp.Expr) -> exp.Expr:
+        target = node.args["to"]
+        if not isinstance(target, exp.DataType):
+            return node
+        value = node.this
+        if target.this == exp.DataType.Type.BOOLEAN and not _is_predicate(value):
+            raise DialectError("SAP HANA 不能把數字或文字轉成布林值")
+        if target.this == exp.DataType.Type.BOOLEAN:
+            return value
+        if _is_predicate(value) and target.this in INTEGER_TYPES:
+            return exp.Case(
+                ifs=[
+                    exp.If(this=value, true=_num(1)),
+                    exp.If(this=exp.Not(this=_paren(value.copy())), true=_num(0)),
+                ]
+            )
+        return _mark(exp.Cast(this=value, to=self._target(target)))
+
+    def _target(self, target: exp.Expr) -> exp.DataType:
+        assert isinstance(target, exp.DataType)
+        kind = target.this
+        if kind in (exp.DataType.Type.VARCHAR, exp.DataType.Type.TEXT, exp.DataType.Type.CHAR):
+            return _type(HANA_TEXT, "tmighana")
+        if kind in INTEGER_TYPES:
+            return _type("BIGINT")
+        if kind in (exp.DataType.Type.DOUBLE, exp.DataType.Type.FLOAT):
+            return _type("DOUBLE")
+        if kind == exp.DataType.Type.DECIMAL:
+            return target if target.expressions else _type("DECIMAL(18, 3)")
+        if kind == exp.DataType.Type.DATE:
+            return target
+        if kind in TIMESTAMP_TYPES:
+            return _type("TIMESTAMP")
+        raise DialectError(f"SAP HANA 不支援轉成 {target.sql('duckdb')} 型別")
+
+    def finish(self, tree: exp.Expr) -> None:
+        for select in list(tree.find_all(exp.Select)):
+            _expand_group_ordinals(select)
+            _qualify_star(select)
+            if select.args.get("from_") is None and select.args.get("from") is None:
+                select.set("from_", exp.From(this=exp.Table(this=exp.to_identifier("DUMMY"))))
+        for boolean in list(tree.find_all(exp.Boolean)):
+            if boolean.root() is tree and _condition_position(boolean):
+                _replace_boolean(boolean)
+        # 條件不能直接當成值：查詢結果或運算中的布林值寫成 CASE（保留 Null）
+        for node in list(tree.walk()):
+            if (
+                isinstance(node, PREDICATES)
+                and not isinstance(node, exp.Boolean)
+                and node.root() is tree
+                and not _condition_position(node)
+                and not _inside_predicate(node)
+            ):
+                node.replace(_boolean_value(node.copy()))
+        # LIKE_REGEXPR 沒有語法節點：條件都已在條件的位置，換成文字
+        for node in list(tree.find_all(exp.RegexpLike)):
+            if node.root() is tree:
+                pattern = self._pattern(node.expression, "REGEXP_MATCH")
+                node.replace(exp.Var(this=f"({self._raw(node.this)}) LIKE_REGEXPR {pattern}"))
+
+
+def _toward_zero(value: exp.Expr) -> exp.Expr:
+    """去掉小數（往 0 的方向）。"""
+    return exp.Case(
+        ifs=[
+            exp.If(
+                this=exp.LT(this=value.copy(), expression=_num(0)), true=exp.Ceil(this=value.copy())
+            )
+        ],
+        default=exp.Floor(this=value),
+    )
+
+
+def _inside_predicate(node: exp.Expr) -> bool:
+    """節點是否是另一個布林運算的運算元（AND、OR、NOT、比較的兩邊另行處理）。"""
+    parent = node.parent
+    while isinstance(parent, exp.Paren):
+        parent = parent.parent
+    return isinstance(parent, (exp.And, exp.Or, exp.Not))
+
+
+def _boolean_value(node: exp.Expr) -> exp.Expr:
+    """條件 → 布林值（Null 時為 Null）。"""
+    return exp.Case(
+        ifs=[
+            exp.If(this=node, true=exp.true()),
+            exp.If(this=exp.Not(this=_paren(node.copy())), true=exp.false()),
+        ]
+    )
+
+
+HANA_DATE = (
+    r"^[[:space:]]*[0-9]{4}-(0?[1-9]|1[0-2])-(0?[1-9]|[12][0-9]|3[01])"
+    r"([ T]([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?)?[[:space:]]*$"
+)
+"""文字轉日期時間前的檢查（ISO 格式）。"""
+
+
 # ---------------------------------------------------------------- SQL Server
 
 
@@ -4480,6 +5472,8 @@ REWRITERS: dict[str, Rewriter] = {
     "teradata": TeradataRewriter(),
     "hive": HiveRewriter(),
     "impala": ImpalaRewriter(),
+    "db2": Db2Rewriter(),
+    "hana": HanaRewriter(),
 }
 
 

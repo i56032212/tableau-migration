@@ -2367,6 +2367,8 @@
                 "teradata",
                 "hive",
                 "impala",
+                "db2",
+                "hana",
                 "duckdb"
               ],
               "type": "string"

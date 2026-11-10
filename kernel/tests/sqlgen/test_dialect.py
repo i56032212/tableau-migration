@@ -128,6 +128,8 @@ DIALECTS = [
     "teradata",
     "hive",
     "impala",
+    "db2",
+    "hana",
 ]
 SNAPSHOT_DIALECTS = [
     "oracle",
@@ -139,6 +141,8 @@ SNAPSHOT_DIALECTS = [
     "teradata",
     "hive",
     "impala",
+    "db2",
+    "hana",
 ]
 """沒有實機的方言：轉譯結果以快照審核（BigQuery 在 CI 以模擬器實跑，仍以快照審核）。"""
 SNAPSHOT_SCHEMAS = {
@@ -151,6 +155,8 @@ SNAPSHOT_SCHEMAS = {
     "teradata": ["sales"],
     "hive": ["sales"],
     "impala": ["sales"],
+    "db2": ["SALES"],
+    "hana": ["SALES"],
 }
 
 
@@ -180,6 +186,8 @@ def test_custom_sql_is_restored(dialect: str) -> None:
         ("teradata", "'O''Hare'", "DATE '2024-01-01'"),
         ("hive", "'O\\'Hare'", "CAST('2024-01-01' AS DATE)"),
         ("impala", "'O\\'Hare'", "CAST('2024-01-01' AS DATE)"),
+        ("db2", "'O''Hare'", "CAST('2024-01-01' AS DATE)"),
+        ("hana", "'O''Hare'", "DATE '2024-01-01'"),
     ],
 )
 def test_custom_sql_parameters(dialect: str, region: str, since: str) -> None:

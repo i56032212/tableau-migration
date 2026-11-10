@@ -1623,3 +1623,384 @@ def _emulate_impala(node: Any) -> Any:
         # TO_TIMESTAMP(s, 格式) 不符合格式時為 Null
         return _duck(f"try_strptime({{s}}, '{_java_format(args[1].name)}')", s=args[0])
     return _emulate_hive(node)
+
+
+# ---------------------------------------------------------------- Db2、SAP HANA（模擬）
+
+
+class Db2Emulator:
+    """測試用：沒有 Db2 實機，把轉譯後的 Db2 SQL 以 SQLGlot（Oracle 的解析）轉回 DuckDB，Db2 特有的函式
+    （DAYS、MIDNIGHT_SECONDS、ADD_DAYS 等、字串單位 CODEUNITS32、LOCATE_IN_STRING、TIMESTAMP_FORMAT、
+    ATAN2 的參數順序、ICU 的取代字串）依官方文件的語意模擬後在 DuckDB 執行，其他沿用 Oracle 的模擬。
+    檢查的是轉譯的結構與函式對照的寫法，仍待實機驗證。"""
+
+    dialect = "db2"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+        con.execute('CREATE SCHEMA IF NOT EXISTS "SYSIBM"')
+        con.execute('CREATE OR REPLACE VIEW "SYSIBM"."SYSDUMMY1" AS SELECT \'Y\' AS "IBMREQD"')
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        sql = re.sub(r"\bTRUNC\(", "TMIG_TRUNC(", sql)
+        # SQLGlot 認得部分 Db2 的函式名稱，但語意不同（DAYOFWEEK、VARIANCE、STDDEV 等）：一律自行處理
+        sql = re.sub(rf"\b({'|'.join(DB2_FUNCTIONS)})\(", r"TMIG_\1(", sql)
+        tree = sqlglot.parse_one(sql, read="oracle")
+        duck = _visit(tree, _emulate_db2).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+DB2_FUNCTIONS = (
+    "ADD_DAYS",
+    "ADD_HOURS",
+    "ADD_MINUTES",
+    "ADD_SECONDS",
+    "DAYS",
+    "MIDNIGHT_SECONDS",
+    "MICROSECOND",
+    "DAYOFWEEK_ISO",
+    "DAYOFWEEK",
+    "WEEK_ISO",
+    "CHARACTER_LENGTH",
+    "SUBSTRING",
+    "LOCATE_IN_STRING",
+    "LEFT",
+    "RIGHT",
+    "TIMESTAMP_FORMAT",
+    "TIMESTAMP",
+    "CORRELATION",
+    "COVARIANCE_SAMP",
+    "COVARIANCE",
+    "VARIANCE_SAMP",
+    "VARIANCE",
+    "STDDEV",
+)
+
+
+def _without_units(args: list[Any]) -> list[Any]:
+    from sqlglot import exp
+
+    return [a for a in args if not (isinstance(a, exp.Column) and a.name.upper() == "CODEUNITS32")]
+
+
+def _locate(text: Any, search: Any, start: Any) -> Any:
+    """第 start 個字元起找 search 的位置（找不到為 0）。"""
+    return _duck(
+        "(CASE WHEN instr(substr({s}, {p}), {x}) = 0 THEN 0 "
+        "ELSE instr(substr({s}, {p}), {x}) + {p} - 1 END)",
+        s=text,
+        x=search,
+        p=start,
+    )
+
+
+DB2_TO_STRFTIME = [
+    ("YYYY", "%Y"),
+    ("MONTH", "%B"),
+    ("MON", "%b"),
+    ("HH24", "%H"),
+    ("HH12", "%I"),
+    ("FF6", "%f"),
+    ("DDD", "%j"),
+    ("YY", "%y"),
+    ("MM", "%m"),
+    ("DD", "%d"),
+    ("MI", "%M"),
+    ("SS", "%S"),
+    ("AM", "%p"),
+]
+
+
+def _oracle_like_format(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        for token, strftime in DB2_TO_STRFTIME:
+            if text.startswith(token, i):
+                out.append(strftime)
+                i += len(token)
+                break
+        else:
+            out.append(text[i].replace("%", "%%"))
+            i += 1
+    return "".join(out)
+
+
+def _emulate_db2(node: Any) -> Any:
+    from sqlglot import exp
+
+    name = node.name.upper().removeprefix("TMIG_") if isinstance(node, exp.Anonymous) else ""
+    if name == "TRUNC":
+        name = "TMIG_TRUNC"
+    args = _without_units(list(node.expressions)) if isinstance(node, exp.Anonymous) else []
+    if isinstance(node, exp.DataType) and node.this == exp.DataType.Type.DOUBLE:
+        return exp.DataType.build("DOUBLE")
+    adds = {"ADD_DAYS": "to_days", "ADD_HOURS": "to_hours", "ADD_MINUTES": "to_minutes"}
+    if name in adds:
+        return _duck(f"({{x}} + {adds[name]}(CAST({{n}} AS BIGINT)))", x=args[0], n=args[1])
+    if name == "ADD_SECONDS":
+        return _duck(
+            "(CAST({x} AS TIMESTAMP) + to_microseconds(CAST(round({n} * 1000000) AS BIGINT)))",
+            x=args[0],
+            n=args[1],
+        )
+    if name == "DAYS":
+        # 自 0001-01-01（第 1 天）起的第幾天：以 1970-01-01 為基準（DAYS('1970-01-01') = 719163）
+        return _duck("(date_diff('day', DATE '1970-01-01', CAST({x} AS DATE)) + 719163)", x=args[0])
+    if name == "MIDNIGHT_SECONDS":
+        return _duck("(hour({x}) * 3600 + minute({x}) * 60 + second({x}))", x=args[0])
+    if name == "MICROSECOND":
+        return _duck("(microsecond({x}) % 1000000)", x=args[0])
+    if name == "DAYOFWEEK":
+        return _duck("(dayofweek({x}) + 1)", x=args[0])
+    if name == "DAYOFWEEK_ISO":
+        return _duck("isodow({x})", x=args[0])
+    if name == "WEEK_ISO":
+        return _duck("week({x})", x=args[0])
+    if name == "CHARACTER_LENGTH":
+        return _duck("length({x})", x=args[0])
+    if name == "SUBSTRING":
+        if len(args) == 2:
+            return _duck("substring({s}, {a})", s=args[0], a=args[1])
+        return _duck("substring({s}, {a}, {b})", s=args[0], a=args[1], b=args[2])
+    if name == "LOCATE_IN_STRING":
+        return _locate(args[0], args[1], args[2])
+    if name in ("LEFT", "RIGHT"):
+        return _duck(f"{name.lower()}({{s}}, CAST({{n}} AS BIGINT))", s=args[0], n=args[1])
+    if name == "TIMESTAMP_FORMAT":
+        text = _oracle_like_format(args[1].name).replace("'", "''")
+        return _duck(f"strptime({{s}}, '{text}')", s=args[0])
+    if name == "TIMESTAMP" and len(args) == 1:
+        return _duck("CAST({x} AS TIMESTAMP)", x=args[0])
+    if name == "TMIG_TRUNC" and len(args) == 2 and args[1].is_number:
+        return _duck("trunc({x})", x=args[0])
+    if isinstance(node, exp.Atan2):
+        # Db2 的 ATAN2(x, y)
+        return exp.Atan2(this=node.expression, expression=node.this)
+    names = {
+        "CORRELATION": "corr",
+        "COVARIANCE_SAMP": "covar_samp",
+        "COVARIANCE": "covar_pop",
+        "VARIANCE_SAMP": "var_samp",
+        "VARIANCE": "var_pop",
+        "STDDEV": "stddev_pop",
+    }
+    # TMIG_TRUNC 交給 Oracle 的模擬（日期的格式）；名稱要還原
+    if name == "TMIG_TRUNC" and not (len(args) == 2 and args[1].is_number):
+        return _emulate(node)
+    if name in names:
+        return _duck(
+            f"{names[name]}({', '.join('{' + f'a{i}' + '}' for i in range(len(args)))})",
+            **{f"a{i}": a for i, a in enumerate(args)},
+        )
+    if isinstance(node, exp.RegexpReplace):
+        replacement = node.args.get("replacement")
+        if isinstance(replacement, exp.Literal) and replacement.is_string:
+            return _duck(
+                f"regexp_replace({{s}}, {{p}}, '{_java_to_re2(replacement.name)}', 'g')",
+                s=node.this,
+                p=node.expression,
+            )
+    return _emulate(node)
+
+
+class HanaEmulator:
+    """測試用：沒有 SAP HANA 實機，把轉譯後的 HANA SQL 以 SQLGlot（PostgreSQL 的解析）轉回 DuckDB，HANA 特有的
+    寫法（LIKE_REGEXPR、SUBSTRING_REGEXPR、REPLACE_REGEXPR 的語法、WEEKDAY、ISOWEEK、ADD_*、DAYS_BETWEEN、
+    NANO100_BETWEEN、LOCATE 的參數順序、ROUND_DOWN）依官方文件的語意模擬後在 DuckDB 執行。
+    檢查的是轉譯的結構與函式對照的寫法，仍待實機驗證。"""
+
+    dialect = "hana"
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+        con.execute('CREATE OR REPLACE VIEW "DUMMY" AS SELECT \'X\' AS "DUMMY"')
+
+    def fetch(self, sql: str) -> pa.Table:
+        import sqlglot
+
+        sql = _hana_regex_calls(sql)
+        # SQLGlot 認得部分 HANA 的函式名稱，但參數或語意不同（LOCATE、TO_TIMESTAMP 等）：一律自行處理
+        sql = re.sub(rf"\b({'|'.join(HANA_FUNCTIONS)})\(", r"TMIG_\1(", sql)
+        tree = sqlglot.parse_one(sql, read="postgres")
+        duck = _visit(tree, _emulate_hana).sql(dialect="duckdb")
+        return self.con.sql(duck).to_arrow_table()
+
+    def close(self) -> None:
+        return None
+
+
+HANA_FUNCTIONS = (
+    "LOCATE",
+    "TO_TIMESTAMP",
+    "TO_DATE",
+    "TO_VARCHAR",
+    "ADD_DAYS",
+    "ADD_MONTHS",
+    "ADD_SECONDS",
+    "DAYS_BETWEEN",
+    "NANO100_BETWEEN",
+    "WEEKDAY",
+    "DAYOFMONTH",
+    "ISOWEEK",
+    "SECOND",
+    "NCHAR",
+    "MOD",
+    "RPAD",
+)
+
+
+def _split_top(text: str, words: list[str]) -> dict[str, str]:
+    """「a IN b GROUP 1」依最外層的關鍵字切開（字串常值與括號內的不算）。"""
+    parts: dict[str, str] = {}
+    key, start, depth, i = "", 0, 0, 0
+    while i < len(text):
+        char = text[i]
+        if char == "'":
+            i = text.index("'", i + 1)
+            while i + 1 < len(text) and text[i + 1] == "'":
+                i = text.index("'", i + 2)
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0:
+            for word in words:
+                if text.startswith(f" {word} ", i):
+                    parts[key] = text[start:i]
+                    key, start = word, i + len(word) + 2
+                    i += len(word) + 1
+                    break
+        i += 1
+    parts[key] = text[start:]
+    return parts
+
+
+def _closing(text: str, open_index: int) -> int:
+    """text[open_index] 是左括號：回傳對應的右括號位置。"""
+    depth, i = 0, open_index
+    while i < len(text):
+        char = text[i]
+        if char == "'":
+            i = text.index("'", i + 1)
+            while i + 1 < len(text) and text[i + 1] == "'":
+                i = text.index("'", i + 2)
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise AssertionError("括號不成對")
+
+
+def _hana_regex_calls(sql: str) -> str:
+    """HANA 的正規表示式語法 → 函式呼叫（TMIG_SUBSTRING_REGEXPR 等），讓 SQLGlot 解析。"""
+    for name in ("SUBSTRING_REGEXPR", "REPLACE_REGEXPR"):
+        while (found := re.search(rf"(?<![\w]){name}\(", sql)) is not None:
+            start = found.start()
+            end = _closing(sql, start + len(name))
+            parts = _split_top(
+                sql[start + len(name) + 1 : end], ["IN", "WITH", "OCCURRENCE", "GROUP"]
+            )
+            if name == "REPLACE_REGEXPR":
+                call = f"TMIG_REPLACE_REGEXPR({parts['']}, {parts['IN']}, {parts['WITH']})"
+            else:
+                call = (
+                    f"TMIG_SUBSTRING_REGEXPR({parts['']}, {parts['IN']}, "
+                    f"{parts.get('OCCURRENCE', '1')}, {parts.get('GROUP', '0')})"
+                )
+            sql = sql[:start] + call + sql[end + 1 :]
+    while ") LIKE_REGEXPR '" in sql:
+        index = sql.index(") LIKE_REGEXPR '")
+        # 左邊的運算元是括號包住的整段：往回找對應的左括號
+        depth, i = 0, index
+        while i >= 0:
+            if sql[i] == ")":
+                depth += 1
+            elif sql[i] == "(":
+                depth -= 1
+                if depth == 0:
+                    break
+            i -= 1
+        pattern_start = index + len(") LIKE_REGEXPR ")
+        pattern_end = pattern_start + 1
+        while True:
+            pattern_end = sql.index("'", pattern_end)
+            if sql[pattern_end + 1 : pattern_end + 2] == "'":
+                pattern_end += 2
+                continue
+            break
+        left = sql[i : index + 1]
+        pattern = sql[pattern_start : pattern_end + 1]
+        sql = sql[:i] + f"TMIG_LIKE_REGEXPR({left}, {pattern})" + sql[pattern_end + 1 :]
+    return sql
+
+
+HANA_TO_STRFTIME = [(token, strftime) for token, strftime in DB2_TO_STRFTIME if token != "DDD"]
+
+
+def _emulate_hana(node: Any) -> Any:
+    from sqlglot import exp
+
+    name = node.name.upper() if isinstance(node, exp.Anonymous) else ""
+    if name.removeprefix("TMIG_") in HANA_FUNCTIONS:
+        name = name.removeprefix("TMIG_")
+    args = list(node.expressions) if isinstance(node, exp.Anonymous) else []
+    if name == "RPAD":
+        return _duck("rpad({s}, CAST({n} AS INTEGER), {p})", s=args[0], n=args[1], p=args[2])
+    if name == "TMIG_LIKE_REGEXPR":
+        return _duck("regexp_matches({s}, {p})", s=args[0], p=args[1])
+    if name == "TMIG_SUBSTRING_REGEXPR":
+        pattern, text, occurrence, group = args
+        return _duck(
+            "list_extract(regexp_extract_all({s}, {p}, {g}), {n})",
+            s=text,
+            p=pattern,
+            g=group,
+            n=occurrence,
+        )
+    if name == "TMIG_REPLACE_REGEXPR":
+        return _duck("regexp_replace({s}, {p}, {r}, 'g')", s=args[1], p=args[0], r=args[2])
+    if name == "ADD_DAYS":
+        return _duck("({x} + to_days(CAST({n} AS BIGINT)))", x=args[0], n=args[1])
+    if name == "ADD_MONTHS":
+        return _duck("({x} + to_months(CAST({n} AS BIGINT)))", x=args[0], n=args[1])
+    if name == "ADD_SECONDS":
+        return _duck(
+            "(CAST({x} AS TIMESTAMP) + to_microseconds(CAST(round({n} * 1000000) AS BIGINT)))",
+            x=args[0],
+            n=args[1],
+        )
+    if name == "DAYS_BETWEEN":
+        return _duck("date_diff('day', CAST({a} AS DATE), CAST({b} AS DATE))", a=args[0], b=args[1])
+    if name == "NANO100_BETWEEN":
+        return _duck("(epoch_us({b}) - epoch_us({a})) * 10", a=args[0], b=args[1])
+    if name == "WEEKDAY":
+        return _duck("(isodow({x}) - 1)", x=args[0])
+    if name == "DAYOFMONTH":
+        return _duck("day({x})", x=args[0])
+    if name == "ISOWEEK":
+        return _duck("strftime({x}, '%G-W%V')", x=args[0])
+    if name == "SECOND":
+        return _duck("(second({x}) + (microsecond({x}) % 1000000) / 1000000.0)", x=args[0])
+    if name == "LOCATE":
+        return _locate(args[0], args[1], args[2] if len(args) > 2 else exp.Literal.number(1))
+    if name == "NCHAR":
+        return _duck("chr(CAST({x} AS INTEGER))", x=args[0])
+    if name == "TO_VARCHAR":
+        return _duck("CAST({x} AS VARCHAR)", x=args[0])
+    if name == "TO_DATE":
+        return _duck("CAST({x} AS DATE)", x=args[0])
+    if name == "TO_TIMESTAMP":
+        text = "".join(_oracle_like_format(args[1].name)).replace("'", "''")
+        return _duck(f"strptime({{s}}, '{text}')", s=args[0])
+    if name == "MOD":
+        return _duck("({a}) % ({b})", a=args[0], b=args[1])
+    return node

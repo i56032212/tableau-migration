@@ -265,6 +265,61 @@ def test_hiveserver2_executor_options(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
 
+def test_db2_and_hana_executor_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Db2：連線字串不含帳密（另外傳給驅動）、可加 SSL；HANA：連接埠預設 30015、HANA Cloud 預設加密。"""
+    import sys
+    import types
+
+    from tmig.data.sources import Db2Executor, HanaExecutor
+    from tmig.ir import LiveConnection
+
+    calls: list[tuple[object, ...]] = []
+    db2 = types.ModuleType("ibm_db_dbi")
+    db2.connect = lambda *args: calls.append(args) or object()  # type: ignore[attr-defined]
+    hdbcli = types.ModuleType("hdbcli")
+    dbapi = types.ModuleType("hdbcli.dbapi")
+    dbapi.connect = lambda **kwargs: calls.append((kwargs,)) or object()  # type: ignore[attr-defined]
+    hdbcli.dbapi = dbapi  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ibm_db_dbi", db2)
+    monkeypatch.setitem(sys.modules, "hdbcli", hdbcli)
+    monkeypatch.setitem(sys.modules, "hdbcli.dbapi", dbapi)
+
+    def live(dbclass: str, dialect: str, server: str, database: str | None) -> LiveConnection:
+        return LiveConnection(
+            kind="live",
+            connection_id=f"{dbclass}_x",
+            dbclass=dbclass,
+            dialect=dialect,  # type: ignore[arg-type]
+            server=server,
+            database=database,
+        )
+
+    connection = live("db2", "db2", "db2.example.com", "SAMPLE")
+    Db2Executor.open(connection, {"user": "u", "password": "p;w", "ssl": "true"})
+    assert calls[0] == (
+        "DATABASE=SAMPLE;HOSTNAME=db2.example.com;PORT=50000;PROTOCOL=TCPIP;SECURITY=SSL;",
+        "u",
+        "p;w",
+    )
+    with pytest.raises(SourceConnectionError, match="缺少主機或資料庫"):
+        Db2Executor.open(connection.model_copy(update={"database": None}), {})
+    HanaExecutor.open(
+        live("saphana", "hana", "hana.example.com", None), {"user": "u", "database": "HXE"}
+    )
+    assert calls[1] == (
+        {
+            "address": "hana.example.com",
+            "port": 30015,
+            "user": "u",
+            "encrypt": False,
+            "sslValidateCertificate": True,
+            "databaseName": "HXE",
+        },
+    )
+    HanaExecutor.open(live("saphana", "hana", "x.hanacloud.ondemand.com", None), {"port": 443})
+    assert calls[2][0]["encrypt"] is True and calls[2][0]["port"] == 443  # type: ignore[index]
+
+
 def test_config_errors(tmp_path: Path) -> None:
     assert load_connections(tmp_path / "missing.toml") == {}
     config = write_config(tmp_path / "bad.toml", '[connections.x]\ndriver = "mssql"\n')
@@ -479,6 +534,8 @@ def test_connections_template_for_other_engines(tmp_path: Path) -> None:
         "spark_db": found("spark_db", "spark", "spark", "adb-1.azuredatabricks.net"),
         "hive_x": found("hive_x", "hadoophive", "hive", "hive.example.com"),
         "impala_x": found("impala_x", "hadoophive", "impala", "impala.example.com"),
+        "db2_x": found("db2_x", "db2", "db2", "db2.example.com"),
+        "hana_x": found("hana_x", "saphana", "hana", "hana.example.com"),
     }
     # Spark SQL 連到 Databricks 時用 Databricks 的驅動；Cloudera Hadoop 連到 Impala 時用 Impala 的規則
     assert {k: driver_for(v.connection) for k, v in entries.items()} == {
@@ -489,6 +546,8 @@ def test_connections_template_for_other_engines(tmp_path: Path) -> None:
         "spark_db": "databricks",
         "hive_x": "hive",
         "impala_x": "impala",
+        "db2_x": "db2",
+        "hana_x": "hana",
     }
     text = template(entries)
     assert '[connections.bigquery_x]\ndriver = "bigquery"\n# credentials_path' in text
@@ -511,6 +570,8 @@ def test_connections_template_for_other_engines(tmp_path: Path) -> None:
         "databricks",
         "hive",
         "impala",
+        "db2",
+        "hana",
     }
 
 

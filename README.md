@@ -32,7 +32,7 @@ Story（故事點記下的篩選動作、篩選與選取）、集合（Top N、�
 轉成來源資料庫的方言下推執行，結果取回 DuckDB 再算 Table Calculation（兩段式執行）。兩份報表的萃取資料載入
 PostgreSQL、Spark（Databricks 的引擎；Spark SQL 另走 HiveServer2 協定）、MySQL 與 Trino、資料源改成 Live 連線後，
 124 項計算比對全部通過，每個公式函式也都實跑比對；Oracle、SQL Server、Snowflake、Redshift、BigQuery、Teradata、
-Hive、Impala 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
+Hive、Impala、Db2、SAP HANA 尚無實機，以轉回 DuckDB 模擬的方式檢查（見「Live 連線」）。多表的資料源支援 join 樹、自訂 SQL 與
 Relationship 模型（見「Relationship 模型」）；公開報表盤點中符合起步條件的從 75 份增加到 90 份。
 萃取型的報表可以由萃取層從來源資料庫更新（完整或增量、原子替換），並與 Tableau 的萃取比對（見「萃取層」）。
 以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）；
@@ -144,7 +144,7 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 
 ## Live 連線
 
-資料源是 Live 連線的報表（Oracle、SQL Server、MySQL、Snowflake、Databricks、Spark SQL、PostgreSQL、Redshift、Presto／Trino、Athena、BigQuery、Teradata、Hive、Impala），查詢時連到來源資料庫：
+資料源是 Live 連線的報表（Oracle、SQL Server、MySQL、Snowflake、Databricks、Spark SQL、PostgreSQL、Redshift、Presto／Trino、Athena、BigQuery、Teradata、Hive、Impala、IBM Db2、SAP HANA），查詢時連到來源資料庫：
 
 1. `uv run tmig connections template <報表或資料夾> --out connections.toml` 產生連線設定檔範本
 2. 帳號、密碼、權杖在設定檔中一律寫成 `${環境變數}`（直接寫值會被拒絕），由部署環境或密碼管理服務提供；
@@ -154,7 +154,8 @@ SQL 依 Tableau 的八段運算順序分成 CTE，並以註解標出每一段與
 
 連線驅動依實際使用的資料庫安裝：`uv sync --extra oracle`、`--extra sqlserver`、`--extra mysql`、`--extra snowflake`、
 `--extra databricks`、`--extra postgres`、`--extra redshift`、`--extra trino`（PrestoDB 為 `--extra presto`）、
-`--extra athena`、`--extra bigquery`、`--extra teradata`、`--extra hive`（Spark SQL、Hive、Impala 共用，HiveServer2 協定）。
+`--extra athena`、`--extra bigquery`、`--extra teradata`、`--extra hive`（Spark SQL、Hive、Impala 共用，HiveServer2 協定）、
+`--extra db2`、`--extra hana`。
 IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
 
 各資料庫的轉譯與驗證程度（`kernel/src/tmig/sqlgen/dialect.py`）：
@@ -174,6 +175,8 @@ IR 只記連線類型、主機、資料庫與資料表，不記任何憑證。
 | Amazon Athena（engine 3） | 實跑（SQL 在 CI 的 Trino 執行；連線本身未實機驗證） | 與 Trino 相同的轉譯；查詢結果寫到 `s3_staging_dir` 或工作群組 `work_group` 設定的位置；AWS 憑證省略時用預設的來源（環境變數、設定檔 profile 或 IAM 角色） |
 | Google BigQuery | 模擬（依官方文件）；執行器在 CI 以 BigQuery 模擬器實跑，連線本身未實機驗證 | 日期時間欄位一律以 DATETIME 計算（TIMESTAMP 欄位依 UTC 換算，與 Tableau 相同）；DATEDIFF 以 DATETIME_DIFF 計算邊界數；REGEXP_EXTRACT 的樣式與群組須為常值；MEDIAN、PERCENTILE 以排序後的 ARRAY_AGG 內插（精確值）；憑證為服務帳號金鑰檔的路徑或 Application Default Credentials，可用 `maximum_bytes_billed` 限制每次查詢的掃描量。BigQuery 模擬器（goccy/bigquery-emulator）執行公式與工作表的結果不可靠（一元負號、1970 年以前的日期等有錯，查詢多時記憶體持續增加），所以公式與工作表以模擬比對；模擬器找到的除法常值 Null、Null 陣列的 FINDNTH 已修正 |
 | Apache Hive 2.3 以上（Tableau 的 Cloudera Hadoop、Hortonworks Hadoop Hive、MapR Hadoop Hive、Amazon EMR Hadoop Hive 連線） | 模擬（依官方文件） | 以 HiveServer2 協定連線（同 Spark SQL）；工作階段的時區為 UTC（Hive 3 起；Hive 2 維持伺服器的時區，伺服器的時區有日光節約時間時，跨越切換日的時間加減可能差一小時）；時間的加減以秒數計算，月份的加減從月初加起（月底的行為與萃取時相同）；Null 也相等的比較為 `<=>`；沒有陣列片段（FINDNTH）；子查詢只能在條件中（集合的成員、Top N 集合等列為不支援）；MEDIAN、PERCENTILE 以排序後的 COLLECT_LIST 內插（精確值）；DATEPARSE 精確到秒（Hive 2 的解析較寬鬆）；GROUP BY 不以位置分組 |
+| IBM Db2 for Linux、UNIX and Windows 11.5 以上 | 模擬（依官方文件） | 沿用 Oracle 的規則：沒有布林值（布林維度、集合的成員等列為不支援）；字串以字元計算（`CODEUNITS32`，預設以位元組計算會切斷中文）；日期加減以 ADD_DAYS、ADD_SECONDS 等，月份從月初加起（月底的行為與萃取時相同）；天數差以 DAYS() 相減；DATEPARSE 以 TIMESTAMP_FORMAT（格式中的文字只能是分隔字元），文字轉數字、日期時先以正規表示式檢查（沒有 TRY_CAST）；沒有 FINDNTH；SPLIT 只支援正數位置；`ssl = true` 以 SSL 連線 |
+| SAP HANA 2.0（SPS05 以上）、HANA Cloud | 模擬（依官方文件） | 查詢結果中的布林值寫成 CASE（比較不能直接當成值）；Null 也相等的比較寫成 = 或兩者皆 Null；ISO 週與年取自 ISOWEEK；正規表示式以 LIKE_REGEXPR、SUBSTRING_REGEXPR、REPLACE_REGEXPR（樣式須為常值）；DATEPARSE 以 TO_TIMESTAMP（格式中的文字只能是分隔字元）；沒有 COVAR、COVARP 與 FINDNTH；SPLIT 只支援正數位置；多租戶時以 `database` 指定租戶，HANA Cloud 預設以 TLS 連線 |
 | Apache Impala 3.3 以上（Cloudera Hadoop 連到 Impala：連接埠 21050 或類型標示 Impala；Tableau 的 Impala 連線） | 模擬（依官方文件） | 與 Hive 相同的規則；時間的加減以 DAYS_ADD、MONTHS_ADD、MICROSECONDS_ADD 等函式；截斷以 TRUNC 與 DATE_TRUNC；正規表示式為 RE2；沒有陣列、精確的 MEDIAN、PERCENTILE 與 CORR、COVAR；SPLIT 的位置須為正整數常值；DATEPARSE 的格式不支援月份名稱、上下午與含英文字母的文字；LENGTH 計算位元組（非 ASCII 字元與 Tableau 不同）；工作階段的時區為 UTC（Impala 3.1 起） |
 
 Excel、文字檔（CSV 等）沒有萃取時不是連到資料庫：匯入時依 Tableau 讀到的欄名與型別讀進 DuckDB，與萃取相同在本機查詢
@@ -210,7 +213,7 @@ SQL 以 SQLGlot 轉回 DuckDB、該資料庫特有的函式依官方文件的語
   走 HiveServer2 協定）、MySQL、Trino（CI 以 Docker）：每個公式函式與兩份報表的每張工作表 × 每組篩選實跑比對
   （`kernel/tests/sqlgen/test_engines.py`；本機有 PostgreSQL、MySQL 時自動執行，Spark 需要 `uv sync --group spark`
   與 Java 17 以上）
-- 模擬：Oracle、SQL Server、Snowflake、Redshift、BigQuery、Teradata、Hive、Impala 尚無實機。轉譯後的 SQL 以 SQLGlot
+- 模擬：Oracle、SQL Server、Snowflake、Redshift、BigQuery、Teradata、Hive、Impala、Db2、SAP HANA 尚無實機。轉譯後的 SQL 以 SQLGlot
   轉回 DuckDB、各自特有的函式依官方文件的語意模擬後執行同樣的比對，並保留轉譯快照（`fixtures/*/sql/<方言>/`）
   供審核；正式使用前須在公司的資料庫實測
 

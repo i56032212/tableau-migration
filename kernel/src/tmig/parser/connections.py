@@ -57,6 +57,8 @@ DIALECTS: dict[str, Dialect] = {
     "maprhadoophive": "hive",
     "awshadoophive": "hive",
     "impala": "impala",
+    "db2": "db2",
+    "saphana": "hana",
 }
 """Tableau 的連線類型 → SQLGlot 方言（類型名稱依公開資料整理，待真實報表確認）。"""
 
@@ -76,6 +78,8 @@ EXECUTABLE: frozenset[str] = frozenset(
         "teradata",
         "hive",
         "impala",
+        "db2",
+        "hana",
     }
 )
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""

@@ -591,6 +591,21 @@ wheels = [
 ]
 
 [[package]]
+name = "hdbcli"
+version = "2.30.27"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/ba/094197bc10e3b2f2bd22bf7069e1d8a5e9bf81f95fdd59f28a320361729f/hdbcli-2.30.27-cp310-abi3-macosx_13_0_arm64.whl", hash = "sha256:2a95a20cba24a67955531c85c755bdf22b0dbd56c2dca28072de4e6bc71c8ad8", size = 5261587, upload-time = "2026-09-18T15:23:22.018Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/82/b36d27b354890542bc89be1885b43c61ee9bc342a686a4e6bca72a0339f6/hdbcli-2.30.27-cp310-abi3-macosx_13_0_x86_64.whl", hash = "sha256:c20d2cfb1c102dd204624e1edfb370245955b4d29794d4ec01625b8a820faa47", size = 5760723, upload-time = "2026-09-18T15:23:24.14Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/9c/8087545a343ba3bd0f655dd8cbc0684b4371fd82650b5db966642852a737/hdbcli-2.30.27-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:4e5c835269ea7563454e91586b593dbb60bf2e27c8ee75fd185b88e64760cf47", size = 5574802, upload-time = "2026-09-18T15:23:25.818Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/82/fd1b0c197d0cc01cb455b224cecd5f86e3a322adea45ff8d5e6f59c3f9da/hdbcli-2.30.27-cp310-abi3-manylinux2014_ppc64le.whl", hash = "sha256:62087ef27599c32ccf566ac96d225da263c53337b6a2dca6d207ca5e5f647b23", size = 6170763, upload-time = "2026-09-18T15:23:27.576Z" },
+    { url = "https://files.pythonhosted.org/packages/66/89/d9c10352b6fcef91f4c91981db3f419ba0c246d5962caca8f6305dd15896/hdbcli-2.30.27-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:8dae4357c648b199e1a10bddd29c87a7d8a23d3b1899b1d9e70b0bd3274ceae9", size = 5905928, upload-time = "2026-09-18T15:23:29.17Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/99/7c45f65d0b62782376428a8e0d6455b234c3e3d354bc044196215bb30949/hdbcli-2.30.27-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a353f219359a9eef0126731e398a7a3ae8f46e7263dda37f49e6af272dc776af", size = 6008298, upload-time = "2026-09-18T15:23:31.152Z" },
+    { url = "https://files.pythonhosted.org/packages/82/b8/be0de1c838851750088affd9fbe50de9a503681996514292444058e3ebdb/hdbcli-2.30.27-cp310-abi3-win32.whl", hash = "sha256:eb4b0b5afc71ac9719f4b6ad3d1c72c9fd34e6594aafd89bd738d7f4ad1ea453", size = 3476562, upload-time = "2026-09-18T15:23:32.825Z" },
+    { url = "https://files.pythonhosted.org/packages/36/74/fc82ee9a6f03965e2d5a743d988844853ff7fae489e07a504f90aaf20d83/hdbcli-2.30.27-cp310-abi3-win_amd64.whl", hash = "sha256:99d30bf6ea7b43cc8acea76dd0bea0ae5344f7f49cddb8ca523ee2ae02db37e2", size = 3835399, upload-time = "2026-09-18T15:23:34.867Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -616,6 +631,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
+]
+
+[[package]]
+name = "ibm-db"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/9d/9f31efe9462a220d3e4e19dc96839b97a8dcd4203e9245a0497cfae6f683/ibm_db-3.3.0.tar.gz", hash = "sha256:75c6749957d202e0b6b37e1e823583bfc37b65293ee123fb287e409d7426b53d", size = 315316, upload-time = "2026-08-11T21:00:35.04Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/75/d60e93559b1b0ff8684622ab54901416834a27a5ff11391d341523cbce0b/ibm_db-3.3.0-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:17335ee3f401f32c10db831a727ea365ca22c12a6ae1f97cab5357c85d8fda27", size = 24195236, upload-time = "2026-08-11T20:58:51.819Z" },
+    { url = "https://files.pythonhosted.org/packages/60/34/761cb391e31b952696a5756738aa14840d09e144d662c9d7a8f49f2c43c8/ibm_db-3.3.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:b801774c68c303e5a53fbd982b79bbfa5905b789eb3476b8ae1db22ce6726c20", size = 20865076, upload-time = "2026-08-11T20:58:55.181Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/3d/0832755c8d6e164f6b25a8dcee5408a497f80780a1f8044cee2896ef0113/ibm_db-3.3.0-cp312-cp312-manylinux_2_34_i686.whl", hash = "sha256:e15138cfeb6e2a0fa5c248bfae7ba9cee7b83856048c81b9e7e36f461df74f8c", size = 43810768, upload-time = "2026-08-11T20:59:00.559Z" },
+    { url = "https://files.pythonhosted.org/packages/61/8a/6c57f4c4fcaa4eef419d5eae30f9b7ce620560c3cbd103324dcab5f1e9b1/ibm_db-3.3.0-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:f282dcc731a33cd19bf310a6f0f28088fa9bd64fb42f28b955b38a5e8f240990", size = 48156737, upload-time = "2026-08-11T20:59:06.154Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/4d/5d14c9ae0051879b4bd4aa6e16b3a8bc0f3ba638c3852d30a2ce77ec76a5/ibm_db-3.3.0-cp312-cp312-win32.whl", hash = "sha256:e3908f9af3e038797a95b60ee0ccfb1a10f35d01cfb623151f534461e9f2691f", size = 24601597, upload-time = "2026-08-11T20:59:10.363Z" },
+    { url = "https://files.pythonhosted.org/packages/29/12/890970bbd9e1232ad8e612e133eb40032011a5a24b632d85b4d1d5a6bdbf/ibm_db-3.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:70147f6885ae7b02f440e5a73be6cf44667d0d708ffec9695d2e5881b9e0ed41", size = 28421640, upload-time = "2026-08-11T20:59:14.33Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/38/76e8500c1c1fa110a7f0c3dcf3d035b4439427b260776a06c027d84a0892/ibm_db-3.3.0-cp313-cp313-macosx_10_15_x86_64.whl", hash = "sha256:52207e096ce82876eb52f734e8c4b32f61a43c6d7ffe46d29412820ff04b609d", size = 24195288, upload-time = "2026-08-11T20:59:18.277Z" },
+    { url = "https://files.pythonhosted.org/packages/40/5a/5c22f27aa512437ef7842e83a8ae8467c80ce863045900088d6d86d08462/ibm_db-3.3.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:a349e175fe8da30986894be872287a160e4a28c29af3729fe9f1ce28ad4db314", size = 20865099, upload-time = "2026-08-11T20:59:21.774Z" },
+    { url = "https://files.pythonhosted.org/packages/34/10/fc67c404a6c605d0efee15b4f05d700c89c05381035e26d1acd9d54fffa8/ibm_db-3.3.0-cp313-cp313-manylinux_2_34_i686.whl", hash = "sha256:c69df4190577193afa3e12cadfd72011d08f2b53c456345e64a458790133ac53", size = 43810828, upload-time = "2026-08-11T20:59:27.046Z" },
+    { url = "https://files.pythonhosted.org/packages/12/22/c1032bf3ab47ed702d0c7b49ecb54840e647d980373ec21361aae73f1980/ibm_db-3.3.0-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:d12a9bb6f3a3eb4cd87e907b25efc2ad487e2e85e481fa5be590fa0722d86db8", size = 48156798, upload-time = "2026-08-11T20:59:33.147Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/9a/762d92fc91dc68d3889e89898d0a21f2595718f4579fc3a35de655657f09/ibm_db-3.3.0-cp313-cp313-win32.whl", hash = "sha256:ae629b4c967bbc84c7993f5d023b7be1ffda1c54d7baf6968b5569657598ca15", size = 24601604, upload-time = "2026-08-11T20:59:37.222Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/5e/2d467702d09d64a048b1ec12bdf2d9f515c1279357d376235780eea06ea2/ibm_db-3.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:29f55f6ee27c5f2005c1c24b3f70f2d0f67921cb4021c4227cc3620176c1cf3e", size = 28421649, upload-time = "2026-08-11T20:59:41.346Z" },
 ]
 
 [[package]]
@@ -1791,6 +1826,12 @@ bigquery = [
 databricks = [
     { name = "databricks-sql-connector" },
 ]
+db2 = [
+    { name = "ibm-db" },
+]
+hana = [
+    { name = "hdbcli" },
+]
 hive = [
     { name = "impyla" },
 ]
@@ -1827,6 +1868,8 @@ requires-dist = [
     { name = "databricks-sql-connector", marker = "extra == 'databricks'", specifier = ">=3.0" },
     { name = "duckdb", specifier = ">=1.1" },
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=3.25" },
+    { name = "hdbcli", marker = "extra == 'hana'", specifier = ">=2.20" },
+    { name = "ibm-db", marker = "extra == 'db2'", specifier = ">=3.2" },
     { name = "impyla", marker = "extra == 'hive'", specifier = ">=0.19" },
     { name = "lxml", specifier = ">=5.2" },
     { name = "openpyxl", specifier = ">=3.1" },
@@ -1848,7 +1891,7 @@ requires-dist = [
     { name = "tzdata", specifier = ">=2024.1" },
     { name = "xlrd", specifier = ">=2.0" },
 ]
-provides-extras = ["postgres", "oracle", "databricks", "sqlserver", "mysql", "snowflake", "redshift", "trino", "presto", "athena", "bigquery", "teradata", "hive"]
+provides-extras = ["postgres", "oracle", "databricks", "sqlserver", "mysql", "snowflake", "redshift", "trino", "presto", "athena", "bigquery", "teradata", "db2", "hana", "hive"]
 
 [[package]]
 name = "tmig-service"

@@ -81,6 +81,8 @@ DRIVERS = (
     "spark",
     "hive",
     "impala",
+    "db2",
+    "hana",
     "duckdb",
 )
 DRIVER_DIALECTS = {
@@ -99,6 +101,8 @@ DRIVER_DIALECTS = {
     "spark": "spark",
     "hive": "hive",
     "impala": "impala",
+    "db2": "db2",
+    "hana": "hana",
     "duckdb": "duckdb",
 }
 SECRET_KEYS = frozenset(
@@ -227,6 +231,10 @@ def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfi
         return TeradataExecutor.open(connection, params)
     if config.driver in HIVESERVER2_SESSION:
         return HiveServer2Executor.open(connection, params, config.driver)
+    if config.driver == "db2":
+        return Db2Executor.open(connection, params)
+    if config.driver == "hana":
+        return HanaExecutor.open(connection, params)
     return DatabricksExecutor.open(connection, params)
 
 
@@ -1017,6 +1025,112 @@ class HiveServer2Executor:
 
     def close(self) -> None:
         self.con.close()
+
+
+class DbApiExecutor:
+    """DB-API 2.0 的連線：執行 SQL、依 cursor.description 轉成 Arrow（小數依小數位數轉型）。"""
+
+    dialect = ""
+
+    def __init__(self, con: Any) -> None:
+        self.con = con
+
+    def fetch(self, sql: str) -> pa.Table:
+        cursor = self.con.cursor()
+        try:
+            cursor.execute(sql)
+            description = cursor.description or []
+            rows = cursor.fetchall()
+        finally:
+            cursor.close()
+        names = [d[0] for d in description]
+        scales = [d[5] if len(d) > 5 and isinstance(d[5], int) else None for d in description]
+        return rows_to_arrow(names, rows, scales)
+
+    def close(self) -> None:
+        self.con.close()
+
+
+class Db2Executor(DbApiExecutor):
+    """IBM Db2 for Linux、UNIX and Windows（ibm_db）。尚未實機驗證。
+
+    ssl = true 以 SSL 連線（SECURITY=SSL；憑證檔以 ssl_server_certificate 指定）；Db2 沒有唯讀的工作階段設定：
+    請使用只有 SELECT 權限的服務帳號。帳號與密碼另外傳給驅動，不寫進連線字串。
+    """
+
+    dialect = "db2"
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> Db2Executor:
+        try:
+            import ibm_db_dbi  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 Db2 驅動：uv sync --extra db2") from exc
+        host = params.get("host") or connection.server
+        database = params.get("database") or connection.database
+        if not host or not database:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少主機或資料庫")
+        parts = {
+            "DATABASE": database,
+            "HOSTNAME": host,
+            "PORT": params.get("port") or connection.port or 50000,
+            "PROTOCOL": "TCPIP",
+        }
+        if str(params.get("ssl", "")).lower() in ("1", "true", "yes"):
+            parts["SECURITY"] = "SSL"
+            if params.get("ssl_server_certificate"):
+                parts["SSLServerCertificate"] = params["ssl_server_certificate"]
+        dsn = "".join(f"{key}={value};" for key, value in parts.items())
+        try:
+            con = ibm_db_dbi.connect(dsn, params.get("user") or "", params.get("password") or "")
+        except Exception as exc:
+            raise SourceConnectionError(
+                f"無法連上 Db2（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
+
+
+class HanaExecutor(DbApiExecutor):
+    """SAP HANA（hdbcli）。尚未實機驗證。
+
+    多租戶資料庫以 database 指定租戶（databaseName）；encrypt = true 以 TLS 連線（HANA Cloud 必須），
+    ssl_validate_certificate 預設為 true。HANA 沒有唯讀的工作階段設定：請使用只有 SELECT 權限的服務帳號。
+    """
+
+    dialect = "hana"
+
+    @classmethod
+    def open(cls, connection: LiveConnection, params: dict[str, Any]) -> HanaExecutor:
+        try:
+            from hdbcli import dbapi  # pyright: ignore[reportMissingImports, reportMissingModuleSource]
+        except ImportError as exc:  # pragma: no cover
+            raise SourceConnectionError("未安裝 SAP HANA 驅動：uv sync --extra hana") from exc
+        host = params.get("host") or connection.server
+        if not host:
+            raise SourceConnectionError(f"連線 {connection.connection_id} 缺少主機")
+
+        def flag(key: str, default: bool) -> bool:
+            value = params.get(key)
+            return default if value is None else str(value).lower() in ("1", "true", "yes")
+
+        kwargs: dict[str, Any] = {
+            "address": host,
+            "port": int(params.get("port") or connection.port or 30015),
+            "user": params.get("user"),
+            "password": params.get("password"),
+            "encrypt": flag("encrypt", host.endswith(".hanacloud.ondemand.com")),
+            "sslValidateCertificate": flag("ssl_validate_certificate", True),
+        }
+        if params.get("database"):
+            kwargs["databaseName"] = params["database"]
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:
+            con = dbapi.connect(**kwargs)
+        except Exception as exc:
+            raise SourceConnectionError(
+                f"無法連上 SAP HANA（{connection.connection_id}）：{exc}"
+            ) from exc
+        return cls(con)
 
 
 def _athena_region(server: str | None) -> str | None:

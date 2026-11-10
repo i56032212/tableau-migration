@@ -46,6 +46,8 @@ DBCLASS_DRIVERS = {
     "maprhadoophive": "hive",
     "awshadoophive": "hive",
     "impala": "impala",
+    "db2": "db2",
+    "saphana": "hana",
 }
 """Tableau 的連線類型 → 執行器（其他類型尚無執行器）。Spark SQL 連到 Databricks 時用 databricks，
 Cloudera Hadoop 連到 Impala 時用 impala（依連線的方言，見 driver_for）。"""
@@ -170,6 +172,10 @@ def template(found: dict[str, FoundConnection]) -> str:
             lines.append('# auth_mechanism = "LDAP"   # PLAIN、NOSASL、GSSAPI（Kerberos）、JWT')
         if driver == "trino":
             lines.append('# driver = "presto"   # 伺服器是 PrestoDB（不是 Trino、Starburst）時')
+        if driver == "db2":
+            lines.append("# ssl = true   # 以 SSL 連線（SECURITY=SSL）")
+        if driver == "hana":
+            lines.append('# database = "…"   # 多租戶時的租戶資料庫；encrypt = true 以 TLS 連線')
         if driver == "snowflake":
             lines.append('# warehouse = "…"   # 省略時用帳號的預設 warehouse')
             lines.append('# role = "…"')

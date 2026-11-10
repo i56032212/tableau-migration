@@ -38,6 +38,8 @@ from tmig.verify.mapping import load_mapping
 
 from ..engines import (
     BigQueryEmulator,
+    Db2Emulator,
+    HanaEmulator,
     HiveEmulator,
     OracleEmulator,
     RedshiftEmulator,
@@ -85,9 +87,22 @@ ENGINES = [
     "teradata",
     "hive",
     "impala",
+    "db2",
+    "hana",
     "spark_thrift",
 ]
-EMULATED = {"oracle", "tsql", "snowflake", "redshift", "bigquery", "teradata", "hive", "impala"}
+EMULATED = {
+    "oracle",
+    "tsql",
+    "snowflake",
+    "redshift",
+    "bigquery",
+    "teradata",
+    "hive",
+    "impala",
+    "db2",
+    "hana",
+}
 """沒有實機、以 DuckDB 模擬的方言（見 tests/engines.py）。Trino 在 CI 以 Docker 實跑（本機模擬）；
 Athena 的 SQL 也在同一台 Trino 執行（Athena engine 3 以 Trino 為基礎）。BigQuery 的模擬器
 （goccy/bigquery-emulator）執行公式與工作表的結果不可靠（一元負號、1970 年以前的日期時間等有錯，
@@ -158,6 +173,16 @@ UNSUPPORTED = {
         "SPLIT('a-b-c', '-', -1)",
         "DATEPARSE('MMM d, yyyy', 'Mar 5, 2024')",
     },
+    # Db2 另外（沒有布林值的公式之外）：DATEPARSE 的格式中只能有分隔字元
+    "db2": {"DATEPARSE(\"yyyy'年'M'月'd'日'\", '2024年3月5日')"},
+    # SAP HANA 沒有陣列、COVAR；SPLIT 只支援正數位置；DATEPARSE 的格式中只能有分隔字元
+    "hana": NO_ARRAYS
+    | {
+        "COVAR([Sales], [Quantity])",
+        "COVARP([Sales], [Quantity])",
+        "SPLIT('a-b-c', '-', -1)",
+        "DATEPARSE(\"yyyy'年'M'月'd'日'\", '2024年3月5日')",
+    },
     # Redshift 沒有陣列與 CORR、COVAR；正規表示式只能取第 1 個群組、取代字串不能參照群組
     "redshift": NO_ARRAYS | NO_CORRELATION | REGEX_GROUPS,
     # SQL Server 另外沒有正規表示式與 DATEPARSE
@@ -170,7 +195,7 @@ ORACLE_UNSUPPORTED_SHEETS = {
     "ws_profitable_sub_categories",
 }
 """Oracle、Teradata 尚不支援的工作表：轉譯時列為不支援。"""
-NO_BOOLEANS = {"oracle", "teradata"}
+NO_BOOLEANS = {"oracle", "teradata", "db2"}
 """沒有布林型別的方言：結果是布林值的公式與上面的工作表列為不支援。"""
 SELECT_SUBQUERIES = {"hive", "impala"}
 """子查詢只能在條件中的方言：集合的成員（EXISTS）列為不支援的工作表與上面相同。"""
@@ -249,10 +274,15 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         finally:
             con.close()
         return
-    if request.param in ("tsql", "snowflake", "redshift", "teradata"):
-        schema = {"tsql": "dbo", "snowflake": "PUBLIC", "redshift": "public", "teradata": "sales"}[
-            request.param
-        ]
+    if request.param in ("tsql", "snowflake", "redshift", "teradata", "db2", "hana"):
+        schema = {
+            "tsql": "dbo",
+            "snowflake": "PUBLIC",
+            "redshift": "public",
+            "teradata": "sales",
+            "db2": "SALES",
+            "hana": "SALES",
+        }[request.param]
         con = duckdb.connect()
         con.execute(f'CREATE SCHEMA "{schema}"')
         con.register("expression_rows", _expression_table())
@@ -265,6 +295,8 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
             "snowflake": SnowflakeEmulator,
             "redshift": RedshiftEmulator,
             "teradata": TeradataEmulator,
+            "db2": Db2Emulator,
+            "hana": HanaEmulator,
         }[request.param](con)
         try:
             yield Engine(request.param, emulator, live(request.param, [schema]))
@@ -409,10 +441,12 @@ def _matches(actual: Any, expected: Any) -> bool:
 
 
 def _expect_unsupported(engine: Engine, formula: str) -> bool:
+    extra = UNSUPPORTED.get(engine.name, set())
     if engine.name not in NO_BOOLEANS:
-        return formula in UNSUPPORTED.get(engine.name, set())
+        return formula in extra
     return (
         formula in ORACLE_UNSUPPORTED
+        or formula in extra
         or analyzer().analyze(parse_formula(formula)).datatype == "boolean"
     )
 
