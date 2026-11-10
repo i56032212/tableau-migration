@@ -133,8 +133,11 @@
           "mark": {
             "type": "arc",
             "tooltip": true,
+            "outerRadius": {
+              "expr": "min(width, height) * 0.25"
+            },
             "innerRadius": {
-              "expr": "min(width, height) * 0.3"
+              "expr": "min(width, height) * 0.15"
             }
           }
         },
@@ -145,7 +148,7 @@
             "fontSize": 12.0,
             "lineBreak": "\n",
             "radius": {
-              "expr": "min(width, height) * 0.4"
+              "expr": "min(width, height) * 0.25 + 24"
             }
           },
           "encoding": {

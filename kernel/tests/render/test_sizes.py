@@ -485,3 +485,28 @@ def test_point_and_line_sizes(tmp_path: Path, db: Path) -> None:
     assert spec["mark"]["strokeWidth"] == 3
     spec = render(parse(tmp_path, sized_mark("Line", "2", **timeline)), db).spec
     assert spec["mark"]["strokeWidth"] == 6
+
+
+def test_pie_size(tmp_path: Path, db: Path) -> None:
+    """圓餅的直徑為區塊較短邊的 s / 2（沒有設定時 s = 1），標籤寫在圓餅外側。"""
+    pie = worksheet(
+        "Pie",
+        [REGION, SALES],
+        mark="Pie",
+        encodings=(
+            f"<color column='{ref('none:Region:nk')}' /><wedge-size column='{ref('sum:Sales:qk')}' />"
+            f"<text column='{ref('sum:Sales:qk')}' />"
+        ),
+    )
+    spec = render(parse(tmp_path, pie), db).spec
+    arc = spec["layer"][0]["mark"]
+    assert arc["outerRadius"] == {"expr": "min(width, height) * 0.25"}
+    label = spec["layer"][1]["mark"]
+    assert label["radius"] == {"expr": "min(width, height) * 0.25 + 24"}
+    sized = pie.replace(
+        "</encodings>",
+        "</encodings><style><style-rule element='mark'>"
+        "<format attr='size' value='1.5052486658096313' /></style-rule></style>",
+    )
+    arc = render(parse(tmp_path, sized), db).spec["layer"][0]["mark"]
+    assert arc["outerRadius"] == {"expr": "min(width, height) * 0.3763"}

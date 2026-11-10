@@ -227,6 +227,8 @@ class _Builder:
         """畫出的欄列架（見 build_spec：沒有對應量值的 Measure Names 不畫）。"""
         self.label_fields: dict[int, str] = {}
         """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
+        self.pie_extent = "min(width, height)"
+        """圓餅的大小所依據的區塊邊長（分面時為每一格的）。"""
         self.values: list[dict[str, Any]] = []
         """工作表的資料列（色彩的範圍與各值的顏色依它決定）。"""
         self.measure_names: dict[Scalar, Any] = {}
@@ -795,6 +797,11 @@ class _Builder:
         if cols_dims:
             encoding["column"] = self._facet(cols_dims, "cols_dim")
         mark = _mark_style({"type": "arc", "tooltip": True}, marks)
+        # 分面時每一格的大小是 child_width、child_height（width、height 是整張圖的）
+        self.pie_extent = (
+            "min(child_width, child_height)" if rows_dims or cols_dims else "min(width, height)"
+        )
+        mark["outerRadius"] = {"expr": f"{self.pie_extent} * {_pie_fraction(marks) / 2}"}
         has_label = bool(marks.label) or id(marks) in self.label_fields
         if not has_label or rows_dims or cols_dims:
             return {"mark": mark, "encoding": encoding}
@@ -807,7 +814,8 @@ class _Builder:
                 "type": "text",
                 **self.font("cell", marks.label_font).mark(),
                 "lineBreak": "\n",
-                "radius": {"expr": "min(width, height) * 0.42"},
+                # 與 Tableau 相同寫在圓餅外側
+                "radius": {"expr": f"{self.pie_extent} * {_pie_fraction(marks) / 2} + 24"},
             },
             "encoding": {
                 "text": {"field": "__pie_label"},
@@ -831,12 +839,14 @@ class _Builder:
         holes = [(i, p) for i, p in enumerate(self.ws.panes) if i > 0 and p.dual]
         if not holes:
             return body
+        # 洞的大小依洞的標記卡的大小（沒有設定時為外圈的六成）
+        hole = holes[0][1].marks
+        outer = max((_pie_fraction(p.marks) for p in self.ws.panes if not p.dual), default=0.5)
+        inner = min(_pie_fraction(hole), outer) if hole.mark_size is not None else outer * 0.6
         for layer in [body, *body.get("layer", [])]:
             mark = layer.get("mark")
             if isinstance(mark, dict) and mark.get("type") == "arc":
-                mark["innerRadius"] = {"expr": "min(width, height) * 0.3"}
-            elif isinstance(mark, dict) and mark.get("type") == "text" and "radius" in mark:
-                mark["radius"] = {"expr": "min(width, height) * 0.4"}
+                mark["innerRadius"] = {"expr": f"{self.pie_extent} * {round(inner / 2, 4)}"}
         if rows_dims or cols_dims:
             self.notes.append("分面的甜甜圈圖中間的標籤尚未畫出（不影響數字）")
             return body
@@ -2273,6 +2283,17 @@ def _template(text: str) -> str:
         parts.append(f"datum['{rest[start + 1 : end]}']")
         rest = rest[end + 1 :]
     return " + ".join(parts) if parts else "''"
+
+
+PIE_SIZE = 1.0
+"""圓餅沒有設定大小時的大小（直徑為區塊較短邊的一半；依公開報表推定，使用者多半調大）。"""
+
+
+def _pie_fraction(marks: Marks) -> float:
+    """圓餅的直徑占區塊（分面的每一格）較短邊的比例：大小 s 時為 s / 2，最多填滿（依 Tableau 的畫面量測：
+    大小 1.505 的圓餅直徑約為區塊高度的 76%，甜甜圈內外圈的直徑比與大小的比相同）。"""
+    size = marks.mark_size if marks.mark_size is not None else PIE_SIZE
+    return round(min(size / 2, 1), 4)
 
 
 def _label_layer(
