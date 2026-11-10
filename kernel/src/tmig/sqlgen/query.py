@@ -237,6 +237,8 @@ class WorksheetSql:
     """自訂 SQL 中參數的目前值：內部名稱（不含方括號）與顯示名稱 → （值、資料型別）。"""
     guards: list[Guard] = field(default_factory=list)
     """Relationship 模型：在比檢視粗的層級彙總時，確認其他資料表不會讓量值重複計算（見 tmig.sqlgen.model）。"""
+    attach: dict[str, str] = field(default_factory=dict)
+    """Data Blending：執行前以唯讀附加的其他萃取（附加的名稱 → 資料源 id，與主要資料源的 DuckDB 檔同一目錄）。"""
 
 
 @dataclass
@@ -468,6 +470,8 @@ class WorksheetQuery:
         """PREVIOUS_VALUE 的代換（見 _previous_value）：參數為編譯第 i 個引數的函式。"""
         self.recursive = False
         """是否有遞迴的 CTE（PREVIOUS_VALUE）：輸出時寫成 WITH RECURSIVE。"""
+        self.row_number: str | None = None
+        """另外輸出依顯示順序的列號的欄名（Data Blending 合併後依它排序，見 tmig.sqlgen.blend）。"""
 
     # ------------------------------------------------------------ 工具
 
@@ -896,6 +900,10 @@ class WorksheetQuery:
             columns.append(OutputColumn(COLUMN_ORDER, "sort", "integer", None))
         order = [f for d in dims for f in fragments[d.key]]
         order_sql = f"\nORDER BY {', '.join(order)}" if order else ""
+        if self.row_number is not None:
+            over = f"ORDER BY {', '.join(order)}" if order else ""
+            outputs.append(f"ROW_NUMBER() OVER ({over}) AS {ident(self.row_number)}")
+            columns.append(OutputColumn(self.row_number, "sort", "integer", None))
         main = f"SELECT {', '.join(outputs)}\nFROM {final}{_where(conds)}{order_sql}"
         stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
         return WorksheetSql(
@@ -2788,6 +2796,10 @@ def _find_worksheet(ir: IR, key: str) -> Worksheet:
 def worksheet_sql(
     ir: IR, worksheet: str, state: QueryState | None = None, user: Identity | None = None
 ) -> WorksheetSql:
+    if _find_worksheet(ir, worksheet).blends:
+        from tmig.sqlgen.blend import blend_sql  # blend 也匯入本模組
+
+        return blend_sql(ir, worksheet, state, user)
     return WorksheetQuery(ir, worksheet, state, user).build()
 
 
@@ -2882,6 +2894,8 @@ def totals_sql(
     ws = _find_worksheet(ir, worksheet)
     if not ws.totals and not ws.subtotals:
         return []
+    if ws.blends:
+        raise QueryError("Data Blending 與總計、小計一起使用尚不支援", unsupported=True)
     dims = {c.key for c in main.columns if c.role == "dimension"}
     headers = {
         "rows": [u for u in ws.rows if use_key(u) in dims and not u.continuous],

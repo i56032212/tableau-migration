@@ -39,7 +39,7 @@ Relationship 模型（見「Relationship 模型」）；公開報表盤點中符
 Project、workbook、view 權限開放（見「權限」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
 PDF、PNG 寄出訂閱（見「排程與訂閱」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
 一份報表可以有多個資料源（各工作表用各自的資料源，網址參數套用到所有資料源中同名的欄位）；同一張工作表混用多個資料源的
-Data Blending 尚不支援。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
+Data Blending 支援主要與次要資料源都是嵌入式萃取、次要資料源只用量值的工作表（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
 不會生效，盤點時列為不符合起步條件（見「依檢視者的身分連線」）。以 156 份公開報表重新盤點：放寬多個資料源後 12 份
 轉為符合起步條件；28 份要求檢視者輸入自己的資料庫帳號（Tableau Server Insights、TabMon 等連到 Tableau 資料庫的範例）
 改列為不符合，3 份以 Windows 整合驗證連線列為需注意。
@@ -202,6 +202,26 @@ Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表
 尚不支援（查詢時列為不支援）：同一個彙總用到多張資料表的欄位（例如 `SUM(IF [客戶].[區域] = 'East' THEN [訂單].[金額] END)`）、
 同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
 Live 連線的邏輯資料表內含實體層的 join、關聯條件含計算（解析時列入 unsupported）。
+
+## Data Blending
+
+同一張工作表用到多個資料源（`<datasources>` 中第一個是主要資料源，之後是次要資料源）時，與 Tableau 相同
+（`kernel/src/tmig/sqlgen/blend.py`）：
+
+- 主要資料源照常查詢（篩選、排序、LOD 都以主要資料源計算）；次要資料源以作用中的連結欄位分組、彙總次要資料源的量值，
+  再依連結欄位 LEFT JOIN 到主要資料源的結果：主要資料源沒有的值不出現，次要資料源沒有的值為 Null；檢視中有連結欄位以外的
+  維度時，次要資料源的值在這些維度上重複
+- 連結欄位：.twb 的自訂關聯（`<datasource-relationships>`，例如主要資料源的 Id 對應次要資料源的 VersionId）優先，
+  沒有自訂關聯時以名稱相同的維度自動連結；主要資料源的連結欄位在檢視中（欄列架或標記卡上的維度）時作用，
+  日期欄位以檢視中的日期衍生連結（檢視是 YEAR(Order Date) 時次要資料源也以年分組）。檢視中沒有連結欄位時列為不支援
+- 次要資料源自己的資料源篩選照樣套用；工作表上主要資料源的篩選不套用到次要資料源
+- 次要資料源的萃取在查詢前以唯讀附加（ATTACH，與主要資料源的 DuckDB 檔同一目錄）
+- 桌面版編輯器：資料窗格可以切換瀏覽其他資料源，把其他資料源的量值放到檢視上即混合（沿用其他工作表的連結，否則以名稱相同的
+  維度連結），移走後不再混合；空白的工作表放上的第一個欄位決定主要資料源。「取代主要資料源」以欄位名稱對應換掉主要資料源
+
+尚不支援（解析時列入 unsupported）：次要資料源的維度、篩選與 Table Calculation、Live 連線或 Relationship 模型的次要資料源、
+Live 連線的主要資料源、與總計或小計一起使用；計算欄位中參照次要資料源的欄位（`[Targets].[Target]`）也不支援。
+連結欄位的 Null 視為相等，Tableau 手動關閉的連結（.twb 中的寫法未確認）以作用中處理。
 
 ## Published Data Source
 
@@ -751,7 +771,8 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
 合併集合（XML 的寫法尚未在公開報表中看到）、地圖、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、SQL Server、MySQL、Snowflake 等其他資料庫的 Live 連線、
-Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、Data Blending、
+Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
+Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、
 標題中的 Table Calculation 值、
 故事點記下的其他狀態（範圍篩選、排序、欄列架的變更、註解等）。
 

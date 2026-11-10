@@ -72,6 +72,8 @@ WORKBOOK_CHILDREN = frozenset(
         "style",
         "style-theme",
         "datasources",
+        # Data Blending 的自訂關聯（工作表解析時讀取，見 tmig.parser.worksheet）
+        "datasource-relationships",
         "worksheets",
         "dashboards",
         "windows",

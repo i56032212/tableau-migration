@@ -225,9 +225,20 @@ export const DIRECTIONS: [string, string][] = [
   ["cell", "儲存格"],
 ];
 
+/** 欄位 id → 欄位：工作表的資料源在前，其他資料源（Data Blending 的次要資料源）在後；欄位 id 全報表唯一。 */
 export function fieldIndex(catalog: Catalog, datasource: string): Map<string, CatalogField> {
-  const ds = catalog.datasources.find((d) => d.id === datasource);
-  return new Map((ds?.fields ?? []).map((f) => [f.id, f]));
+  const ordered = [...catalog.datasources].sort((a, b) => Number(b.id === datasource) - Number(a.id === datasource));
+  return new Map(ordered.flatMap((d) => d.fields.map((f) => [f.id, f] as [string, CatalogField])));
+}
+
+/** 欄位所屬的資料源。 */
+export function fieldDatasource(catalog: Catalog, field: string): string | undefined {
+  return catalog.datasources.find((d) => d.fields.some((f) => f.id === field))?.id;
+}
+
+/** 工作表的次要資料源（Data Blending）。 */
+export function blendSources(sheet: SheetIR): string[] {
+  return ((sheet.blends as { datasource: string }[] | undefined) ?? []).map((b) => b.datasource);
 }
 
 export const isDate = (field: CatalogField | undefined) =>

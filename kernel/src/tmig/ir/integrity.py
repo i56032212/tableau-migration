@@ -212,14 +212,16 @@ def check_references(ir: IR) -> list[str]:
         where: str,
         table_calcs: set[str] | None,
         special: bool = False,
+        extra: set[str] | None = None,
     ) -> None:
+        """extra：另外允許的欄位（Data Blending 的次要資料源的欄位）。"""
         if special and use.field in SPECIAL_FIELDS:
             if use.agg is not None or use.date is not None or use.table_calc is not None:
                 errors.append(
                     f"{where}：Measure Names／Values 不能彙總、日期衍生或套用 Table Calculation"
                 )
             return
-        if use.field not in fields_by_ds.get(ds_id, set()):
+        if use.field not in fields_by_ds.get(ds_id, set()) and use.field not in (extra or set()):
             errors.append(f"{where}：欄位「{use.field}」不在資料源「{ds_id}」中")
         if use.table_calc is None:
             return
@@ -253,21 +255,35 @@ def check_references(ir: IR) -> list[str]:
             errors.append(f"{base}.datasource：資料源「{ws.datasource}」不存在")
             continue
         tcs = {tc.id for tc in ws.table_calcs}
+        blended: set[str] = set()
+        for n, blend in enumerate(ws.blends):
+            where = f"{base}.blends[{n}]"
+            if blend.datasource == ws.datasource or blend.datasource not in fields_by_ds:
+                errors.append(f"{where}：次要資料源「{blend.datasource}」不存在或與主要資料源相同")
+                continue
+            blended |= fields_by_ds[blend.datasource]
+            for k, link in enumerate(blend.links):
+                check_use(link.primary, ws.datasource, f"{where}.links[{k}].primary", None)
+                check_use(link.secondary, blend.datasource, f"{where}.links[{k}].secondary", None)
         for name, uses in (("rows", ws.rows), ("columns", ws.columns)):
             for i, use in enumerate(uses):
-                check_use(use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True)
+                check_use(
+                    use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True, extra=blended
+                )
         cards = [("marks", ws.marks)] + [
             (f"panes[{i}].marks", p.marks) for i, p in enumerate(ws.panes)
         ]
         for name, card in cards:
             for i, use in enumerate(card.uses()):
-                check_use(use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True)
+                check_use(
+                    use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True, extra=blended
+                )
         for i, pane in enumerate(ws.panes):
-            check_use(pane.measure, ws.datasource, f"{base}.panes[{i}].measure", tcs)
+            check_use(pane.measure, ws.datasource, f"{base}.panes[{i}].measure", tcs, extra=blended)
             if pane.measure not in (ws.rows if pane.axis == "rows" else ws.columns):
                 errors.append(f"{base}.panes[{i}].measure：量值不在{pane.axis}架上")
         for i, use in enumerate(ws.measure_values):
-            check_use(use, ws.datasource, f"{base}.measure_values[{i}]", tcs)
+            check_use(use, ws.datasource, f"{base}.measure_values[{i}]", tcs, extra=blended)
         for i, alias in enumerate(ws.measure_aliases):
             if alias.use not in ws.measure_values:
                 errors.append(f"{base}.measure_aliases[{i}]：量值不在 Measure Values 卡上")

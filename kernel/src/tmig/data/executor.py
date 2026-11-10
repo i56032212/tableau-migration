@@ -16,6 +16,7 @@ from typing import Any
 import duckdb
 
 from tmig.sqlgen.query import Guard, QueryError, WorksheetSql
+from tmig.sqlgen.sql import ident, string
 
 
 class ExecutionError(RuntimeError):
@@ -54,12 +55,16 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
-def execute(db_path: str | Path, sql: str) -> QueryResult:
+def execute(db_path: str | Path, sql: str, attach: dict[str, Path] | None = None) -> QueryResult:
+    """attach：先以唯讀附加的其他 DuckDB 檔（附加的名稱 → 檔案），例如 Data Blending 的次要資料源。"""
     path = Path(db_path)
-    if not path.is_file():
-        raise ExecutionError(f"找不到資料檔 {path}；請先執行 tmig import-hyper")
+    for item in [path, *(attach or {}).values()]:
+        if not item.is_file():
+            raise ExecutionError(f"找不到資料檔 {item}；請先執行 tmig import-hyper")
     try:
         with duckdb.connect(str(path), read_only=True) as con:
+            for alias, other in (attach or {}).items():
+                con.execute(f"ATTACH {string(str(other))} AS {ident(alias)} (READ_ONLY)")
             cursor = con.execute(sql)
             description = cursor.description or []
             columns = [d[0] for d in description]
@@ -70,10 +75,14 @@ def execute(db_path: str | Path, sql: str) -> QueryResult:
 
 
 def execute_query(db_path: str | Path, query: WorksheetSql) -> QueryResult:
-    """執行一張工作表的查詢（萃取的 DuckDB 檔）：先做查詢附帶的檢查，再執行查詢。"""
+    """執行一張工作表的查詢（萃取的 DuckDB 檔）：先做查詢附帶的檢查，再執行查詢。
+
+    Data Blending 的次要資料源是同一目錄中以資料源 id 為檔名的 DuckDB 檔。"""
     for guard in query.guards:
         check_guard(guard, execute(db_path, guard.sql).rows)
-    return execute(db_path, query.sql)
+    folder = Path(db_path).parent
+    attach = {alias: folder / f"{ds}.duckdb" for alias, ds in query.attach.items()}
+    return execute(db_path, query.sql, attach)
 
 
 def check_guard(guard: Guard, rows: list[tuple[Any, ...]] | list[list[Any]]) -> None:

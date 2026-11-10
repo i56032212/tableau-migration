@@ -24,7 +24,8 @@ export interface EditorContextValue {
   prepare: (sheet: SheetIR, use: FieldUse) => Promise<[SheetIR, FieldUse]>;
   newId: (prefix: string, text: string) => Promise<string>;
   openFilter: (target: FilterTarget) => void;
-  openCalc: (field: CatalogField | null) => void;
+  /** 建立（field 為 null）或編輯計算欄位；datasource 為計算欄位所屬的資料源，省略時為工作表的資料源 */
+  openCalc: (field: CatalogField | null, datasource?: string) => void;
   openDialog: (dialog: EditorDialog) => void;
   notify: (message: string, kind?: "info" | "error") => void;
 }

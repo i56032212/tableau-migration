@@ -973,8 +973,9 @@ def build_spec(
     panes：詳細程度較粗的標記卡各自的查詢結果（tmig.sqlgen.query.pane_sql），以 ws.panes 的索引為鍵。
     totals：總計的查詢結果（tmig.sqlgen.query.totals_sql），附加在資料最後；去掉的維度顯示為 Grand Total。"""
     ws = next(w for w in ir.worksheets if w.id == worksheet)
-    ds = next(d for d in ir.datasources if d.id == ws.datasource)
-    fields = {f.id: f for f in ds.fields}
+    # Data Blending：次要資料源的量值也在查詢結果中
+    sources = {ws.datasource, *(b.datasource for b in ws.blends)}
+    fields = {f.id: f for d in ir.datasources if d.id in sources for f in d.fields}
 
     channels: dict[str, Channel] = {}
     for n, column in enumerate(c for c in columns if c.role != "sort" and c.use is not None):

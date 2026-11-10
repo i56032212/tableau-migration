@@ -51,9 +51,11 @@ function replaceDatasource(sheet: SheetIR, from: CatalogField[], to: CatalogFiel
     const found = byName.get(f.name);
     if (found) mapping.set(f.id, found);
   }
+  const own = new Set(from.map((f) => f.id));
   let missing = false;
   const map = (id: string) => {
-    if (id === "measure_names" || id === MEASURE_VALUES) return id;
+    // 次要資料源（Data Blending）的欄位不變
+    if (id === "measure_names" || id === MEASURE_VALUES || !own.has(id)) return id;
     const found = mapping.get(id);
     if (!found) missing = true;
     return found ?? id;
@@ -69,7 +71,8 @@ function replaceDatasource(sheet: SheetIR, from: CatalogField[], to: CatalogFiel
   };
   const updated = walk(sheet) as SheetIR;
   if (missing) return null;
-  return { ...updated, datasource: target, formats: {} };
+  // 次要資料源與連結由伺服器依新的主要資料源重新決定
+  return { ...updated, datasource: target, formats: {}, blends: [] };
 }
 
 function AnalyticsCard() {
@@ -151,7 +154,7 @@ export function Editor({
   const [revision, setRevision] = useState(0);
   const [card, setCard] = useState<Card>("all");
   const [filter, setFilter] = useState<FilterTarget | null>(null);
-  const [calc, setCalc] = useState<CatalogField | null | undefined>(undefined);
+  const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
   const [dialog, setDialog] = useState<EditorDialog | null>(null);
   const [message, setMessage] = useState<{ text: string; kind: "info" | "error" } | null>(null);
   const [pending, setPending] = useState(0);
@@ -318,7 +321,7 @@ export function Editor({
     prepare,
     newId,
     openFilter: setFilter,
-    openCalc: (field) => setCalc(field),
+    openCalc: (field, datasource) => setCalc({ field, datasource }),
     openDialog: setDialog,
     notify,
   };
@@ -477,7 +480,8 @@ export function Editor({
       {filter && <FilterDialog target={filter} onClose={() => setFilter(null)} />}
       {calc !== undefined && (
         <CalcDialog
-          field={calc}
+          field={calc.field}
+          datasource={calc.datasource}
           onClose={() => setCalc(undefined)}
           onSaved={() => {
             void reloadCatalog();

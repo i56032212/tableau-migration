@@ -581,6 +581,51 @@
       "title": "Banding",
       "type": "object"
     },
+    "Blend": {
+      "additionalProperties": false,
+      "description": "Data Blending（資料混合）：工作表上用到次要資料源的量值。\n\n作用中的連結為主要資料源的連結欄位在檢視中（欄列架或標記卡上的維度）的那些；次要資料源依這些\n連結欄位分組彙總，再依連結欄位併到主要資料源的結果（LEFT JOIN：主要資料源沒有的值不出現，\n次要資料源沒有的值為 Null）。檢視中沒有連結欄位時不能混合。",
+      "properties": {
+        "datasource": {
+          "description": "次要資料源",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Datasource",
+          "type": "string"
+        },
+        "links": {
+          "description": "可用的連結（同名的維度或自訂關聯）",
+          "items": {
+            "$ref": "#/$defs/BlendLink"
+          },
+          "minItems": 1,
+          "title": "Links",
+          "type": "array"
+        }
+      },
+      "required": [
+        "datasource",
+        "links"
+      ],
+      "title": "Blend",
+      "type": "object"
+    },
+    "BlendLink": {
+      "additionalProperties": false,
+      "description": "Data Blending 的連結欄位：主要資料源與次要資料源中對應的維度（同名自動連結或自訂的關聯）。\n\n沒有日期衍生（date 為 None）時以欄位連結：檢視中主要資料源的這個欄位用了哪一種日期衍生（例如年），\n次要資料源的欄位就以同一種衍生分組。有日期衍生時（自訂關聯中的欄位實例，例如日）只在檢視用到\n同一種衍生時作用。",
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "secondary": {
+          "$ref": "#/$defs/FieldUse"
+        }
+      },
+      "required": [
+        "primary",
+        "secondary"
+      ],
+      "title": "BlendLink",
+      "type": "object"
+    },
     "Button": {
       "additionalProperties": false,
       "description": "dashboard 按鈕（I2）：切換到 dashboard 或工作表、顯示或隱藏區塊、匯出。",
@@ -5590,6 +5635,14 @@
           ],
           "title": "Fit",
           "type": "string"
+        },
+        "blends": {
+          "description": "Data Blending：次要資料源與連結欄位；欄列架與標記卡上可以有這些資料源的量值",
+          "items": {
+            "$ref": "#/$defs/Blend"
+          },
+          "title": "Blends",
+          "type": "array"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

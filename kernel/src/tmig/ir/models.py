@@ -1125,6 +1125,44 @@ class VisualTotal(IRModel):
     agg: Literal["sum", "avg", "min", "max"]
 
 
+class BlendLink(IRModel):
+    """Data Blending 的連結欄位：主要資料源與次要資料源中對應的維度（同名自動連結或自訂的關聯）。
+
+    沒有日期衍生（date 為 None）時以欄位連結：檢視中主要資料源的這個欄位用了哪一種日期衍生（例如年），
+    次要資料源的欄位就以同一種衍生分組。有日期衍生時（自訂關聯中的欄位實例，例如日）只在檢視用到
+    同一種衍生時作用。"""
+
+    primary: FieldUse
+    secondary: FieldUse
+
+    def secondary_for(self, use: FieldUse) -> FieldUse | None:
+        """檢視中主要資料源的維度 use 讓這個連結作用時，次要資料源以哪一種使用分組；不作用時為 None。"""
+        if use.field != self.primary.field or use.agg is not None or use.table_calc is not None:
+            return None
+        if self.primary.date is not None:
+            same = use.date is not None and (use.date.kind, use.date.unit) == (
+                self.primary.date.kind,
+                self.primary.date.unit,
+            )
+            return self.secondary if same else None
+        if use.date is None:
+            return self.secondary
+        if self.secondary.date is None:
+            return FieldUse(field=self.secondary.field, date=use.date)
+        return None
+
+
+class Blend(IRModel):
+    """Data Blending（資料混合）：工作表上用到次要資料源的量值。
+
+    作用中的連結為主要資料源的連結欄位在檢視中（欄列架或標記卡上的維度）的那些；次要資料源依這些
+    連結欄位分組彙總，再依連結欄位併到主要資料源的結果（LEFT JOIN：主要資料源沒有的值不出現，
+    次要資料源沒有的值為 Null）。檢視中沒有連結欄位時不能混合。"""
+
+    datasource: Id = Field(description="次要資料源")
+    links: list[BlendLink] = Field(min_length=1, description="可用的連結（同名的維度或自訂關聯）")
+
+
 class Worksheet(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -1208,6 +1246,10 @@ class Worksheet(IRModel):
         default=None, description="欄位標籤的背景顏色（列標題上方的欄位名稱）；None 為不上色"
     )
     fit: FitMode = Field(default="standard", description="工作表本身（工作表分頁）的顯示大小")
+    blends: list[Blend] = Field(
+        default_factory=list,
+        description="Data Blending：次要資料源與連結欄位；欄列架與標記卡上可以有這些資料源的量值",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")

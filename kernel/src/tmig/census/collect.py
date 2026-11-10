@@ -614,17 +614,7 @@ def _checks(
     checks.append(identity_check(dss, server_connections))
     checks.append(_rls_check(r, dss))
 
-    blended = [w.name for w in r.worksheets if w.blending]
-    checks.append(
-        Check(
-            key="no_blending",
-            title="無 Data Blending",
-            status="fail" if blended else "pass",
-            detail=f"用到 Blending 的工作表：{_quote(blended)}"
-            if blended
-            else "每張工作表只用一個資料源",
-        )
-    )
+    checks.append(_blending_check(r, dss))
 
     boards = [d for d in r.dashboards if not d.story]
     loose = [d for d in boards if d.sizing != "fixed"]
@@ -903,9 +893,47 @@ def features_outside_v0(r: CensusReport) -> list[str]:
 Grade = Literal["A", "B", "C"]
 
 
+def _blending_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:
+    """Data Blending 已支援主要與次要資料源都是嵌入式萃取、次要資料源只用量值的工作表；其他資料源
+    （Live 連線、Published Data Source）混合時仍不支援。"""
+    blended = [w for w in r.worksheets if w.blending]
+    if not blended:
+        return Check(
+            key="no_blending",
+            title="Data Blending（主要與次要資料源須為嵌入式萃取）",
+            status="pass",
+            detail="每張工作表只用一個資料源",
+        )
+    by_name = {d.name: d for d in dss}
+    others = sorted(
+        {
+            by_name[name].caption
+            for w in blended
+            for name in w.datasources
+            if name in by_name and (by_name[name].published or not by_name[name].data_in_hyper)
+        }
+    )
+    detail = f"用到 Blending 的工作表：{_quote([w.name for w in blended])}"
+    if others:
+        detail += f"；不是嵌入式萃取的資料源：{_quote(others)}"
+    else:
+        detail += "（次要資料源只支援彙總的量值，解析時另列不支援的用法）"
+    return Check(
+        key="no_blending",
+        title="Data Blending（主要與次要資料源須為嵌入式萃取）",
+        status="fail" if others else "warn",
+        detail=detail,
+    )
+
+
+def _blending_supported(r: CensusReport) -> bool:
+    return next((c.status for c in r.checks if c.key == "no_blending"), "pass") != "fail"
+
+
 def _grade(r: CensusReport) -> tuple[Grade, list[str]]:
     c_reasons: list[str] = []
-    if any(w.blending for w in r.worksheets):
+    blending = any(w.blending for w in r.worksheets)
+    if blending and not _blending_supported(r):
         c_reasons.append("Data Blending")
     if any(d.custom_sql for d in r.datasources):
         c_reasons.append("自訂 SQL")
@@ -913,6 +941,8 @@ def _grade(r: CensusReport) -> tuple[Grade, list[str]]:
         c_reasons.append("地圖")
 
     b_reasons: list[str] = []
+    if blending and _blending_supported(r):
+        b_reasons.append("Data Blending（嵌入式萃取）")
     if r.lod:
         b_reasons.append("LOD：" + "、".join(f"{k} {v}" for k, v in r.lod.items()))
     quick = sum(len(w.table_calcs) for w in r.worksheets)

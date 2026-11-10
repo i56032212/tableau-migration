@@ -33,9 +33,19 @@ const TYPES: Record<string, string> = {
 
 // ---------------------------------------------------------------- 計算欄位
 
-export function CalcDialog({ field, onClose, onSaved }: { field: CatalogField | null; onClose: () => void; onSaved: () => void }) {
+export function CalcDialog({
+  field,
+  datasource,
+  onClose,
+  onSaved,
+}: {
+  field: CatalogField | null;
+  datasource?: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const editor = useEditor();
-  const ds = editor.sheet.datasource;
+  const ds = datasource ?? editor.sheet.datasource;
   const [caption, setCaption] = useState(field?.caption ?? "計算 1");
   const [formula, setFormula] = useState(field?.formula ?? "");
   const [check, setCheck] = useState<FormulaCheck | null>(null);
@@ -71,7 +81,8 @@ export function CalcDialog({ field, onClose, onSaved }: { field: CatalogField | 
       setSaving(false);
     }
   };
-  const fields = [...editor.fields.values()].filter((f) => !f.hidden && f.id !== field?.id);
+  const own = editor.catalog.datasources.find((d) => d.id === ds)?.fields ?? [];
+  const fields = own.filter((f) => !f.hidden && f.id !== field?.id);
   return (
     <Modal title={field ? `編輯計算欄位：${field.caption}` : "建立計算欄位"} onClose={onClose} wide>
       <div className="calc-dialog">

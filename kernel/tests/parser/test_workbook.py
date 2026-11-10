@@ -379,7 +379,7 @@ def test_multiple_panes_must_match(tmp_path: Path) -> None:
     assert any("多個標記卡" in r for r in reasons(ir))
 
 
-def test_blending_is_unsupported(tmp_path: Path) -> None:
+def test_blending_with_missing_secondary_is_unsupported(tmp_path: Path) -> None:
     sources = f"<datasource name='{DS}' /><datasource name='federated.other' />"
     ir = parse(tmp_path, b.workbook(worksheets=basic_sheet(datasources=sources)))
     assert ir.worksheets == []

@@ -22,6 +22,8 @@ from tmig.formula.types import FormulaSemanticError
 from tmig.ir import (
     IR,
     Action,
+    Blend,
+    BlendLink,
     Calc,
     Dashboard,
     DataField,
@@ -316,10 +318,116 @@ def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR
         raise EditError(f"找不到工作表 {sheet.id}")
     if any(w.name == sheet.name and w.id != sheet.id for w in ir.worksheets):
         raise EditError(f"已經有名為「{sheet.name}」的工作表")
+    sheet = _sync_blends(ir, sheet)
     updated = ir.model_copy(
         update={"worksheets": [sheet if w.id == sheet.id else w for w in ir.worksheets]}
     )
     return _validated(updated, "工作表的參照不正確"), sheet
+
+
+def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
+    """Data Blending：欄列架與標記卡上有其他資料源的欄位時，加上次要資料源與連結欄位；不再用到的
+    次要資料源移除。
+
+    與 Tableau 相同，工作表還沒有用到主要資料源的任何欄位時，第一個放上的欄位的資料源成為主要資料源。
+    連結沿用其他工作表混合同一對資料源時的連結（例如來自 .twb 的自訂關聯），否則以名稱相同的維度
+    自動連結。次要資料源的欄位只能是彙總的量值。"""
+    owner = {f.id: ds.id for ds in ir.datasources for f in ds.fields}
+    view = [*sheet.rows, *sheet.columns, *sheet.marks.uses()]
+    view += [u for pane in sheet.panes for u in pane.marks.uses()]
+    view += list(sheet.measure_values)
+    used = [u for u in view if u.field in owner]
+    referenced = _field_refs(sheet.model_dump(exclude={"blends"}))
+    primary = sheet.datasource
+    if used and not any(owner.get(f) == primary for f in referenced):
+        primary = owner[used[0].field]
+    order: list[str] = []
+    for use in used:
+        ds = owner[use.field]
+        if ds != primary and ds not in order:
+            order.append(ds)
+    existing = {b.datasource: b for b in sheet.blends}
+    blends: list[Blend] = []
+    for ds_id in order:
+        secondary = _datasource(ir, ds_id)
+        for use in used:
+            if owner[use.field] == ds_id and not _secondary_measure(secondary, use):
+                caption = next(f.caption for f in secondary.fields if f.id == use.field)
+                raise EditError(
+                    f"「{caption}」是次要資料源「{secondary.caption}」的欄位：Data Blending 只能使用"
+                    "次要資料源彙總的量值"
+                )
+        found = existing.get(ds_id) if primary == sheet.datasource else None
+        found = found or _known_blend(ir, sheet.id, primary, ds_id)
+        if found is None:
+            links = _auto_links(_datasource(ir, primary), secondary)
+            if not links:
+                raise EditError(
+                    f"資料源「{_datasource(ir, primary).caption}」與「{secondary.caption}」沒有名稱相同的"
+                    "維度可以連結（Data Blending）"
+                )
+            found = Blend(datasource=ds_id, links=links)
+        blends.append(found)
+    if primary == sheet.datasource and blends == sheet.blends:
+        return sheet
+    return sheet.model_copy(update={"datasource": primary, "blends": blends})
+
+
+def _field_refs(node: Any) -> set[str]:
+    """工作表中所有欄位參照（FieldUse 與排序的 field、Table Calculation 的定址）。"""
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "field" and isinstance(value, str):
+                found.add(value)
+            elif key == "addressing" and isinstance(value, list):
+                found |= {v for v in value if isinstance(v, str)}
+            else:
+                found |= _field_refs(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _field_refs(item)
+    return found
+
+
+def _secondary_measure(ds: Datasource, use: FieldUse) -> bool:
+    field = next((f for f in ds.fields if f.id == use.field), None)
+    if field is None or use.table_calc is not None:
+        return False
+    level = field.calc.level if field.calc is not None else None
+    if level == "table_calc":
+        return False
+    return use.agg is not None or level == "aggregate"
+
+
+def _known_blend(ir: IR, sheet: str, primary: str, secondary: str) -> Blend | None:
+    """其他工作表混合同一對資料源時的連結（例如 .twb 的自訂關聯）。"""
+    for ws in ir.worksheets:
+        if ws.id == sheet or ws.datasource != primary:
+            continue
+        for blend in ws.blends:
+            if blend.datasource == secondary:
+                return blend
+    return None
+
+
+def _auto_links(primary: Datasource, secondary: Datasource) -> list[BlendLink]:
+    """名稱相同的維度（與 Tableau 的自動連結相同）。"""
+
+    def dimensions(ds: Datasource) -> dict[str, DataField]:
+        return {
+            f.caption: f
+            for f in ds.fields
+            if f.role == "dimension"
+            and (f.calc is None or f.calc.level not in ("aggregate", "table_calc"))
+        }
+
+    others = dimensions(secondary)
+    return [
+        BlendLink(primary=FieldUse(field=f.id), secondary=FieldUse(field=others[caption].id))
+        for caption, f in dimensions(primary).items()
+        if caption in others
+    ]
 
 
 def add_worksheet(ir: IR, name: str | None, datasource: str | None) -> tuple[IR, Worksheet]:
@@ -506,8 +614,8 @@ def outline(ir: IR) -> dict[str, Any]:
 
 def _use_label(ir: IR, ws: Worksheet, use: FieldUse) -> str:
     """欄位使用的顯示名稱（與膠囊相同，例如 YEAR(Order Date)、SUM(Sales)）。"""
-    ds = next((d for d in ir.datasources if d.id == ws.datasource), None)
-    field = next((f for f in ds.fields if f.id == use.field), None) if ds else None
+    # 欄位 id 全報表唯一：Data Blending 的次要資料源的欄位也找得到
+    field = next((f for d in ir.datasources for f in d.fields if f.id == use.field), None)
     text = field.caption if field is not None else use.field
     if use.date is not None:
         text = f"{use.date.unit.upper()}({text})"

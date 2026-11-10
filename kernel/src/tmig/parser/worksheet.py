@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -28,7 +30,10 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    Blend,
+    BlendLink,
     ColorPalette,
+    DataField,
     FieldUse,
     Filter,
     Marks,
@@ -273,6 +278,17 @@ def _folded_axes(style: etree._Element | None) -> set[str]:
     return folded
 
 
+def _relation_use(ds: DsState, ref: str, instances: dict[str, etree._Element]) -> FieldUse | None:
+    """自訂關聯中的欄位（<datasource-relationships> 的相依清單中的欄位實例，或欄位本身）。"""
+    key = instance_key(ref)
+    inst = instances.get(key)
+    if inst is not None:
+        use = use_from_instance(ds, inst)
+        return None if isinstance(use, str) else use.model_copy(update={"continuous": False})
+    data_field = ds.by_name.get(key)
+    return FieldUse(field=data_field.id) if data_field is not None else None
+
+
 def shelf_refs(text: str) -> tuple[list[str], set[str]]:
     """拆解欄列架文字：回傳完整參照（例如 [ds].[none:Region:nk]）與出現的運算子。"""
     refs: list[str] = []
@@ -323,6 +339,11 @@ class SheetParser:
         self.instances: dict[str, etree._Element] = {}
         self.uses: dict[str, FieldUse] = {}
         self.ds: DsState | None = None
+        self.secondaries: dict[str, DsState] = {}
+        """Data Blending 的次要資料源：名稱 → 狀態，依 <datasources> 的順序（第一個是主要資料源）。"""
+        self.secondary_instances: dict[str, dict[str, etree._Element]] = {}
+        self._blending = False
+        """目前解析的位置可以用次要資料源的欄位（欄列架、標記卡與其中的文字、數字格式）。"""
         self._colors: dict[str, etree._Element] | None = None
         """色彩編碼（工作表與資料源的 <style>）：欄位實例鍵 → <encoding>。"""
 
@@ -344,21 +365,25 @@ class SheetParser:
             else:
                 ctx.flag(el, f"工作表「{self.name}」沒有資料源")
             return None
-        if len(main) > 1:
-            ctx.flag(
-                view, f"工作表「{self.name}」使用 Data Blending（{'、'.join(main)}），v0 不支援"
-            )
-            return None
         ds = ctx.datasources.get(main[0])
         if ds is None:
             ctx.flag(el, f"工作表「{self.name}」的資料源 {main[0]} 無法移轉")
             return None
         self.ds = ds
+        for name in main[1:]:
+            secondary = ctx.datasources.get(name)
+            if secondary is None:
+                ctx.flag(view, f"工作表「{self.name}」的次要資料源 {name}（Data Blending）無法移轉")
+                return None
+            self.secondaries[name] = secondary
         self._dependencies(view, main[0])
+        for name, secondary in self.secondaries.items():
+            self.secondary_instances[name] = self._dependencies(view, name, secondary)
         self._check_elements(el)
 
-        rows = self._shelf(child(table, "rows"))
-        cols = self._shelf(child(table, "cols"))
+        with self._blend_scope():
+            rows = self._shelf(child(table, "rows"))
+            cols = self._shelf(child(table, "cols"))
         subtotals = self._subtotals(table, rows, cols)
         totals = self._totals(table, rows, cols)
         visual_totals = self._visual_totals() if totals or subtotals else []
@@ -370,22 +395,27 @@ class SheetParser:
             aggregation = child(view, "aggregation")
             if aggregation is not None and aggregation.get("value") == "false":
                 ctx.flag(aggregation, "取消彙總量值（Aggregate Measures 關閉）v0 不支援")
-        marks, panes, mark_dims = self._marks(
-            child(table, "panes"), rows, cols, _folded_axes(child(table, "style"))
-        )
-        measure_values, measure_aliases = self._measure_values(
-            view, [*rows, *cols, *marks.uses()], panes
-        )
+        with self._blend_scope():
+            marks, panes, mark_dims = self._marks(
+                child(table, "panes"), rows, cols, _folded_axes(child(table, "style"))
+            )
+            measure_values, measure_aliases = self._measure_values(
+                view, [*rows, *cols, *marks.uses()], panes
+            )
         card_uses = [*rows, *cols, *marks.uses(), *(u for p in panes for u in p.marks.uses())]
         if not measure_values and any(u.field == MEASURE_VALUES for u in card_uses):
             return None  # 無法得知 Measure Values 的量值（已列為不支援）
+        blends = self._blends(view, [*card_uses, *measure_values], bool(totals or subtotals))
+        if blends is None:
+            return None
         sheet_id = ctx.ids.make("ws", self.name)
         table_calcs = self._table_calcs(rows, cols, mark_dims)
         filters, kinds = self._filters(view)
         self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
         reference_lines = self._reference_lines(child(table, "panes"), child(table, "style"))
-        formats = self._formats(child(table, "style"), [*rows, *cols])
+        with self._blend_scope():
+            formats = self._formats(child(table, "style"), [*rows, *cols])
         sheet_formats = worksheet_formats(
             child(table, "style"), self.resolve, rows, cols, child(ctx.package.root, "style")
         )
@@ -422,6 +452,7 @@ class SheetParser:
             fonts=sheet_formats.fonts,
             label_valign=sheet_formats.label_valign,
             fit=ctx.sheet_fits.get(self.name, "standard"),
+            blends=blends,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -436,24 +467,30 @@ class SheetParser:
 
     # ------------------------------------------------------------ 欄位實例
 
-    def _dependencies(self, view: etree._Element, ds_name: str) -> None:
-        assert self.ds is not None
+    def _dependencies(
+        self, view: etree._Element, ds_name: str, ds: DsState | None = None
+    ) -> dict[str, etree._Element]:
+        """工作表相依清單中這個資料源的欄位實例（主要資料源的存到 self.instances）。"""
+        state = ds or self.ds
+        assert state is not None
+        instances = self.instances if ds is None else {}
         added = False
         for dep in children(view, "datasource-dependencies"):
             if dep.get("datasource") != ds_name:
                 continue
             for column in children(dep, "column"):
                 name = column.get("name", "")
-                if name in self.ds.by_name or child(column, "calculation") is None:
+                if name in state.by_name or child(column, "calculation") is None:
                     continue
                 # 直接在欄列架上輸入的臨時計算，只存在工作表裡
-                if add_calc_field(self.ctx, self.ds, column) is not None:
+                if add_calc_field(self.ctx, state, column) is not None:
                     added = True
             for inst in children(dep, "column-instance"):
                 # 物件模型的欄位實例名稱含資料表前綴，例如 [__tableau_internal_object_id__].[cnt:…:qk]
-                self.instances[instance_key(inst.get("name", ""))] = inst
+                instances[instance_key(inst.get("name", ""))] = inst
         if added:
-            analyze_calcs(self.ctx, self.ds)
+            analyze_calcs(self.ctx, state)
+        return instances
 
     def _parameter_field(self, ref: str) -> FieldUse | str:
         """欄列架或標記卡上的參數（例如放在文字上顯示目前的選擇）：當成公式只有這個參數的計算欄位，
@@ -493,6 +530,8 @@ class SheetParser:
     def resolve(self, ref: str) -> FieldUse | str:
         assert self.ds is not None
         parts = qualified_parts(ref)
+        if len(parts) == 2 and parts[0] in self.secondaries:
+            return self._secondary_use(parts[0], ref)
         if len(parts) == 2 and parts[0] not in (self.ds.name, "Parameters"):
             return f"參照了其他資料源 {parts[0]}"
         if parts and parts[0] == "Parameters":
@@ -519,6 +558,143 @@ class SheetParser:
             use = resolved
         self.uses[key] = use
         return use
+
+    def _secondary_use(self, name: str, ref: str) -> FieldUse | str:
+        """次要資料源（Data Blending）的欄位：只能是欄列架與標記卡上彙總的量值。"""
+        secondary = self.secondaries[name]
+        if not self._blending:
+            return f"次要資料源「{secondary.caption}」（Data Blending）的欄位只支援放在欄列架與標記卡上"
+        key = instance_key(ref)
+        cache = f"[{name}].{key}"
+        if cache in self.uses:
+            return self.uses[cache]
+        inst = self.secondary_instances.get(name, {}).get(key)
+        if inst is None:
+            data_field = secondary.by_name.get(key)
+            if data_field is None:
+                return f"找不到次要資料源「{secondary.caption}」的欄位實例 {ref}"
+            use: FieldUse | str = FieldUse(field=data_field.id)
+        else:
+            if children(inst, "table-calc"):
+                return f"次要資料源「{secondary.caption}」的欄位套用 Table Calculation（Data Blending）v0 不支援"
+            use = use_from_instance(secondary, inst)
+        if isinstance(use, str):
+            return use
+        if not is_aggregate(secondary, use) or secondary.levels.get(use.field) == "table_calc":
+            caption = secondary.field_by_id(use.field).caption
+            return (
+                f"次要資料源「{secondary.caption}」的「{caption}」不是彙總的量值："
+                "Data Blending v0 只支援次要資料源的量值"
+            )
+        self.uses[cache] = use
+        return use
+
+    @contextmanager
+    def _blend_scope(self) -> Iterator[None]:
+        saved, self._blending = self._blending, True
+        try:
+            yield
+        finally:
+            self._blending = saved
+
+    def _field(self, field_id: str) -> DataField:
+        """主要或次要資料源的欄位。"""
+        assert self.ds is not None
+        for ds in (self.ds, *self.secondaries.values()):
+            for item in ds.fields:
+                if item.id == field_id:
+                    return item
+        raise KeyError(field_id)
+
+    def _is_measure(self, use: FieldUse) -> bool:
+        """在檢視中是否為量值（次要資料源的欄位依它自己的資料源判斷）。"""
+        assert self.ds is not None
+        for secondary in self.secondaries.values():
+            if any(f.id == use.field for f in secondary.fields):
+                return is_aggregate(secondary, use)
+        return is_aggregate(self.ds, use)
+
+    # ------------------------------------------------------------ Data Blending
+
+    def _blends(
+        self, view: etree._Element, uses: list[FieldUse], totals: bool
+    ) -> list[Blend] | None:
+        """次要資料源與連結欄位。自訂關聯（<datasource-relationships>）優先，沒有時以同名的維度自動連結；
+        檢視中要有連結欄位（作用中的連結），否則無法混合。"""
+        assert self.ds is not None
+        primary_ids = {f.id for f in self.ds.fields}
+        dims = [
+            u
+            for u in uses
+            if u.field in primary_ids and u.field not in SPECIAL_FIELDS and not self._is_measure(u)
+        ]
+        blends: list[Blend] = []
+        for name, secondary in self.secondaries.items():
+            ids = {f.id for f in secondary.fields}
+            if not any(u.field in ids for u in uses):
+                continue
+            label = f"工作表「{self.name}」混合次要資料源「{secondary.caption}」（Data Blending）"
+            if totals:
+                self.ctx.flag(view, f"{label}並加上總計或小計，v0 不支援")
+                return None
+            links = self._links(name, secondary)
+            if not links:
+                self.ctx.flag(view, f"{label}：找不到連結欄位")
+                return None
+            if not any(link.secondary_for(d) is not None for link in links for d in dims):
+                self.ctx.flag(view, f"{label}：檢視中沒有連結欄位（沒有作用中的連結）")
+                return None
+            blends.append(Blend(datasource=secondary.id, links=links))
+        return blends
+
+    def _links(self, name: str, secondary: DsState) -> list[BlendLink]:
+        assert self.ds is not None
+        primary = self.ds
+        relations = child(self.ctx.package.root, "datasource-relationships")
+        instances: dict[str, dict[str, etree._Element]] = {}
+        for dep in children(relations, "datasource-dependencies"):
+            found = instances.setdefault(dep.get("datasource", ""), {})
+            for inst in children(dep, "column-instance"):
+                found[instance_key(inst.get("name", ""))] = inst
+        custom: list[BlendLink] = []
+        defined = False
+        for relation in children(relations, "datasource-relationship"):
+            pair = (relation.get("source"), relation.get("target"))
+            if pair not in ((primary.name, name), (name, primary.name)):
+                continue
+            defined = True
+            for item in descendants(child(relation, "column-mapping"), "map"):
+                refs = [item.get("key", ""), item.get("value", "")]
+                if qualified_parts(refs[0])[:1] == [name]:
+                    refs.reverse()
+                left = _relation_use(primary, refs[0], instances.get(primary.name, {}))
+                right = _relation_use(secondary, refs[1], instances.get(name, {}))
+                if left is None or right is None:
+                    self.ctx.flag(
+                        relation, f"Data Blending 的自訂關聯 {refs[0]} ＝ {refs[1]} 無法解析"
+                    )
+                    continue
+                custom.append(BlendLink(primary=left, secondary=right))
+        if defined:
+            return custom
+        # 自動連結：名稱相同的維度
+        by_caption = {
+            f.caption: f
+            for f in secondary.fields
+            if f.role == "dimension"
+            and secondary.levels.get(f.id) not in ("aggregate", "table_calc")
+        }
+        links: list[BlendLink] = []
+        for data_field in primary.fields:
+            if data_field.role != "dimension" or data_field.caption not in by_caption:
+                continue
+            if primary.levels.get(data_field.id) in ("aggregate", "table_calc"):
+                continue
+            other = by_caption[data_field.caption]
+            links.append(
+                BlendLink(primary=FieldUse(field=data_field.id), secondary=FieldUse(field=other.id))
+            )
+        return links
 
     def _use(self, ref: str | None, anchor: etree._Element, what: str) -> FieldUse | None:
         if not ref:
@@ -772,8 +948,7 @@ class SheetParser:
                 marks.detail.append(use)
             else:
                 marks.tooltip.append(use)
-            assert self.ds is not None
-            if use.field not in SPECIAL_FIELDS and not is_aggregate(self.ds, use):
+            if use.field not in SPECIAL_FIELDS and not self._is_measure(use):
                 dims.append(use)
         label = child(child(pane, "customized-label"), "formatted-text")
         if label is not None:
@@ -853,7 +1028,11 @@ class SheetParser:
                     continue
                 runs.append(TextRun(parameter=param.id))
                 continue
-            if len(parts) == 2 and self.ds is not None and parts[0] == self.ds.name:
+            if (
+                len(parts) == 2
+                and self.ds is not None
+                and parts[0] in (self.ds.name, *self.secondaries)
+            ):
                 resolved = self.resolve(token)
                 if isinstance(resolved, str):
                     self.ctx.flag(formatted, f"{what}：{resolved}")
@@ -869,8 +1048,7 @@ class SheetParser:
         for marks in cards:
             missing = [run.use for run in marks.label_text if run.use and run.use not in uses]
             if missing:
-                assert self.ds is not None
-                names = "、".join(self.ds.field_by_id(u.field).caption for u in missing)
+                names = "、".join(self._field(u.field).caption for u in missing)
                 self.ctx.flag(
                     self.el, f"工作表「{self.name}」的自訂標籤用到不在標記卡上的欄位 {names}"
                 )
@@ -907,7 +1085,7 @@ class SheetParser:
         return [
             u
             for u in uses
-            if u.field not in SPECIAL_FIELDS and not u.continuous and not is_aggregate(self.ds, u)
+            if u.field not in SPECIAL_FIELDS and not u.continuous and not self._is_measure(u)
         ]
 
     def _subtotals(
@@ -1083,8 +1261,7 @@ class SheetParser:
             use = self._use(ref, element, "Measure Values 的量值")
             if use is None:
                 continue
-            assert self.ds is not None
-            if not is_aggregate(self.ds, use):
+            if not self._is_measure(use):
                 self.ctx.flag(element, f"Measure Values 中的 {ref} 不是量值")
                 continue
             result.append((instance_key(ref), use))
@@ -1113,8 +1290,8 @@ class SheetParser:
     ) -> list[TableCalc]:
         assert self.ds is not None
         ds = self.ds
-        row_dims = [u for u in rows if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)]
-        col_dims = [u for u in cols if u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)]
+        row_dims = [u for u in rows if u.field not in SPECIAL_FIELDS and not self._is_measure(u)]
+        col_dims = [u for u in cols if u.field not in SPECIAL_FIELDS and not self._is_measure(u)]
         # 窗格內變化的維度（窗格的計算方向只定址這些）
         self._pane_dims = (self._inner(rows), self._inner(cols))
         result: list[TableCalc] = []
@@ -1363,11 +1540,9 @@ class SheetParser:
     def _inner(self, shelf: list[FieldUse]) -> list[FieldUse]:
         """這一架在窗格內變化的維度：最後是離散維度時為它（它切出儲存格，外層的維度切出窗格）；最後是
         連續的維度（座標軸）時為結尾連續的維度；最後是量值或 Measure Names 時沒有。"""
-        assert self.ds is not None
-        ds = self.ds
 
         def is_dim(u: FieldUse) -> bool:
-            return u.field not in SPECIAL_FIELDS and not is_aggregate(ds, u)
+            return u.field not in SPECIAL_FIELDS and not self._is_measure(u)
 
         if not shelf or not is_dim(shelf[-1]):
             return []

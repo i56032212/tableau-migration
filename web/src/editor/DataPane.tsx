@@ -4,7 +4,7 @@ import type React from "react";
 import { useState } from "react";
 import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor } from "./context";
-import { type CatalogField, defaultUse, insertUse, isDate, isMeasure, MEASURE_NAMES, MEASURE_VALUES, removeUse } from "./model";
+import { blendSources, type CatalogField, defaultUse, insertUse, isDate, isMeasure, MEASURE_NAMES, MEASURE_VALUES, removeUse } from "./model";
 
 /** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合）。 */
 function fieldIcon(field: CatalogField): string {
@@ -15,7 +15,7 @@ function fieldIcon(field: CatalogField): string {
   return "Abc";
 }
 
-function FieldRow({ field }: { field: CatalogField }) {
+function FieldRow({ field, datasource }: { field: CatalogField; datasource: string }) {
   const editor = useEditor();
   const measure = field.role === "measure" || field.level === "aggregate" || field.level === "table_calc";
   const add = () =>
@@ -44,7 +44,7 @@ function FieldRow({ field }: { field: CatalogField }) {
       </span>
       {field.kind === "calc" && (
         <span className="field-actions">
-          <button type="button" className="link" title="編輯計算欄位" onClick={() => editor.openCalc(field)}>
+          <button type="button" className="link" title="編輯計算欄位" onClick={() => editor.openCalc(field, datasource)}>
             ✎
           </button>
           <button
@@ -52,9 +52,8 @@ function FieldRow({ field }: { field: CatalogField }) {
             className="link"
             title="刪除計算欄位"
             onClick={() => {
-              const ds = editor.sheet.datasource;
               editApi
-                .removeCalc(editor.workbook, ds, field.id)
+                .removeCalc(editor.workbook, datasource, field.id)
                 .then(() => editor.notify(`已刪除「${field.caption}」`))
                 .catch((e: Error) => editor.notify(e.message, "error"));
             }}
@@ -89,7 +88,11 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
   const [showHidden, setShowHidden] = useState(false);
   // 膠囊拖回資料窗格＝從架上移除
   const { over, handlers } = useRemoveTarget();
-  const ds = catalog.datasources.find((d) => d.id === sheet.datasource);
+  // 資料窗格瀏覽的資料源：預設為工作表的（主要）資料源；其他資料源的量值放到檢視上即為 Data Blending
+  const [browse, setBrowse] = useState<string | null>(null);
+  const shown = browse !== null && catalog.datasources.some((d) => d.id === browse) ? browse : sheet.datasource;
+  const ds = catalog.datasources.find((d) => d.id === shown);
+  const secondary = new Set(blendSources(sheet));
   const term = search.trim().toLowerCase();
   const visible = (ds?.fields ?? []).filter(
     (f) => (showHidden || !f.hidden) && (!term || f.caption.toLowerCase().includes(term)),
@@ -104,16 +107,32 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
       <div className="pane-title">資料</div>
       <select
         aria-label="資料源"
-        value={sheet.datasource}
-        onChange={(e) => onDatasource(e.target.value)}
-        title="工作表使用的資料源"
+        value={shown}
+        onChange={(e) => setBrowse(e.target.value)}
+        title="資料窗格顯示的資料源；其他資料源的量值放到檢視上即依名稱相同的維度混合（Data Blending）"
       >
         {catalog.datasources.map((d) => (
           <option key={d.id} value={d.id}>
             {d.caption}
+            {d.id === sheet.datasource ? "（主要）" : secondary.has(d.id) ? "（次要）" : ""}
           </option>
         ))}
       </select>
+      {shown !== sheet.datasource && (
+        <div className="pane-actions blend-actions">
+          <span className="hint">量值放到檢視上即與主要資料源混合（Data Blending，依名稱相同的維度連結）</span>
+          <button
+            type="button"
+            title="以這個資料源取代工作表的主要資料源（欄位依名稱對應）"
+            onClick={() => {
+              onDatasource(shown);
+              setBrowse(null);
+            }}
+          >
+            取代主要資料源
+          </button>
+        </div>
+      )}
       <input
         type="search"
         placeholder="搜尋欄位"
@@ -122,7 +141,7 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
         onChange={(e) => setSearch(e.target.value)}
       />
       <div className="pane-actions">
-        <button type="button" onClick={() => editor.openCalc(null)}>
+        <button type="button" onClick={() => editor.openCalc(null, shown)}>
           建立計算欄位…
         </button>
         <label className="hint">
@@ -132,7 +151,7 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
       <div className="pane-section">維度</div>
       <ul className="fields">
         {dimensions.map((f) => (
-          <FieldRow key={f.id} field={f} />
+          <FieldRow key={f.id} field={f} datasource={shown} />
         ))}
         {!term && <SpecialRow id={MEASURE_NAMES} label="Measure Names" measure={false} />}
       </ul>
@@ -141,7 +160,7 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
           <div className="pane-section">集合</div>
           <ul className="fields">
             {sets.map((f) => (
-              <FieldRow key={f.id} field={f} />
+              <FieldRow key={f.id} field={f} datasource={shown} />
             ))}
           </ul>
         </>
@@ -149,7 +168,7 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
       <div className="pane-section">量值</div>
       <ul className="fields">
         {measures.map((f) => (
-          <FieldRow key={f.id} field={f} />
+          <FieldRow key={f.id} field={f} datasource={shown} />
         ))}
         {!term && <SpecialRow id={MEASURE_VALUES} label="Measure Values" measure />}
       </ul>

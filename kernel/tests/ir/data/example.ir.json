@@ -365,6 +365,7 @@
       "fonts": {},
       "field_label_background": null,
       "fit": "standard",
+      "blends": [],
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -517,6 +518,7 @@
       "fonts": {},
       "field_label_background": null,
       "fit": "standard",
+      "blends": [],
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }
   ],
