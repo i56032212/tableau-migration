@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { SubscriptionDialog } from "./AdminSchedules";
+import { AlertsTable } from "./Alerts";
 import { ConfirmDialog } from "./dialogs";
 import {
   PAPER_SIZES,
@@ -347,6 +348,12 @@ export function MySubscriptionsPage({ go }: { go: (to: string) => void }) {
               </tbody>
             </table>
           )}
+        </section>
+      )}
+      {data && (
+        <section className="admin-section standalone">
+          <h3>資料警示</h3>
+          <AlertsTable admin={false} timezone={data.timezone} run={run} />
         </section>
       )}
       {editing && data && (

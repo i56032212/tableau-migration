@@ -68,6 +68,9 @@ class Report:
 @dataclass
 class Catalog:
     reports: list[Report] = field(default_factory=list)
+    sources: list[Report] = field(default_factory=list)
+    """伺服器上的 Published Data Source（只有一個資料源的報表；name 為 pds:<id>，url_name 為網址名稱）：
+    萃取更新的對象是 Published Data Source 時更新這一份，不再更新各報表併入的那一份。"""
 
     @classmethod
     def load(cls, fixtures: Path) -> Catalog:
@@ -81,8 +84,8 @@ class Catalog:
         )
 
     def report(self, key: str) -> Report | None:
-        """依報表 id（檢視器網址中的名稱）找報表。"""
-        return next((r for r in self.reports if r.name == key), None)
+        """依報表 id（檢視器網址中的名稱，或伺服器上的資料源 pds:<id>）找報表。"""
+        return next((r for r in [*self.reports, *self.sources] if r.name == key), None)
 
     def workbook(self, url_name: str | None, name: str | None = None) -> Report | None:
         """依網址名稱（優先）或報表名稱找報表；名稱重複時無法判斷，回傳 None。"""
@@ -97,7 +100,19 @@ class Catalog:
         return None
 
     def published(self, url_name: str | None, name: str | None = None) -> list[tuple[Report, str]]:
-        """用到這個 Published Data Source 的報表與資料源 id（每份報表各有一份併入的萃取）。"""
+        """用到這個 Published Data Source 的報表與資料源 id（每份報表各有一份併入的萃取）；
+        伺服器上有這個資料源時只有伺服器上的那一份（報表改用它的萃取）。"""
+        if url_name:
+            for source in self.sources:
+                if (
+                    source.url_name is not None
+                    and source.url_name.casefold() == url_name.casefold()
+                ):
+                    return [
+                        (source, ds.id)
+                        for ds in source.ir.datasources
+                        if has_local_data(ds.connection)
+                    ]
         result: list[tuple[Report, str]] = []
         for report in self.reports:
             for ds in report.ir.datasources:

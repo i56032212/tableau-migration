@@ -445,3 +445,21 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .publish-form .row label { flex-direction: row; align-items: center; }
 .publish-form textarea, .publish-form input:not([type]), .publish-form select { font: inherit; padding: 3px 6px; }
 .admin-section.standalone { border-top: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }
+/* 檢視者的工具：復原、自訂檢視、留言、我的最愛、下載資料 */
+.toolbar .history { display: inline-flex; gap: 2px; }
+.toolbar .history button { min-width: 28px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; cursor: pointer; font: inherit; font-size: 13px; }
+.toolbar button.favorite.on { color: #b7791f; border-color: #e3c27a; }
+.custom-view-name { font-size: 12px; color: var(--accent); background: #eef4fb; border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+.comments { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; }
+.comments li { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.comment-meta { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.comment-meta .danger-link { margin-left: auto; }
+.comment-text { white-space: pre-wrap; margin-top: 4px; }
+.data-dialog-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.data-dialog-tools .tabs { border-bottom: none; }
+.data-preview { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
+.data-preview table.list th { position: sticky; top: 0; background: var(--panel); }
+.home-search { margin: 12px 0; }
+.home-search input { font: inherit; padding: 5px 8px; width: min(420px, 100%); }
+.home-shortcuts { margin: 12px 0; }
+.home-shortcuts h2 { font-size: 14px; color: var(--muted); margin: 0 0 6px; }

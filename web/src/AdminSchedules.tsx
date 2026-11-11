@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertsTable } from "./Alerts";
 import { ConfirmDialog } from "./dialogs";
 import {
   type ExtractTaskItem,
@@ -598,6 +599,12 @@ export function TasksTab({
       </table>
       {data.subscriptions.length === 0 && <p className="hint">沒有訂閱。</p>}
 
+      <h3>資料警示</h3>
+      <p className="hint">
+        使用者在檢視器的「警示」中建立；萃取更新後檢查（Live 連線每小時檢查），每位收件人以自己看得到的資料判斷。
+      </p>
+      <AlertsTable admin timezone={tz} run={run} showRuns={showRuns} />
+
       {adding && <NewTaskDialog data={data} onClose={() => setAdding(false)} run={run} />}
       {editingTask && <EditTaskDialog data={data} task={editingTask} onClose={() => setEditingTask(null)} run={run} />}
       {editingSub && (
@@ -883,7 +890,9 @@ export function RunsTab({ data, job, setJob }: { data: ScheduleOverview; job: st
               <tr key={index} className={item.status === "ok" ? "" : "failed-row"}>
                 <td>{when(item.started, data.timezone)}</td>
                 <td>{when(item.finished, data.timezone)}</td>
-                <td>{labels.get(item.job) ?? item.job}</td>
+                <td>
+                  {labels.get(item.job) ?? (item.job.startsWith("alert:") ? `資料警示 ${item.job.slice(6)}` : item.job)}
+                </td>
                 <td>{item.trigger === "manual" ? `立即執行（${item.requested_by ?? "—"}）` : "排程"}</td>
                 <td className={item.status === "ok" ? "run-ok" : "run-failed"}>
                   {item.status === "ok" ? "成功" : "失敗"}

@@ -181,3 +181,55 @@ export const ORDINALS: [string, string][] = [
   ["Last", "最後一個"],
 ];
 export const PAPER_SIZES = ["A4", "A3", "A5", "Letter", "Legal", "Ledger", "Tabloid"];
+
+// ---------------------------------------------------------------- 資料警示（tmig_service.alert_api）
+
+export interface AlertItem {
+  id: string;
+  subject: string;
+  owner: string;
+  recipients: string[];
+  report: string;
+  view: string;
+  worksheet: string;
+  measure: string;
+  measure_name: string;
+  condition: string;
+  threshold: number;
+  frequency: string;
+  frequency_name: string;
+  description: string;
+  suspended: boolean;
+  consecutive_failures: number;
+  last_checked: string | null;
+  last_sent: Record<string, string>;
+  created_at: string;
+  mine?: boolean;
+  last_run?: RunItem | null;
+}
+
+export interface AlertOptions {
+  username: string;
+  measures: { key: string; name: string; min: number; max: number }[];
+  conditions: Record<string, string>;
+  frequencies: Record<string, string>;
+  email: string | null;
+  can_add_others: boolean;
+  users: string[];
+}
+
+export const alertApi = {
+  options: (report: string, worksheet: string, state: unknown) =>
+    request<AlertOptions>("/api/alert-options", json("POST", { report, worksheet, state })),
+  mine: () => request<{ alerts: AlertItem[] }>("/api/alerts"),
+  all: () => request<{ alerts: AlertItem[] }>("/api/admin/alerts"),
+  create: (body: Record<string, unknown>) => request<AlertItem>("/api/alerts", json("POST", body)),
+  update: (id: string, body: Record<string, unknown>) =>
+    request<AlertItem>(`/api/alerts/${encodeURIComponent(id)}`, json("PATCH", body)),
+  remove: (id: string) => request<void>(`/api/alerts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  leave: (id: string) => request<AlertItem>(`/api/alerts/${encodeURIComponent(id)}/leave`, { method: "POST" }),
+  check: (id: string) =>
+    request<{ queued: string; scheduler: SchedulerStatus }>(`/api/alerts/${encodeURIComponent(id)}/check`, {
+      method: "POST",
+    }),
+};

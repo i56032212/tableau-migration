@@ -613,7 +613,7 @@ def _schedule_source(args: argparse.Namespace):
         planned, timezone = source()
         return planned, args.timezone or timezone
 
-    return schedules, site if site.exists() else None, jobs
+    return schedules, site if site.exists() else None, jobs, source
 
 
 def _schedule_inputs(args: argparse.Namespace):
@@ -623,7 +623,7 @@ def _schedule_inputs(args: argparse.Namespace):
     from tmig.schedule.runner import plan_jobs
 
     if getattr(args, "store", None) is not None:
-        store_schedules, _, jobs = _schedule_source(args)
+        store_schedules, _, jobs, _ = _schedule_source(args)
         planned, timezone = jobs()
         if not timezone:
             raise ScheduleError(
@@ -669,14 +669,22 @@ def _scheduler(args: argparse.Namespace):
     cleanup = subscription.close if subscription is not None else (lambda: None)
     if store_mode:
         # 報表庫模式：每次檢查時重讀排程資料（還沒有時區時只處理立即執行）；連續失敗時暫停並寄信通知
+        from tmig_service.alerts import AlertChecker, AlertStore
         from tmig_service.schedules import FailurePolicy
 
-        store_schedules, site, source = _schedule_source(args)
+        store_schedules, site, source, store_jobs = _schedule_source(args)
         planned, found = source()
-        policy = FailurePolicy(
-            store_schedules,
+        mail = subscription.mail if subscription is not None else _mail_settings(args)
+        policy = FailurePolicy(store_schedules, site, mail, threshold=args.suspend_after)
+        # 資料警示：萃取更新成功後與每小時檢查；收件人以自己的身分查詢
+        alerts = AlertChecker(
+            AlertStore(args.store),
             site,
-            subscription.mail if subscription is not None else _mail_settings(args),
+            store_jobs.catalog,
+            lambda: source()[0],
+            mail,
+            renderer=subscription.renderer if subscription is not None else None,
+            clock=clock,
             threshold=args.suspend_after,
         )
         scheduler = Scheduler(
@@ -687,6 +695,8 @@ def _scheduler(args: argparse.Namespace):
             clock,
             source=source,
             on_result=policy,
+            after_tick=alerts,
+            extras={"alert": alerts.run_request},
         )
         return planned, scheduler, cleanup
     state_dir = args.state_dir or args.schedules.parent / "schedule-state"

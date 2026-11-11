@@ -41,9 +41,9 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tmig.access.permissions import ADMIN_ROLES
+from tmig.access.permissions import ADMIN_ROLES, decide
 from tmig.catalog import Catalog, Report, workbook_url_name
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
@@ -63,6 +63,7 @@ from tmig.render.vegalite import (
     value_format,
     worksheet_title,
 )
+from tmig.sqlgen.dialect import underlying_query
 from tmig.sqlgen.query import (
     PREVIEW_LIMIT,
     QueryError,
@@ -79,9 +80,19 @@ from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
 from tmig_service.access import Authorizer, Grant, PermissionsSource, Rights, viewer_ir
 from tmig_service.auth import Authenticator, AuthSettings, auth_router, load_auth
+from tmig_service.datasources import DatasourceRecord, DatasourceStore, uses_published
+from tmig_service.downloads import (
+    CSV_TYPE,
+    FULL_DATA_LIMIT,
+    XLSX_TYPE,
+    csv_bytes,
+    file_name,
+    xlsx_bytes,
+)
 from tmig_service.site import SiteStore, from_exports
 from tmig_service.store import STORE_ENV, ReportRecord, ReportStore
 from tmig_service.usage import UsageLog, Visit, summarize
+from tmig_service.viewer_store import ViewerStore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -111,6 +122,8 @@ class Workspace:
     def __init__(self, fixtures: Path, store: ReportStore | None = None) -> None:
         self.fixtures = fixtures
         self.store = store
+        self.datasources = DatasourceStore(store.root) if store is not None else None
+        """伺服器上的 Published Data Source：報表連到它時改用它的萃取。"""
         self._cache: dict[str, Loaded] = {}
         self._lock = threading.Lock()
         self._data_ready: set[str] = set()
@@ -173,8 +186,21 @@ class Workspace:
             self._cache.pop(name, None)
             self._data_ready.discard(name)
 
+    def published(self, loaded: Loaded, datasource: str) -> DatasourceRecord | None:
+        """報表的資料源連到伺服器上的 Published Data Source（萃取取自 .tdsx）時，回傳那個資料源。"""
+        if self.datasources is None:
+            return None
+        found = next((d for d in loaded.ir.datasources if d.id == datasource), None)
+        url = uses_published(found) if found is not None else None
+        return self.datasources.find(url) if url else None
+
     def database(self, name: str, datasource: str) -> Path:
         loaded = self.get(name)
+        shared = self.published(loaded, datasource)
+        if shared is not None and shared.extract and self.datasources is not None:
+            path = self.datasources.data_path(shared)
+            if path.is_file():
+                return path
         with self._lock:
             if name not in self._data_ready:
                 ensure_data(loaded.directory, loaded.ir)
@@ -197,8 +223,29 @@ def open_site(store: ReportStore, authenticator: Authenticator) -> SiteStore | N
     return site
 
 
+class UnderlyingBody(BaseModel):
+    """檢視資料的「完整資料」：檢視器目前的狀態與最多的列數。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: QueryState | None = None
+    limit: int = PREVIEW_LIMIT
+
+
+class DownloadBody(BaseModel):
+    """下載：交叉資料表、摘要資料或完整資料，CSV 或 Excel。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: QueryState | None = None
+    kind: Literal["crosstab", "summary", "underlying"] = "crosstab"
+    format: Literal["csv", "xlsx"] = "csv"
+
+
 def workspace_catalog(workspace: Workspace, site: SiteStore | None) -> Catalog:
-    """排程的對象：查詢服務看得到的報表（fixtures 與報表庫；IR 用查詢服務的快取）。"""
+    """排程的對象：查詢服務看得到的報表（fixtures 與報表庫；IR 用查詢服務的快取）與伺服器上的資料源。"""
+    from tmig_service.schedules import datasource_reports
+
     linked = {w.id: w for w in site.data().workbooks} if site is not None else {}
     reports: list[Report] = []
     for name in workspace.names():
@@ -223,7 +270,8 @@ def workspace_catalog(workspace: Workspace, site: SiteStore | None) -> Catalog:
             reports.append(
                 Report(loaded.directory, loaded.ir, workbook_url_name(loaded.directory), key=name)
             )
-    return Catalog(reports)
+    sources = datasource_reports(workspace.datasources) if workspace.datasources is not None else []
+    return Catalog(reports, sources)
 
 
 def current_user(request: Request) -> Identity | None:
@@ -273,6 +321,17 @@ def create_app(
     )
     authorizer = Authorizer(permissions)
     rights = Rights(permissions)
+    viewer_store = ViewerStore(store.root) if store is not None else None
+    """我的最愛、自訂檢視與留言（有報表庫時）。"""
+
+    def require_connect(loaded: Loaded, datasources: list[str], user: Identity | None) -> None:
+        """連到伺服器上的 Published Data Source 的資料源：要那個資料源的「連線」權限（與 Tableau 相同）。"""
+        from tmig_service.datasource_api import may
+
+        for datasource in datasources:
+            shared = workspace.published(loaded, datasource)
+            if shared is not None and not may(rights.permissions, user, shared, "Connect"):
+                raise HTTPException(403, f"沒有連線到資料源「{shared.name}」的權限")
 
     def grant_for(loaded: Loaded, user: Identity | None) -> Grant:
         if loaded.published is not None:
@@ -315,6 +374,91 @@ def create_app(
                 store, rights, data, loaded_ir, workspace.names, authenticator.identity
             )
         )
+
+        def viewer_granted(wb: str, user: Identity | None) -> tuple[IR, Grant, str | None]:
+            """報表、登入者的權限與報表的擁有者（報表庫的報表，或 Tableau 匯出的權限中的擁有者）。"""
+            loaded, grant = granted(wb, user)
+            owner = loaded.published.owner if loaded.published is not None else None
+            if owner is None and authorizer.permissions is not None:
+                entry = authorizer.entry(loaded.directory, loaded.ir)
+                owner = entry.owner if entry is not None else None
+            return loaded.ir, grant, owner
+
+        def manages(user: Identity, report_id: str) -> bool:
+            """站台管理員、報表的擁有者，或報表所在 Project（與上層）的擁有者與 Project Leader。"""
+            if (user.site_role or "") in ADMIN_ROLES:
+                return True
+            try:
+                loaded = workspace.get(report_id)
+            except HTTPException:
+                return False
+            name = user.username.casefold()
+            record = loaded.published
+            if record is not None:
+                if record.owner.casefold() == name:
+                    return True
+                project: str | None = record.project
+            else:
+                entry = (
+                    authorizer.entry(loaded.directory, loaded.ir)
+                    if authorizer.permissions is not None
+                    else None
+                )
+                if entry is None:
+                    return False
+                if (entry.owner or "").casefold() == name:
+                    return True
+                project = entry.project
+            permissions = rights.permissions
+            if project is None or permissions is None:
+                return False
+            return any(
+                (p.owner or "").casefold() == name or decide(p.rules, user, "ProjectLeader")
+                for p in permissions.ancestors(project)
+            )
+
+        from tmig_service.datasource_api import datasource_router
+
+        def used_by(content_url: str, user: Identity | None) -> list[dict[str, Any]]:
+            """用到某個 Published Data Source 的報表（登入者看得到的）。"""
+            found: list[dict[str, Any]] = []
+            for name in workspace.names():
+                try:
+                    loaded, _ = granted(name, user)
+                except Exception:
+                    continue
+                if any(
+                    (uses_published(d) or "").casefold() == content_url.casefold()
+                    for d in loaded.ir.datasources
+                ):
+                    title = (
+                        loaded.published.name
+                        if loaded.published is not None
+                        else loaded.ir.workbook.name
+                    )
+                    found.append({"id": name, "name": title})
+            return found
+
+        def can_publish(user: Identity | None, project: str) -> tuple[bool, str | None]:
+            access = rights.publish(user, project)
+            return access.allowed, access.reason
+
+        assert workspace.datasources is not None
+        app.include_router(
+            datasource_router(
+                workspace.datasources,
+                site,
+                lambda: rights.permissions,
+                authenticator.identity,
+                used_by,
+                can_publish,
+                store.root / "uploads",
+            )
+        )
+        if viewer_store is not None:
+            from tmig_service.viewer_api import viewer_router
+
+            app.include_router(viewer_router(viewer_store, authenticator.identity, viewer_granted))
         if site is not None:
             from tmig_service.admin import admin_router
             from tmig_service.schedule_api import schedule_router
@@ -328,7 +472,54 @@ def create_app(
                     return None
                 return grant_for(loaded, user)
 
+            from tmig_service.alert_api import alert_router
+            from tmig_service.alerts import AlertStore
+
+            def alert_measures(
+                report: str, worksheet: str, state: dict[str, Any], user: Identity
+            ) -> list[dict[str, Any]]:
+                """工作表中可以設定警示的量值（數字的量值欄）與目前的範圍。"""
+                try:
+                    query_state = QueryState.model_validate(state) if state else None
+                except ValidationError as exc:
+                    raise HTTPException(422, f"篩選的狀態不正確：{exc}") from exc
+                result = render(report, worksheet, user, query_state)
+                table = result.get("table") or {}
+                found: list[dict[str, Any]] = []
+                for i, (key, header, role) in enumerate(
+                    zip(
+                        table.get("keys", []),
+                        table.get("headers", []),
+                        table.get("roles", []),
+                        strict=False,
+                    )
+                ):
+                    if role != "measure":
+                        continue
+                    values: list[float] = []
+                    for row in table.get("raw", []):
+                        try:
+                            values.append(float(row[i]))
+                        except (TypeError, ValueError):
+                            continue
+                    if values:
+                        found.append(
+                            {"key": key, "name": header, "min": min(values), "max": max(values)}
+                        )
+                return found
+
             app.include_router(admin_router(site, store, rights, authenticator.identity))
+            app.include_router(
+                alert_router(
+                    AlertStore(store.root),
+                    ScheduleStore(store.root),
+                    site,
+                    authenticator.identity,
+                    viewer_granted,
+                    alert_measures,
+                    manages,
+                )
+            )
             app.include_router(
                 schedule_router(
                     ScheduleStore(store.root),
@@ -541,6 +732,7 @@ def create_app(
             return empty
         sheet = next(w for w in ir.worksheets if w.id == query.worksheet)
         datasource = next(d for d in ir.datasources if d.id == sheet.datasource)
+        require_connect(loaded, [sheet.datasource], user)
 
         def database() -> Path:
             return workspace.database(wb, sheet.datasource)
@@ -662,8 +854,140 @@ def create_app(
                 "headers": [caption(fields[c.use.field], c.use, sheet) for c in shown if c.use],
                 "rows": table_rows,
                 "raw": [[format_value(row[index[c.key]]) for c in shown] for row in result.rows],
+                "roles": [c.role for c in shown],
             },
         }
+
+    @app.get("/api/workbooks/{wb}/access")
+    def workbook_access(wb: str, user: User) -> dict[str, bool]:
+        """檢視器上依權限顯示的功能：下載圖片／PDF、資料與交叉資料表、完整資料、報表、自訂檢視與留言。"""
+        _, grant = granted(wb, user)
+        return {
+            "export_image": grant.can("ExportImage"),
+            "export_data": grant.can("ExportData"),
+            "underlying_data": grant.can("ViewUnderlyingData"),
+            "download_workbook": grant.can("ExportXml"),
+            "share_view": grant.can("ShareView"),
+            "view_comments": grant.can("ViewComments"),
+            "add_comment": grant.can("AddComment"),
+            "store": viewer_store is not None and user is not None,
+        }
+
+    def underlying_rows(
+        loaded: Loaded,
+        wb: str,
+        ws: str,
+        state: QueryState | None,
+        user: Identity | None,
+        limit: int,
+    ) -> tuple[list[str], list[list[Any]], bool]:
+        """工作表的完整資料：前 limit 列與是否還有更多。"""
+        ir = loaded.ir
+        state = state or QueryState()
+        if state.today is None:
+            state = state.model_copy(update={"today": as_of(loaded.directory)})
+        try:
+            query = underlying_query(worksheet_sql(ir, ws, state, user), limit + 1)
+        except StateError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except QueryError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        sheet = next(w for w in ir.worksheets if w.id == query.worksheet)
+        datasource = next(d for d in ir.datasources if d.id == sheet.datasource)
+        require_connect(loaded, [sheet.datasource], user)
+        try:
+            result = data.run(query, datasource, lambda: workspace.database(wb, sheet.datasource))
+        except QueryError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except SourceConnectionError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ExecutionError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        keep = [i for i, name in enumerate(result.columns) if not name.startswith("__")]
+        rows = [[row[i] for i in keep] for row in result.rows[:limit]]
+        return [result.columns[i] for i in keep], rows, len(result.rows) > limit
+
+    @app.post("/api/workbooks/{wb}/worksheets/{ws}/underlying")
+    def underlying(wb: str, ws: str, body: UnderlyingBody, user: User) -> dict[str, Any]:
+        """檢視資料的「完整資料」：工作表的基礎資料列（要「檢視基礎資料」的權限）。"""
+        loaded, grant = granted(wb, user)
+        if not grant.worksheet_allowed(loaded.ir, ws) or not any(
+            w.id == ws for w in loaded.ir.worksheets
+        ):
+            raise HTTPException(404, f"找不到工作表「{ws}」")
+        if not grant.can("ViewUnderlyingData"):
+            raise HTTPException(403, "沒有檢視完整資料的權限（檢視基礎資料）")
+        limit = max(1, min(body.limit, 100_000))
+        columns, rows, truncated = underlying_rows(loaded, wb, ws, body.state, user, limit)
+        return {
+            "columns": columns,
+            "rows": [[_cell(v) for v in row] for row in rows],
+            "truncated": truncated,
+            "limit": limit,
+        }
+
+    @app.post("/api/workbooks/{wb}/worksheets/{ws}/download")
+    def download(wb: str, ws: str, body: DownloadBody, user: User) -> Response:
+        """下載交叉資料表（Excel、CSV）、摘要資料或完整資料（tmig_service.downloads）。"""
+        loaded, grant = granted(wb, user)
+        sheet = next((w for w in loaded.ir.worksheets if w.id == ws), None)
+        if sheet is None or not grant.worksheet_allowed(loaded.ir, ws):
+            raise HTTPException(404, f"找不到工作表「{ws}」")
+        if body.kind == "underlying":
+            if not grant.can("ViewUnderlyingData"):
+                raise HTTPException(403, "沒有下載完整資料的權限（檢視基礎資料）")
+            headers, rows, _ = underlying_rows(loaded, wb, ws, body.state, user, FULL_DATA_LIMIT)
+        else:
+            if not grant.can("ExportData"):
+                raise HTTPException(403, "沒有下載資料的權限（下載摘要資料）")
+            result = render(wb, ws, user, body.state)
+            table = result.get("table")
+            if result.get("unsupported") or not table:
+                raise HTTPException(422, "這張工作表沒有可以下載的資料")
+            headers = list(table["headers"])
+            rows = table["rows"] if body.kind == "crosstab" else table["raw"]
+        if body.format == "xlsx":
+            content, media = xlsx_bytes(sheet.name, headers, rows), XLSX_TYPE
+        else:
+            content, media = csv_bytes(headers, rows), CSV_TYPE
+        return Response(
+            content,
+            media_type=media,
+            headers={"Content-Disposition": file_name(sheet.name, f".{body.format}")},
+        )
+
+    @app.get("/api/recents")
+    def recents(user: User, limit: int = 12) -> list[dict[str, Any]]:
+        """最近檢視：登入者 90 天內開啟過的 view（依使用紀錄，最新的在前；沒有權限了的不列出）。"""
+        if usage is None or user is None:
+            raise HTTPException(404, "沒有使用紀錄")
+        since = dt.datetime.now(dt.UTC) - dt.timedelta(days=90)
+        latest: dict[tuple[str, str], Visit] = {}
+        for visit in usage.visits(since):
+            if not visit.view_id or (visit.user or "").casefold() != user.username.casefold():
+                continue
+            key = (visit.workbook, visit.view_id)
+            if key not in latest or visit.time > latest[key].time:
+                latest[key] = visit
+        result: list[dict[str, Any]] = []
+        for visit in sorted(latest.values(), key=lambda v: v.time, reverse=True):
+            try:
+                loaded, _ = granted(visit.workbook, user)
+            except HTTPException:
+                continue
+            result.append(
+                {
+                    "report": visit.workbook,
+                    "view": visit.view_id,
+                    "view_name": visit.view,
+                    "report_name": loaded.ir.workbook.name,
+                    "kind": visit.kind,
+                    "time": visit.time.isoformat(),
+                }
+            )
+            if len(result) >= max(1, min(limit, 50)):
+                break
+        return result
 
     @app.get("/api/workbooks/{wb}/datasources")
     def datasources(wb: str, user: User) -> list[dict[str, Any]]:
@@ -690,6 +1014,7 @@ def create_app(
         if datasource is None:
             raise HTTPException(404, f"找不到資料源「{ds}」")
         limit = max(1, min(limit, PREVIEW_LIMIT))
+        require_connect(loaded, [ds], user)
 
         def database() -> Path:
             return workspace.database(wb, ds)
@@ -748,6 +1073,7 @@ def create_app(
             kind = "range"
         else:
             kind = "values"
+        require_connect(loaded, [ds.id], user)
         try:
             sql = domain_sql(ir, ds.id, use, kind, user)
             result = data.run_sql(

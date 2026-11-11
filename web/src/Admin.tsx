@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { request } from "./api";
 import { ScheduleTabs } from "./AdminSchedules";
+import { datasourceApi, type DatasourceItem, PublishDatasourceDialog } from "./Datasources";
 import { ChecklistDialog, ConfirmDialog, PromptDialog } from "./dialogs";
 import { Modal } from "./Server";
 import type { Me } from "./types";
@@ -306,17 +307,34 @@ type Editing =
   | { kind: "move-project"; project: Project }
   | { kind: "report"; report: Report }
   | { kind: "delete-project"; project: Project }
-  | { kind: "delete-report"; report: Report };
+  | { kind: "delete-report"; report: Report }
+  | { kind: "publish-datasource" }
+  | { kind: "datasource-permissions"; datasource: DatasourceItem }
+  | { kind: "datasource"; datasource: DatasourceItem }
+  | { kind: "delete-datasource"; datasource: DatasourceItem };
 
 function ContentTab({ site, run }: { site: Site; run: Run }) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const close = () => setEditing(null);
   const tree = useMemo(() => projectTree(site.projects), [site.projects]);
+  // 伺服器上的 Published Data Source（資料源的修改後重新讀取）
+  const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
+  const reloadSources = useCallback(() => {
+    datasourceApi
+      .list()
+      .then(setDatasources)
+      .catch(() => setDatasources([]));
+  }, []);
+  useEffect(reloadSources, [reloadSources]);
+  const runSource: Run = (work, done) => run(work, done).then((ok) => (ok && reloadSources(), ok));
   return (
     <section className="admin-section">
       <div className="admin-actions">
         <button type="button" className="primary" onClick={() => setEditing({ kind: "new-project", parent: null })}>
           新增 Project
+        </button>
+        <button type="button" onClick={() => setEditing({ kind: "publish-datasource" })}>
+          發布資料源…
         </button>
       </div>
       <table className="admin-table">
@@ -330,7 +348,14 @@ function ContentTab({ site, run }: { site: Site; run: Run }) {
         </thead>
         <tbody>
           {tree.map(({ project, depth }) => (
-            <ProjectRows key={project.id} site={site} project={project} depth={depth} edit={setEditing} />
+            <ProjectRows
+              key={project.id}
+              site={site}
+              project={project}
+              depth={depth}
+              datasources={datasources.filter((d) => d.project === project.id)}
+              edit={setEditing}
+            />
           ))}
         </tbody>
       </table>
@@ -395,6 +420,38 @@ function ContentTab({ site, run }: { site: Site; run: Run }) {
           onConfirm={() => run(() => adminApi.deleteReport(editing.report.id), "已刪除報表")}
         />
       )}
+      {editing?.kind === "publish-datasource" && (
+        <PublishDatasourceDialog
+          projects={site.projects.map((p) => ({ id: p.id, path: p.path }))}
+          onClose={close}
+          onDone={(item) => {
+            close();
+            void runSource(() => Promise.resolve(), `已發布資料源「${item.name}」第 ${item.version} 版`);
+          }}
+        />
+      )}
+      {editing?.kind === "datasource-permissions" && (
+        <PermissionsDialog
+          title={`資料源「${editing.datasource.name}」的權限`}
+          site={site}
+          capabilities={DATASOURCE_CAPABILITIES}
+          rules={editing.datasource.rules as Rule[]}
+          locked={false}
+          onClose={close}
+          onSave={(rules) => runSource(() => datasourceApi.update(editing.datasource.id, { rules }), "已更新權限")}
+        />
+      )}
+      {editing?.kind === "datasource" && (
+        <DatasourceDialog site={site} datasource={editing.datasource} onClose={close} run={runSource} />
+      )}
+      {editing?.kind === "delete-datasource" && (
+        <ConfirmDialog
+          title="刪除資料源"
+          message={`刪除資料源「${editing.datasource.name}」與它的每一版？用到它的報表改用報表裡的資料。`}
+          onClose={close}
+          onConfirm={() => runSource(() => datasourceApi.remove(editing.datasource.id), "已刪除資料源")}
+        />
+      )}
     </section>
   );
 }
@@ -418,11 +475,13 @@ function ProjectRows({
   site,
   project,
   depth,
+  datasources,
   edit,
 }: {
   site: Site;
   project: Project;
   depth: number;
+  datasources: DatasourceItem[];
   edit: (e: Editing) => void;
 }) {
   const reports = site.reports.filter((r) => r.project === project.id);
@@ -488,7 +547,91 @@ function ProjectRows({
           </td>
         </tr>
       ))}
+      {datasources.map((datasource) => (
+        <tr key={datasource.id} className="report-row" data-datasource={datasource.id}>
+          <td style={{ paddingLeft: `${28 + depth * 20}px` }}>
+            🗄 {datasource.name} <span className="hint">（資料源，第 {datasource.version} 版）</span>
+          </td>
+          <td>{datasource.owner}</td>
+          <td className="hint">{datasource.rules.length} 筆</td>
+          <td className="actions">
+            <button type="button" className="link" onClick={() => edit({ kind: "datasource-permissions", datasource })}>
+              權限
+            </button>
+            <button type="button" className="link" onClick={() => edit({ kind: "datasource", datasource })}>
+              改名／移動／擁有者
+            </button>
+            <button
+              type="button"
+              className="link danger-link"
+              onClick={() => edit({ kind: "delete-datasource", datasource })}
+            >
+              刪除
+            </button>
+          </td>
+        </tr>
+      ))}
     </>
+  );
+}
+
+function DatasourceDialog({
+  site,
+  datasource,
+  onClose,
+  run,
+}: {
+  site: Site;
+  datasource: DatasourceItem;
+  onClose: () => void;
+  run: Run;
+}) {
+  const [name, setName] = useState(datasource.name);
+  const [project, setProject] = useState(datasource.project);
+  const [owner, setOwner] = useState(datasource.owner);
+  return (
+    <Modal title={`資料源「${datasource.name}」`} onClose={onClose}>
+      <label className="admin-field">
+        名稱
+        <input value={name} onChange={(e) => setName(e.target.value)} />
+      </label>
+      <label className="admin-field">
+        Project
+        <select value={project} onChange={(e) => setProject(e.target.value)}>
+          {site.projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.path}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="admin-field">
+        擁有者
+        <select value={owner} onChange={(e) => setOwner(e.target.value)}>
+          {site.users.map((u) => (
+            <option key={`${u.domain ?? ""}\\${u.name}`} value={u.name}>
+              {u.full_name ? `${u.full_name}（${u.name}）` : u.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="dialog-actions">
+        <button
+          type="button"
+          className="primary"
+          onClick={() =>
+            void run(() => datasourceApi.update(datasource.id, { name, project, owner }), "已更新資料源").then(
+              (ok) => ok && onClose(),
+            )
+          }
+        >
+          儲存
+        </button>
+        <button type="button" onClick={onClose}>
+          取消
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -776,11 +919,26 @@ const PROJECT_TEMPLATES: [string, string[]][] = [
   ["檢視", ["Read"]],
   ["發布", ["Read", "Write"]],
 ];
+const DATASOURCE_TEMPLATES: [string, string[]][] = [
+  ["檢視", ["Read", "Connect"]],
+  ["探索", ["Read", "Connect", "ExportXml"]],
+  ["發布", ["Read", "Connect", "ExportXml", "Write"]],
+  ["管理", ["Read", "Connect", "ExportXml", "Write", "Delete", "ChangePermissions"]],
+];
+const DATASOURCE_CAPABILITIES: Record<string, string> = {
+  Read: "檢視",
+  Connect: "連線",
+  ExportXml: "下載",
+  Write: "覆蓋",
+  Delete: "刪除",
+  ChangePermissions: "設定權限",
+};
 
 /** 範本控制的能力：報表為全部；Project 為檢視與發布（Project Leader 另外設定）。 */
 function templatesFor(
   capabilities: Record<string, string>,
 ): { domain: string[]; templates: [string, string[]][] } | null {
+  if ("Connect" in capabilities) return { domain: Object.keys(capabilities), templates: DATASOURCE_TEMPLATES };
   if ("ChangePermissions" in capabilities) return { domain: Object.keys(capabilities), templates: WORKBOOK_TEMPLATES };
   if ("ProjectLeader" in capabilities) return { domain: ["Read", "Write"], templates: PROJECT_TEMPLATES };
   return null;

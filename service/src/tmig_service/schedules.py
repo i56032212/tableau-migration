@@ -38,6 +38,7 @@ from tmig_service.site import SiteStore
 from tmig_service.store import ReportStore
 
 if TYPE_CHECKING:
+    from tmig_service.datasources import DatasourceStore
     from tmig_service.subscriptions import MailSettings
 
 SCHEDULES = "schedules.json"
@@ -75,6 +76,18 @@ def file_lock(path: Path, timeout: float = 15.0, stale: float = 60.0) -> Iterato
         yield
     finally:
         path.unlink(missing_ok=True)
+
+
+def atomic_replace(source: Path, target: Path, attempts: int = 40) -> None:
+    """os.replace；Windows 上目標正被其他行程讀取時（只開一下）稍後再試。"""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05)
 
 
 def validate_schedules(data: ScheduleFile) -> None:
@@ -177,7 +190,7 @@ class ScheduleStore:
         self.root.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f"{SCHEDULES}.{os.getpid()}.tmp")
         temporary.write_text(data.model_dump_json(indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, self.path)
+        atomic_replace(temporary, self.path)
         self._cache = None
 
     # ------------------------------------------------------------ 排程器的狀態
@@ -228,6 +241,7 @@ class ScheduleStore:
 def store_reports(reports: ReportStore, site: SiteStore | None, fixtures: Path | None) -> Catalog:
     """排程的對象：fixtures 的報表與報表庫中發布的報表（與 fixtures 同名時以報表庫為準，與查詢服務相同）。"""
     from tmig.verify.run import load_fixture_ir
+    from tmig_service.datasources import DatasourceStore
 
     linked = {w.id: w for w in site.data().workbooks} if site is not None and site.exists() else {}
     items: list[Report] = []
@@ -251,7 +265,30 @@ def store_reports(reports: ReportStore, site: SiteStore | None, fixtures: Path |
                 title=record.name,
             )
         )
-    return Catalog(items)
+    return Catalog(items, datasource_reports(DatasourceStore(reports.root)))
+
+
+def datasource_reports(store: DatasourceStore) -> list[Report]:
+    """伺服器上萃取型的 Published Data Source（萃取更新的對象）。"""
+    found: list[Report] = []
+    for record in store.records():
+        if not record.extract:
+            continue
+        try:
+            ir = store.ir(record)
+        except Exception:  # 讀不了的資料源不能排程，其他照常
+            continue
+        found.append(
+            Report(
+                store.directory(record),
+                ir,
+                record.content_url,
+                key=f"pds:{record.id}",
+                owner=record.owner,
+                title=f"資料源：{record.name}",
+            )
+        )
+    return found
 
 
 class StoreJobs:
@@ -274,8 +311,11 @@ class StoreJobs:
         self._jobs: list[Job] = []
 
     def catalog(self) -> Catalog:
+        from tmig_service.datasources import DatasourceStore
+
         key = (
             tuple((r.id, r.latest.version, r.tableau_workbook) for r in self.reports.records()),
+            tuple((r.id, r.latest.version) for r in DatasourceStore(self.reports.root).records()),
             tuple(
                 (
                     d.name,
@@ -327,6 +367,8 @@ class FailurePolicy:
     def __call__(self, job: Job, record: RunRecord) -> None:
         kind, _, item_id = job.id.partition(":")
         failed = record.status == "failed"
+        if kind == "extract" and not failed:
+            self._refreshed(job, record)
         current = self._entry(self.schedules.data(), kind, item_id)
         if current is None or (not failed and current.consecutive_failures == 0):
             return
@@ -355,6 +397,18 @@ class FailurePolicy:
                 self.notify(job, record, result["count"], result["suspended"])
             except Exception as exc:  # 通知寄不出去不影響排程器
                 print(f"無法寄出 {job.id} 失敗的通知：{exc}", file=sys.stderr)
+
+    def _refreshed(self, job: Job, record: RunRecord) -> None:
+        """伺服器上的資料源更新了萃取：記下時間（資料源頁面顯示）。"""
+        from tmig_service.datasources import DatasourceStore
+
+        store = DatasourceStore(self.schedules.root)
+        for target in job.targets:
+            if target.report.name.startswith("pds:"):
+                try:
+                    store.update(target.report.name[4:], {"refreshed_at": record.finished})
+                except Exception as exc:  # 資料源剛被刪除等
+                    print(f"無法記下資料源的萃取更新時間：{exc}", file=sys.stderr)
 
     @staticmethod
     def _entry(data: ScheduleFile, kind: str, item_id: str) -> Any:
@@ -427,6 +481,7 @@ __all__ = [
     "FailurePolicy",
     "ScheduleStore",
     "StoreJobs",
+    "atomic_replace",
     "file_lock",
     "store_reports",
     "validate_schedules",

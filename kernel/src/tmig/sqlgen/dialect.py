@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import ClassVar
 
 import sqlglot
@@ -175,6 +175,25 @@ def split(query: WorksheetSql) -> Split:
     if local:
         head = "WITH " + ", ".join(f'"{c.name}" AS ({c.body})' for c in local) + " "
     return Split(fetches=fetches, local_sql=head + query.main)
+
+
+def underlying_query(query: WorksheetSql, limit: int | None = None) -> WorksheetSql:
+    """完整資料（基礎資料列）的查詢：只帶 query.underlying 用到的 CTE（都可以下推），工作表本身的查詢不變。
+
+    與工作表的查詢一樣以 DuckDB 執行（萃取），或以 split 兩段式執行（Live）。不支援時拋出 QueryError。"""
+    if not query.underlying:
+        raise QueryError("這張工作表不支援完整資料（例如 Data Blending）")
+    main = query.underlying + (f"\nLIMIT {int(limit)}" if limit else "")
+    names = {c.name for c in query.ctes}
+    deps = {c.name: _references(c.body, names - {c.name}) for c in query.ctes}
+    needed: set[str] = set()
+    for name in _references(main, names):
+        needed |= _closure(name, deps)
+    ctes = [c for c in query.ctes if c.name in needed]
+    head = "WITH RECURSIVE" if query.sql.lstrip().startswith("WITH RECURSIVE") else "WITH"
+    body = ",\n".join(f'"{c.name}" AS (\n  {c.body}\n)' for c in ctes)
+    sql = f"{head}\n{body}\n{main}" if ctes else main
+    return replace(query, sql=sql, main=main, ctes=ctes, columns=[], guards=[])
 
 
 def _references(sql: str, names: set[str]) -> list[str]:
@@ -5487,4 +5506,5 @@ __all__ = [
     "split",
     "sql_literal",
     "to_dialect",
+    "underlying_query",
 ]

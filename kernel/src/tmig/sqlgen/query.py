@@ -242,6 +242,9 @@ class WorksheetSql:
     """Relationship 模型：在比檢視粗的層級彙總時，確認其他資料表不會讓量值重複計算（見 tmig.sqlgen.model）。"""
     attach: dict[str, str] = field(default_factory=dict)
     """Data Blending：執行前以唯讀附加的其他萃取（附加的名稱 → 資料源 id，與主要資料源的 DuckDB 檔同一目錄）。"""
+    underlying: str = ""
+    """完整資料（基礎資料列）的 SELECT：彙總前的資料列中，仍在檢視中的標記所對應的列（與 main 相同接在 ctes 之後）；
+    空的時不支援（例如 Data Blending）。"""
 
 
 @dataclass
@@ -922,6 +925,7 @@ class WorksheetQuery:
             outputs.append(f"ROW_NUMBER() OVER ({over}) AS {ident(self.row_number)}")
             columns.append(OutputColumn(self.row_number, "sort", "integer", None))
         main = f"SELECT {', '.join(outputs)}\nFROM {final}{_where(conds)}{order_sql}"
+        underlying = self._underlying(dims, marks, rows_cte)
         stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
         return WorksheetSql(
             worksheet=ws.id,
@@ -939,7 +943,20 @@ class WorksheetQuery:
             if self.source.custom_sql
             else {},
             guards=self._guard_list(),
+            underlying=underlying,
         )
+
+    def _underlying(self, dims: list[Dim], marks: str, rows_cte: str) -> str:
+        """完整資料：彙總前的資料列（資料源篩選、列層級權限、維度篩選之後），只留下量值篩選後仍在檢視中的標記
+        所對應的列（與 Tableau 的「檢視資料 → 完整資料」相同）。不另建 CTE，工作表的 SQL 不變。"""
+        row_r = self.compiler(_RowEnv(self, "r"))
+        on = (
+            " AND ".join(
+                f"k.{ident(d.col)} IS NOT DISTINCT FROM {self.dim_sql(d.use, row_r)}" for d in dims
+            )
+            or "TRUE"
+        )
+        return f"SELECT r.* FROM {rows_cte} r WHERE EXISTS (SELECT 1 FROM {marks} k WHERE {on})"
 
     def _disaggregated(self) -> bool:
         """取消彙總量值且檢視中有不彙總的量值（只有維度時與 Tableau 相同，相同的組合只畫一個標記）。"""

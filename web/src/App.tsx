@@ -1,8 +1,19 @@
 import { useEffect, useState } from "react";
 import { AdminPage } from "./Admin";
+import { AlertButton } from "./Alerts";
 import { api } from "./api";
+import { datasourceApi, DatasourcesPage } from "./Datasources";
 import { scheduleApi } from "./schedules";
 import { MySubscriptionsPage, SubscribeButton } from "./Subscribe";
+import {
+  CommentsButton,
+  CrosstabDialog,
+  CustomViewsButton,
+  DataDialog,
+  FavoriteButton,
+  viewSheets,
+} from "./ViewerTools";
+import { type FavoriteItem, type RecentItem, type ViewerAccess, viewerApi } from "./viewerApi";
 import { caseState, DashboardView } from "./Dashboard";
 import {
   closeDocument,
@@ -16,14 +27,7 @@ import {
   toast,
 } from "./desktop";
 import { exportView } from "./exporter";
-import {
-  DesktopTokensButton,
-  Modal,
-  OpenFromServerDialog,
-  PublishDialog,
-  ServerPanel,
-  VersionsButton,
-} from "./Server";
+import { DesktopTokensButton, Modal, OpenFromServerDialog, PublishDialog, ServerPanel, VersionsButton } from "./Server";
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
@@ -36,11 +40,12 @@ import { PageControl, pagesOf } from "./PageControl";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
-// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）、/admin/<分頁>（站台管理）、/subscriptions（我的訂閱）；?case=<篩選組合>
+// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）、/admin/<分頁>（站台管理）、/subscriptions（我的訂閱）、/datasources（資料源）；?case=<篩選組合>
 type Route =
   | { page: "home" }
   | { page: "admin"; tab?: string }
   | { page: "subscriptions" }
+  | { page: "datasources" }
   | { page: "workbook"; workbook: string }
   | { page: "dashboard"; workbook: string; dashboard: string }
   | { page: "sheet"; workbook: string; worksheet: string }
@@ -54,6 +59,7 @@ function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "admin") return { page: "admin", tab: parts[1] };
   if (parts[0] === "subscriptions") return { page: "subscriptions" };
+  if (parts[0] === "datasources") return { page: "datasources" };
   if (parts[0] === "w" && parts[1]) {
     if (parts[2] === "d" && parts[3]) return { page: "dashboard", workbook: parts[1], dashboard: parts[3] };
     if (parts[2] === "s" && parts[3]) return { page: "sheet", workbook: parts[1], worksheet: parts[3] };
@@ -68,7 +74,11 @@ function parseRoute(path: string): Route {
 }
 
 /** 檢視（dashboard、工作表、Story）、資料源分頁與編輯器的網址。 */
-function viewPath(workbook: string, kind: "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story", id: string): string {
+function viewPath(
+  workbook: string,
+  kind: "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story",
+  id: string,
+): string {
   return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
 }
 
@@ -113,6 +123,8 @@ export function App() {
             <AdminPage me={me} tab={route.tab} go={navigate} />
           ) : route.page === "subscriptions" ? (
             <MySubscriptionsPage go={navigate} />
+          ) : route.page === "datasources" ? (
+            <DatasourcesPage go={navigate} />
           ) : (
             <WorkbookPage route={route} caseName={caseName} me={me} />
           )}
@@ -148,17 +160,60 @@ function DesktopCommands() {
 function Home({ me }: { me: Me }) {
   const [workbooks, setWorkbooks] = useState<WorkbookSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // 伺服器有排程管理時才有「我的訂閱」
+  // 伺服器有排程管理時才有「我的訂閱」；有報表庫時才有我的最愛，有使用紀錄時才有最近檢視
   const [subscriptions, setSubscriptions] = useState<number | null>(null);
+  const [favorites, setFavorites] = useState<FavoriteItem[] | null>(null);
+  const [recents, setRecents] = useState<RecentItem[] | null>(null);
+  const [sources, setSources] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
   const desktop = me.mode === "desktop";
   useEffect(() => {
-    api.workbooks().then(setWorkbooks).catch((e: Error) => setError(e.message));
-    if (!desktop && me.user)
+    api
+      .workbooks()
+      .then(setWorkbooks)
+      .catch((e: Error) => setError(e.message));
+    if (!desktop && me.user) {
       scheduleApi
         .mine()
         .then((data) => setSubscriptions(data.subscriptions.length))
         .catch(() => setSubscriptions(null));
+      viewerApi
+        .favorites()
+        .then(setFavorites)
+        .catch(() => setFavorites(null));
+      viewerApi
+        .recents()
+        .then(setRecents)
+        .catch(() => setRecents(null));
+      datasourceApi
+        .list()
+        .then((items) => setSources(items.length))
+        .catch(() => setSources(null));
+    }
   }, [desktop, me.user]);
+  const query = search.trim().toLowerCase();
+  const matches = (text: string) => !query || text.toLowerCase().includes(query);
+  const shown = workbooks
+    ?.map((wb) => {
+      const hit = matches(wb.name);
+      return {
+        ...wb,
+        dashboards: wb.dashboards.filter((d) => hit || matches(d.name)),
+        stories: wb.stories?.filter((st) => hit || matches(st.name)),
+        worksheets: wb.worksheets.filter((w) => hit || matches(w.name)),
+        hit,
+      };
+    })
+    .filter((wb) => wb.hit || wb.dashboards.length || wb.worksheets.length || wb.stories?.length);
+  // 報表庫的報表以發布時的名稱顯示（與報表清單相同）
+  const reportName = (report: string, fallback: string) => workbooks?.find((w) => w.id === report)?.name ?? fallback;
+  const viewLink = (report: string, view: string | null) => {
+    const wb = workbooks?.find((w) => w.id === report);
+    if (!wb || !view) return `/w/${encodeURIComponent(report)}`;
+    if (wb.dashboards.some((d) => d.id === view)) return viewPath(report, "d", view);
+    if (wb.stories?.some((st) => st.id === view)) return viewPath(report, "story", view);
+    return viewPath(report, "s", view);
+  };
   return (
     <main className="home">
       <div className="home-header">
@@ -169,12 +224,51 @@ function Home({ me }: { me: Me }) {
           </button>
         )}
         {!desktop && me.user?.admin && <Link to="/admin">站台管理</Link>}
-        {subscriptions !== null && <Link to="/subscriptions">我的訂閱{subscriptions ? `（${subscriptions}）` : ""}</Link>}
+        {subscriptions !== null && (
+          <Link to="/subscriptions">我的訂閱{subscriptions ? `（${subscriptions}）` : ""}</Link>
+        )}
+        {sources !== null && <Link to="/datasources">資料源{sources ? `（${sources}）` : ""}</Link>}
         {!desktop && me.user && me.mode !== "none" && <DesktopTokensButton />}
         <UserBar me={me} />
       </div>
       {desktop && <ServerPanel onOpenFromServer={() => openDialog({ kind: "open-server" })} />}
       {error && <p className="error">無法連到查詢服務：{error}</p>}
+      {workbooks && workbooks.length > 0 && (
+        <div className="home-search">
+          <input
+            type="search"
+            aria-label="搜尋報表"
+            placeholder="搜尋報表、dashboard 或工作表"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      )}
+      {!query && favorites && favorites.length > 0 && (
+        <section className="home-shortcuts" aria-label="我的最愛">
+          <h2>我的最愛</h2>
+          <div className="wb-links">
+            {favorites.map((f) => (
+              <Link key={`${f.report}:${f.view ?? ""}`} to={viewLink(f.report, f.view)}>
+                ★ {f.view_name ? `${reportName(f.report, f.report_name)}／${f.view_name}` : reportName(f.report, f.report_name)}
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+      {!query && recents && recents.length > 0 && (
+        <section className="home-shortcuts" aria-label="最近檢視">
+          <h2>最近檢視</h2>
+          <div className="wb-links">
+            {recents.map((r) => (
+              <Link key={`${r.report}:${r.view}`} to={viewLink(r.report, r.view)}>
+                {reportName(r.report, r.report_name)}／{r.view_name}
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+      {query && shown?.length === 0 && <p className="hint">找不到「{search.trim()}」。</p>}
       {workbooks?.length === 0 && (
         <p>
           {desktop
@@ -185,7 +279,7 @@ function Home({ me }: { me: Me }) {
         </p>
       )}
       <ul className="workbooks">
-        {workbooks?.map((wb) => (
+        {shown?.map((wb) => (
           <li key={wb.id}>
             <div className="wb-name">{wb.name}</div>
             <div className="wb-links">
@@ -206,7 +300,12 @@ function Home({ me }: { me: Me }) {
               ))}
             </div>
             {wb.unsupported > 0 && <div className="error">有 {wb.unsupported} 筆不支援的元素</div>}
-            {desktop && <DocumentActions workbook={wb.id} onClosed={() => setWorkbooks((list) => list?.filter((w) => w.id !== wb.id) ?? null)} />}
+            {desktop && (
+              <DocumentActions
+                workbook={wb.id}
+                onClosed={() => setWorkbooks((list) => list?.filter((w) => w.id !== wb.id) ?? null)}
+              />
+            )}
           </li>
         ))}
       </ul>
@@ -249,7 +348,7 @@ function WorkbookPage({
   caseName,
   me,
 }: {
-  route: Exclude<Route, { page: "home" } | { page: "admin" } | { page: "subscriptions" }>;
+  route: Exclude<Route, { page: "home" } | { page: "admin" } | { page: "subscriptions" } | { page: "datasources" }>;
   caseName: string | null;
   me: Me;
 }) {
@@ -264,6 +363,13 @@ function WorkbookPage({
   const [error, setError] = useState<string | null>(null);
   // 編輯器改變報表後遞增，重新載入報表的定義
   const [version, setVersion] = useState(0);
+  // 復原、重做：檢視狀態的歷程（篩選、參數、選取、動作）；重新整理：遞增後重新查詢
+  const [history, setHistory] = useState<{ past: ViewState[]; future: ViewState[] }>({ past: [], future: [] });
+  const [refresh, setRefresh] = useState(0);
+  const [access, setAccess] = useState<ViewerAccess | null>(null);
+  const [dialog, setDialog] = useState<"crosstab" | "data" | null>(null);
+  const [customName, setCustomName] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.ir(workbook), api.cases(workbook)])
@@ -285,8 +391,27 @@ function WorkbookPage({
   }, [workbook, version]);
 
   useEffect(() => {
-    if (ir) setView(caseState(ir, cases.find((c) => c.name === caseName)));
+    if (ir)
+      setView(
+        caseState(
+          ir,
+          cases.find((c) => c.name === caseName),
+        ),
+      );
+    setHistory({ past: [], future: [] });
+    setCustomName(null);
   }, [ir, cases, caseName]);
+
+  useEffect(() => {
+    if (me.mode === "desktop") {
+      setAccess(null);
+      return;
+    }
+    viewerApi
+      .access(workbook)
+      .then(setAccess)
+      .catch(() => setAccess(null));
+  }, [workbook, me.mode]);
 
   // 使用紀錄：每開啟一個 dashboard、工作表或 Story 記一次（切換篩選、故事點不算）
   const viewId =
@@ -308,6 +433,33 @@ function WorkbookPage({
   if (error) return <main className="error">載入失敗：{error}</main>;
   if (!ir || !view) return <main>載入中…</main>;
 
+  /** 改變檢視狀態：記入歷程（最多 50 步），可以復原。 */
+  const changeView = (next: ViewState) => {
+    setHistory((h) => ({ past: [...h.past, view].slice(-50), future: [] }));
+    setView(next);
+  };
+  const undo = () => {
+    const previous = history.past[history.past.length - 1];
+    if (!previous) return;
+    setHistory({ past: history.past.slice(0, -1), future: [view, ...history.future] });
+    setView(previous);
+  };
+  const redo = () => {
+    const next = history.future[0];
+    if (!next) return;
+    setHistory({ past: [...history.past, view], future: history.future.slice(1) });
+    setView(next);
+  };
+  const revert = () => {
+    changeView(
+      caseState(
+        ir,
+        cases.find((c) => c.name === caseName),
+      ),
+    );
+    setCustomName(null);
+  };
+
   const stories = ir.stories ?? [];
   const dashboard = route.page === "dashboard" ? ir.dashboards.find((d) => d.id === route.dashboard) : undefined;
   const worksheet = route.page === "sheet" ? ir.worksheets.find((w) => w.id === route.worksheet) : undefined;
@@ -315,8 +467,7 @@ function WorkbookPage({
   const editingDashboard = route.page === "edit-dashboard" && me.mode === "desktop" ? route.dashboard : null;
   const editingStory = route.page === "edit-story" && me.mode === "desktop" ? route.story : null;
   const story = route.page === "story" ? stories.find((s) => s.id === route.story) : undefined;
-  const datasource =
-    route.page === "datasource" ? datasources.find((d) => d.id === route.datasource) : undefined;
+  const datasource = route.page === "datasource" ? datasources.find((d) => d.id === route.datasource) : undefined;
   const base = window.location.pathname;
   // 報表本身：開啟第一個 dashboard，沒有時開啟第一個 Story 或工作表
   const target =
@@ -368,8 +519,19 @@ function WorkbookPage({
             const [kind, id] = e.target.value.split(":");
             // 編輯中切換到另一個工作表、dashboard 或 Story 時繼續編輯
             const editingAny = editing || editingDashboard || editingStory;
-            const target = !editingAny ? kind : kind === "s" ? "edit" : kind === "d" ? "edit-d" : kind === "story" ? "edit-story" : kind;
-            navigate(viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story", id) + window.location.search);
+            const target = !editingAny
+              ? kind
+              : kind === "s"
+                ? "edit"
+                : kind === "d"
+                  ? "edit-d"
+                  : kind === "story"
+                    ? "edit-story"
+                    : kind;
+            navigate(
+              viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story", id) +
+                window.location.search,
+            );
           }}
         >
           {datasources.map((d) => (
@@ -399,27 +561,57 @@ function WorkbookPage({
           </button>
         )}
         {me.mode === "desktop" && dashboard && (
-          <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit-d", dashboard.id))}>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => navigate(viewPath(workbook, "edit-d", dashboard.id))}
+          >
             編輯 dashboard
           </button>
         )}
         {me.mode === "desktop" && story && (
-          <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit-story", story.id))}>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => navigate(viewPath(workbook, "edit-story", story.id))}
+          >
             編輯 Story
           </button>
         )}
         {(dashboard || worksheet || story) && (
+          <span className="history" role="group" aria-label="復原與重做">
+            <button type="button" title="復原" aria-label="復原" disabled={history.past.length === 0} onClick={undo}>
+              ↶
+            </button>
+            <button type="button" title="重做" aria-label="重做" disabled={history.future.length === 0} onClick={redo}>
+              ↷
+            </button>
+            <button type="button" title="還原成原始的檢視" onClick={revert}>
+              還原
+            </button>
+            <button type="button" title="重新查詢資料" onClick={() => setRefresh((n) => n + 1)}>
+              重新整理
+            </button>
+          </span>
+        )}
+        {(dashboard || worksheet || story) && (access === null || access.export_image || access.export_data) && (
           <select
             aria-label="匯出"
             value=""
             onChange={(e) => {
               const kind = e.target.value;
               e.target.value = "";
+              if (kind === "crosstab" || kind === "data") {
+                setDialog(kind);
+                return;
+              }
               if (kind === "pdf") {
                 window.print();
                 return;
               }
-              const element = document.querySelector<HTMLElement>(".page .dashboard, .page .single-sheet, .page .story");
+              const element = document.querySelector<HTMLElement>(
+                ".page .dashboard, .page .single-sheet, .page .story",
+              );
               const title = dashboard?.name ?? worksheet?.name ?? story?.name ?? "export";
               if (!element || (kind !== "image" && kind !== "powerpoint")) return;
               void exportView(element, kind, title, me.mode === "desktop")
@@ -428,10 +620,45 @@ function WorkbookPage({
             }}
           >
             <option value="">匯出…</option>
-            <option value="image">圖片（PNG）</option>
-            <option value="powerpoint">PowerPoint</option>
-            <option value="pdf">PDF（列印）</option>
+            {access?.export_image !== false && <option value="image">圖片（PNG）</option>}
+            {access?.export_data !== false && (dashboard || worksheet) && <option value="data">資料…</option>}
+            {access?.export_data !== false && (dashboard || worksheet) && <option value="crosstab">交叉資料表…</option>}
+            {access?.export_image !== false && <option value="pdf">PDF（列印）</option>}
+            {access?.export_image !== false && <option value="powerpoint">PowerPoint</option>}
           </select>
+        )}
+        {access?.store && viewId && known && (
+          <CustomViewsButton
+            key={`${workbook}:${viewId}`}
+            workbook={workbook}
+            view={viewId}
+            state={view}
+            onApply={(state, name) => {
+              changeView(
+                state ??
+                  caseState(
+                    ir,
+                    cases.find((c) => c.name === caseName),
+                  ),
+              );
+              setCustomName(name);
+            }}
+          />
+        )}
+        {customName && <span className="custom-view-name">自訂檢視：{customName}</span>}
+        {access?.store && access.view_comments && viewId && known && (
+          <CommentsButton key={`c:${workbook}:${viewId}`} workbook={workbook} view={viewId} />
+        )}
+        {access?.store && viewId && known && <FavoriteButton workbook={workbook} view={viewId} />}
+        {access?.store && me.user && viewId && known && (dashboard || worksheet) && (
+          <AlertButton
+            key={`a:${workbook}:${viewId}`}
+            workbook={workbook}
+            view={viewId}
+            ir={ir}
+            sheets={viewSheets(ir, dashboard?.id ?? null, worksheet?.id ?? null)}
+            state={view}
+          />
         )}
         <div className="cases" role="group" aria-label="篩選組合">
           <button type="button" className={caseName === null ? "active" : ""} onClick={() => navigate(base)}>
@@ -455,15 +682,53 @@ function WorkbookPage({
         {me.mode !== "desktop" && me.user && (dashboard || worksheet) && (
           <SubscribeButton workbook={workbook} view={dashboard?.name ?? worksheet?.name ?? null} />
         )}
+        {notice && <span className="success">{notice}</span>}
         <UserBar me={me} />
       </header>
+      {dialog === "crosstab" && (dashboard || worksheet) && (
+        <CrosstabDialog
+          workbook={workbook}
+          ir={ir}
+          sheets={viewSheets(ir, dashboard?.id ?? null, worksheet?.id ?? null)}
+          view={view}
+          desktop={me.mode === "desktop"}
+          onClose={() => setDialog(null)}
+          onDone={(message) => {
+            setDialog(null);
+            setNotice(message);
+          }}
+        />
+      )}
+      {dialog === "data" && (dashboard || worksheet) && (
+        <DataDialog
+          workbook={workbook}
+          ir={ir}
+          sheets={viewSheets(ir, dashboard?.id ?? null, worksheet?.id ?? null)}
+          view={view}
+          access={
+            access ?? {
+              export_image: true,
+              export_data: true,
+              underlying_data: true,
+              download_workbook: true,
+              share_view: false,
+              view_comments: false,
+              add_comment: false,
+              store: false,
+            }
+          }
+          desktop={me.mode === "desktop"}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {dashboard && (
         <DashboardView
+          key={refresh}
           workbook={workbook}
           ir={ir}
           dashboard={dashboard}
           view={view}
-          onView={(next) => setView(next)}
+          onView={changeView}
           onNavigate={onNavigate}
           cases={cases}
         />
@@ -512,19 +777,45 @@ function WorkbookPage({
       {worksheet && (
         <div className="single-sheet">
           {worksheet.pages && view && (
-            <PageControl workbook={workbook} worksheet={worksheet.id} {...pagesOf(ir, worksheet.id)} view={view} onView={setView} />
+            <PageControl
+              workbook={workbook}
+              worksheet={worksheet.id}
+              {...pagesOf(ir, worksheet.id)}
+              view={view}
+              onView={changeView}
+            />
           )}
-          <WorksheetView workbook={workbook} worksheet={worksheet.id} state={stateFor(ir, worksheet.id, view)} />
+          <WorksheetView
+            key={refresh}
+            workbook={workbook}
+            worksheet={worksheet.id}
+            state={stateFor(ir, worksheet.id, view)}
+            revision={refresh}
+          />
         </div>
       )}
-      {story && <StoryView workbook={workbook} ir={ir} story={story} base={view} cases={cases} onNavigate={onNavigate} />}
+      {story && (
+        <StoryView
+          key={refresh}
+          workbook={workbook}
+          ir={ir}
+          story={story}
+          base={view}
+          cases={cases}
+          onNavigate={onNavigate}
+        />
+      )}
       {datasource && <DatasourceView workbook={workbook} datasource={datasource} />}
       {route.page === "datasource" && !datasource && (datasources.length > 0 || datasourceError) && (
         <main className="error">{datasourceError ? `無法開啟資料源：${datasourceError}` : "找不到這個資料源"}</main>
       )}
-      {!dashboard && !worksheet && !story && !editing && !editingDashboard && !editingStory && route.page !== "datasource" && (
-        <main className="error">找不到這個 dashboard、工作表或 Story</main>
-      )}
+      {!dashboard &&
+        !worksheet &&
+        !story &&
+        !editing &&
+        !editingDashboard &&
+        !editingStory &&
+        route.page !== "datasource" && <main className="error">找不到這個 dashboard、工作表或 Story</main>}
     </div>
   );
 }

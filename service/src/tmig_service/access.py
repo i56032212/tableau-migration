@@ -42,6 +42,15 @@ class Grant:
     """可以取得完整的報表定義（下載 workbook 的權限）。"""
     underlying_data: bool = True
     """可以檢視資料源的原始列（檢視基礎資料的權限）。"""
+    capabilities: frozenset[str] | None = None
+    """其他的能力（下載圖片／PDF、下載摘要資料、分享自訂檢視、檢視與新增留言）；None 表示全部。"""
+
+    def can(self, capability: str) -> bool:
+        if capability == "ExportXml":
+            return self.full_definition
+        if capability == "ViewUnderlyingData":
+            return self.underlying_data
+        return self.capabilities is None or capability in self.capabilities
 
     def dashboard_allowed(self, name: str) -> bool:
         return self.views is None or name in self.views
@@ -88,6 +97,8 @@ class Grant:
 
 
 OPEN = Grant(allowed=True)
+VIEWER_CAPABILITIES = ("ExportImage", "ExportData", "ShareView", "ViewComments", "AddComment")
+"""檢視器上依權限顯示的功能（與 Tableau 的 workbook 能力相同）。"""
 
 PermissionsSource = Permissions | Callable[[], Permissions | None] | None
 """權限：固定的（匯出的權限檔）或每次取用時才讀的（站台資料，修改後立即生效）。"""
@@ -125,11 +136,15 @@ class Authorizer:
             return Grant(allowed=False)
         download = self.permissions.access(user, entry, "ExportXml").allowed
         underlying = self.permissions.access(user, entry, "ViewUnderlyingData").allowed
+        capabilities = frozenset(
+            c for c in VIEWER_CAPABILITIES if self.permissions.access(user, entry, c).allowed
+        )
         return Grant(
             allowed=True,
             views=access.views,
             full_definition=download,
             underlying_data=underlying,
+            capabilities=capabilities,
         )
 
 

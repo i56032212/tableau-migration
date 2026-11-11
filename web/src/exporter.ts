@@ -310,7 +310,14 @@ export async function saveFile(name: string, data: Blob, desktop: boolean): Prom
   if (desktop) {
     const { pickSavePath } = await import("./desktop");
     const extension = name.slice(name.lastIndexOf(".") + 1);
-    const label = extension === "png" ? "PNG 圖片" : extension === "pptx" ? "PowerPoint 簡報" : "PDF";
+    const labels: Record<string, string> = {
+      png: "PNG 圖片",
+      pptx: "PowerPoint 簡報",
+      pdf: "PDF",
+      csv: "CSV",
+      xlsx: "Excel 活頁簿",
+    };
+    const label = labels[extension] ?? extension.toUpperCase();
     let target = await pickSavePath(name, { title: "匯出", extension, label });
     if (!target) return null;
     if (!target.toLowerCase().endsWith(`.${extension}`)) target += `.${extension}`;

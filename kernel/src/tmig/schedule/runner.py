@@ -30,7 +30,7 @@ from typing import Any, Literal, Protocol
 from tmig.catalog import Catalog, Report
 from tmig.schedule.model import ExtractTask, Schedule, ScheduleError, ScheduleFile, Subscription
 
-JobKind = Literal["extract", "subscription"]
+JobKind = Literal["extract", "subscription", "alert"]
 Clock = Callable[[], dt.datetime]
 QUEUE = "queue"
 """狀態目錄中「立即執行」的要求。"""
@@ -51,6 +51,8 @@ class Target:
     view: str | None = None
 
     def describe(self) -> str:
+        if self.datasource and self.report.name.startswith("pds:"):
+            return self.report.label  # 伺服器上的資料源：只有一個資料源
         if self.datasource:
             return f"{self.report.label}／{self.datasource}"
         if self.view:
@@ -249,6 +251,8 @@ class Scheduler:
         *,
         source: Callable[[], tuple[list[Job], str | None]] | None = None,
         on_result: Callable[[Job, RunRecord], Any] | None = None,
+        after_tick: Callable[[list[RunRecord]], list[RunRecord]] | None = None,
+        extras: dict[str, Callable[[str, str | None], RunRecord]] | None = None,
     ) -> None:
         self.all_jobs = list(jobs)
         self.jobs = [j for j in jobs if j.runnable]
@@ -258,6 +262,10 @@ class Scheduler:
         self.clock = clock
         self.source = source
         self.on_result = on_result
+        self.after_tick = after_tick
+        """每次檢查之後（例如資料警示：萃取剛更新的報表與每小時的檢查），回傳的紀錄也寫入 runs.jsonl。"""
+        self.extras = extras or {}
+        """「立即執行」中其他種類的工作：id 的前綴（例如 alert）→ 執行並回傳紀錄。"""
         self.state_path = state_dir / "state.json"
         self.log_path = state_dir / "runs.jsonl"
         self.started = clock()
@@ -335,6 +343,15 @@ class Scheduler:
             changed = True
         if changed:
             self._save_state()
+        if self.after_tick is not None:
+            try:
+                extra = self.after_tick(records)
+            except Exception as exc:  # 檢查之後的工作失敗不影響排程器
+                print(f"檢查之後的工作失敗：{type(exc).__name__}: {exc}", file=sys.stderr)
+                extra = []
+            for record in extra:
+                self._log(record)
+            records.extend(extra)
         return records
 
     def run(
@@ -394,6 +411,12 @@ class Scheduler:
                 continue
             job_id = str(request.get("job", ""))
             user = request.get("user")
+            extra = self.extras.get(job_id.partition(":")[0])
+            if extra is not None:
+                record = extra(job_id, user)
+                self._log(record)
+                records.append(record)
+                continue
             job = next((j for j in self.all_jobs if j.id == job_id), None)
             if job is None or (job.problem is not None and not job.suspended):
                 now = self.clock().isoformat()

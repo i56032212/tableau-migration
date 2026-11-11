@@ -271,7 +271,18 @@ def schedule_router(
 
     def reports_json() -> list[dict[str, Any]]:
         records = {r.id: r for r in store.records()}
-        result: list[dict[str, Any]] = []
+        result: list[dict[str, Any]] = [
+            {
+                "id": source.name,
+                "name": source.label,
+                "published": True,
+                "datasources": [
+                    {"id": ds.id, "caption": ds.caption or ds.id} for ds in source.ir.datasources
+                ],
+                "views": [],
+            }
+            for source in catalog().sources
+        ]
         for report in catalog().reports:
             ir = report.ir
             record = records.get(report.name)
@@ -422,12 +433,26 @@ def schedule_router(
             raise _bad(f"找不到報表「{body.report}」")
         if not report.extract_datasources():
             raise _bad(f"報表「{report.ir.workbook.name}」沒有萃取型的資料源")
+        source = body.report.startswith("pds:")
+        if source and not is_admin(user):
+            raise HTTPException(403, "資料源的萃取更新只有站台管理員可以排程")
         task_id = f"t{secrets.token_hex(6)}"
 
         def apply(data: ScheduleFile) -> None:
             check_schedule(data, body.schedule, "Extract")
             data.extract_refreshes.append(
+                # 伺服器上的資料源：對象是 Published Data Source（更新伺服器上的那一份）
                 ExtractTask(
+                    id=task_id,
+                    schedule=body.schedule,
+                    refresh=body.refresh,
+                    target_kind="datasource",
+                    target_name=report.label,
+                    content_url=report.url_name,
+                    priority=body.priority,
+                )
+                if source
+                else ExtractTask(
                     id=task_id,
                     schedule=body.schedule,
                     refresh=body.refresh,
