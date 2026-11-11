@@ -172,7 +172,8 @@ def test_schedules_and_subscriptions(tmp_path: Path) -> None:
         page.get_by_role("dialog").get_by_role("button", name="儲存").click()
         expect(row).to_contain_text("週報")
         row.get_by_role("button", name="暫停").click()
-        expect(row).to_contain_text("暫停")
+        # 「暫停」也是按鈕的文字：等到按鈕變成「繼續」（修改完成、清單重新讀取）才檢查
+        expect(row.get_by_role("button", name="繼續")).to_be_visible()
         assert schedules.data().subscriptions[0].suspended is True
         row.get_by_role("button", name="取消訂閱").click()
         page.get_by_role("dialog").get_by_role("button", name="取消訂閱").click()

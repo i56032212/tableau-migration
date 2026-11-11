@@ -92,7 +92,8 @@ def test_create_and_manage_alert(tmp_path: Path) -> None:
         expect(row).to_contain_text("Sales 高於或等於 250,000")
         expect(row).to_contain_text("最多每天一次")
         row.get_by_role("button", name="暫停").click()
-        expect(row).to_contain_text("暫停")
+        # 「暫停」也是按鈕的文字：等到按鈕變成「繼續」（修改完成、清單重新讀取）才檢查
+        expect(row.get_by_role("button", name="繼續")).to_be_visible()
         alert_after = AlertStore(tmp_path / "store").get(alert.id)
         assert alert_after is not None and alert_after.suspended is True
 
