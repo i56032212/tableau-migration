@@ -19,6 +19,7 @@ import io
 import math
 import os
 import re
+import tempfile
 import zipfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -36,6 +37,8 @@ from tmig.data.hyper_import import (
     _same,
     _stat_sql,
     _text,
+    export_hyper_tables,
+    load_hyper_export,
 )
 from tmig.ir.models import (
     FILE_SCHEMA,
@@ -113,9 +116,13 @@ def import_file_tables(
     tmp_out.unlink(missing_ok=True)
     books: dict[str, Any] = {}
     results: list[TableImport] = []
-    with duckdb.connect(str(tmp_out)) as con:
+    with tempfile.TemporaryDirectory() as work, duckdb.connect(str(tmp_out)) as con:
         con.execute(f"CREATE SCHEMA {_quote(FILE_SCHEMA)}")
+        hyper = _hyper_exports(archive, connection, Path(work))
         for table in connection.tables:
+            if table.format == "hyper":
+                results.append(load_hyper_export(con, hyper[table.name], FILE_SCHEMA, table.name))
+                continue
             data = read_member(archive, table.path)
             if table.format == "excel":
                 raw = excel_rows(data, table, books)
@@ -125,6 +132,31 @@ def import_file_tables(
             results.append(_load(con, table, values, warnings))
     os.replace(tmp_out, out_path)
     return results
+
+
+def _hyper_exports(
+    archive: zipfile.ZipFile, connection: FileConnection, work: Path
+) -> dict[str, Any]:
+    """.hyper 檔中的資料表匯出成 Parquet（每個檔案啟動一次 Hyper），以關聯樹中的資料表名稱為鍵。"""
+    by_path: dict[str, list[FileTable]] = {}
+    for table in connection.tables:
+        if table.format == "hyper":
+            by_path.setdefault(table.path, []).append(table)
+    found: dict[str, Any] = {}
+    for i, (path, tables) in enumerate(by_path.items()):
+        hyper_path = work / f"source{i}.hyper"
+        hyper_path.write_bytes(read_member(archive, path))
+        log_dir = work / f"log{i}"
+        log_dir.mkdir()
+        refs: list[tuple[str, str]] = []
+        for table in tables:
+            parts = table.table or ["Extract", "Extract"]
+            refs.append((parts[0], parts[-1]) if len(parts) > 1 else ("public", parts[0]))
+        exported, _ = export_hyper_tables(hyper_path, list(dict.fromkeys(refs)), log_dir)
+        by_ref = {(e.schema, e.table): e for e in exported}
+        for table, ref in zip(tables, refs, strict=True):
+            found[table.name] = by_ref[ref]
+    return found
 
 
 def read_member(archive: zipfile.ZipFile, path: str) -> bytes:

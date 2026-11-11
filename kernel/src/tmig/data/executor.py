@@ -15,6 +15,7 @@ from typing import Any
 
 import duckdb
 
+from tmig.data import udf
 from tmig.sqlgen.query import Guard, QueryError, WorksheetSql
 from tmig.sqlgen.sql import ident, string
 
@@ -62,7 +63,11 @@ def execute(db_path: str | Path, sql: str, attach: dict[str, Path] | None = None
         if not item.is_file():
             raise ExecutionError(f"找不到資料檔 {item}；請先執行 tmig import-hyper")
     try:
-        with duckdb.connect(str(path), read_only=True) as con:
+        # 用到 ICU 的正規表示式時另開記憶體資料庫附加資料檔（見 tmig.data.udf）
+        connection = (
+            udf.attached(path) if udf.needed(sql) else duckdb.connect(str(path), read_only=True)
+        )
+        with connection as con:
             for alias, other in (attach or {}).items():
                 con.execute(f"ATTACH {string(str(other))} AS {ident(alias)} (READ_ONLY)")
             cursor = con.execute(sql)
@@ -82,7 +87,17 @@ def execute_query(db_path: str | Path, query: WorksheetSql) -> QueryResult:
         check_guard(guard, execute(db_path, guard.sql).rows)
     folder = Path(db_path).parent
     attach = {alias: folder / f"{ds}.duckdb" for alias, ds in query.attach.items()}
-    return execute(db_path, query.sql, attach)
+    return finish(query, execute(db_path, query.sql, attach))
+
+
+def finish(query: WorksheetSql, result: QueryResult) -> QueryResult:
+    """查詢之後的分析：叢集編號、預測的估計值與預測區間（tmig.planner.analytics）。"""
+    if query.analytics is None:
+        return result
+    from tmig.planner.analytics import apply
+
+    columns, rows = apply(query.analytics, list(result.columns), list(result.rows))
+    return QueryResult(columns=columns, rows=rows)
 
 
 def check_guard(guard: Guard, rows: list[tuple[Any, ...]] | list[list[Any]]) -> None:

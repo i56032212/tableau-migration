@@ -267,6 +267,12 @@ def test_bottom_n_and_parameter_count(run: Run) -> None:
         region_sheet(view_extra=top_n("none:Region:nk", "[Parameters].[Parameter 1]")), state=state
     )
     assert by_region(rows, "sum(f_sales)") == {"West": 800}
+    # 實數的參數（例如清單中的 1.）：整數值可以當成數量
+    state = QueryState(parameters={"p_top_n": 1.0})
+    rows = run(
+        region_sheet(view_extra=top_n("none:Region:nk", "[Parameters].[Parameter 1]")), state=state
+    )
+    assert by_region(rows, "sum(f_sales)") == {"West": 800}
 
 
 def test_measure_filter(run: Run) -> None:
@@ -366,32 +372,33 @@ def test_fixed_without_dims_and_row_level_mix(run: Run) -> None:
     assert by_region(rows, "f_above_min") == {"East": 200, "North": 0, "South": 60, "West": 500}
 
 
-def test_relative_lod_outside_the_view_is_unsupported(tmp_path: Path) -> None:
-    """INCLUDE／EXCLUDE 相對於檢視的維度。依欄位排序、Top N 的排名依據、彙總的條件篩選用到它時，
-    Tableau 在各自的層級計算（公開範例 Logshark 的 Apache），尚不支援：整張工作表列為不支援，
-    不默默以檢視的層級計算。"""
+def test_relative_lod_in_sort_top_n_and_condition(run: Run) -> None:
+    """INCLUDE／EXCLUDE 相對於檢視的維度；依欄位排序、Top N 的排名依據、彙總的條件篩選中則與 Tableau
+    相同，相對於排序或篩選的維度（公開範例 Logshark 的 Apache）。
+
+    Order Avg＝AVG({INCLUDE [Order ID] : SUM([Sales])})：各區每張訂單的銷售平均 East 175、West 400、
+    South 50、North 60（依 SUM(Sales) 的名次 South 在 North 之前，依 Order Avg 則相反）。"""
     order_avg = ref("usr:Calculation_12:qk")
+    enc = f"<text column='{order_avg}' />"
     sort = (
         f"<computed-sort column='{ref('none:Region:nk')}' direction='DESC' using='{order_avg}' />"
     )
-    top = top_n("none:Region:nk", "2", by="[Calculation_13]")
+    rows = run(lod_sheet(ref("none:Region:nk"), enc, sort), LOD_CALCS)
+    assert [r["f_region"] for r in rows] == ["West", "East", "North", "South"]
+    # 檢視中還有類別時，排序值仍是各區的值（不是各區、各類別的值）
+    sheet = lod_sheet(f"({ref('none:Region:nk')} / {ref('none:Category:nk')})", enc, sort)
+    rows = run(sheet, LOD_CALCS)
+    assert list(dict.fromkeys(r["f_region"] for r in rows)) == ["West", "East", "North", "South"]
+    top = top_n("none:Region:nk", "3", by="[Calculation_12]")
+    rows = run(lod_sheet(ref("none:Region:nk"), enc, top), LOD_CALCS)
+    assert sorted(r["f_region"] for r in rows) == ["East", "North", "West"]
     condition = (
         f"<filter class='categorical' column='{ref('none:Region:nk')}'>"
-        "<groupfilter expression='[Calculation_13] &gt; 100' function='filter'>"
+        "<groupfilter expression='[Calculation_12] &gt; 100' function='filter'>"
         "<groupfilter function='level-members' level='[none:Region:nk]' /></groupfilter></filter>"
     )
-    for view_extra, message in (
-        (sort, "INCLUDE／EXCLUDE LOD 只能用在檢視的量值"),
-        (top, "Top N 的排名依據含 INCLUDE／EXCLUDE LOD，尚不支援"),
-        (condition, "條件篩選含 INCLUDE／EXCLUDE LOD，尚不支援"),
-    ):
-        sheet = lod_sheet(ref("none:Region:nk"), f"<text column='{order_avg}' />", view_extra)
-        xml = b.workbook(b.extract_datasource(columns=LOD_CALCS), worksheets=sheet)
-        ir = parse_workbook(b.write_twb(tmp_path, xml))
-        assert ir.unsupported == []
-        with pytest.raises(QueryError, match=message) as info:
-            worksheet_sql(ir, ir.worksheets[0].id)
-        assert info.value.unsupported
+    rows = run(lod_sheet(ref("none:Region:nk"), enc, condition), LOD_CALCS)
+    assert by_region(rows, "f_order_avg") == {"East": 175, "West": 400}
 
 
 # ---------------------------------------------------------------- D4 Table Calculation

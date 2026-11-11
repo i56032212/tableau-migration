@@ -92,3 +92,76 @@ def test_no_panes_when_the_dimension_is_the_axis(tmp_path: Path, db: Path) -> No
     )
     spec = render(parse(tmp_path, sheet), db).spec
     assert "vconcat" not in spec and "hconcat" not in spec
+
+
+def measure_pane(pane_id: int, axis: str, mark: str, encodings: str, index: str = "") -> str:
+    return (
+        f"<pane id='{pane_id}' y-axis-name='{axis}'{index}><view><breakdown value='auto' /></view>"
+        f"<mark class='{mark}' /><encodings>{encodings}</encodings></pane>"
+    )
+
+
+def test_dual_axis_colored_by_measure_names(tmp_path: Path, db: Path) -> None:
+    """雙軸的兩個量值以 Measure Names 上色（沒有 Measure Values）：每個量值的圖層以常數欄位上色，共用圖例。"""
+    color = f"<color column='{ref(':Measure Names')}' />"
+    sheet = worksheet(
+        "Dual",
+        [MONTH, SALES, PROFIT],
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("tmn:Order Date:qk"),
+        mark="Line",
+        encodings=color,
+        panes_extra=measure_pane(2, ref("sum:Sales:qk"), "Line", color)
+        + measure_pane(3, ref("sum:Profit:qk"), "Line", color, " y-index='1'"),
+    )
+    spec = render(parse(tmp_path, sheet), db).spec
+    sales, profit = spec["layer"]
+    for layer, title in ((sales, "Sales"), (profit, "Profit")):
+        assert {"calculate": f'"{title}"', "as": "__mn_name"} in layer["transform"]
+        color_def = layer["encoding"]["color"]
+        assert (color_def["field"], color_def["title"]) == ("__mn_name", "Measure Names")
+        assert color_def["scale"]["domain"] == ["Sales", "Profit"]
+
+
+def test_measure_values_with_own_card_and_dual_axis(tmp_path: Path, db: Path) -> None:
+    """KPI 的折線：Measure Values 的軸有自己的標記卡（以 Measure Names 上色的折線），疊上另一個量值的圓點
+    （雙軸、同步的座標軸）。"""
+    values = ref("Multiple Values")
+    names = f"<color column='{ref(':Measure Names')}' />"
+    sheet = worksheet(
+        "KPI",
+        [MONTH, SALES, PROFIT],
+        rows=f"({values} + {ref('sum:Profit:qk')})",
+        cols=ref("tmn:Order Date:qk"),
+        mark="Automatic",
+        panes_extra=measure_pane(2, values, "Line", names)
+        + measure_pane(3, ref("sum:Profit:qk"), "Circle", ""),
+        view_extra=(
+            f"<filter class='categorical' column='{ref(':Measure Names')}'>"
+            "<groupfilter function='union'>"
+            f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref('sum:Sales:qk')}&quot;' />"
+            f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref('sum:Profit:qk')}&quot;' />"
+            "</groupfilter></filter>"
+        ),
+    ).replace(
+        "<style />",
+        "<style><style-rule element='axis'>"
+        f"<encoding attr='space' class='0' field='{ref('sum:Profit:qk')}' field-type='quantitative' "
+        "fold='true' scope='rows' synchronized='true' type='space' />"
+        "</style-rule></style>",
+        1,
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    assert [(p.measure.field, p.dual, p.marks.type) for p in ws.panes] == [
+        ("measure_values", False, "line"),
+        ("f_profit", True, "circle"),
+    ]
+    spec = render(ir, db).spec
+    # 同步的雙軸共用刻度：Measure Values 的折線（每個量值一條）與 Profit 的圓點疊在一起
+    assert spec["resolve"] == {"scale": {"y": "shared"}}
+    lines, dots = spec["layer"]
+    assert lines["mark"]["type"] == "line" and lines["encoding"]["color"]["field"] == "__mn"
+    assert dots["mark"]["type"] == "circle"
+    assert {"filter": "!(datum.__mn_i > 0)"} in dots["transform"]

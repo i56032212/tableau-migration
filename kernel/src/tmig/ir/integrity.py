@@ -142,7 +142,14 @@ def _check_refresh(ds: Datasource, errors: list[str]) -> None:
 
 
 def check_references(ir: IR) -> list[str]:
-    from tmig.ir.models import SPECIAL_FIELDS, ParamRef, TopNFilter, TupleFilter
+    from tmig.ir.models import (
+        MEASURE_VALUES,
+        SPECIAL_FIELDS,
+        FieldUse,
+        ParamRef,
+        TopNFilter,
+        TupleFilter,
+    )
 
     errors: list[str] = []
     owner: dict[str, str] = {}
@@ -342,11 +349,32 @@ def check_references(ir: IR) -> list[str]:
                     if use.agg is not None or use.table_calc is not None:
                         errors.append(f"{where}.fields[{j}]：只能以維度篩選")
         for i, pane in enumerate(ws.panes):
-            check_use(pane.measure, ws.datasource, f"{base}.panes[{i}].measure", tcs, extra=blended)
+            where = f"{base}.panes[{i}].measure"
+            if pane.measure.field == MEASURE_VALUES:
+                if not ws.measure_values:
+                    errors.append(f"{where}：Measure Values 的標記卡，工作表卻沒有 Measure Values")
+            else:
+                check_use(pane.measure, ws.datasource, where, tcs, extra=blended)
             if pane.measure not in (ws.rows if pane.axis == "rows" else ws.columns):
                 errors.append(f"{base}.panes[{i}].measure：量值不在{pane.axis}架上")
         for i, use in enumerate(ws.measure_values):
             check_use(use, ws.datasource, f"{base}.measure_values[{i}]", tcs, extra=blended)
+        if ws.cluster is not None:
+            check_use(
+                FieldUse(field=ws.cluster.field), ws.datasource, f"{base}.cluster.field", None
+            )
+            for i, use in enumerate(ws.cluster.measures):
+                check_use(use, ws.datasource, f"{base}.cluster.measures[{i}]", tcs, extra=blended)
+        if ws.forecast is not None:
+            for i, use in enumerate(ws.forecast.measures):
+                check_use(use, ws.datasource, f"{base}.forecast.measures[{i}]", tcs, extra=blended)
+            if ws.forecast.indicator is not None:
+                check_use(
+                    FieldUse(field=ws.forecast.indicator),
+                    ws.datasource,
+                    f"{base}.forecast.indicator",
+                    None,
+                )
         if ws.pages is not None:
             check_use(ws.pages, ws.datasource, f"{base}.pages", None)
             if ws.pages.agg is not None or ws.pages.table_calc is not None:

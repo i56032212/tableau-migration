@@ -491,6 +491,18 @@ def test_expressions(engine: Engine) -> None:
     assert problems == [], f"{engine.name}：\n" + "\n".join(problems)
 
 
+def test_random(engine: Engine) -> None:
+    """RANDOM()：每一列各自的 [0, 1] 隨機數（以 DuckDB 模擬的方言只檢查轉譯，模擬不出來源資料庫的行為）。"""
+    sql = ExprCompiler(analyzer(), Env()).row(parse_formula("RANDOM()"))
+    query = f"SELECT {sql} AS v FROM t"
+    translated = to_dialect(query, engine.executor.dialect)
+    if type(engine.executor).__name__.endswith("Emulator"):
+        return
+    values = engine.executor.fetch(translated).column(0).to_pylist()
+    assert values and all(0 <= v <= 1 for v in values)
+    assert len(set(values)) > 1, f"{engine.name} 每一列的隨機數相同"
+
+
 @pytest.mark.parametrize("directory", FIXTURES, ids=[d.name for d in FIXTURES])
 def test_fixture_checks(engine: Engine, directory: Path) -> None:
     """每張工作表 × 每組篩選：下推到來源資料庫的兩段式執行與預期結果一致。"""

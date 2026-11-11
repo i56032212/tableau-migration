@@ -628,6 +628,7 @@
           ],
           "ranges": [],
           "group": null,
+          "latest": false,
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
@@ -745,6 +746,7 @@
           ],
           "ranges": [],
           "group": null,
+          "latest": false,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter[1]"
         },
         {
@@ -804,6 +806,8 @@
         }
       ],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -970,6 +974,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1124,12 +1130,15 @@
           ],
           "ranges": [],
           "group": null,
+          "latest": false,
           "source_ref": "/workbook/worksheets/worksheet[3]/table/view/filter"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1314,6 +1323,8 @@
         }
       ],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],

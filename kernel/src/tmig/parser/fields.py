@@ -374,6 +374,7 @@ class FilterParser:
         mode, values = selection
         stage = self._stage_for_dimension(element, context)
         assert stage is not None
+        preset = child(element, "preset")
         return CategoricalFilter(
             kind="categorical",
             id=filter_id,
@@ -382,6 +383,7 @@ class FilterParser:
             mode=mode,
             values=values,
             ranges=ranges,
+            latest=preset is not None and preset.get("type") == "last-values",
             source_ref=_xpath(element),
         )
 

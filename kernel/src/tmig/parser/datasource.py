@@ -39,6 +39,7 @@ from tmig.ir.models import (
     PublishedSource,
     Relation,
     SourceColumn,
+    SqlRelation,
     TableRelation,
     Unsupported,
     WeekDay,
@@ -100,6 +101,7 @@ WEEK_DAYS: tuple[WeekDay, ...] = (
 )
 DS_CHILDREN = frozenset(
     {
+        "analytic-model",
         "column",
         "column-instance",
         "folder",
@@ -121,8 +123,9 @@ DS_CHILDREN = frozenset(
         "field-sort-info",
     }
 )
-FILE_SOURCES = frozenset({"excel-direct", "textscan"})
-"""檔案型連線（沒有萃取時匯入 DuckDB，見 FileConnection）。"""
+FILE_SOURCES = frozenset({"excel-direct", "textscan", "hyper", "dataengine"})
+"""檔案型連線（沒有萃取時匯入 DuckDB，見 FileConnection）。.hyper 只有一張資料表時與萃取相同，
+有 join、多個 .hyper 檔或 Relationship 模型時是檔案型連線。"""
 TABLE_ID_PREFIX = "[__tableau_internal_object_id__]."
 """物件模型中每張邏輯資料表的筆數欄位（Tableau 2020.2 起的「資料表 (計數)」）。"""
 
@@ -305,6 +308,8 @@ class DatasourceParser:
         self.caption = ds_el.get("caption") or self.name
         self.objects = graph_objects(ds_el)
         self.model_tables: list[LogicalTable] | None = None
+        self.original_names: dict[str, str] = {}
+        """變更了資料類型的欄位：隱藏的原始欄位名稱 → 原本的欄位名稱（萃取的 metadata-record 以它為名）。"""
         """Relationship 模型的邏輯資料表（N6）；不是模型時為 None。"""
 
     def parse(self) -> DsState | None:
@@ -369,6 +374,10 @@ class DatasourceParser:
             instance_key(inst.get("name", "")): inst for inst in children(el, "column-instance")
         }
         self._filters(state)
+        for model in children(self.el, "analytic-model"):
+            name = child(child(model, "name"), "field")
+            if name is not None and name.get("name"):
+                state.analytic_models[name.get("name", "")] = model
         self._check_children()
         return state
 
@@ -403,7 +412,11 @@ class DatasourceParser:
         if conn.get("class") in ("hyper", "dataengine"):
             return conn, False
         if len(named) == 1 and named[0].get("class") in ("hyper", "dataengine"):
-            return named[0], False
+            # 直接以 .hyper 為來源：只有一張資料表時與萃取相同；join 或 Relationship 模型時是檔案型連線
+            relations = children(conn, "relation")
+            single = len(relations) == 1 and relations[0].get("type") == "table"
+            if single and len(self.objects) <= 1:
+                return named[0], False
         return None
 
     def _files(self, conn: etree._Element) -> tuple[bool, FileConnection | None]:
@@ -489,6 +502,19 @@ class DatasourceParser:
             self.ctx.flag(element, f"資料源「{self.caption}」的資料表「{name}」沒有欄位資訊")
             return None
         header = (columns_el.get("header") if columns_el is not None else None) != "no"
+        if source.get("class") in ("hyper", "dataengine"):
+            dbname = (source.get("dbname") or "").replace("\\", "/")
+            path = self._packaged(dbname)
+            if path is None:
+                self.ctx.flag(source, f"資料源「{self.caption}」的檔案「{dbname}」不在 .twbx 內")
+                return None
+            return FileTable(
+                name=name,
+                format="hyper",
+                path=path,
+                table=qualified_parts(element.get("table", "")) or None,
+                columns=columns,
+            )
         if source.get("class") == "textscan":
             # 文字檔：資料表名稱是檔名，副檔名前的點寫成 #（[orders#csv]）
             base, sep, ext = table.rpartition("#")
@@ -722,6 +748,8 @@ class DatasourceParser:
         ctx = self.ctx
         extract_records = self._meta_columns(data_conn) if via_extract else []
         records = extract_records or self._meta_columns(conn)
+        # 來源（連線層）的型別：變更資料類型時萃取與來源資料表中仍是原本的型別
+        source_types = {r.local: r.local_type for r in self._meta_columns(conn)}
         physical: dict[str, str] = {}
         if via_extract:
             for mapping in children(child(data_conn, "cols"), "map"):
@@ -743,6 +771,15 @@ class DatasourceParser:
             if column is not None and child(column, "calculation") is not None:
                 continue  # 實體化的計算欄位（例如 Number of Records）以公式為準
             datatype = (column.get("datatype") if column is not None else None) or record.local_type
+            source_type = source_types.get(record.local, "")
+            if (
+                column is not None
+                and column.get("datatype-customized") == "true"
+                and source_type in DATATYPES
+                and source_type != datatype
+                and self._add_converted(state, column, datatype, source_type, record, physical)
+            ):
+                continue
             self._add_raw(state, record.local, datatype, column, record, physical)
 
         for name, column in columns.items():
@@ -759,6 +796,16 @@ class DatasourceParser:
             if not records:
                 # 沒有 metadata-records 的舊檔：以 <column> 為準
                 self._add_raw(state, name, column.get("datatype", ""), column, None, physical)
+                continue
+            if via_extract and column.get("hidden") == "true":
+                # 建立萃取時排除了隱藏的欄位（「隱藏所有未使用的欄位」）：萃取中沒有，Tableau 也不能用
+                ctx.ignore(column, f"隱藏的欄位 {name} 不在萃取中：略過")
+                continue
+            if (
+                not via_extract
+                and self.model_tables is None
+                and add_uncached_column(ctx, state, column)
+            ):
                 continue
             ctx.flag(column, f"欄位 {name} 找不到資料來源")
 
@@ -902,35 +949,18 @@ class DatasourceParser:
         physical: dict[str, str],
     ) -> None:
         anchor = column if column is not None else record.element if record is not None else self.el
-        caption = (column.get("caption") if column is not None else None) or strip_brackets(name)
-        if datatype not in DATATYPES:
-            self.ctx.flag(anchor, f"欄位「{caption}」的型別 {datatype} v0 不支援")
-            return
-        aliases = member_aliases(self.ctx, column, datatype, f"欄位「{caption}」")
-        role = (column.get("role") if column is not None else None) or (
-            "measure" if datatype in ("integer", "real") else "dimension"
+        found = raw_field(
+            self.ctx,
+            name,
+            datatype,
+            column,
+            record.aggregation if record is not None else "",
+            physical.get(name, strip_brackets(name)),
+            self._field_table(state, record),
+            anchor,
         )
-        agg_text = (column.get("aggregation") if column is not None else None) or (
-            record.aggregation if record is not None else ""
-        )
-        default_agg = METADATA_AGG.get(agg_text) if role == "measure" else None
-        state.add_field(
-            DataField(
-                id=self.ctx.ids.make("f", caption, name),
-                name=name,
-                caption=caption,
-                role=role,  # type: ignore[arg-type]
-                datatype=datatype,  # type: ignore[arg-type]
-                default_agg=default_agg,
-                format=column.get("default-format") if column is not None else None,
-                hidden=column is not None and column.get("hidden") == "true",
-                column=physical.get(name, strip_brackets(name)),
-                table=self._field_table(state, record),
-                calc=None,
-                aliases=aliases,
-                source_ref=xpath(anchor),
-            )
-        )
+        if found is not None:
+            state.add_field(found)
 
     def _field_table(self, state: DsState, record: MetaColumn | None) -> str | None:
         """欄位所屬的資料表：Live 連線為 metadata-record 的 parent-name；
@@ -983,7 +1013,7 @@ class DatasourceParser:
         for data_field in state.fields:
             if data_field.column is None or data_field.calc is not None:
                 continue
-            record = records.get(data_field.name)
+            record = records.get(self.original_names.get(data_field.name, data_field.name))
             if record is None:
                 return  # 萃取中找不到這一欄的來源
             columns.append(
@@ -1036,6 +1066,61 @@ class DatasourceParser:
     def _add_calc(self, state: DsState, column: etree._Element) -> None:
         add_calc_field(self.ctx, state, column)
 
+    def _add_converted(
+        self,
+        state: DsState,
+        column: etree._Element,
+        datatype: str,
+        source_type: str,
+        record: MetaColumn,
+        physical: dict[str, str],
+    ) -> bool:
+        """變更了資料類型的欄位（datatype-customized）：萃取與來源資料表中仍是原本的型別，Tableau 查詢時
+        才轉換（與型別轉換函式相同，例如數字轉日期是 1899-12-30 起算的天數、字串轉數字無法轉換時為 Null）。
+        以隱藏的原始欄位加上轉換它的計算欄位表示；轉成布林值等尚不支援的轉換回傳 False（照原樣當成欄位）。"""
+        convert = CONVERSIONS.get(datatype)
+        if convert is None:
+            return False
+        name = column.get("name", "")
+        caption = column.get("caption") or strip_brackets(name)
+        source_name = f"[{strip_brackets(name)} (原始型別)]"
+        if source_name in state.by_name:
+            return False
+        synthetic = etree.fromstring(etree.tostring(column))
+        for old in synthetic.findall("calculation"):
+            synthetic.remove(old)
+        calc = etree.SubElement(synthetic, "calculation")
+        calc.set("class", "tableau")
+        calc.set("formula", f"{convert}({source_name})")
+        created = add_calc_field(self.ctx, state, synthetic)
+        if created is None:
+            return False
+        created.source_ref = xpath(column)
+        role = "measure" if source_type in ("integer", "real") else "dimension"
+        state.add_field(
+            DataField(
+                id=self.ctx.ids.make("f", f"{caption} source", source_name),
+                name=source_name,
+                caption=f"{caption}（原始型別）",
+                role=role,  # type: ignore[arg-type]
+                datatype=source_type,  # type: ignore[arg-type]
+                default_agg="sum" if role == "measure" else None,
+                format=None,
+                hidden=True,
+                column=physical.get(name, strip_brackets(name)),
+                table=self._field_table(state, record),
+                calc=None,
+                source_ref=xpath(column),
+            )
+        )
+        self.original_names[source_name] = name
+        self.ctx.ignore(
+            column,
+            f"欄位「{caption}」變更了資料類型（{source_type} → {datatype}）：查詢時以 "
+            f"{convert}() 轉換，與 Tableau 相同",
+        )
+        return True
+
     # ------------------------------------------------------------ 篩選
 
     def _filters(self, state: DsState) -> None:
@@ -1081,6 +1166,144 @@ def _source_datatype(state: DsState, source: str) -> str | None:
         if column.get("name") == source:
             return column.get("datatype")
     return None
+
+
+CONVERSIONS = {
+    "date": "DATE",
+    "datetime": "DATETIME",
+    "integer": "INT",
+    "real": "FLOAT",
+    "string": "STR",
+}
+"""變更資料類型時 Tableau 的轉換（與型別轉換函式相同）。"""
+
+
+def raw_field(
+    ctx: ParseContext,
+    name: str,
+    datatype: str,
+    column: etree._Element | None,
+    aggregation: str,
+    physical: str,
+    table: str | None,
+    anchor: etree._Element,
+) -> DataField | None:
+    """資料表中的一欄（非計算欄位）；型別不支援時列為不支援並回傳 None。"""
+    caption = (column.get("caption") if column is not None else None) or strip_brackets(name)
+    if datatype not in DATATYPES:
+        ctx.flag(anchor, f"欄位「{caption}」的型別 {datatype} v0 不支援")
+        return None
+    aliases = member_aliases(ctx, column, datatype, f"欄位「{caption}」")
+    role = (column.get("role") if column is not None else None) or (
+        "measure" if datatype in ("integer", "real") else "dimension"
+    )
+    agg_text = (column.get("aggregation") if column is not None else None) or aggregation
+    default_agg = METADATA_AGG.get(agg_text) if role == "measure" else None
+    return DataField(
+        id=ctx.ids.make("f", caption, name),
+        name=name,
+        caption=caption,
+        role=role,  # type: ignore[arg-type]
+        datatype=datatype,  # type: ignore[arg-type]
+        default_agg=default_agg,
+        format=column.get("default-format") if column is not None else None,
+        hidden=column is not None and column.get("hidden") == "true",
+        column=physical,
+        table=table,
+        calc=None,
+        aliases=aliases,
+        source_ref=xpath(anchor),
+    )
+
+
+def single_live_table(state: DsState) -> str | None:
+    """Live 連線只有一張資料表（或一段自訂 SQL）時它的名稱；萃取、檔案、join 或 Relationship 模型為 None。"""
+    connection = state.connection
+    if not isinstance(connection, LiveConnection):
+        return None
+    relation = connection.relation
+    if not isinstance(relation, TableRelation | SqlRelation):
+        return None
+    return relation.name
+
+
+def add_uncached_column(ctx: ParseContext, state: DsState, column: etree._Element) -> bool:
+    """Live 連線的欄位清單（metadata-records）是存檔時的快取，Tableau 連線時重新讀取來源資料表的欄位：
+    不在快取中、宣告了型別的欄位（只有一張資料表時）以宣告的型別直接查詢；來源資料表沒有這一欄時與
+    Tableau 相同查詢失敗。"""
+    table = single_live_table(state)
+    name = column.get("name", "")
+    if table is None or not name or name in state.by_name:
+        return False
+    if column.get("datatype", "") not in DATATYPES or child(column, "calculation") is not None:
+        return False
+    found = raw_field(
+        ctx, name, column.get("datatype", ""), column, "", strip_brackets(name), table, column
+    )
+    if found is None:
+        return False
+    if found.role == "measure" and found.default_agg is None:
+        found.default_agg = "sum"
+    ctx.ignore(
+        column, f"欄位 {name} 不在存檔時快取的欄位清單中：以宣告的型別直接查詢來源資料表 {table}"
+    )
+    state.add_field(found)
+    return True
+
+
+def _synthetic_calc(
+    ctx: ParseContext,
+    state: DsState,
+    name: str,
+    caption: str,
+    datatype: str,
+    formula: str,
+    source: etree._Element,
+) -> DataField | None:
+    """查詢之後才填值的欄位（叢集、Forecast Indicator）：公式為常數的計算欄位，沿用來源元素的別名。"""
+    column = etree.Element("column")
+    for key, value in (
+        ("caption", caption),
+        ("datatype", datatype),
+        ("name", name),
+        ("role", "dimension"),
+        ("type", "ordinal" if datatype == "integer" else "nominal"),
+    ):
+        column.set(key, value)
+    aliases = child(source, "aliases")
+    if aliases is not None:
+        column.append(etree.fromstring(etree.tostring(aliases)))
+    calc = etree.SubElement(column, "calculation")
+    calc.set("class", "tableau")
+    calc.set("formula", formula)
+    created = add_calc_field(ctx, state, column)
+    if created is not None:
+        created.source_ref = xpath(source)
+    return created
+
+
+def add_cluster_field(
+    ctx: ParseContext, state: DsState, column: etree._Element
+) -> DataField | None:
+    """工作表上的叢集（is-adhoc-cluster）：整數的維度，查詢之後才填入叢集編號（ClusterSpec）。"""
+    name = column.get("name", "")
+    found = state.by_name.get(name)
+    if found is not None:
+        return found
+    return _synthetic_calc(
+        ctx, state, name, column.get("caption") or "Clusters", "integer", "0", column
+    )
+
+
+def add_forecast_indicator(
+    ctx: ParseContext, state: DsState, inst: etree._Element
+) -> DataField | None:
+    """預測的 Forecast Indicator：實際值為 Actual，查詢之後補上的估計值為 Estimate（Forecast）。"""
+    name = inst.get("column") or "[Forecast Indicator]"
+    found = state.by_name.get(name)
+    if found is not None:
+        return found
+    return _synthetic_calc(ctx, state, name, "Forecast Indicator", "string", '"Actual"', inst)
 
 
 def add_table_count(
@@ -1225,15 +1448,15 @@ def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
             node = analyzer.calc_ast(target)
         except FormulaSemanticError as exc:
             state.levels[data_field.id] = None
-            ctx.unsupported.append(
-                Unsupported(
-                    source_ref=data_field.source_ref,
-                    reason=f"計算欄位「{data_field.caption}」：{exc.message}"
-                    + ("（v0 尚不支援）" if exc.unsupported else ""),
-                    element="column",
-                    xml=data_field.calc.formula,
-                )
+            entry = Unsupported(
+                source_ref=data_field.source_ref,
+                reason=f"計算欄位「{data_field.caption}」：{exc.message}"
+                + ("（v0 尚不支援）" if exc.unsupported else ""),
+                element="column",
+                xml=data_field.calc.formula,
             )
+            ctx.unsupported.append(entry)
+            ctx.broken_calcs.append((data_field.id, entry))
             continue
 
         def resolve(ref: FieldRef) -> dict[str, str] | None:

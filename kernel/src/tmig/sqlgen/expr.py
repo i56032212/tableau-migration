@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from typing import Protocol
 
+from tmig.data import udf
 from tmig.formula.analyze import Analyzer, Target
 from tmig.formula.ast import (
     Binary,
@@ -37,6 +38,7 @@ from tmig.formula.ast import (
 )
 from tmig.formula.functions import (
     WEEK_STARTS,
+    icu_features,
     int_literal,
     lookup,
     parameter_ref,
@@ -439,18 +441,33 @@ class ExprCompiler:
         if name == "SPACE":
             # DuckDB 的 greatest 略過 Null；SPACE(Null) 應為 Null
             return f"(CASE WHEN {a[0]} IS NULL THEN NULL ELSE repeat(' ', CAST(greatest({a[0]}, 0) AS BIGINT)) END)"
+        icu = False
+        if name.startswith("REGEXP_"):
+            # RE2 不支援、ICU 支援的語法（前後查看等）：以 ICU 相容的函式計算（tmig.data.udf）
+            pattern = node.args[1]
+            icu = (
+                isinstance(pattern, LiteralNode)
+                and pattern.kind == "string"
+                and bool(icu_features(str(pattern.value)))
+            )
         if name == "REGEXP_MATCH":
+            if icu:
+                return f"{udf.MATCH}({a[0]}, {a[1]})"
             return f"regexp_matches({a[0]}, {a[1]})"
         if name in ("REGEXP_EXTRACT", "REGEXP_EXTRACT_NTH"):
             if name == "REGEXP_EXTRACT_NTH":
                 group = int_literal(node.args[2], name, node.pos)
             else:
                 group = 1 if _capture_groups(node.args[1]) else 0
+            if icu:
+                return f"{udf.EXTRACT}({a[0]}, {a[1]}, {group})"
             # 沒有符合時為 Null（DuckDB 回傳空字串）
             extracted = f"regexp_extract({a[0]}, {a[1]}, {group})"
             return f"(CASE WHEN regexp_matches({a[0]}, {a[1]}) THEN {extracted} END)"
         if name == "REGEXP_REPLACE":
             replacement = node.args[2]
+            if icu:
+                return f"{udf.REPLACE}({a[0]}, {a[1]}, {a[2]})"
             if isinstance(replacement, LiteralNode) and replacement.kind == "string":
                 repl = literal(icu_replacement(str(replacement.value)), "string")
             else:
@@ -458,6 +475,8 @@ class ExprCompiler:
             return f"regexp_replace({a[0]}, {a[1]}, {repl}, 'g')"
         if name == "PI":
             return "pi()"
+        if name == "RANDOM":
+            return "random()"
         if name in ("DEGREES", "RADIANS", "SIN", "COS", "TAN", "ATAN"):
             return f"{name.lower()}({a[0]})"
         if name in ("ASIN", "ACOS"):

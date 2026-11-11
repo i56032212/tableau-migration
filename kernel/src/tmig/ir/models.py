@@ -266,18 +266,23 @@ class SqlRelation(IRModel):
 
 
 class JoinTerm(IRModel):
-    """join 條件的一邊：資料表的實體欄位，或常值（例如 1 = [T].[dummy] 這種全部配對的寫法）。"""
+    """join 條件的一邊：資料表的實體欄位、常值（例如 1 = [T].[dummy] 這種全部配對的寫法），或 join 計算
+    （Tableau 的公式，以 [資料表].[欄位] 參照實體欄位）。"""
 
     table: str | None = Field(default=None, description="資料表名稱；常值時為 None")
     column: str | None = None
     literal: Scalar = None
+    formula: str | None = Field(
+        default=None, description='join 計算的公式，例如 IF [Begin].[Type] = "begin" THEN 1 END'
+    )
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         if (self.table is None) != (self.column is None):
             raise ValueError("欄位必須同時有 table 與 column")
-        if self.table is not None and self.literal is not None:
-            raise ValueError("欄位與常值只能擇一")
+        given = [self.table is not None, self.literal is not None, self.formula is not None]
+        if sum(given) > 1:
+            raise ValueError("欄位、常值與 join 計算只能擇一")
         return self
 
 
@@ -418,12 +423,16 @@ class FileColumn(IRModel):
 
 
 class FileTable(IRModel):
-    """檔案型資料源中的一張資料表：Excel 的工作表，或文字檔（CSV 等）。"""
+    """檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等），或 .hyper 檔中的資料表
+    （直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；只有一張資料表時與萃取相同）。"""
 
     name: str = Field(min_length=1, description="關聯樹中的資料表名稱（relation 的 name）")
-    format: Literal["excel", "text"]
+    format: Literal["excel", "text", "hyper"]
     path: str = Field(min_length=1, description=".twbx 內的路徑，一律用 /")
     sheet: str | None = Field(default=None, description="Excel 的工作表（或具名範圍）")
+    table: list[str] | None = Field(
+        default=None, description=".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]"
+    )
     cells: str | None = Field(
         default=None, description="Excel 的資料範圍，例如 A1:U10195；None 表示整張工作表"
     )
@@ -435,9 +444,9 @@ class FileTable(IRModel):
 
 
 class FileConnection(IRModel):
-    """資料在 .twbx 內的檔案（Excel、文字檔）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進
-    DuckDB（每張資料表一張 Files.<name>），之後與萃取相同在本機查詢。檔案的內容是報表封裝時的快照
-    （與 Tableau Server 上的 .twbx 相同）。"""
+    """資料在 .twbx 內的檔案（Excel、文字檔、.hyper）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進
+    DuckDB（每張資料表一張 Files.<name>；.hyper 依它本身的型別），之後與萃取相同在本機查詢。檔案的
+    內容是報表封裝時的快照（與 Tableau Server 上的 .twbx 相同）。"""
 
     kind: Literal["file"]
     tables: list[FileTable] = Field(min_length=1)
@@ -486,6 +495,11 @@ class CategoricalFilter(IRModel):
     group: str | None = Field(
         default=None,
         description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
+    )
+    latest: bool = Field(
+        default=False,
+        description="開啟報表時篩選到最新的值（<preset type='last-values'>）：開啟時以欄位目前的最大值"
+        "取代存檔時的選取（tmig.planner.dynamic）",
     )
     source_ref: SourceRef
 
@@ -1049,6 +1063,39 @@ class Annotation(IRModel):
     offset: tuple[int, int] = Field(default=(0, 0), description="文字相對於位置的像素（x、y）")
 
 
+class ClusterSpec(IRModel):
+    """叢集（分析 → 叢集）：依檢視中各標記的量值以 k-means 分組（tmig.planner.cluster）。叢集欄位是資料源中
+    公式為 0 的整數欄位，查詢之後才填入叢集編號（1 起算；量值是 Null 的標記為 0「不分叢集」）。"""
+
+    field: Id = Field(description="叢集欄位")
+    measures: list[FieldUse] = Field(min_length=1, description="分析的量值（都在檢視中）")
+    count: int | None = Field(default=None, ge=1, description="叢集數；None 為自動")
+
+
+ForecastComponent = Literal["none", "additive", "multiplicative"]
+
+
+class Forecast(IRModel):
+    """預測（分析 → 預測）：時間軸上的量值以指數平滑估計之後幾期（tmig.planner.forecast）。估計的列
+    Forecast Indicator 為 Estimate；預測區間另外輸出。Tableau 的初始值與最佳化細節沒有公開，估計值可能
+    與 Tableau 有些微差異。"""
+
+    measures: list[FieldUse] = Field(default_factory=list, description="預測的量值")
+    indicator: Id | None = Field(
+        default=None, description='Forecast Indicator 欄位（公式為 "Actual" 的字串欄位）'
+    )
+    model: Literal["auto", "auto_no_season", "custom"] = "auto"
+    trend: ForecastComponent | None = None
+    season: ForecastComponent | None = None
+    length: Literal["auto", "next", "until"] = "auto"
+    size: int | None = Field(default=None, ge=0, description="next、until 的期數")
+    unit: DatePart | None = Field(default=None, description="next、until 的期間單位")
+    ignore_last: int = Field(default=1, ge=0, description="忽略最後幾期（改以估計值呈現）")
+    fill_zeros: bool = Field(default=False, description="缺少的期以 0 填補")
+    confidence: float = Field(default=0.95, gt=0, lt=1, description="預測區間的信賴水準")
+    bands: bool = Field(default=True, description="畫出預測區間")
+
+
 class Pane(IRModel):
     """個別量值的標記卡：同一架上有多個量值（各自一個軸）或雙軸時，每個量值可以有自己的標記設定。"""
 
@@ -1344,6 +1391,8 @@ class Worksheet(IRModel):
     annotations: list[Annotation] = Field(
         default_factory=list, description="註解（標記、點、區域）：只影響圖表"
     )
+    cluster: ClusterSpec | None = Field(default=None, description="叢集（分析 → 叢集）")
+    forecast: Forecast | None = Field(default=None, description="預測（分析 → 預測）")
     reference_lines: list[ReferenceLine] = Field(default_factory=list)
     formats: dict[str, str] = Field(
         default_factory=dict,

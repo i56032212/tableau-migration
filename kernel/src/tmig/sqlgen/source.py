@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tmig.formula.analyze import Target
 from tmig.ir.models import (
     DataField,
     Datasource,
@@ -69,7 +70,12 @@ def datasource_source(ds: Datasource) -> Source:
     if isinstance(connection, FileConnection) and isinstance(relation, SqlRelation):
         raise SourceError(f"資料源「{ds.caption}」的檔案中有自訂 SQL")
     custom: list[str] = []
-    from_sql = _relation_sql(relation, custom)
+    columns = {
+        (f.table, f.column): f.datatype
+        for f in ds.fields
+        if f.table is not None and f.column is not None and f.calc is None
+    }
+    from_sql = _relation_sql(relation, custom, columns)
     names = _relation_names(relation)
     default = names[0] if len(names) == 1 else None
     projections: list[str] = []
@@ -94,6 +100,58 @@ def datasource_source(ds: Datasource) -> Source:
     )
 
 
+class _JoinScope:
+    """join 計算中的欄位參照：[資料表].[欄位] 是實體欄位（型別依資料源的欄位）。"""
+
+    def __init__(self, columns: dict[tuple[str, str], str]) -> None:
+        self.columns = columns
+
+    def lookup(self, parts: tuple[str, ...]) -> Target | None:
+        if len(parts) != 2 or tuple(parts) not in self.columns:
+            return None
+        table, column = parts
+        datatype = self.columns[(table, column)]
+        return Target("field", f"{table}\x1f{column}", datatype, "dimension")  # type: ignore[arg-type]
+
+
+class _JoinEnv:
+    week_start = "sunday"
+
+    def column(self, target: Target) -> str:
+        table, column = target.id.split("\x1f", 1)
+        return f"{ident(table)}.{ident(column)}"
+
+    def param(self, target: Target) -> str:
+        raise SourceError("join 計算不能用到參數")
+
+    def param_value(self, target: Target) -> object:
+        raise SourceError("join 計算不能用到參數")
+
+    def lod(self, node: object) -> str:
+        raise SourceError("join 計算不能用到 LOD")
+
+    def aggregate(self, node: object) -> str:
+        raise SourceError("join 計算不能彙總")
+
+    def table_calc(self, node: object) -> str:
+        raise SourceError("join 計算不能用到 Table Calculation")
+
+
+def join_formula(text: str, columns: dict[tuple[str, str], str]) -> str:
+    """join 計算（Tableau 的公式，以 [資料表].[欄位] 參照實體欄位）→ DuckDB 的 SQL。"""
+    from tmig.formula.analyze import Analyzer
+    from tmig.formula.lexer import FormulaSyntaxError
+    from tmig.formula.parser import parse_formula
+    from tmig.formula.types import FormulaSemanticError
+    from tmig.sqlgen.expr import ExprCompiler
+
+    try:
+        node = parse_formula(text)
+        return ExprCompiler(Analyzer(_JoinScope(columns)), _JoinEnv()).row(node)  # type: ignore[arg-type]
+    except (FormulaSyntaxError, FormulaSemanticError) as exc:
+        raise SourceError(f"join 計算「{text}」：{exc}") from exc
+
+
 def datetime_columns_vary(connection: object) -> bool:
     """BigQuery 的日期時間欄位可能是 DATETIME（沒有時區）或 TIMESTAMP（UTC 的時間點），兩者不能直接比較、
     加減的函式也不同：base 一律轉成沒有時區的時間（DuckDB 的 TIMESTAMP 即 BigQuery 的 DATETIME，
@@ -106,7 +164,10 @@ def model_custom_sql(model: ModelRelation) -> list[str]:
     return [t.relation.sql for t in model.tables if isinstance(t.relation, SqlRelation)]
 
 
-def _relation_sql(relation: Relation, custom: list[str]) -> str:
+def _relation_sql(
+    relation: Relation, custom: list[str], columns: dict[tuple[str, str], str] | None = None
+) -> str:
+    """關聯樹 → FROM 子句。columns：各資料表的實體欄位的型別（join 計算的欄位參照用）。"""
     if isinstance(relation, TableRelation):
         table = ".".join(ident(p) for p in relation.table)
         return f"{table} AS {ident(relation.name)}"
@@ -115,17 +176,21 @@ def _relation_sql(relation: Relation, custom: list[str]) -> str:
         return f"{ident(CUSTOM_SQL_PREFIX + str(len(custom) - 1))} AS {ident(relation.name)}"
     assert isinstance(relation, JoinRelation)
     keyword = {"inner": "INNER", "left": "LEFT", "right": "RIGHT", "full": "FULL"}[relation.join]
-    left = _relation_sql(relation.left, custom)
-    right = _relation_sql(relation.right, custom)
+    left = _relation_sql(relation.left, custom, columns)
+    right = _relation_sql(relation.right, custom, columns)
     if isinstance(relation.right, JoinRelation):
         right = f"({right})"
-    conditions = " AND ".join(f"{_term(c.left)} {c.op} {_term(c.right)}" for c in relation.on)
+    conditions = " AND ".join(
+        f"{_term(c.left, columns)} {c.op} {_term(c.right, columns)}" for c in relation.on
+    )
     return f"{left} {keyword} JOIN {right} ON {conditions}"
 
 
-def _term(term: JoinTerm) -> str:
+def _term(term: JoinTerm, columns: dict[tuple[str, str], str] | None = None) -> str:
     if term.table is not None and term.column is not None:
         return f"{ident(term.table)}.{ident(term.column)}"
+    if term.formula is not None:
+        return f"({join_formula(term.formula, columns or {})})"
     value = term.literal
     kind = "string" if isinstance(value, str) else "real" if isinstance(value, float) else "integer"
     return literal(value, kind)

@@ -398,7 +398,8 @@ def test_every_row_and_aggregate_function_is_tested() -> None:
     }
     # Table Calculation 在 test_query 以整張工作表實跑；使用者函式在 test_rls 以不同的登入者實跑
     table_calcs = {name for name in implemented_names() if is_table_calc_function(name)}
-    missing = implemented_names() - tested - table_calcs - USER_FUNCTIONS - {"TODAY", "NOW"}
+    nondeterministic = {"TODAY", "NOW", "RANDOM"}
+    missing = implemented_names() - tested - table_calcs - USER_FUNCTIONS - nondeterministic
     assert missing == set()
 
 
@@ -426,3 +427,13 @@ def test_mode_errors(formula: str, mode: str, message: str) -> None:
 def test_today_and_now_run(con: duckdb.DuckDBPyConnection) -> None:
     assert isinstance(row_value(con, "TODAY()", "A1"), dt.date)
     assert isinstance(row_value(con, "NOW()", "A1"), dt.datetime)
+
+
+def test_random_runs(con: duckdb.DuckDBPyConnection) -> None:
+    """RANDOM()：每一列各自的 [0, 1) 隨機數（型別是實數）。"""
+    analyzed = analyzer().analyze(parse_formula("RANDOM()"))
+    assert analyzed.datatype == "real"
+    sql = ExprCompiler(analyzer(), Env()).row(parse_formula("RANDOM() * 10"))
+    values = [row[0] for row in con.execute(f"SELECT {sql} FROM t").fetchall()]
+    assert all(0 <= v < 10 for v in values)
+    assert len(set(values)) > 1

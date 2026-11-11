@@ -1276,6 +1276,7 @@
           ],
           "ranges": [],
           "group": null,
+          "latest": false,
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
@@ -1415,6 +1416,7 @@
           ],
           "ranges": [],
           "group": "group:5",
+          "latest": false,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/filter"
         },
         {
@@ -1434,6 +1436,7 @@
           ],
           "ranges": [],
           "group": "shared:ds_orders:f_region",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
         {
@@ -1451,12 +1454,15 @@
           "values": [],
           "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1592,6 +1598,7 @@
           ],
           "ranges": [],
           "group": "group:5",
+          "latest": false,
           "source_ref": "/workbook/worksheets/worksheet[2]/table/view/filter"
         },
         {
@@ -1611,6 +1618,7 @@
           ],
           "ranges": [],
           "group": "shared:ds_orders:f_region",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
         {
@@ -1628,12 +1636,15 @@
           "values": [],
           "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1768,6 +1779,7 @@
           ],
           "ranges": [],
           "group": "shared:ds_orders:f_region",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
         {
@@ -1785,12 +1797,15 @@
           "values": [],
           "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1959,6 +1974,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2121,6 +2138,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2328,6 +2347,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2497,6 +2518,8 @@
         }
       ],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2664,6 +2687,8 @@
           ]
         }
       ],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2814,6 +2839,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2964,6 +2991,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3130,6 +3159,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3258,6 +3289,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3386,6 +3419,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3506,6 +3541,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3655,6 +3692,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3801,6 +3840,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3947,6 +3988,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4097,6 +4140,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4271,6 +4316,8 @@
         }
       ],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4399,6 +4446,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4526,6 +4575,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [
         {
           "id": "refline0",
@@ -4727,6 +4778,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [
         {
           "id": "refline0",
@@ -4996,6 +5049,8 @@
         }
       ],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5212,6 +5267,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5422,6 +5479,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5564,6 +5623,7 @@
           ],
           "ranges": [],
           "group": "shared:ds_orders:f_region",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
         {
@@ -5581,12 +5641,15 @@
           "values": [],
           "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5713,6 +5776,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5855,12 +5920,15 @@
           ],
           "ranges": [],
           "group": null,
+          "latest": false,
           "source_ref": "/workbook/worksheets/worksheet[28]/table/view/filter"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5989,6 +6057,8 @@
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -6131,6 +6201,7 @@
           ],
           "ranges": [],
           "group": "shared:ds_orders:f_region",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
         {
@@ -6148,12 +6219,15 @@
           "values": [],
           "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -6295,6 +6369,7 @@
           ],
           "ranges": [],
           "group": "shared:ds_orders:f_region",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[1]"
         },
         {
@@ -6312,12 +6387,15 @@
           "values": [],
           "ranges": [],
           "group": "shared:ds_orders:f_ship_mode",
+          "latest": false,
           "source_ref": "/workbook/shared-views/shared-view/filter[2]"
         }
       ],
       "sorts": [],
       "table_calcs": [],
       "annotations": [],
+      "cluster": null,
+      "forecast": null,
       "reference_lines": [],
       "formats": {},
       "title": [],

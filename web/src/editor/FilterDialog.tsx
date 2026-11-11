@@ -82,6 +82,8 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
   const [domain, setDomain] = useState<Scalar[] | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [exclude, setExclude] = useState(existing?.kind === "categorical" && existing.mode === "exclude");
+  // 開啟報表時篩選到最新的值（日期的類別篩選）
+  const [latest, setLatest] = useState(existing?.kind === "categorical" && existing.latest === true);
   const [search, setSearch] = useState("");
   // 範圍
   const [low, setLow] = useState<string>(existing?.kind === "range" && existing.min !== null && existing.min !== undefined ? String(existing.min) : "");
@@ -249,6 +251,7 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
           values: everything ? [] : values,
           ranges: [],
           group: null,
+          ...(latest && isDate(field) && !measure ? { latest: true } : {}),
           source_ref: EDITOR_REF,
         };
       }
@@ -351,6 +354,11 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
                   <p className="hint">
                     已選取 {checked.size} / {domain.length} 個值
                   </p>
+                )}
+                {isDate(field) && !measure && (
+                  <label>
+                    <input type="checkbox" checked={latest} onChange={(e) => setLatest(e.target.checked)} /> 開啟報表時篩選到最新的值
+                  </label>
                 )}
               </div>
             )}

@@ -18,6 +18,9 @@ import re
 
 from lxml import etree
 
+from tmig.formula.ast import FieldRef, walk
+from tmig.formula.lexer import FormulaSyntaxError
+from tmig.formula.parser import parse_formula
 from tmig.ir.models import (
     Dialect,
     JoinCondition,
@@ -273,24 +276,35 @@ def _conditions(expression: etree._Element) -> list[JoinCondition] | None:
     if op not in COMPARISONS or len(operands) != 2:
         return None
     left, right = _term(operands[0]), _term(operands[1])
-    if left is None or right is None or (left.table is None and right.table is None):
+    if left is None or right is None or (_constant(left) and _constant(right)):
         return None
     return [JoinCondition(left=left, op=op, right=right)]  # type: ignore[arg-type]
 
 
+def _constant(term: JoinTerm) -> bool:
+    return term.table is None and term.formula is None
+
+
 def _term(expression: etree._Element) -> JoinTerm | None:
-    """[T].[欄位]、數字或字串常值；含函式的運算式（join 計算）回傳 None。"""
+    """[T].[欄位]、數字或字串常值，或 join 計算（公式寫在 op 中，以 [T].[欄位] 參照實體欄位）。"""
     if children(expression):
         return None
     text = expression.get("op", "")
     parts = qualified_parts(text)
-    if len(parts) == 2 and text.startswith("["):
+    if len(parts) == 2 and text.startswith("[") and text.endswith("]"):
         return JoinTerm(table=parts[0], column=parts[1])
     if NUMBER.fullmatch(text):
         return JoinTerm(literal=float(text) if "." in text else int(text))
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" and text.count(text[0]) == 2:
         return JoinTerm(literal=text[1:-1])
-    return None
+    try:
+        node = parse_formula(text)
+    except FormulaSyntaxError:
+        return None
+    refs = [n for n in walk(node) if isinstance(n, FieldRef)]
+    if not refs or any(len(r.parts) != 2 for r in refs):
+        return None  # join 計算只能參照 [資料表].[欄位]
+    return JoinTerm(formula=text.replace("\r\n", "\n"))
 
 
 def relation_tables(relation: Relation | None) -> list[str]:

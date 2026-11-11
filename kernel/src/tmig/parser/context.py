@@ -66,6 +66,8 @@ class DsState:
     identity_sets: set[str] = field(default_factory=set)
     """Tableau 的使用者篩選轉成的布林計算欄位 id；工作表以「在集合中」篩選（P1）。"""
     set_fields: set[str] = field(default_factory=set)
+    analytic_models: dict[str, etree._Element] = field(default_factory=dict)
+    """分析模型（叢集）：名稱（例如 [AnalyticModel:{…}]）→ <analytic-model>。"""
     """集合（含使用者篩選）的欄位 id：篩選架上沒有條件的篩選表示「在集合中」。"""
     hierarchies: list[Hierarchy] = field(default_factory=list)
     """階層（<drill-paths>）。"""
@@ -180,6 +182,8 @@ class ParseContext:
     """動態參數（<column default-value-field=… source-field=…>）：資料源解析完後才對應到欄位。"""
     tooltip_refs: list[TooltipRef] = field(default_factory=list)
     """工具提示中的工作表（Viz in Tooltip），依工作表解析的順序。"""
+    broken_calcs: list[tuple[str, Unsupported]] = field(default_factory=list)
+    """公式有錯誤的計算欄位（欄位 id、不支援的紀錄）：沒有用到的最後改列為略過。"""
     story_names: set[str] = field(default_factory=set)
     """workbook 中 Story 的名稱（導覽按鈕與切換動作的目標可能是 Story）。"""
     """導覽到 dashboard 的按鈕：所有 dashboard 解析完後確認目標存在。"""

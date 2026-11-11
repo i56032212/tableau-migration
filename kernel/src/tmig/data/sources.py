@@ -58,9 +58,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 
-import duckdb
 import pyarrow as pa
 
+from tmig.data import udf
 from tmig.ir.models import LiveConnection
 
 CONFIG_ENV = "TMIG_CONNECTIONS"
@@ -265,7 +265,8 @@ class DuckDBExecutor:
     def __init__(self, path: Path) -> None:
         if not path.is_file():
             raise SourceConnectionError(f"找不到 DuckDB 檔 {path}")
-        self.con = duckdb.connect(str(path), read_only=True)
+        # 自己的記憶體資料庫附加資料檔：ICU 的正規表示式函式（見 tmig.data.udf）
+        self.con = udf.attached(path)
 
     def fetch(self, sql: str) -> pa.Table:
         relation = self.con.sql(sql)

@@ -112,8 +112,8 @@ def test_lod_is_row_level() -> None:
         ("{FIXED [Region] : {FIXED [Category] : SUM([Sales])}}", "LOD 運算式內部必須是彙總"),
         ("[Region] - [Order Date]", "無法相減"),
         ("[Order Date] - [Region]", "無法相減"),
-        ("REGEXP_MATCH([Region], '(?=a)')", "前向查看"),
-        ("REGEXP_MATCH([Region], '(a)\\1')", "反向參照"),
+        # 前後查看等 RE2 不支援的語法以 ICU 相容的函式計算（tmig.data.udf）；樣式本身的錯誤仍是公式錯誤
+        ("REGEXP_MATCH([Region], '(?=a')", "樣式無法解析"),
         ("REGEXP_EXTRACT_NTH([Region], '(a)', [Quantity])", "整數常值"),
         ("REGEXP_REPLACE([Region], 'a', 1)", "必須是字串"),
         ("DATEPARSE('yyyy-ww', [Region])", "「ww」尚不支援"),

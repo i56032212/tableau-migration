@@ -45,6 +45,17 @@ Data Blending 支援主要與次要資料源都是嵌入式萃取、次要資料
 轉為符合起步條件；28 份要求檢視者輸入自己的資料庫帳號（Tableau Server Insights、TabMon 等連到 Tableau 資料庫的範例）
 改列為不符合，3 份以 Windows 整合驗證連線列為需注意。
 
+另以 GitHub 上 113 份公開的 .twb／.twbx（Logshark、TabMon、twbparser 的範例與個人作品集）逐份檢查：地圖以外的
+95 份中 90 份解析後沒有不支援的元素，這 90 份共 814 張工作表都能查詢、畫出合法的 Vega-Lite 規格（其中 252 張
+沒有資料，逐張核對過都是資料本身如此：Logshark 範例的萃取是空的或只有少量測試記錄、篩選的值不在資料中、動作篩選
+在選取之前不顯示資料、相對於今天的日期篩選，以及 Top N 先於維度篩選的順序）。
+這一輪補上的功能：變更資料類型、正規表示式的前後查看、RANDOM()、直接以 .hyper 為來源的 join 與 join 計算、
+多個 .hyper 檔、萃取中排除的隱藏欄位、Live 連線快取以外的欄位、沒有用到的錯誤計算欄位、Measure Names 篩選的
+「全部」與「排除」、Measure Values 的軸有自己的標記卡（KPI 的折線疊上圓點）、依欄位排序與 Top N、條件篩選中的
+INCLUDE／EXCLUDE LOD（相對於排序或篩選的維度）、開啟報表時篩選到最新的值、叢集與預測。其餘 5 份：4 份 TabMon
+要求檢視者輸入自己的資料庫帳號（依設計列為不支援，見「依檢視者的身分連線」），1 份是 twbparser 手寫的測試檔
+（不是 Tableau 存出的檔案）。
+
 以 5 份附有作者 Tableau 截圖的公開報表（汽車銷售、HR 分析、股市分析、Superstore 銷售績效、HR 人資儀表板）實測：
 萃取匯入自檢全部一致，截圖上看得到的數字（KPI、圖上標籤、明細表）都與 Tableau 相同；股市報表的截圖是把參數拖到
 另一個日期後截的，代入同樣的參數後也相同。實測補上的顯示：「K／M」單位換算與正負數分段的數字格式、工作表上設定的
@@ -798,8 +809,18 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   Top N 篩選的篩選控制項與 Tableau 相同，選取的成員是排名前的選取（篩選對話框的「一般」頁），再取前 N 名
 - **色彩上有多個欄位**：Tableau 以欄位值的組合著色；新平台以第一個欄位著色，其他的維度當作詳細資料（詳細程度與
   數字相同），Measure Names 略過（記在略過的元素）
-- **篩選到最新的值**（日期篩選的「開啟活頁簿時篩選到最新的日期值」，`<preset type='last-values'>`）：尚不支援，列為
-  不支援（不能默默以存檔時的選取計算）
+- **篩選到最新的值**（日期篩選的「開啟活頁簿時篩選到最新的日期值」，`<preset type='last-values'>`）：開啟報表時
+  以欄位目前的最大值取代存檔時的選取（與動態參數相同，以資料源篩選與列層級權限後的資料計算，一分鐘內快取）
+- **變更資料類型**（`datatype-customized`）：萃取與來源資料表中仍是原本的型別，查詢時以 Tableau 的型別轉換函式
+  轉換（數字轉日期為 1899-12-30 起算的天數、字串轉數字無法轉換時為 Null）；以隱藏的原始欄位加上轉換的計算欄位表示
+- **正規表示式的前後查看等**（RE2 不支援、ICU 支援的語法）：DuckDB 以 Python 的 re 計算（寫法與 ICU 相同）；
+  Live 連線轉成 PostgreSQL、MySQL 8、Spark／Databricks、Trino／Athena、Hive、Redshift 的正規表示式，其他資料庫不支援
+- **直接以 .hyper 為來源**、有 join、多個 .hyper 檔或 Relationship 模型的資料源（Logshark 的報表）：與 Excel、
+  文字檔相同匯入成 Files.<資料表>，join 在本機執行；join 條件可以是計算（join 計算）
+- **叢集**：k-means（最小–最大正規化、分割法的初始中心、Lloyd 演算法、自動時以 Calinski-Harabasz 指標的第一個
+  局部最大值決定叢集數），依 Tableau 文件實作；Tableau 的編號規則與細節沒有公開，分群的結果可能不同
+- **預測**：指數平滑（趨勢、季節各為無、加法或乘法，以 AIC 選模型；季節長度依月 12、季 4、週 13、日 7、時 24），
+  忽略最後幾期、預測長度、信賴水準與預測區間依設定；Tableau 的初始值與最佳化細節沒有公開，估計值可能有些微差異
 - **TOTAL()**：以量值篩選後仍在檢視中的標記所對應的底層資料重新彙總
 - **週起始日**：.twb 沒寫時視為星期日
 - **預期 CSV 的格式**：Tableau 匯出的欄名與數值格式依版本與語系而異；欄名用 mapping.yaml 對照，
@@ -989,15 +1010,14 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
-合併集合（XML 的寫法尚未在公開報表中看到）、地圖、預測（Forecast）、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
+合併集合（XML 的寫法尚未在公開報表中看到）、地圖、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_* 與空間函式、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
 Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、
 標題中的 Table Calculation 值、
 故事點記下的其他狀態（範圍篩選、排序、欄列架的變更、註解等）、
-工作表上的註解（Annotation）、叢集（Cluster）、正規表示式的前向與後向查看（DuckDB 的 RE2 不支援）、
-多表萃取與跨資料庫的關聯（多個具名連線）、檔案的聯集與資料解譯器、舊版的 .tde 萃取、
-色彩上同時放維度與 Measure Names、Top N 篩選的控制項。
+取消彙總的叢集與以維度分群、Teradata 的彙總中的 RANDOM()、
+Live 連線的跨資料庫關聯（多個具名連線）、檔案的聯集與資料解譯器、舊版的 .tde 萃取。
 
 ## 開發規則
 

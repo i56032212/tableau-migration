@@ -426,6 +426,40 @@ def test_snowflake_semantics() -> None:
 
 
 @pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("postgres", "RANDOM()"),
+        ("redshift", "RANDOM()"),
+        ("databricks", "RAND()"),
+        ("spark", "RAND()"),
+        ("oracle", "DBMS_RANDOM.VALUE()"),
+        ("mysql", "RAND()"),
+        # SQL Server 的 RAND() 整個查詢只算一次
+        ("tsql", "RAND(CHECKSUM(NEWID()))"),
+        # Snowflake 的 RANDOM() 是 64 位元整數
+        ("snowflake", "UNIFORM(CAST(0 AS DOUBLE), CAST(1 AS DOUBLE), RANDOM())"),
+        ("trino", "RAND()"),
+        ("athena", "RAND()"),
+        ("bigquery", "RAND()"),
+        ("teradata", "(CAST(RANDOM(0, 2147483646) AS DOUBLE PRECISION) / 2147483647)"),
+        ("hive", "RAND()"),
+        ("impala", "RAND()"),
+        ("db2", "RAND()"),
+        ("hana", "RAND()"),
+    ],
+)
+def test_random(dialect: str, expected: str) -> None:
+    """RANDOM()：每一列各自的 [0, 1) 隨機數。"""
+    assert f"SELECT {expected} AS " in to_dialect("SELECT random() AS r FROM t", dialect)
+
+
+def test_teradata_random_in_aggregate() -> None:
+    # Teradata 的 RANDOM 不能放在彙總函式中
+    with pytest.raises(DialectError, match="RANDOM"):
+        to_dialect("SELECT SUM(random()) FROM t", "teradata")
+
+
+@pytest.mark.parametrize(
     ("dialect", "sql"),
     [
         ("mysql", "SELECT median(x) FROM t"),

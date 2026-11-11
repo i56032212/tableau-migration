@@ -1806,6 +1806,7 @@ source = { editable = "kernel" }
 dependencies = [
     { name = "duckdb" },
     { name = "lxml" },
+    { name = "numpy" },
     { name = "openpyxl" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -1872,6 +1873,7 @@ requires-dist = [
     { name = "ibm-db", marker = "extra == 'db2'", specifier = ">=3.2" },
     { name = "impyla", marker = "extra == 'hive'", specifier = ">=0.19" },
     { name = "lxml", specifier = ">=5.2" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "oracledb", marker = "extra == 'oracle'", specifier = ">=2.0" },
     { name = "presto-python-client", marker = "extra == 'presto'", specifier = ">=0.8" },

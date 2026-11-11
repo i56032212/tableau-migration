@@ -38,6 +38,8 @@ from sqlglot.dialects.oracle import Oracle
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.errors import ParseError
 
+from tmig.data import udf
+from tmig.formula.functions import icu_features
 from tmig.ir.models import Scalar
 from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
@@ -578,6 +580,8 @@ class Rewriter:
     name = ""
     dialect = ""
     allowed: frozenset[type[exp.Expr]] = frozenset()
+    icu_regex: frozenset[str] = frozenset()
+    """來源資料庫的正規表示式支援的 ICU 語法（RE2 不支援的，見 tmig.formula.functions.icu_features）。"""
 
     def rewrite(self, tree: exp.Expr) -> exp.Expr:
         return self._visit(tree)
@@ -604,12 +608,46 @@ class Rewriter:
         if handler is not None:
             return handler(node)
         name = _anon_name(node)
+        if name in udf.FUNCTIONS:
+            assert isinstance(node, exp.Anonymous)
+            return self._icu_regex(name, list(node.expressions))
         if name is not None:
             assert isinstance(node, exp.Anonymous)
             fn = self.functions().get(name)
             if fn is not None:
                 return fn(list(node.expressions))
         return node
+
+    def _icu_regex(self, name: str, args: list[exp.Expr]) -> exp.Expr:
+        """用到 RE2 不支援的語法（前後查看等）的正規表示式：來源資料庫支援時轉成它的正規表示式函式
+        （與一般的寫法相同的改寫），否則不能轉譯。"""
+        pattern = args[1]
+        features = (
+            icu_features(pattern.name)
+            if isinstance(pattern, exp.Literal) and pattern.is_string
+            else ["不是常值的樣式"]
+        )
+        missing = [f for f in dict.fromkeys(features) if f not in self.icu_regex]
+        if missing:
+            raise DialectError(f"正規表示式用到{'、'.join(missing)}，{self.name} 不支援")
+        if name == udf.MATCH:
+            return self.node(exp.RegexpLike(this=args[0], expression=args[1]))
+        if name == udf.EXTRACT:
+            # 沒有符合時為 Null（與一般的寫法相同）
+            matched = self.node(exp.RegexpLike(this=args[0].copy(), expression=args[1].copy()))
+            extracted = self.node(
+                exp.RegexpExtract(this=args[0], expression=args[1], group=args[2])
+            )
+            return exp.Case(ifs=[exp.If(this=matched, true=extracted)])
+        replacement = args[2]
+        if isinstance(replacement, exp.Literal) and replacement.is_string:
+            replacement = exp.Literal.string(_icu_to_re2(replacement.name))
+        # 與一般的寫法（regexp_replace(…, 'g')）相同的語法節點
+        replaced = sqlglot.parse_one("regexp_replace(a, b, c, 'g')", read="duckdb")
+        replaced.set("this", args[0])
+        replaced.set("expression", args[1])
+        replaced.set("replacement", replacement)
+        return self.node(replaced)
 
     def finish(self, tree: exp.Expr) -> None:
         """整棵樹改寫完成後的調整。"""
@@ -680,6 +718,18 @@ class Rewriter:
         return result
 
 
+ICU_ALL = frozenset(
+    {"前向查看", "否定前向查看", "後向查看", "否定後向查看", "原子群組", "佔有量詞", "反向參照"}
+)
+"""ICU、Java、PCRE、Oniguruma 的正規表示式都支援的語法（RE2 都不支援）。"""
+
+
+def _icu_to_re2(text: str) -> str:
+    from tmig.sqlgen.expr import icu_replacement
+
+    return icu_replacement(text)
+
+
 def _describe(node: exp.Expr) -> str:
     if isinstance(node, exp.Anonymous):
         return f"函式 {node.name}"
@@ -696,11 +746,14 @@ class PostgresRewriter(Rewriter):
 
     name = "PostgreSQL"
     dialect = "postgres"
+    # PostgreSQL 的 ARE：前後查看與反向參照（沒有原子群組與佔有量詞）
+    icu_regex = frozenset({"前向查看", "否定前向查看", "後向查看", "否定後向查看", "反向參照"})
     allowed = frozenset(
         {
             exp.Degrees,
             exp.Radians,
             exp.Pi,
+            exp.Rand,
             exp.Unicode,
             exp.Repeat,
             exp.Left,
@@ -952,6 +1005,7 @@ class RedshiftRewriter(PostgresRewriter):
 
     name = "Redshift"
     dialect = "redshift"
+    icu_regex = ICU_ALL  # 以 PCRE 解讀（參數 p）
     allowed = (PostgresRewriter.allowed - {exp.NullSafeEQ, exp.ArrayToString, exp.Log}) | {
         exp.Unicode
     }
@@ -1143,6 +1197,8 @@ class RedshiftRewriter(PostgresRewriter):
 class SparkRewriter(Rewriter):
     """Spark 3.4 以上與 Databricks（連線時把工作階段的時區設為 UTC）。"""
 
+    icu_regex = ICU_ALL  # Java 的正規表示式
+
     allowed = frozenset(
         {
             exp.Year,
@@ -1158,6 +1214,7 @@ class SparkRewriter(Rewriter):
             exp.Degrees,
             exp.Radians,
             exp.Pi,
+            exp.Rand,
             exp.Unicode,
             exp.Repeat,
             exp.Left,
@@ -1393,6 +1450,7 @@ class OracleRewriter(Rewriter):
                 "DOUBLE",
             ),
             exp.Pi: lambda n: acos(),
+            exp.Rand: lambda n: _fn("DBMS_RANDOM.VALUE"),
             exp.Degrees: lambda n: exp.Div(
                 this=exp.Mul(this=_paren(n.this), expression=_num(180)), expression=acos()
             ),
@@ -1819,6 +1877,7 @@ class MySQLRewriter(Rewriter):
 
     name = "MySQL"
     dialect = "mysql"
+    icu_regex = ICU_ALL  # MySQL 8 以 ICU 執行
     allowed = frozenset(
         {
             exp.Year,
@@ -1837,6 +1896,7 @@ class MySQLRewriter(Rewriter):
             exp.Unicode,
             exp.DPipe,
             exp.Pi,
+            exp.Rand,
             exp.Degrees,
             exp.Radians,
             exp.Variance,
@@ -2192,6 +2252,9 @@ class SnowflakeRewriter(Rewriter):
         return {
             exp.DayOfWeek: lambda n: _fn("MOD", _fn("DAYOFWEEKISO", n.this), _num(7)),
             exp.Week: lambda n: _fn("WEEKISO", n.this),
+            exp.Rand: lambda n: _fn(
+                "UNIFORM", _cast(_num(0), "DOUBLE"), _cast(_num(1), "DOUBLE"), _fn("RANDOM")
+            ),
             exp.Round: self.round,
             exp.TimestampFromParts: self.make_timestamp,
             exp.Monthname: lambda n: _names(_fn("MONTH", n.this), MONTH_NAMES),
@@ -2367,6 +2430,7 @@ class TrinoRewriter(Rewriter):
 
     name = "Trino"
     dialect = "trino"
+    icu_regex = ICU_ALL  # 預設以 Joni（Oniguruma）執行
     allowed = frozenset(
         {
             exp.Year,
@@ -2381,6 +2445,7 @@ class TrinoRewriter(Rewriter):
             exp.Week,
             exp.TimeToUnix,
             exp.Pi,
+            exp.Rand,
             exp.Degrees,
             exp.Radians,
             exp.Round,
@@ -2734,6 +2799,7 @@ class BigQueryRewriter(Rewriter):
             exp.Monthname: lambda n: _names(_extract("MONTH", n.this), MONTH_NAMES),
             exp.Dayname: lambda n: _names(self._iso_dow(n.this), DAY_NAMES),
             exp.Pi: lambda n: self._pi(),
+            exp.Rand: lambda n: _fn("RAND"),
             exp.Degrees: lambda n: exp.Paren(
                 this=exp.Div(
                     this=exp.Mul(this=_paren(n.this), expression=_num(180)), expression=self._pi()
@@ -2993,6 +3059,7 @@ class HiveRewriter(Rewriter):
 
     name = "Hive"
     dialect = "hive"
+    icu_regex = ICU_ALL  # Java 的正規表示式
     allowed = frozenset(
         {
             exp.Year,
@@ -3000,6 +3067,7 @@ class HiveRewriter(Rewriter):
             exp.Month,
             exp.Day,
             exp.Pi,
+            exp.Rand,
             exp.Degrees,
             exp.Radians,
             exp.Log,
@@ -3365,6 +3433,7 @@ class ImpalaRewriter(HiveRewriter):
 
     name = "Impala"
     dialect = "impala"
+    icu_regex: frozenset[str] = frozenset()  # RE2
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
         if unit in ("year", "month"):
@@ -3607,6 +3676,7 @@ class TeradataRewriter(OracleRewriter):
 
         return {
             **base,
+            exp.Rand: self._random,
             exp.Quarter: lambda n: _quarter(n.this),
             exp.Hour: time_part("HOUR"),
             exp.Minute: time_part("MINUTE"),
@@ -3705,6 +3775,13 @@ class TeradataRewriter(OracleRewriter):
                 exp.Var(this="CURRENT_TIMESTAMP(6)"), "TIMESTAMP(6)", "teradata"
             ),
         }
+
+    def _random(self, node: exp.Expr) -> exp.Expr:
+        """[0, 1) 的隨機數：Teradata 的 RANDOM(下限, 上限) 傳回整數，且不能放在彙總函式或視窗函式中。"""
+        if node.find_ancestor(exp.AggFunc, exp.Window) is not None:
+            raise DialectError("Teradata 的 RANDOM 不能放在彙總函式中")
+        value = _cast(_fn("RANDOM", _num(0), _num(2147483646)), "DOUBLE")
+        return exp.Paren(this=exp.Div(this=value, expression=_num(2147483647)))
 
     def log(self, node: exp.Expr) -> exp.Expr:
         if node.expression is None or _literal_int(node.this) == 10:
@@ -4186,6 +4263,7 @@ class Db2Rewriter(OracleRewriter):
 
         return {
             **super().handlers(),
+            exp.Rand: lambda n: _fn("RAND"),
             exp.Quarter: native("QUARTER"),
             exp.Hour: native("HOUR"),
             exp.Minute: native("MINUTE"),
@@ -4678,6 +4756,7 @@ class HanaRewriter(Rewriter):
                 "BIGINT",
             ),
             exp.Pi: lambda n: acos(),
+            exp.Rand: lambda n: _fn("RAND"),
             exp.Degrees: lambda n: exp.Paren(
                 this=exp.Div(
                     this=exp.Mul(this=_paren(n.this), expression=_num(180)), expression=acos()
@@ -5137,6 +5216,7 @@ class TSqlRewriter(Rewriter):
             return lambda n: _fn(name, _cast(n.this, "DOUBLE"))
 
         return {
+            exp.Rand: lambda n: _fn("RAND", _fn("CHECKSUM", _fn("NEWID"))),
             exp.Quarter: part("quarter"),
             exp.Hour: part("hour"),
             exp.Minute: part("minute"),

@@ -440,6 +440,69 @@ def test_measure_names_and_values(tmp_path: Path) -> None:
     assert sheet.filters == [] and sheet.sorts == []
 
 
+def test_measure_names_members_with_percent(tmp_path: Path) -> None:
+    """Measure Names 的成員（與色彩對照）中，欄位名稱的 % 寫成 \\%。"""
+    margin = instance("[Margin %]", "Sum", "[sum:Margin %:qk]", "quantitative")
+    sheets = worksheet(
+        "KPIs",
+        [*MEASURES, margin],
+        rows=ref("none:Region:nk"),
+        cols=ref(":Measure Names"),
+        mark="Automatic",
+        encodings=f"<text column='{ref('Multiple Values')}' />",
+        view_extra=measure_names_filter("sum:Sales:qk", "sum:Margin \\%:qk"),
+    )
+    ds = b.extract_datasource(columns=b.calc("Margin %", "Margin %", "[Profit] / [Sales]"))
+    ir = parse(tmp_path, b.workbook(datasource=ds, worksheets=sheets))
+    assert reasons(ir) == []
+    captions = {f.id: f.caption for f in ir.datasources[0].fields}
+    used = [(captions[u.field], u.agg) for u in ir.worksheets[0].measure_values]
+    assert used == [("Sales", "sum"), ("Margin %", "sum")]
+
+
+def measure_names_all(excluded: str = "") -> str:
+    group = "<groupfilter function='level-members' level='[:Measure Names]' />"
+    if excluded:
+        group = (
+            f"<groupfilter function='except'>{group}<groupfilter function='member' "
+            f"level='[:Measure Names]' member='&quot;{ref(excluded)}&quot;' /></groupfilter>"
+        )
+    return f"<filter class='categorical' column='{ref(':Measure Names')}'>{group}</filter>"
+
+
+@pytest.mark.parametrize(
+    ("excluded", "expected"),
+    [
+        # 全部：資料源中所有的量值（各以預設的彙總），依顯示名稱排序；放在工具提示上的 AVG(Sales) 不算
+        ("", [("f_profit", "sum"), ("f_quantity", "sum"), ("f_sales", "sum")]),
+        # 全部，排除 Profit
+        ("sum:Profit:qk", [("f_quantity", "sum"), ("f_sales", "sum")]),
+    ],
+)
+def test_measure_names_filter_all(
+    tmp_path: Path, excluded: str, expected: list[tuple[str, str]]
+) -> None:
+    deps = [
+        *MEASURES,
+        instance("[Quantity]", "Sum", "[sum:Quantity:qk]", "quantitative"),
+        instance("[Sales]", "Avg", "[avg:Sales:qk]", "quantitative"),
+    ]
+    sheets = worksheet(
+        "KPIs",
+        deps,
+        rows=ref("none:Region:nk"),
+        cols=ref(":Measure Names"),
+        mark="Automatic",
+        encodings=(
+            f"<text column='{ref('Multiple Values')}' /><tooltip column='{ref('avg:Sales:qk')}' />"
+        ),
+        view_extra=measure_names_all(excluded),
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=sheets))
+    assert reasons(ir) == []
+    assert [(u.field, u.agg) for u in ir.worksheets[0].measure_values] == expected
+
+
 def test_measure_values_without_names_filter_is_unsupported(tmp_path: Path) -> None:
     sheets = worksheet(
         "KPIs",
@@ -765,6 +828,18 @@ def test_filter_action_sources_and_navigation(tmp_path: Path) -> None:
         "db_detail",
         True,
     )
+
+
+def test_action_excluding_every_source_is_ignored(tmp_path: Path) -> None:
+    """來源的工作表都被排除：動作不會觸發（Tableau 仍保留），略過而不列為不支援。"""
+    source = (
+        "<source dashboard='Board' type='sheet'>"
+        "<exclude-sheet name='Source' /><exclude-sheet name='Target' /></source>"
+    )
+    ir = parse(tmp_path, action_workbook(action_filter(), actions=action(source=source)))
+    assert reasons(ir) == []
+    assert ir.actions == []
+    assert any("排除了所有來源工作表" in u.reason for u in ir.ignored)
 
 
 def test_filter_action_from_datasource(tmp_path: Path) -> None:

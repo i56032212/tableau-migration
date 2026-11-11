@@ -178,6 +178,8 @@ DECO = "__deco"
 """色帶、多層列標題等裝飾圖層的名稱前綴：檢視器的選取與醒目提示略過這些圖層（與參考線的 __ref 相同）。"""
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
+MEASURE_NAME_FIELD = "__mn_name"
+"""雙軸等以 Measure Names 上色時，每個量值圖層的常數欄位（量值的名稱）。"""
 
 
 @dataclass
@@ -1287,6 +1289,20 @@ def build_spec(
     elif trend is not None and not multiple:
         # 多個量值時每張圖各自畫（見 _Builder.multi）
         _trend_lines(builder, body, trend, builder.records_of(ws.marks))
+
+    if ws.cluster is not None:
+        builder.notes.append(
+            "叢集以平台的 k-means 計算（與 Tableau 相同的做法），分群的結果與編號可能與 Tableau 不同"
+        )
+    if ws.forecast is not None:
+        builder.notes.append(
+            "預測的估計值以平台的指數平滑計算（與 Tableau 相同的模型），可能與 Tableau 有些微差異"
+        )
+        if ws.forecast.bands:
+            if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
+                body = _with_forecast_bands(builder, body, values, result)
+            else:
+                builder.notes.append("多個量值、圓餅等圖表上的預測區間尚未畫出（不影響數字）")
 
     if ws.annotations:
         if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
@@ -2715,6 +2731,84 @@ def _with_annotations(
     return {"layer": [body, *layers]}
 
 
+FORECAST_BAND = f"{DECO}_forecast"
+
+
+def _with_forecast_bands(
+    builder: _Builder, body: dict[str, Any], values: list[dict[str, Any]], result: QueryResult
+) -> dict[str, Any]:
+    """預測區間：估計的期以淺色的區域畫出上下界（畫在標記的後面）。"""
+    from tmig.planner.analytics import HIGH, LOW
+
+    ws = builder.ws
+    assert ws.forecast is not None
+    encoding = main_encoding(body)
+    if not isinstance(encoding, dict):
+        return body
+    index = {key: i for i, key in enumerate(result.columns)}
+    layers: list[dict[str, Any]] = []
+    for n, use in enumerate(ws.forecast.measures):
+        channel = builder.channels.get(use_key(use))
+        key = use_key(use)
+        if channel is None or LOW + key not in index:
+            continue
+        axis = next(
+            (
+                c
+                for c in ("y", "x")
+                if isinstance(encoding.get(c), dict) and encoding[c].get("field") == channel.name
+            ),
+            None,
+        )
+        other = "x" if axis == "y" else "y"
+        if axis is None or not isinstance(encoding.get(other), dict):
+            continue
+        low, high = f"{FORECAST_BAND}{n}_low", f"{FORECAST_BAND}{n}_high"
+        for record, row in zip(values, result.rows, strict=False):
+            record[low] = _json_value(row[index[LOW + key]])
+            record[high] = _json_value(row[index[HIGH + key]])
+        position = dict(encoding[other])
+        if position.get("type") in ("nominal", "ordinal"):
+            # 離散的時間軸：區域的頂點在格子的中間（與標記相同）
+            position["bandPosition"] = 0.5
+        band: dict[str, Any] = {
+            other: position,
+            axis: {**encoding[axis], "field": low},
+            f"{axis}2": {"field": high},
+        }
+        series = _series_detail(encoding)
+        if series:
+            band["detail"] = series  # 每條序列（色彩、詳細資料）各自的區間
+        layers.append(
+            {
+                # 實際值的列沒有區間（Null），區域在這些列斷開。不先篩掉這些列：離散軸的順序由
+                # 各層資料依序合併，篩掉會讓估計的期排到最前面
+                "name": f"{FORECAST_BAND}{n}",
+                "mark": {"type": "area", "color": "#bab0ac", "opacity": 0.3, "tooltip": False},
+                "encoding": band,
+            }
+        )
+    if not layers:
+        return body
+    return {"layer": [*layers, body]}
+
+
+def _series_detail(encoding: dict[str, Any]) -> list[dict[str, Any]]:
+    """各自成一條序列的離散欄位（色彩、詳細資料、形狀）。"""
+    found: list[dict[str, Any]] = []
+    for channel in ("color", "detail", "shape"):
+        defs = encoding.get(channel)
+        for item in defs if isinstance(defs, list) else [defs]:
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("field"), str)
+                and item.get("type") in ("nominal", "ordinal")
+                and all(f["field"] != item["field"] for f in found)
+            ):
+                found.append({"field": item["field"], "type": item["type"]})
+    return found
+
+
 def _annotation_record(
     builder: _Builder, rows: list[dict[str, Any]], mark: dict[str, Scalar]
 ) -> dict[str, Any] | None:
@@ -3649,12 +3743,26 @@ def _color_datum(
             if replace and isinstance(encoding.get("color"), dict) and "field" in encoding["color"]:
                 del encoding["color"]
             if "color" not in encoding:
-                encoding["color"] = {
-                    "datum": title,
-                    "type": "nominal",
-                    "title": MEASURE_NAMES_TITLE,
-                    **({"scale": scale} if scale is not None else {}),
-                }
+                if scale is None:
+                    encoding["color"] = {
+                        "datum": title,
+                        "type": "nominal",
+                        "title": MEASURE_NAMES_TITLE,
+                    }
+                else:
+                    # 常數的 datum 不能帶比例尺：以常數欄位上色
+                    node.setdefault("transform", []).append(
+                        {
+                            "calculate": json.dumps(title, ensure_ascii=False),
+                            "as": MEASURE_NAME_FIELD,
+                        }
+                    )
+                    encoding["color"] = {
+                        "field": MEASURE_NAME_FIELD,
+                        "type": "nominal",
+                        "title": MEASURE_NAMES_TITLE,
+                        "scale": scale,
+                    }
         for child in node.get("layer", []):
             visit(child)
 

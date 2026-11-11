@@ -275,13 +275,19 @@ def _joins(relation: Relation) -> list[dict[str, Any]]:
 def _term(term: JoinTerm) -> str:
     if term.table is not None and term.column is not None:
         return f"{term.table}.{term.column}"
+    if term.formula is not None:
+        return term.formula
     return _value(term.literal)
 
 
 def _connection(connection: ExtractConnection | LiveConnection | FileConnection) -> dict[str, Any]:
     if isinstance(connection, FileConnection):
         formats = {t.format for t in connection.tables}
-        kinds = {"excel": DATABASES["excel-direct"], "text": DATABASES["textscan"]}
+        kinds = {
+            "excel": DATABASES["excel-direct"],
+            "text": DATABASES["textscan"],
+            "hyper": DATABASES["hyper"],
+        }
         return {
             "kind": "file",
             "type": "、".join(kinds[f] for f in sorted(formats)),

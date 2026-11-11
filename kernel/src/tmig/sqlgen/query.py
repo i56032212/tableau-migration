@@ -70,6 +70,7 @@ from tmig.ir.models import (
 )
 from tmig.ir.scope import DatasourceScope
 from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
+from tmig.planner.analytics import Analytics, ClusterPlan, ForecastPlan
 from tmig.planner.identity import Identity
 from tmig.planner.state import EffectiveState, QueryState, SetValue, apply_state, use_key
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
@@ -245,6 +246,8 @@ class WorksheetSql:
     underlying: str = ""
     """完整資料（基礎資料列）的 SELECT：彙總前的資料列中，仍在檢視中的標記所對應的列（與 main 相同接在 ctes 之後）；
     空的時不支援（例如 Data Blending）。"""
+    analytics: Analytics | None = None
+    """叢集與預測：執行之後在結果上計算（tmig.planner.analytics）。"""
 
 
 @dataclass
@@ -1512,11 +1515,6 @@ class WorksheetQuery:
             raise QueryError(f"條件篩選 {flt.id} 的公式「{flt.condition}」：{exc}") from exc
         if info.level == "tc":
             raise QueryError(f"條件篩選 {flt.id} 含 Table Calculation，尚不支援", unsupported=True)
-        if info.level == "agg" and (
-            any(lod.kind != "fixed" for lod in self.lods_in(node))
-            or any(lod.kind != "fixed" for a in self.aggregates_in(node) for lod in self.lods_in(a))
-        ):
-            raise QueryError("條件篩選含 INCLUDE／EXCLUDE LOD，尚不支援", unsupported=True)
         return node
 
     def _attach_sets(self, source: str, stage: int) -> str:
@@ -1578,8 +1576,12 @@ class WorksheetQuery:
         nodes = self.aggregates_in(node)
         self._guard(self._covered([flt.field]), "彙總條件篩選", nodes)
         dim = self.dim_sql(flt.field)
-        agg_name, agg_cols, keys = self.aggregate("cond_agg", nodes, [dim], source, stage, None)
-        value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(node))
+        level = [Dim(key=use_key(flt.field), use=flt.field, col="")]
+        with self._dimension_lods(node, level, source, stage) as source:
+            agg_name, agg_cols, keys = self.aggregate(
+                "cond_agg", nodes, [dim], source, stage, level
+            )
+            value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(node))
         name = self.name("cond")
         self.cte(
             stage,
@@ -1630,16 +1632,14 @@ class WorksheetQuery:
             raise QueryError(f"Top N 篩選 {flt.id} 的排名依據「{flt.by}」：{exc}") from exc
         if info.level != "agg":
             raise QueryError(f"Top N 篩選 {flt.id} 的排名依據必須是彙總")
-        if any(lod.kind != "fixed" for lod in self.lods_in(node)) or any(
-            lod.kind != "fixed" for a in self.aggregates_in(node) for lod in self.lods_in(a)
-        ):
-            raise QueryError("Top N 的排名依據含 INCLUDE／EXCLUDE LOD，尚不支援", unsupported=True)
         return node
 
     def _top_n(self, flt: TopNFilter, by: Node, source: str, stage: int) -> str:
         count = flt.count
         if isinstance(count, ParamRef):
             value = self.state.parameters.get(count.parameter)
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)  # 實數的參數（例如 3.0）
             if not isinstance(value, int) or isinstance(value, bool):
                 raise QueryError(f"Top N 篩選 {flt.id} 的參數值 {value!r} 不是整數")
             count = value
@@ -1654,8 +1654,12 @@ class WorksheetQuery:
             source = self.cte(
                 stage, self.name("topn_src"), f"SELECT * FROM {source} WHERE {selected}"
             )
-        agg_name, agg_cols, keys = self.aggregate("topn_agg", nodes, [dim], source, stage, None)
-        value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(by))
+        level = [Dim(key=use_key(flt.field), use=flt.field, col="")]
+        with self._dimension_lods(by, level, source, stage) as source:
+            agg_name, agg_cols, keys = self.aggregate(
+                "topn_agg", nodes, [dim], source, stage, level
+            )
+            value = self._compile(lambda: self.compiler(_PostEnv(self, agg_cols)).post(by))
         direction = "DESC" if flt.direction == "top" else "ASC"
         name = self.name("topn")
         body = (
@@ -1773,6 +1777,34 @@ class WorksheetQuery:
         self.cte(stage, name, f"SELECT {', '.join(selects)} FROM {source} r {' '.join(joins)}")
         self.attached.update(s.col for s in specs)
         return name
+
+    @contextmanager
+    def _dimension_lods(
+        self, node: Node, dims: list[Dim], source: str, stage: int
+    ) -> Iterator[str]:
+        """只依幾個維度計算的彙總（依欄位排序、Top N、彙總條件篩選）中的 INCLUDE／EXCLUDE LOD：與 Tableau
+        相同相對於這些維度（不是檢視的維度），另外計算一次併回每一列。區塊中的編譯以這些值代入，
+        回傳併好的資料來源；沒有 INCLUDE／EXCLUDE 時原樣回傳。"""
+        relative = [lod for lod in self.lods_in(node) if lod.kind != "fixed"]
+        if not relative:
+            yield source
+            return
+        saved = self.lods
+        specs = {lod: self._lod_spec(lod, None) for lod in relative}
+        ordered: list[LodSpec] = []
+
+        def visit(spec: LodSpec) -> None:
+            for inner in spec.inner.values():
+                visit(inner)
+            ordered.append(spec)
+
+        for spec in specs.values():
+            visit(spec)
+        self.lods = {**saved, **specs}
+        try:
+            yield self._attach(ordered, source, self.name("dim_lod"), stage, view_dims=dims)
+        finally:
+            self.lods = saved
 
     def _lod_values(
         self,
@@ -1943,15 +1975,17 @@ class WorksheetQuery:
             node = self.measure_node(sort.by)
             nodes = self.aggregates_in(node)
             self._guard(self._covered([d.use]), "依欄位排序", nodes)
-            # 排序值依來源資料計算，不含 Table Calculation：可下推
-            agg_name, agg_cols, keys = self.aggregate(
-                "sort_agg", nodes, [self.dim_sql(d.use)], rows_cte, 7, None, pushdown=True
-            )
-            value = self._compile(
-                lambda node=node, agg_cols=agg_cols: self.compiler(_PostEnv(self, agg_cols)).post(
-                    node
+            # 排序值依來源資料計算，不含 Table Calculation：可下推（INCLUDE／EXCLUDE LOD 相對於這個維度，
+            # 在第 6 段另外計算，同樣可下推）
+            with self._dimension_lods(node, [d], rows_cte, 6) as source:
+                agg_name, agg_cols, keys = self.aggregate(
+                    "sort_agg", nodes, [self.dim_sql(d.use)], source, 7, [d], pushdown=True
                 )
-            )
+                value = self._compile(
+                    lambda node=node, agg_cols=agg_cols: self.compiler(
+                        _PostEnv(self, agg_cols)
+                    ).post(node)
+                )
             name = self.name("sort")
             self.cte(
                 7,
@@ -2840,11 +2874,102 @@ def _find_worksheet(ir: IR, key: str) -> Worksheet:
 def worksheet_sql(
     ir: IR, worksheet: str, state: QueryState | None = None, user: Identity | None = None
 ) -> WorksheetSql:
-    if _find_worksheet(ir, worksheet).blends:
+    ws = _find_worksheet(ir, worksheet)
+    if ws.blends:
         from tmig.sqlgen.blend import blend_sql  # blend 也匯入本模組
 
-        return blend_sql(ir, worksheet, state, user)
-    return WorksheetQuery(ir, worksheet, state, user).build()
+        query = blend_sql(ir, worksheet, state, user)
+    else:
+        query = WorksheetQuery(ir, worksheet, state, user).build()
+    query.analytics = analytics_plan(ir, ws, query.columns)
+    return query
+
+
+TIME_UNITS = ("year", "quarter", "month", "week", "day", "hour")
+
+
+def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analytics | None:
+    """叢集與預測：查詢結果中的欄位（叢集欄位、分析的量值、時間維度、預測的量值與其他維度）。"""
+    if ws.cluster is None and ws.forecast is None:
+        return None
+    shown = [c for c in columns if c.use is not None and c.role != "sort"]
+
+    def column_of(use: FieldUse, role: str) -> str | None:
+        key = use_key(use)
+        return next(
+            (
+                c.key
+                for c in shown
+                if c.role == role and c.use is not None and use_key(c.use) == key
+            ),
+            None,
+        )
+
+    plan = Analytics()
+    cluster_field = ws.cluster.field if ws.cluster is not None else None
+    if ws.cluster is not None:
+        found = next(
+            (
+                c.key
+                for c in shown
+                if c.role == "dimension" and c.use is not None and c.use.field == cluster_field
+            ),
+            None,
+        )
+        measures = [column_of(m, "measure") for m in ws.cluster.measures]
+        if found is not None:
+            if any(m is None for m in measures):
+                raise QueryError("叢集的分析量值不在查詢結果中", unsupported=True)
+            plan.cluster = ClusterPlan(
+                found, [m for m in measures if m is not None], ws.cluster.count
+            )
+    forecast = ws.forecast
+    if forecast is not None:
+        fields = {f.id: f for d in ir.datasources for f in d.fields}
+        dims = [c for c in shown if c.role == "dimension" and c.use is not None]
+        times: list[tuple[OutputColumn, str]] = []
+        for c in dims:
+            assert c.use is not None
+            if c.use.field in (forecast.indicator, cluster_field):
+                continue
+            date = c.use.date
+            if date is not None and date.kind == "trunc" and date.unit in TIME_UNITS:
+                times.append((c, date.unit))
+            elif date is not None and date.kind == "part" and date.unit == "year":
+                times.append((c, "year_number"))
+            elif date is not None:
+                raise QueryError(
+                    "預測的時間維度是年以外的日期部分（例如只有月份），v0 不支援", unsupported=True
+                )
+            elif c.use.field in fields and fields[c.use.field].datatype in ("date", "datetime"):
+                times.append((c, "day"))
+        if len(times) != 1:
+            raise QueryError(
+                "預測需要檢視中剛好一個時間的維度（年、季、月、週、日或時）", unsupported=True
+            )
+        time, unit = times[0]
+        measures = [column_of(m, "measure") for m in forecast.measures]
+        if any(m is None for m in measures):
+            raise QueryError("預測的量值不在查詢結果中", unsupported=True)
+        indicator = next(
+            (c.key for c in dims if c.use is not None and c.use.field == forecast.indicator), None
+        )
+        series = [
+            c.key
+            for c in dims
+            if c.key not in (time.key, indicator)
+            and c.use is not None
+            and c.use.field != cluster_field
+        ]
+        plan.forecast = ForecastPlan(
+            time=time.key,
+            unit=unit,
+            measures=[m for m in measures if m is not None],
+            series=series,
+            indicator=indicator,
+            settings=forecast,
+        )
+    return plan
 
 
 def pane_sql(

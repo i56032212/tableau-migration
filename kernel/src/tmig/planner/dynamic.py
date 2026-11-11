@@ -1,5 +1,10 @@
-"""動態參數（Tableau 2020.1 起）：開啟報表時，參數的目前值取自欄位的值（「開啟活頁簿時的值」），
-允許值的清單或範圍取自欄位的值（「開啟活頁簿時」重新整理）。
+"""開啟報表時以目前的資料取值。
+
+動態參數（Tableau 2020.1 起）：參數的目前值取自欄位的值（「開啟活頁簿時的值」），允許值的清單或範圍
+取自欄位的值（「開啟活頁簿時」重新整理）。
+
+類別篩選的「開啟活頁簿時篩選到最新的值」（<preset type='last-values'>）：以欄位目前的最大值取代存檔時的
+選取（與動態參數相同，以資料源篩選、列層級權限後的資料計算；沒有值或查詢失敗時維持存檔時的選取）。
 
 - 以資料源篩選、萃取篩選與列層級權限後的資料計算（與工作表的篩選無關），與一張只把欄位放在列上的工作表相同
 - 目前值：欄位只有一個值時取代存檔時的值；多個值或沒有值時維持存檔時的值（Tableau 這時無法選擇預設值）
@@ -18,6 +23,8 @@ from tmig.ir.models import (
     IR,
     AllowedList,
     AllowedRange,
+    CategoricalFilter,
+    DataField,
     Datasource,
     FieldUse,
     Marks,
@@ -34,13 +41,31 @@ Runner = Callable[[Any, Datasource], Any]
 """執行查詢：(WorksheetSql, 資料源) → QueryResult（有 columns 與 rows）。"""
 
 
-def dynamic_fields(ir: IR) -> list[str]:
-    """動態參數用到的欄位 id（同一個欄位只查一次）。"""
+def _parameter_fields(ir: IR) -> list[str]:
     found: list[str] = []
     for param in ir.parameters:
         for field_id in (param.value_field, param.domain_field):
             if field_id is not None and field_id not in found:
                 found.append(field_id)
+    return found
+
+
+def latest_filters(ir: IR) -> list[CategoricalFilter]:
+    """「開啟報表時篩選到最新的值」的類別篩選。"""
+    return [
+        f
+        for ws in ir.worksheets
+        for f in ws.filters
+        if isinstance(f, CategoricalFilter) and f.latest
+    ]
+
+
+def dynamic_fields(ir: IR) -> list[str]:
+    """開啟報表時要以目前的資料取值的欄位 id：動態參數與「篩選到最新的值」的篩選（同一個欄位只查一次）。"""
+    found = _parameter_fields(ir)
+    for flt in latest_filters(ir):
+        if flt.field.field not in found:
+            found.append(flt.field.field)
     return found
 
 
@@ -50,12 +75,16 @@ def _datasource_of(ir: IR, field_id: str) -> Datasource | None:
 
 def field_values(ir: IR, field_id: str, run: Runner, user: Identity | None = None) -> list[Any]:
     """欄位的不重複值：一張只把這個欄位放在列上的工作表（資料源篩選、列層級權限照常套用）。"""
+    return use_values(ir, FieldUse(field=field_id), run, user)
+
+
+def use_values(ir: IR, use: FieldUse, run: Runner, user: Identity | None = None) -> list[Any]:
+    """欄位（可含日期部分）的不重複值，與 field_values 相同的計算。"""
     from tmig.sqlgen.query import worksheet_sql
 
-    datasource = _datasource_of(ir, field_id)
+    datasource = _datasource_of(ir, use.field)
     if datasource is None:
-        raise ValueError(f"找不到欄位「{field_id}」")
-    use = FieldUse(field=field_id)
+        raise ValueError(f"找不到欄位「{use.field}」")
     holder = Worksheet(
         id=HOLDER,
         name="動態參數",
@@ -120,12 +149,60 @@ def parameter_values(
     return found
 
 
+def _value_type(data_field: DataField, use: FieldUse) -> str:
+    """篩選值的型別：日期部分為整數，其他依欄位的型別。"""
+    if use.date is not None and use.date.kind == "part":
+        return "integer"
+    return data_field.datatype
+
+
+def _resolve_latest(ir: IR, run: Runner, user: Identity | None, notes: list[str]) -> IR:
+    """「開啟報表時篩選到最新的值」：以欄位目前的最大值取代存檔時的選取。"""
+    filters = latest_filters(ir)
+    if not filters:
+        return ir
+    fields = {f.id: f for d in ir.datasources for f in d.fields}
+    latest: dict[str, Scalar] = {}
+    tried: set[str] = set()
+    for flt in filters:
+        key = use_key(flt.field)
+        if key in tried:
+            continue
+        tried.add(key)
+        caption = fields[flt.field.field].caption
+        try:
+            found = [v for v in use_values(ir, flt.field, run, user) if v is not None]
+        except Exception as exc:  # 查詢失敗：維持存檔時的選取
+            notes.append(f"篩選到最新的值的欄位「{caption}」查詢失敗，維持存檔時的選取：{exc}")
+            continue
+        if not found:
+            notes.append(f"篩選到最新的值的欄位「{caption}」沒有值，維持存檔時的選取")
+            continue
+        latest[key] = _scalar(max(found), _value_type(fields[flt.field.field], flt.field))
+    worksheets: list[Worksheet] = []
+    for ws in ir.worksheets:
+        replaced = [
+            f.model_copy(
+                update={"mode": "include", "values": [latest[use_key(f.field)]], "ranges": []}
+            )
+            if isinstance(f, CategoricalFilter) and f.latest and use_key(f.field) in latest
+            else f
+            for f in ws.filters
+        ]
+        changed = any(a is not b for a, b in zip(replaced, ws.filters, strict=True))
+        worksheets.append(ws.model_copy(update={"filters": replaced}) if changed else ws)
+    return ir.model_copy(update={"worksheets": worksheets})
+
+
 def resolve_parameters(ir: IR, run: Runner, user: Identity | None = None) -> tuple[IR, list[str]]:
-    """以資料的值設定動態參數；沒有動態參數時回傳原本的 IR。"""
-    fields = dynamic_fields(ir)
-    if not fields:
+    """以資料的值設定動態參數與「篩選到最新的值」的篩選；都沒有時回傳原本的 IR。"""
+    if not dynamic_fields(ir):
         return ir, []
     notes: list[str] = []
+    ir = _resolve_latest(ir, run, user, notes)
+    fields = _parameter_fields(ir)
+    if not fields:
+        return ir, notes
     values: dict[str, list[Any]] = {}
     captions = {f.id: f.caption for d in ir.datasources for f in d.fields}
     for field_id in fields:
@@ -169,4 +246,11 @@ def resolve_parameters(ir: IR, run: Runner, user: Identity | None = None) -> tup
     return ir.model_copy(update={"parameters": parameters}), notes
 
 
-__all__ = ["dynamic_fields", "field_values", "parameter_values", "resolve_parameters"]
+__all__ = [
+    "dynamic_fields",
+    "field_values",
+    "latest_filters",
+    "parameter_values",
+    "resolve_parameters",
+    "use_values",
+]

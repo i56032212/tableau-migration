@@ -11,7 +11,8 @@ import datetime as dt
 
 import duckdb
 
-from tmig.data.executor import ExecutionError, QueryResult, check_guard
+from tmig.data import udf
+from tmig.data.executor import ExecutionError, QueryResult, check_guard, finish
 from tmig.data.sources import Executor
 from tmig.sqlgen.dialect import ParameterValues, split, to_dialect
 from tmig.sqlgen.query import OutputColumn, WorksheetSql
@@ -36,7 +37,7 @@ def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
         (fetch.name, to_dialect(fetch.sql, executor.dialect, query.custom_sql, query.parameters))
         for fetch in plan.fetches
     ]
-    con = duckdb.connect()
+    con = udf.register(duckdb.connect())
     try:
         for name, sql in remote:
             try:
@@ -44,7 +45,7 @@ def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
             except Exception as exc:
                 raise ExecutionError(f"來源資料庫執行失敗（{name}）：{exc}") from exc
             con.register(name, table)
-        return _coerce(_run(con, plan.local_sql), query.columns)
+        return finish(query, _coerce(_run(con, plan.local_sql), query.columns))
     finally:
         con.close()
 
@@ -61,7 +62,7 @@ def execute_remote(
         table = executor.fetch(translated)
     except Exception as exc:
         raise ExecutionError(f"來源資料庫執行失敗：{exc}") from exc
-    con = duckdb.connect()
+    con = udf.register(duckdb.connect())
     try:
         con.register("remote", table)
         return _run(con, "SELECT * FROM remote")

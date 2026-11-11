@@ -35,10 +35,12 @@ from tmig.ir.models import (
     Blend,
     BlendLink,
     CategoricalFilter,
+    ClusterSpec,
     ColorPalette,
     DataField,
     FieldUse,
     Filter,
+    Forecast,
     Marks,
     MarkType,
     MeasureAlias,
@@ -65,7 +67,15 @@ from tmig.parser.context import (
     SheetState,
     TooltipRef,
 )
-from tmig.parser.datasource import TABLE_ID_PREFIX, add_calc_field, add_table_count, analyze_calcs
+from tmig.parser.datasource import (
+    TABLE_ID_PREFIX,
+    add_calc_field,
+    add_cluster_field,
+    add_forecast_indicator,
+    add_table_count,
+    add_uncached_column,
+    analyze_calcs,
+)
 from tmig.parser.fields import (
     FilterParser,
     bucket_values,
@@ -284,9 +294,8 @@ LINE_PATTERNS = {"solid": "solid", "dashed": "dashed", "dotted": "dotted", "dash
 REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
 REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
 KNOWN_UNSUPPORTED = {
-    # 日期篩選的「開啟活頁簿時篩選到最新的日期值」：開啟時以目前資料的最新值取代存檔時的選取
+    # 類別篩選以外的「開啟活頁簿時篩選到最新的值」（類別篩選的見 CategoricalFilter.latest）
     "preset": "篩選的「開啟報表時篩選到最新的值」（<preset type='last-values'>）",
-    "forecast-specification": "預測",
     "mapsources": "地圖",
     "mapsource": "地圖",
     "add-in": "工作表擴充功能",
@@ -375,6 +384,11 @@ class SheetParser:
         """色彩編碼（工作表與資料源的 <style>）：欄位實例鍵 → <encoding>。"""
         self.cross: dict[str, str] = {}
         """跨資料源篩選：其他資料源的欄位（[資料源].[欄位實例]）→ 主要資料源中對應的欄位實例名稱。"""
+        self.forecast_measures: list[FieldUse] = []
+        """預測的量值（fVal: 的欄位實例對應的量值）。"""
+        self.forecast_indicator: str | None = None
+        self.cluster: tuple[str, str] | None = None
+        """叢集：（叢集欄位 id、分析模型的名稱）。"""
         self._keyed: dict[str, Filter] = {}
         """工作表上的單一欄位篩選，以篩選的欄位實例名稱為鍵（跨資料源篩選與同一欄位的篩選合併用）。"""
 
@@ -449,6 +463,8 @@ class SheetParser:
         sorts = self._sorts(view)
         reference_lines = self._reference_lines(child(table, "panes"), child(table, "style"))
         annotations = self._annotations(child(table, "annotations"))
+        forecast = self._forecast(child(table, "forecast-specification"))
+        cluster = self._cluster_spec(card_uses)
         with self._blend_scope():
             formats = self._formats(child(table, "style"), [*rows, *cols])
         sheet_formats = worksheet_formats(
@@ -471,6 +487,8 @@ class SheetParser:
             table_calcs=table_calcs,
             reference_lines=reference_lines,
             annotations=annotations,
+            cluster=cluster,
+            forecast=forecast,
             formats=formats,
             title=title,
             totals=totals,
@@ -520,6 +538,14 @@ class SheetParser:
                 continue
             for column in children(dep, "column"):
                 name = column.get("name", "")
+                if column.get("is-adhoc-cluster") == "true":
+                    # 叢集：查詢之後才填入叢集編號
+                    existed = name in state.by_name
+                    found = add_cluster_field(self.ctx, state, column)
+                    if found is not None and ds is None:
+                        self.cluster = (found.id, column.get("parent-model", ""))
+                    added = added or (found is not None and not existed)
+                    continue
                 if name in state.by_name:
                     continue
                 if name.startswith(TABLE_ID_PREFIX) and len(graph_objects(state.element)) <= 1:
@@ -528,6 +554,9 @@ class SheetParser:
                     added = True
                     continue
                 if child(column, "calculation") is None:
+                    # Live 連線：不在存檔時快取的欄位清單中、只寫在工作表相依清單中的欄位
+                    if add_uncached_column(self.ctx, state, column):
+                        added = True
                     continue
                 # 直接在欄列架上輸入的臨時計算，只存在工作表裡
                 if add_calc_field(self.ctx, state, column) is not None:
@@ -591,9 +620,14 @@ class SheetParser:
             self.uses[key] = use
             return use
         inst = self.instances.get(key)
+        if inst is not None and inst.get("forecast-column-type"):
+            return self._forecast_use(key, inst)
         if inst is None:
             data_field = self.ds.by_name.get(key)
             if data_field is None:
+                if "\\%" in ref:
+                    # Measure Names 的成員與色彩對照中，欄位名稱的 % 寫成 \%
+                    return self.resolve(ref.replace("\\%", "%"))
                 if key.startswith("[:"):
                     return f"特殊欄位 {key} v0 不支援"
                 return f"找不到欄位實例 {ref}"
@@ -605,6 +639,118 @@ class SheetParser:
             use = resolved
         self.uses[key] = use
         return use
+
+    def _forecast_use(self, key: str, inst: etree._Element) -> FieldUse | str:
+        """預測的結果：實際值與估計值（fVal:）是預測的量值本身；Forecast Indicator 是查詢之後才補上
+        Estimate 的字串欄位。其他結果類型（趨勢、精確度等）尚不支援。"""
+        assert self.ds is not None
+        kind = inst.get("forecast-column-type")
+        if kind == "forecast-value":
+            base = self.resolve(inst.get("forecast-column-base", ""))
+            if isinstance(base, str):
+                return base
+            if base not in self.forecast_measures:
+                self.forecast_measures.append(base)
+            self.uses[key] = base
+            return base
+        if kind == "forecast-indicator":
+            found = add_forecast_indicator(self.ctx, self.ds, inst)
+            if found is None:
+                return "Forecast Indicator 無法建立"
+            analyze_calcs(self.ctx, self.ds)
+            use = FieldUse(field=found.id)
+            self.forecast_indicator = found.id
+            self.uses[key] = use
+            return use
+        return f"預測的結果類型 {kind} v0 不支援"
+
+    def _forecast(self, element: etree._Element | None) -> Forecast | None:
+        """預測的設定（<forecast-specification>）：開啟時才有預測。"""
+        if element is None or element.get("enabled") != "true":
+            return None
+        if not self.forecast_measures:
+            self.ctx.ignore(
+                element, f"工作表「{self.name}」開啟了預測，但檢視中沒有預測的量值：略過"
+            )
+            return None
+        if element.get("auto-forecast-agg") == "false":
+            self.ctx.flag(element, "預測的「彙總依據」不是檢視的時間細度，v0 不支援")
+            return None
+        components = {
+            "ets-none": "none",
+            "ets-additive": "additive",
+            "ets-multiplicative": "multiplicative",
+        }
+        model = {"auto-season": "auto", "auto": "auto_no_season", "custom": "custom"}.get(
+            element.get("model-type", ""), "auto"
+        )
+        length = {"auto": "auto", "next": "next", "end-of": "until"}.get(
+            element.get("range-type", ""), "auto"
+        )
+        size = element.get("range-size")
+        periods = (element.get("range-periods") or "").split("-")[0].lower()
+        try:
+            confidence = float(element.get("band-confidence-level") or "95") / 100
+            ignore_last = int(element.get("ignore-last") or "1")
+        except ValueError:
+            confidence, ignore_last = 0.95, 1
+        return Forecast(
+            measures=list(self.forecast_measures),
+            indicator=self.forecast_indicator,
+            model=model,  # type: ignore[arg-type]
+            trend=components.get(element.get("trend-type", "")),  # type: ignore[arg-type]
+            season=components.get(element.get("season-type", "")),  # type: ignore[arg-type]
+            length=length,  # type: ignore[arg-type]
+            size=int(size) if size and size.isdigit() else None,
+            unit=periods
+            if periods in ("year", "quarter", "month", "week", "day", "hour")
+            else None,  # type: ignore[arg-type]
+            ignore_last=max(ignore_last, 0),
+            fill_zeros=element.get("fill-type") == "fill-zero",
+            confidence=min(max(confidence, 0.01), 0.999),
+            bands=element.get("show-prediction-bands") != "false",
+        )
+
+    def _cluster_spec(self, card_uses: list[FieldUse]) -> ClusterSpec | None:
+        """叢集的設定（資料源中的 <analytic-model>）：分析的量值都要在檢視中。"""
+        if self.cluster is None:
+            return None
+        assert self.ds is not None
+        field_id, name = self.cluster
+        model = self.ds.analytic_models.get(name)
+        if model is None:
+            self.ctx.flag(self.el, f"工作表「{self.name}」的叢集找不到分析模型 {name}")
+            return None
+        spec = child(model, "analytic-model-specifications")
+        if spec is None or spec.get("class") != "cluster-specifications":
+            self.ctx.flag(model, f"分析模型 {name} 不是叢集，v0 不支援")
+            return None
+        if text_of(child(spec, "is-dissagregate")) == "true":
+            self.ctx.flag(spec, "取消彙總的叢集（每一列資料分叢集）v0 不支援")
+            return None
+        if children(child(spec, "lod-fields"), "field") or children(
+            child(spec, "filter-fields"), "field"
+        ):
+            self.ctx.flag(spec, "叢集的詳細程度或篩選欄位 v0 不支援")
+            return None
+        measures: list[FieldUse] = []
+        for item in children(child(spec, "analysis-fields"), "field"):
+            use = self._use(item.get("name"), spec, "叢集的分析欄位")
+            if use is None:
+                return None
+            if not self._is_measure(use):
+                self.ctx.flag(spec, "叢集的分析欄位是維度（以對應分析分群）v0 不支援")
+                return None
+            if use not in card_uses:
+                self.ctx.flag(spec, f"叢集的分析量值 {item.get('name')} 不在檢視中，v0 不支援")
+                return None
+            measures.append(use)
+        if not measures:
+            self.ctx.flag(spec, "叢集沒有分析的量值")
+            return None
+        text = text_of(child(spec, "number-of-desired-clusters"))
+        count = int(text) if text.isdigit() and int(text) > 0 else None
+        return ClusterSpec(field=field_id, measures=measures, count=count)
 
     def _secondary_use(self, name: str, ref: str) -> FieldUse | str:
         """次要資料源（Data Blending）的欄位：只能是欄列架與標記卡上彙總的量值。"""
@@ -1012,15 +1158,15 @@ class SheetParser:
                 continue
             if measure.field in SPECIAL_FIELDS:
                 # Measure Values 的軸的標記卡：與共用的標記卡相同、不是雙軸時（例如 Measure Values 與
-                # 另一個量值各自一個軸）等同共用的標記卡；疊成雙軸或設定不同尚不支援
+                # 另一個量值各自一個軸）等同共用的標記卡；設定不同或疊成雙軸時是個別的標記卡（例如
+                # 以 Measure Names 上色的折線，疊上標出最大、最小值的圓點）
                 index = element.get("y-index") or element.get("x-index") or "0"
                 dual = (index.isdigit() and int(index) > 0) or instance_key(axis_ref) in folded
-                if dual or _pane_signature(element) != _pane_signature(main):
-                    self.ctx.flag(
-                        element,
-                        "Measure Values 的軸有個別的標記卡（例如與其他量值疊成雙軸），尚不支援",
-                    )
-                continue
+                if not dual and _pane_signature(element) == _pane_signature(main):
+                    continue
+                if measure.field != MEASURE_VALUES:
+                    self.ctx.flag(element, f"標記卡的軸 {axis_ref} 不是量值")
+                    continue
             if measure not in (rows if axis == "rows" else cols):
                 self.ctx.flag(element, f"標記卡的量值 {axis_ref} 不在欄列架上")
                 continue
@@ -1482,9 +1628,9 @@ class SheetParser:
             return []
         if not used and not names_used:
             return []
-        refs = self._member_refs(child(element, "groupfilter"))
+        refs = self._measure_name_refs(child(element, "groupfilter"))
         if refs is None:
-            self.ctx.flag(element, "Measure Names 篩選不是逐一列出量值（例如「全部」），尚不支援")
+            self.ctx.flag(element, "Measure Names 篩選的選取方式尚不支援")
             return []
         order = next(
             (
@@ -1511,6 +1657,51 @@ class SheetParser:
                 continue
             result.append((instance_key(ref), use))
         return result
+
+    def _measure_name_refs(self, group: etree._Element | None) -> list[str] | None:
+        """Measure Names 篩選選取的量值：逐一列出；「全部」（level-members）；或「全部，排除…」（except）。"""
+        if group is None:
+            return None
+        function = group.get("function")
+        if function == "level-members":
+            return self._all_measure_refs()
+        if function == "except":
+            parts = children(group, "groupfilter")
+            if len(parts) != 2 or parts[0].get("function") != "level-members":
+                return None
+            excluded = self._member_refs(parts[1])
+            if excluded is None:
+                return None
+            dropped = {instance_key(r) for r in excluded}
+            return [r for r in self._all_measure_refs() if instance_key(r) not in dropped]
+        return self._member_refs(group)
+
+    def _all_measure_refs(self) -> list[str]:
+        """Measure Names 篩選選取全部：Measure Values 是資料源中所有的量值（各以預設的彙總），工作表的
+        相依清單列出了這些量值的欄位實例。依資料窗格的順序：依顯示名稱排序，資料表的計數（例如
+        「Orders (計數)」）在最後。同一個量值有多個實例時取預設的彙總（其他的是放在別處的欄位）。"""
+        assert self.ds is not None
+        chosen: dict[str, tuple[str, FieldUse]] = {}
+        for key, inst in self.instances.items():
+            if inst.get("derivation") in (None, "None") or child(inst, "table-calc") is not None:
+                continue
+            use = self.resolve(key)
+            if isinstance(use, str) or use.field in SPECIAL_FIELDS or not self._is_measure(use):
+                continue
+            data_field = next((f for f in self.ds.fields if f.id == use.field), None)
+            if data_field is None or data_field.role != "measure":
+                continue
+            default = data_field.default_agg or "sum"
+            current = chosen.get(use.field)
+            if current is None or (use.agg == default and current[1].agg != default):
+                chosen[use.field] = (key, use)
+        fields = {f.id: f for f in self.ds.fields}
+
+        def rank(item: tuple[str, FieldUse]) -> tuple[bool, str]:
+            found = fields[item[1].field]
+            return (found.name.startswith(TABLE_ID_PREFIX), found.caption.casefold())
+
+        return [f"[{self.ds.name}].{key}" for key, _ in sorted(chosen.values(), key=rank)]
 
     def _member_refs(self, group: etree._Element | None) -> list[str] | None:
         if group is None:
@@ -2226,6 +2417,11 @@ class SheetParser:
                 else:
                     self.ctx.ignore(item, "Drop Lines（選取標記時才顯示）：新平台不顯示")
                 continue
+            if tag == "preset" and _latest_preset(item):
+                continue  # 類別篩選的「開啟報表時篩選到最新的值」：CategoricalFilter.latest
+            if tag == "forecast-specification":
+                self._check_forecast(item)
+                continue
             if tag in KNOWN_UNSUPPORTED:
                 self.ctx.flag(item, f"{KNOWN_UNSUPPORTED[tag]} v0 不支援")
                 continue
@@ -2233,6 +2429,30 @@ class SheetParser:
                 self.ctx.flag(item, f"工作表中的未知元素 <{tag}>")
                 continue
             self._check_elements(item)
+
+    def _check_forecast(self, item: etree._Element) -> None:
+        """<forecast-specification>：工作表 <table> 之下開啟的預測由 _forecast 解析（Worksheet.forecast）。"""
+        parent = item.getparent()
+        if parent is None or local_name(parent) != "table":
+            self.ctx.flag(
+                item, "預測 v0 不支援：<forecast-specification> 不在工作表的 <table> 之下"
+            )
+        elif item.get("enabled") == "false":
+            # 曾經開過又關掉的預測：只留下設定，畫面上沒有預測
+            self.ctx.ignore(item, "預測已關閉（只留下設定）：略過")
+        elif item.get("enabled") != "true":
+            self.ctx.flag(item, "預測 v0 不支援：<forecast-specification> 沒有標明是否開啟")
+
+
+def _latest_preset(preset: etree._Element) -> bool:
+    """類別篩選的「開啟報表時篩選到最新的值」（解析成 CategoricalFilter.latest）。"""
+    parent = preset.getparent()
+    return (
+        preset.get("type") == "last-values"
+        and parent is not None
+        and local_name(parent) == "filter"
+        and parent.get("class") == "categorical"
+    )
 
 
 TupleTree = tuple[str, list[str], list[list[str | None]]]

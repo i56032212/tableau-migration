@@ -152,3 +152,43 @@ def test_feature_flag_prefixed_attributes(tmp_path: Path, db: Path) -> None:
     assert ir.parameters[0].value_field is not None
     resolved, _ = resolve_parameters(ir, runner(db))
     assert resolved.parameters[0].value == "2024-03-15"
+
+
+def latest_sheet(
+    member: str = "#2023-01-15#", preset: str = "<preset type='last-values' />"
+) -> str:
+    day = instance("[Order Date]", "None", "[none:Order Date:ok]", "ordinal")
+    sales = instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative")
+    return worksheet(
+        "Latest Day",
+        [REGION, day, sales],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=(
+            f"<filter class='categorical' column='{ref('none:Order Date:ok')}'>"
+            f"<groupfilter function='member' level='[none:Order Date:ok]' member='{member}' />"
+            f"{preset}</filter>"
+        ),
+    )
+
+
+def test_filter_to_latest_value_when_opened(tmp_path: Path, db: Path) -> None:
+    """類別篩選的「開啟報表時篩選到最新的值」：以欄位目前的最大值（2024-03-15，只有 North 的 60）取代
+    存檔時的選取（2023-01-15）。"""
+    ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=latest_sheet())))
+    assert ir.unsupported == [], [u.reason for u in ir.unsupported]
+    (flt,) = ir.worksheets[0].filters
+    assert flt.kind == "categorical" and flt.latest and flt.values == ["2023-01-15"]
+    resolved, notes = resolve_parameters(ir, runner(db))
+    assert notes == []
+    (latest,) = resolved.worksheets[0].filters
+    assert latest.kind == "categorical" and (latest.mode, latest.values) == (
+        "include",
+        ["2024-03-15"],
+    )
+    query = worksheet_sql(resolved, resolved.worksheets[0].id)
+    rows = execute(db, query.sql).records()
+    assert [(r["f_region"], r["sum(f_sales)"]) for r in rows] == [("North", 60.0)]
+    # 沒有這個設定的篩選維持存檔時的選取
+    plain = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=latest_sheet(preset=""))))
+    assert resolve_parameters(plain, runner(db))[0] is plain

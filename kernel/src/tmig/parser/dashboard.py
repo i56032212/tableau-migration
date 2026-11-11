@@ -236,7 +236,8 @@ class DashboardParser:
         if kind_attr == "bitmap":
             image = element.get("param")
             if not image:
-                self.ctx.flag(element, "圖片區塊沒有指定圖片")
+                # 還沒選圖片的圖片物件：Tableau 顯示空白的區塊
+                self.ctx.ignore(element, "圖片區塊沒有指定圖片：以空白區塊呈現")
                 return Zone(kind="blank", **base)
             return Zone(kind="image", image=image.replace("\\", "/"), **base)
         if kind_attr == "empty":
@@ -401,6 +402,11 @@ class DashboardParser:
                 )
                 return Zone(kind="blank", **base)
             key = mapped
+        if key.startswith("[attr:") and key not in sheet.filter_kinds:
+            # ATTR(維度) 的篩選控制項：工作表上沒有這個篩選時，是同一個維度的類別篩選
+            dimension = "[none:" + key.removeprefix("[attr:")
+            if dimension in sheet.filter_kinds:
+                key = dimension
         use = sheet.uses.get(key)
         if use is None:
             self.ctx.flag(element, f"篩選控制項的欄位 {param} 不在工作表「{name}」上")

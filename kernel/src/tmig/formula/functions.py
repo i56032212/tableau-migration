@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -232,7 +233,8 @@ def _datediff(name: str) -> Checker:
     return check
 
 
-# 正規表示式：Tableau 萃取用 ICU，DuckDB 用 RE2；RE2 不支援前後查看、反向參照與佔有量詞
+# 正規表示式：Tableau 萃取用 ICU，DuckDB 用 RE2；RE2 不支援前後查看、反向參照與佔有量詞，用到時以
+# ICU 相容的函式計算（tmig.data.udf；Live 連線的方言不支援時轉譯失敗）
 _RE2_UNSUPPORTED = (
     ("(?=", "前向查看"),
     ("(?!", "否定前向查看"),
@@ -246,22 +248,27 @@ _RE2_UNSUPPORTED = (
 
 
 def regex_pattern(node: Node, name: str, pos: int) -> str | None:
-    """正規表示式的樣式：常值時檢查 RE2 能否執行並回傳內容；不是常值時回傳 None。"""
+    """正規表示式的樣式：常值時回傳內容（Python 的 re 也不能解析時是公式錯誤）；不是常值時回傳 None。"""
     if not (isinstance(node, LiteralNode) and node.kind == "string"):
         return None
     pattern = str(node.value)
-    for token, label in _RE2_UNSUPPORTED:
-        if token in pattern:
-            raise FormulaSemanticError(
-                f"{name} 的樣式用到{label}（{token}），尚不支援", pos, unsupported=True
-            )
+    if icu_features(pattern):
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise FormulaSemanticError(f"{name} 的樣式無法解析：{exc}", pos) from exc
+    return pattern
+
+
+def icu_features(pattern: str) -> list[str]:
+    """樣式中 RE2（DuckDB）不支援、ICU 支援的語法：前後查看、原子群組、佔有量詞、反向參照。"""
+    found = [label for token, label in _RE2_UNSUPPORTED if token in pattern]
     for i in range(len(pattern) - 1):
         escaped = i > 0 and pattern[i - 1] == "\\"
         if pattern[i] == "\\" and pattern[i + 1] in "123456789" and not escaped:
-            raise FormulaSemanticError(
-                f"{name} 的樣式用到反向參照，尚不支援", pos, unsupported=True
-            )
-    return pattern
+            found.append("反向參照")
+            break
+    return found
 
 
 def _regexp(result: DataType) -> Callable[[str], Checker]:
@@ -547,6 +554,8 @@ _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("REGEXP_MATCH", 2, 2, _regexp("boolean")),
     ("REGEXP_REPLACE", 3, 3, _regexp("string")),
     ("PI", 0, 0, _fixed("real")),
+    # 0 到 1 之間的亂數（每一列、每次查詢都不同，與 Tableau 相同無法逐值比對）
+    ("RANDOM", 0, 0, _fixed("real")),
     ("DEGREES", 1, 1, _real_numeric),
     ("RADIANS", 1, 1, _real_numeric),
     ("SIN", 1, 1, _real_numeric),

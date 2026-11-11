@@ -263,12 +263,12 @@ CALCS = "".join(
 def test_calc_levels_and_ast(tmp_path: Path) -> None:
     ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=CALCS)))
     levels = {f.caption: f.calc.level for f in ir.datasources[0].fields if f.calc is not None}
+    # 不支援（或公式有錯誤）但沒有用到的計算欄位：從資料源移除，改列為略過
     assert levels == {
         "Margin": "row",
         "Ratio": "aggregate",
         "Region Sales": "lod",
         "Rank": "table_calc",
-        "Bad": None,
         "Uses Param": "row",
     }
     margin = field(ir, "[Calculation_1]")
@@ -280,7 +280,32 @@ def test_calc_levels_and_ast(tmp_path: Path) -> None:
     param = field(ir, "[Calculation_6]")
     assert param.calc is not None and param.calc.ast is not None
     assert param.calc.ast["right"]["id"] == "p_top_n"
-    assert any("Bad" in r and "SCRIPT_REAL" in r for r in reasons(ir))
+    assert reasons(ir) == []
+    assert any(
+        "Bad" in u.reason and "SCRIPT_REAL" in u.reason and "沒有用到" in u.reason
+        for u in ir.ignored
+    )
+
+
+def test_used_broken_calc_is_unsupported(tmp_path: Path) -> None:
+    """有用到的計算欄位公式有錯誤（例如欄位改了型別）：仍列為不支援，欄位留在資料源中。"""
+    columns = calc(
+        "Calculation_7", "Year Start", "MAKEDATE(1970, 1, [Order Date])", "date", "dimension"
+    ) + calc("Calculation_8", "Unused", "MAKEDATE(1970, 1, [Order Date])", "date", "dimension")
+    used = instance("[Calculation_7]", "Year", "[yr:Calculation_7:ok]", "ordinal")
+    xml = b.workbook(
+        b.extract_datasource(columns=columns),
+        worksheets=worksheet(
+            "Sheet A", [*BASIC, used], rows=ref("yr:Calculation_7:ok"), cols=ref("sum:Sales:qk")
+        ),
+    )
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == ["計算欄位「Year Start」：MAKEDATE 的第 3 個參數必須是數字"]
+    captions = [f.caption for f in ir.datasources[0].fields]
+    assert "Year Start" in captions and "Unused" not in captions
+    assert [u.reason for u in ir.ignored if "Unused" in u.reason] == [
+        "計算欄位「Unused」：MAKEDATE 的第 3 個參數必須是數字；沒有用到，略過"
+    ]
 
 
 def test_group_calcs_and_sets(tmp_path: Path) -> None:
@@ -372,7 +397,9 @@ def test_nested_dimensions_and_dates(tmp_path: Path) -> None:
     ("kwargs", "message"),
     [
         ({"encodings": f"<geometry column='{ref('none:Category:nk')}' />"}, "標記編碼 <geometry>"),
-        ({"pane_extra": "<forecast-specification />"}, "預測"),
+        # 預測（Worksheet.forecast）只從工作表的 <table> 之下讀取，且要標明開啟
+        ({"pane_extra": "<forecast-specification enabled='true' />"}, "不在工作表的 <table> 之下"),
+        ({"table_extra": "<forecast-specification />"}, "沒有標明是否開啟"),
         ({"view_extra": "<strange-element />"}, "未知元素 <strange-element>"),
         ({"mark": "Map"}, "標記類型 Map"),
     ],
@@ -808,6 +835,8 @@ def test_dashboard_zones(tmp_path: Path) -> None:
             zone(10, 80000, 80000, 20000, 10000, "type-v2='empty'"),
             zone(11, 80000, 90000, 20000, 10000, "type-v2='extension'"),
             zone(12, 60000, 90000, 20000, 10000, "param='https://example.com/' type-v2='web'"),
+            # 還沒選圖片的圖片物件
+            zone(13, 60000, 80000, 20000, 10000, "type-v2='bitmap'"),
         ]
     )
     root = zone(
@@ -842,6 +871,8 @@ def test_dashboard_zones(tmp_path: Path) -> None:
     assert zones["z10"].kind == "blank"
     assert zones["z11"].kind == "blank"
     assert (zones["z12"].kind, zones["z12"].url) == ("web", "https://example.com/")
+    assert zones["z13"].kind == "blank"
+    assert any("沒有指定圖片" in u.reason for u in ir.ignored)
     assert reasons(ir) == ["dashboard 區塊類型 extension v0 不支援"]
     assert ir.unsupported[0].source_ref == zones["z11"].source_ref
 

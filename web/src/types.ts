@@ -71,6 +71,8 @@ export interface FieldFilter {
   mode?: "include" | "exclude" | "all";
   values?: Scalar[];
   ranges?: MemberRange[];
+  /** 開啟報表時篩選到最新的值（伺服器開啟報表時已代入目前的最大值） */
+  latest?: boolean;
   min?: Scalar;
   max?: Scalar;
   include_null?: boolean;

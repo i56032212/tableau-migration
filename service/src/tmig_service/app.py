@@ -889,6 +889,9 @@ def create_app(
             totals or None,
         )
         rendered.notes.extend(notes)
+        if query.analytics is not None:
+            # 叢集與預測在查詢之後計算：估計不了時的說明（例如資料不足以預測）
+            rendered.notes.extend(query.analytics.notes)
         fields = {f.id: f for ds in ir.datasources for f in ds.fields}
         shown = [c for c in query.columns if c.role != "sort" and c.use is not None]
         index = {key: i for i, key in enumerate(result.columns)}

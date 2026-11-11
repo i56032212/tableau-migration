@@ -194,13 +194,24 @@ def import_datasource_hyper(
     return table, others
 
 
-def import_hyper_tables(
-    hyper_path: Path, refs: list[tuple[str, str]], out_path: Path, log_dir: Path
-) -> tuple[list[TableImport], list[str]]:
-    """把 .hyper 中的多張資料表（schema、table）匯入同一個 DuckDB 檔，各自做匯入自檢。
+@dataclass
+class HyperExport:
+    """從 .hyper 匯出的一張資料表（Parquet 檔）與 Hyper 中的統計值（匯入自檢用）。"""
 
-    回傳各資料表的匯入結果，與 .hyper 中沒有匯入的其他資料表。
-    """
+    schema: str
+    table: str
+    columns: list[ColumnInfo]
+    tags: dict[str, str]
+    labels: list[tuple[str | None, str]]
+    hyper_stats: Any
+    parquet: Path
+
+
+def export_hyper_tables(
+    hyper_path: Path, refs: list[tuple[str, str]], log_dir: Path
+) -> tuple[list[HyperExport], list[tuple[str, str]]]:
+    """把 .hyper 中的資料表（schema、table）匯出成 Parquet，並在 Hyper 中計算統計值。
+    回傳各資料表的匯出結果，與 .hyper 中所有的資料表。"""
     from tableauhyperapi import (
         Connection,
         CreateMode,
@@ -210,7 +221,7 @@ def import_hyper_tables(
         escape_string_literal,
     )
 
-    exported: list[tuple[str, str, list[ColumnInfo], dict[str, str], str, Any, Path]] = []
+    exported: list[HyperExport] = []
     with (
         HyperProcess(
             Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, parameters={"log_dir": str(log_dir)}
@@ -248,50 +259,63 @@ def import_hyper_tables(
             conn.execute_command(
                 f"COPY {hyper_table} TO {escape_string_literal(str(parquet))} WITH (FORMAT PARQUET)"
             )
-            exported.append((schema, table, columns, tags, sql, (labels, hyper_stats), parquet))
+            exported.append(HyperExport(schema, table, columns, tags, labels, hyper_stats, parquet))
+    return exported, names
 
+
+def load_hyper_export(
+    con: duckdb.DuckDBPyConnection, export: HyperExport, schema: str, table: str
+) -> TableImport:
+    """把匯出的資料表載入 DuckDB 的 schema.table（結構描述須已建立），並與 Hyper 的統計值比對。"""
+    target = f"{_quote(schema)}.{_quote(table)}"
+    select = ", ".join(
+        f"CAST({_quote(c.name)} AS {c.duckdb_type}) AS {_quote(c.name)}" for c in export.columns
+    )
+    con.execute(
+        f"CREATE TABLE {target} AS SELECT {select} FROM read_parquet(?)", [str(export.parquet)]
+    )
+    sql, _ = _stat_sql(export.columns, export.tags, target)
+    duck_stats = con.execute(sql).fetchone()
+    assert duck_stats is not None
+    checks = [
+        StatCheck(
+            column=column,
+            stat=stat,
+            hyper=_text(h),
+            duckdb=_text(d),
+            ok=_same(stat, export.tags.get(column or "", ""), h, d),
+        )
+        for (column, stat), h, d in zip(export.labels, export.hyper_stats, duck_stats, strict=True)
+    ]
+    warnings = [
+        f"欄位「{c.name}」使用定序 {c.collation}，文字比較與排序可能與 DuckDB 不同"
+        for c in export.columns
+        if c.collation not in (None, "", "binary")
+    ]
+    return TableImport(
+        schema=schema,
+        table=table,
+        rows=int(str(export.hyper_stats[0])),
+        columns=export.columns,
+        checks=checks,
+        warnings=warnings,
+    )
+
+
+def import_hyper_tables(
+    hyper_path: Path, refs: list[tuple[str, str]], out_path: Path, log_dir: Path
+) -> tuple[list[TableImport], list[str]]:
+    """把 .hyper 中的多張資料表（schema、table）匯入同一個 DuckDB 檔，各自做匯入自檢。
+
+    回傳各資料表的匯入結果，與 .hyper 中沒有匯入的其他資料表。
+    """
+    exported, names = export_hyper_tables(hyper_path, refs, log_dir)
     tmp_out = out_path.with_name(out_path.name + ".tmp")
     tmp_out.unlink(missing_ok=True)
-    results: list[TableImport] = []
     with duckdb.connect(str(tmp_out)) as con:
-        for schema in dict.fromkeys(item[0] for item in exported):
+        for schema in dict.fromkeys(item.schema for item in exported):
             con.execute(f"CREATE SCHEMA {_quote(schema)}")
-        for schema, table, columns, tags, sql, (labels, hyper_stats), parquet in exported:
-            hyper_table = f"{_quote(schema)}.{_quote(table)}"
-            select = ", ".join(
-                f"CAST({_quote(c.name)} AS {c.duckdb_type}) AS {_quote(c.name)}" for c in columns
-            )
-            con.execute(
-                f"CREATE TABLE {hyper_table} AS SELECT {select} FROM read_parquet(?)",
-                [str(parquet)],
-            )
-            duck_stats = con.execute(sql).fetchone()
-            assert duck_stats is not None
-            checks = [
-                StatCheck(
-                    column=column,
-                    stat=stat,
-                    hyper=_text(h),
-                    duckdb=_text(d),
-                    ok=_same(stat, tags.get(column or "", ""), h, d),
-                )
-                for (column, stat), h, d in zip(labels, hyper_stats, duck_stats, strict=True)
-            ]
-            warnings = [
-                f"欄位「{c.name}」使用定序 {c.collation}，文字比較與排序可能與 DuckDB 不同"
-                for c in columns
-                if c.collation not in (None, "", "binary")
-            ]
-            results.append(
-                TableImport(
-                    schema=schema,
-                    table=table,
-                    rows=int(str(hyper_stats[0])),
-                    columns=columns,
-                    checks=checks,
-                    warnings=warnings,
-                )
-            )
+        results = [load_hyper_export(con, item, item.schema, item.table) for item in exported]
     os.replace(tmp_out, out_path)
     imported = set(refs)
     return results, [f"{a}.{b}" for a, b in names if (a, b) not in imported]
@@ -333,6 +357,40 @@ def _missing_columns(
         for f in fields
         if f.column is not None and f.column not in by_table.get(f.table or "", set())
     )
+
+
+TYPE_FAMILIES = {
+    "boolean": ("BOOLEAN",),
+    "integer": ("SMALLINT", "INTEGER", "BIGINT", "DECIMAL"),
+    "real": ("DOUBLE", "FLOAT", "DECIMAL", "SMALLINT", "INTEGER", "BIGINT"),
+    "string": ("VARCHAR",),
+    "date": ("DATE", "TIMESTAMP"),
+    "datetime": ("TIMESTAMP", "TIMESTAMPTZ", "DATE"),
+}
+"""IR 的型別 → 萃取中可以直接當成這個型別查詢的 DuckDB 型別。"""
+
+
+def _type_warnings(
+    connection: ExtractConnection, fields: list[DataField], tables: list[TableImport]
+) -> list[str]:
+    """IR 的實體欄位與萃取中的型別不同類（例如 IR 是日期、萃取中是整數，通常是 Tableau 變更了資料類型
+    但解析時沒有對應的轉換）：查詢可能失敗或結果不同，在匯入結果中提醒。"""
+    types: dict[tuple[str | None, str], str] = {}
+    for i, table in enumerate(tables):
+        key = connection.model.tables[i].id if connection.model is not None else None
+        for column in table.columns:
+            types[(key, column.name)] = column.duckdb_type
+    warnings: list[str] = []
+    for f in fields:
+        if f.column is None or f.calc is not None:
+            continue
+        found = types.get((f.table if connection.model is not None else None, f.column))
+        if found is None:
+            continue
+        family = found.split("(")[0]
+        if family not in TYPE_FAMILIES.get(f.datatype, (family,)):
+            warnings.append(f"欄位「{f.caption}」在萃取中是 {found}，IR 的型別是 {f.datatype}")
+    return warnings
 
 
 def import_workbook(
@@ -384,6 +442,7 @@ def import_workbook(
             out_path = target / f"{ds.id}.duckdb"
             refs = extract_table_refs(ds.connection)
             tables, others = import_hyper_tables(hyper_path, refs, out_path, log_dir)
+            tables[0].warnings.extend(_type_warnings(ds.connection, ds.fields, tables))
             result = DatasourceImport(
                 datasource=ds.id,
                 hyper_file=member,

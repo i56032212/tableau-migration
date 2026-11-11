@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote
 
 from lxml import etree
@@ -29,6 +31,7 @@ from tmig.ir.models import (
     ParameterAction,
     Scalar,
     SetAction,
+    Story,
     TooltipSheet,
     TupleFilter,
     Unsupported,
@@ -152,6 +155,18 @@ def _url_key(ctx: ParseContext, ds: DsState, text: str) -> str | None:
     if found.role == "measure" and level not in ("aggregate", "table_calc"):
         return f"{agg or found.default_agg or 'sum'}({found.id})"
     return found.id
+
+
+def _strings(value: Any) -> Iterator[str]:
+    """JSON 結構中所有的字串值。"""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
 
 
 def _command(action: etree._Element) -> str:
@@ -300,6 +315,7 @@ class WorkbookParser:
             reasons = "；".join(u.reason for u in ctx.unsupported) or "workbook 沒有資料源"
             raise NoDatasourceError(f"沒有可移轉的資料源：{reasons}", list(ctx.unsupported))
 
+        self._unused_broken_calcs(worksheets, dashboards, actions, stories)
         datasources = [
             Datasource(
                 id=state.id,
@@ -330,6 +346,40 @@ class WorkbookParser:
             )
         except ValidationError as exc:
             raise WorkbookParseError(f"解析結果不是合法的 IR：{exc}") from exc
+
+    def _unused_broken_calcs(
+        self,
+        worksheets: list[Worksheet],
+        dashboards: list[Dashboard],
+        actions: list[Action],
+        stories: list[Story],
+    ) -> None:
+        """公式有錯誤、但沒有任何地方用到的計算欄位（例如欄位改了型別後留下的舊計算）：Tableau 只在資料窗格
+        標示錯誤，不影響任何工作表。從資料源移除並改列為略過；有用到的仍是不支援。"""
+        ctx = self.ctx
+        if not ctx.broken_calcs:
+            return
+        broken = {field_id for field_id, _ in ctx.broken_calcs}
+        parts: list[Any] = [
+            [m.model_dump(mode="json") for m in [*worksheets, *dashboards, *actions, *stories]],
+            [p.model_dump(mode="json") for p in ctx.parameters],
+        ]
+        for state in ctx.datasources.values():
+            parts.append([f.model_dump(mode="json") for f in state.fields if f.id not in broken])
+            parts.append([f.model_dump(mode="json") for f in state.filters])
+            parts.append([h.model_dump(mode="json") for h in state.hierarchies])
+        used = set(_strings(parts))
+        unused = {field_id for field_id in broken if field_id not in used}
+        if not unused:
+            return
+        for field_id, entry in ctx.broken_calcs:
+            if field_id in unused:
+                ctx.unsupported.remove(entry)
+                ctx.ignored.append(
+                    entry.model_copy(update={"reason": f"{entry.reason}；沒有用到，略過"})
+                )
+        for state in ctx.datasources.values():
+            state.fields = [f for f in state.fields if f.id not in unused]
 
     def _tooltip_sheets(self, worksheets: list[Worksheet], root: etree._Element) -> None:
         """工具提示中的工作表（Viz in Tooltip）：所有工作表解析完後對應到目標工作表。
@@ -468,7 +518,9 @@ class WorkbookParser:
             source_el = child(action, "source")
             sources = self._action_sources(source_el, by_name, dashboards, worksheets)
             if not sources:
-                ctx.flag(action, f"{kind}動作「{caption}」的來源工作表無法移轉")
+                self._sourceless(
+                    action, f"{kind}動作「{caption}」", source_el, by_name, dashboards, worksheets
+                )
                 continue
             dashboard = (
                 board_ids.get(source_el.get("dashboard", "")) if source_el is not None else None
@@ -716,7 +768,9 @@ class WorkbookParser:
         source_el = child(item, "source")
         sources = self._action_sources(source_el, by_name, dashboards, worksheets)
         if not sources:
-            self.ctx.flag(item, f"{label}「{caption}」的來源工作表無法移轉")
+            self._sourceless(
+                item, f"{label}「{caption}」", source_el, by_name, dashboards, worksheets
+            )
             return None
         board_ids = {d.name: d.id for d in dashboards}
         dashboard = board_ids.get(source_el.get("dashboard", "")) if source_el is not None else None
@@ -745,7 +799,9 @@ class WorkbookParser:
         source_el = child(action, "source")
         sources = self._action_sources(source_el, by_name, dashboards, worksheets)
         if not sources:
-            ctx.flag(action, f"醒目提示動作「{caption}」的來源工作表無法移轉")
+            self._sourceless(
+                action, f"醒目提示動作「{caption}」", source_el, by_name, dashboards, worksheets
+            )
             return None
         boards = {d.name: d for d in dashboards}
         dashboard = boards.get(source_el.get("dashboard", "")) if source_el is not None else None
@@ -954,21 +1010,41 @@ class WorkbookParser:
             source_ref=xpath(item),
         )
 
+    def _sourceless(
+        self,
+        element: etree._Element,
+        label: str,
+        source: etree._Element | None,
+        by_name: dict[str, str],
+        dashboards: list[Dashboard],
+        worksheets: list[Worksheet],
+    ) -> None:
+        """沒有來源工作表的動作：來源的工作表都被排除時動作不會觸發（Tableau 仍保留），略過；否則不支援。"""
+        if self._action_sources(source, by_name, dashboards, worksheets, exclude=False):
+            self.ctx.ignore(element, f"{label}排除了所有來源工作表，不會觸發：略過")
+        else:
+            self.ctx.flag(element, f"{label}的來源工作表無法移轉")
+
     def _action_sources(
         self,
         source: etree._Element | None,
         by_name: dict[str, str],
         dashboards: list[Dashboard],
         worksheets: list[Worksheet],
+        exclude: bool = True,
     ) -> list[str]:
         """來源：指定工作表；或 dashboard 上的所有工作表；或使用該資料源的所有工作表；或所有工作表
-        （type='all'）；都扣掉 <exclude-sheet>。"""
+        （type='all'）；都扣掉 <exclude-sheet>（exclude=False 時不扣）。"""
         if source is None:
             return []
         if source.get("worksheet"):
             found = by_name.get(source.get("worksheet", ""))
             return [found] if found else []
-        excluded = {by_name.get(e.get("name", "")) for e in children(source, "exclude-sheet")}
+        excluded = (
+            {by_name.get(e.get("name", "")) for e in children(source, "exclude-sheet")}
+            if exclude
+            else set()
+        )
         if source.get("type") == "datasource":
             ds = self.ctx.datasources.get(source.get("datasource", ""))
             found_ids = [ws.id for ws in worksheets if ds is not None and ws.datasource == ds.id]

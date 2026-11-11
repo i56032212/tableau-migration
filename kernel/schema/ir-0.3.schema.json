@@ -1126,6 +1126,12 @@
           "description": "篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
           "title": "Group"
         },
+        "latest": {
+          "default": false,
+          "description": "開啟報表時篩選到最新的值（<preset type='last-values'>）：開啟時以欄位目前的最大值取代存檔時的選取（tmig.planner.dynamic）",
+          "title": "Latest",
+          "type": "boolean"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -1142,6 +1148,47 @@
         "source_ref"
       ],
       "title": "CategoricalFilter",
+      "type": "object"
+    },
+    "ClusterSpec": {
+      "additionalProperties": false,
+      "description": "叢集（分析 → 叢集）：依檢視中各標記的量值以 k-means 分組（tmig.planner.cluster）。叢集欄位是資料源中\n公式為 0 的整數欄位，查詢之後才填入叢集編號（1 起算；量值是 Null 的標記為 0「不分叢集」）。",
+      "properties": {
+        "field": {
+          "description": "叢集欄位",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Field",
+          "type": "string"
+        },
+        "measures": {
+          "description": "分析的量值（都在檢視中）",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "minItems": 1,
+          "title": "Measures",
+          "type": "array"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "叢集數；None 為自動",
+          "title": "Count"
+        }
+      },
+      "required": [
+        "field",
+        "measures"
+      ],
+      "title": "ClusterSpec",
       "type": "object"
     },
     "ColorAssignment": {
@@ -2212,7 +2259,7 @@
     },
     "FileConnection": {
       "additionalProperties": false,
-      "description": "資料在 .twbx 內的檔案（Excel、文字檔）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進\nDuckDB（每張資料表一張 Files.<name>），之後與萃取相同在本機查詢。檔案的內容是報表封裝時的快照\n（與 Tableau Server 上的 .twbx 相同）。",
+      "description": "資料在 .twbx 內的檔案（Excel、文字檔、.hyper）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進\nDuckDB（每張資料表一張 Files.<name>；.hyper 依它本身的型別），之後與萃取相同在本機查詢。檔案的\n內容是報表封裝時的快照（與 Tableau Server 上的 .twbx 相同）。",
       "properties": {
         "kind": {
           "const": "file",
@@ -2265,7 +2312,7 @@
     },
     "FileTable": {
       "additionalProperties": false,
-      "description": "檔案型資料源中的一張資料表：Excel 的工作表，或文字檔（CSV 等）。",
+      "description": "檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等），或 .hyper 檔中的資料表\n（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；只有一張資料表時與萃取相同）。",
       "properties": {
         "name": {
           "description": "關聯樹中的資料表名稱（relation 的 name）",
@@ -2276,7 +2323,8 @@
         "format": {
           "enum": [
             "excel",
-            "text"
+            "text",
+            "hyper"
           ],
           "title": "Format",
           "type": "string"
@@ -2299,6 +2347,22 @@
           "default": null,
           "description": "Excel 的工作表（或具名範圍）",
           "title": "Sheet"
+        },
+        "table": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": ".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]",
+          "title": "Table"
         },
         "cells": {
           "anyOf": [
@@ -2421,6 +2485,156 @@
         }
       },
       "title": "FontStyle",
+      "type": "object"
+    },
+    "Forecast": {
+      "additionalProperties": false,
+      "description": "預測（分析 → 預測）：時間軸上的量值以指數平滑估計之後幾期（tmig.planner.forecast）。估計的列\nForecast Indicator 為 Estimate；預測區間另外輸出。Tableau 的初始值與最佳化細節沒有公開，估計值可能\n與 Tableau 有些微差異。",
+      "properties": {
+        "measures": {
+          "description": "預測的量值",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Measures",
+          "type": "array"
+        },
+        "indicator": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Forecast Indicator 欄位（公式為 \"Actual\" 的字串欄位）",
+          "title": "Indicator"
+        },
+        "model": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "auto_no_season",
+            "custom"
+          ],
+          "title": "Model",
+          "type": "string"
+        },
+        "trend": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "additive",
+                "multiplicative"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trend"
+        },
+        "season": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "additive",
+                "multiplicative"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Season"
+        },
+        "length": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "next",
+            "until"
+          ],
+          "title": "Length",
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "next、until 的期數",
+          "title": "Size"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "enum": [
+                "year",
+                "quarter",
+                "month",
+                "week",
+                "weekday",
+                "day",
+                "hour",
+                "minute",
+                "second"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "next、until 的期間單位",
+          "title": "Unit"
+        },
+        "ignore_last": {
+          "default": 1,
+          "description": "忽略最後幾期（改以估計值呈現）",
+          "minimum": 0,
+          "title": "Ignore Last",
+          "type": "integer"
+        },
+        "fill_zeros": {
+          "default": false,
+          "description": "缺少的期以 0 填補",
+          "title": "Fill Zeros",
+          "type": "boolean"
+        },
+        "confidence": {
+          "default": 0.95,
+          "description": "預測區間的信賴水準",
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "bands": {
+          "default": true,
+          "description": "畫出預測區間",
+          "title": "Bands",
+          "type": "boolean"
+        }
+      },
+      "title": "Forecast",
       "type": "object"
     },
     "Hierarchy": {
@@ -2582,7 +2796,7 @@
     },
     "JoinTerm": {
       "additionalProperties": false,
-      "description": "join 條件的一邊：資料表的實體欄位，或常值（例如 1 = [T].[dummy] 這種全部配對的寫法）。",
+      "description": "join 條件的一邊：資料表的實體欄位、常值（例如 1 = [T].[dummy] 這種全部配對的寫法），或 join 計算\n（Tableau 的公式，以 [資料表].[欄位] 參照實體欄位）。",
       "properties": {
         "table": {
           "anyOf": [
@@ -2629,6 +2843,19 @@
           ],
           "default": null,
           "title": "Literal"
+        },
+        "formula": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "join 計算的公式，例如 IF [Begin].[Type] = \"begin\" THEN 1 END",
+          "title": "Formula"
         }
       },
       "title": "JoinTerm",
@@ -6068,6 +6295,30 @@
           },
           "title": "Annotations",
           "type": "array"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClusterSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "叢集（分析 → 叢集）"
+        },
+        "forecast": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Forecast"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預測（分析 → 預測）"
         },
         "reference_lines": {
           "items": {
