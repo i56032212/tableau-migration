@@ -30,6 +30,8 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    Annotation,
+    AnnotationPoint,
     Blend,
     BlendLink,
     CategoricalFilter,
@@ -227,6 +229,8 @@ KNOWN = frozenset(
 )
 OPAQUE = frozenset(
     {
+        # 註解另外解析（_annotations）
+        "annotations",
         "style",
         "layout-options",
         "customized-tooltip",
@@ -442,6 +446,7 @@ class SheetParser:
         self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
         reference_lines = self._reference_lines(child(table, "panes"), child(table, "style"))
+        annotations = self._annotations(child(table, "annotations"))
         with self._blend_scope():
             formats = self._formats(child(table, "style"), [*rows, *cols])
         sheet_formats = worksheet_formats(
@@ -463,6 +468,7 @@ class SheetParser:
             sorts=sorts,
             table_calcs=table_calcs,
             reference_lines=reference_lines,
+            annotations=annotations,
             formats=formats,
             title=title,
             totals=totals,
@@ -1160,6 +1166,95 @@ class SheetParser:
             add_text(match.group(0))
         add_text(text[position:])
         return runs
+
+    def _annotations(self, element: etree._Element | None) -> list[Annotation]:
+        """註解：<annotation class='mark'|'point'|'area'>，文字（<formatted-text>）與位置
+        （<point>、<top-left>、<bottom-right> 的 <visual-coordinate>）；文字相對於位置的偏移在 <body x y>。
+        認不得的位置略過這個註解（只影響圖表）。"""
+        found: list[Annotation] = []
+        for item in children(element, "annotation"):
+            kind = item.get("class")
+            if kind not in ("mark", "point", "area"):
+                self.ctx.ignore(item, f"工作表「{self.name}」的註解類型 {kind} 尚不支援，未畫出")
+                continue
+            formatted = child(item, "formatted-text")
+            text = (
+                self._text_runs(formatted, f"工作表「{self.name}」的註解")
+                if formatted is not None
+                else []
+            )
+            body = child(item, "body")
+            offset = (
+                _number(body.get("x") if body is not None else None),
+                _number(body.get("y") if body is not None else None),
+            )
+            positions: dict[str, AnnotationPoint | None] = {}
+            for tag in ("point",) if kind != "area" else ("top-left", "bottom-right"):
+                coordinate = child(child(item, tag), "visual-coordinate")
+                positions[tag] = (
+                    self._annotation_point(coordinate) if coordinate is not None else None
+                )
+            if any(p is None for p in positions.values()):
+                self.ctx.ignore(item, f"工作表「{self.name}」的註解位置無法解析，未畫出")
+                continue
+            found.append(
+                Annotation(
+                    kind=kind,  # type: ignore[arg-type]
+                    text=text,
+                    point=positions.get("point"),
+                    top_left=positions.get("top-left"),
+                    bottom_right=positions.get("bottom-right"),
+                    offset=offset,
+                )
+            )
+        return found
+
+    def _annotation_point(self, coordinate: etree._Element) -> AnnotationPoint | None:
+        """<visual-coordinate class='axis'>：x-coord、y-coord 的 axis-value 與座標軸的量值；
+        class='mark'：<tuple-reference> 的欄位（<columns>）與值（<tuple>）。"""
+        if coordinate.get("class") == "mark":
+            reference = child(coordinate, "tuple-reference")
+            columns = children(child(child(reference, "tuple-descriptor"), "columns"), "field")
+            values = children(child(reference, "tuple"), "value")
+            if not columns or len(columns) != len(values):
+                return None
+            mark: dict[str, Scalar] = {}
+            for column, value in zip(columns, values, strict=True):
+                use = self.resolve(text_of(column))
+                if isinstance(use, str) or use.agg is not None or use.table_calc is not None:
+                    continue  # 量值不用來找標記
+                if use.field in SPECIAL_FIELDS:
+                    continue
+                field = self._field(use.field)
+                try:
+                    mark[use_key(use)] = parse_literal(text_of(value), value_type(field, use))
+                except LiteralError:
+                    return None
+            return AnnotationPoint(mark=mark) if mark else None
+        point: dict[str, object] = {}
+        for axis in ("x", "y"):
+            coord = child(coordinate, f"{axis}-coord")
+            if coord is None:
+                continue
+            raw = coord.get("axis-value")
+            ref = text_of(child(child(coord, "node-reference"), "axis"))
+            if raw is None or not ref:
+                continue
+            use = self.resolve(ref)
+            if isinstance(use, str):
+                return None
+            try:
+                value = (
+                    parse_literal(raw, "real")
+                    if not raw.startswith("#")
+                    else parse_literal(raw, "datetime")
+                )
+            except LiteralError:
+                return None
+            point[axis], point[f"{axis}_axis"] = value, use
+        if not point:
+            return None
+        return AnnotationPoint.model_validate(point)
 
     def _tooltip_sheets(self, formatted: etree._Element, marks: Marks) -> None:
         """工具提示文字中的工作表（Viz in Tooltip）：記下名稱、大小與篩選的欄位，所有工作表解析完後
@@ -2247,3 +2342,11 @@ def _pixels(value: str | None, default: int = 300) -> int:
     except ValueError:
         return default
     return number if number > 0 else default
+
+
+def _number(value: str | None) -> int:
+    """註解文字的偏移（像素）；沒寫或不是數字時為 0。"""
+    try:
+        return round(float(value)) if value else 0
+    except ValueError:
+        return 0

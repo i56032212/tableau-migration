@@ -493,6 +493,24 @@ def test_phone_layout(server: str) -> None:
         browser.close()
 
 
+def test_annotation_is_drawn(server: str) -> None:
+    """註解：Region Picker 上 West 的長條有標記的註解（文字代入地區、畫線連到文字），不影響選取。"""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/s/ws_region_picker")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"] svg')
+        text = page.locator(".single-sheet svg text:not(.frozen *)", has_text="最高的地區：West")
+        text.first.wait_for()
+        assert text.count() == 1
+        assert errors == []
+        browser.close()
+
+
 MARKS_JS = """(sheet) => Array.from(document.querySelectorAll(
     `[data-worksheet='${sheet}'] svg [aria-roledescription='text mark'],`
     + `[data-worksheet='${sheet}'] svg [aria-roledescription='bar']`))

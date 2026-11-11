@@ -331,6 +331,190 @@
       "title": "AllowedRange",
       "type": "object"
     },
+    "Annotation": {
+      "additionalProperties": false,
+      "description": "註解（Tableau 的「註解」：標記、點、區域）：圖上的文字，只影響圖表，不影響數字。\n\n標記與點的註解在 point 的位置畫一條線到文字（offset 為文字相對於位置的像素）；區域的註解在\ntop_left 到 bottom_right 的方框中顯示文字。",
+      "properties": {
+        "kind": {
+          "enum": [
+            "mark",
+            "point",
+            "area"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "description": "文字（可含欄位與參數）",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Text",
+          "type": "array"
+        },
+        "point": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnnotationPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "top_left": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnnotationPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bottom_right": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnnotationPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "offset": {
+          "default": [
+            0,
+            0
+          ],
+          "description": "文字相對於位置的像素（x、y）",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Offset",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "Annotation",
+      "type": "object"
+    },
+    "AnnotationPoint": {
+      "additionalProperties": false,
+      "description": "註解的位置：量值座標軸上的值（x_axis、y_axis 為座標軸的量值，沒有該方向的座標軸時為 None），\n或一個標記（mark：維度的欄位鍵 → 值）。",
+      "properties": {
+        "x": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "X"
+        },
+        "x_axis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "y": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Y"
+        },
+        "y_axis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mark": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標記的註解：標記的維度值（欄位鍵 → 值）",
+          "title": "Mark"
+        }
+      },
+      "title": "AnnotationPoint",
+      "type": "object"
+    },
     "Axis": {
       "additionalProperties": false,
       "description": "一個欄位在欄架或列架上的座標軸（連續欄位）或標題（離散欄位的成員）設定：Tableau 的\n「編輯座標軸」與「顯示標題」。沒有寫的依預設（顯示、以欄位名稱為標題、範圍依資料）。",
@@ -5875,6 +6059,14 @@
             "$ref": "#/$defs/TableCalc"
           },
           "title": "Table Calcs",
+          "type": "array"
+        },
+        "annotations": {
+          "description": "註解（標記、點、區域）：只影響圖表",
+          "items": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "title": "Annotations",
           "type": "array"
         },
         "reference_lines": {

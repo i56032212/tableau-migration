@@ -1022,6 +1022,33 @@ class Marks(IRModel):
         return [u for u in singles if u is not None] + [*self.label, *self.detail, *self.tooltip]
 
 
+class AnnotationPoint(IRModel):
+    """註解的位置：量值座標軸上的值（x_axis、y_axis 為座標軸的量值，沒有該方向的座標軸時為 None），
+    或一個標記（mark：維度的欄位鍵 → 值）。"""
+
+    x: Scalar = None
+    x_axis: FieldUse | None = None
+    y: Scalar = None
+    y_axis: FieldUse | None = None
+    mark: dict[str, Scalar] | None = Field(
+        default=None, description="標記的註解：標記的維度值（欄位鍵 → 值）"
+    )
+
+
+class Annotation(IRModel):
+    """註解（Tableau 的「註解」：標記、點、區域）：圖上的文字，只影響圖表，不影響數字。
+
+    標記與點的註解在 point 的位置畫一條線到文字（offset 為文字相對於位置的像素）；區域的註解在
+    top_left 到 bottom_right 的方框中顯示文字。"""
+
+    kind: Literal["mark", "point", "area"]
+    text: list[TextRun] = Field(default_factory=list, description="文字（可含欄位與參數）")
+    point: AnnotationPoint | None = None
+    top_left: AnnotationPoint | None = None
+    bottom_right: AnnotationPoint | None = None
+    offset: tuple[int, int] = Field(default=(0, 0), description="文字相對於位置的像素（x、y）")
+
+
 class Pane(IRModel):
     """個別量值的標記卡：同一架上有多個量值（各自一個軸）或雙軸時，每個量值可以有自己的標記設定。"""
 
@@ -1314,6 +1341,9 @@ class Worksheet(IRModel):
     filters: list[Filter] = Field(default_factory=list)
     sorts: list[Sort] = Field(default_factory=list)
     table_calcs: list[TableCalc] = Field(default_factory=list)
+    annotations: list[Annotation] = Field(
+        default_factory=list, description="註解（標記、點、區域）：只影響圖表"
+    )
     reference_lines: list[ReferenceLine] = Field(default_factory=list)
     formats: dict[str, str] = Field(
         default_factory=dict,

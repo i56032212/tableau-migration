@@ -1456,6 +1456,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1632,6 +1633,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1788,6 +1790,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -1955,6 +1958,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2116,6 +2120,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2322,6 +2327,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2490,6 +2496,7 @@
           "source_ref": "/workbook/worksheets/worksheet[7]/table/view/datasource-dependencies/column-instance[2]/table-calc"
         }
       ],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2617,6 +2624,46 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [
+        {
+          "kind": "mark",
+          "text": [
+            {
+              "text": "最高的地區：",
+              "use": null,
+              "parameter": null,
+              "style": null
+            },
+            {
+              "text": null,
+              "use": {
+                "field": "f_region",
+                "agg": null,
+                "date": null,
+                "continuous": false,
+                "table_calc": null
+              },
+              "parameter": null,
+              "style": null
+            }
+          ],
+          "point": {
+            "x": null,
+            "x_axis": null,
+            "y": null,
+            "y_axis": null,
+            "mark": {
+              "f_region": "West"
+            }
+          },
+          "top_left": null,
+          "bottom_right": null,
+          "offset": [
+            -150,
+            -22
+          ]
+        }
+      ],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2766,6 +2813,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -2915,6 +2963,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3080,6 +3129,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3207,6 +3257,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3334,6 +3385,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3453,6 +3505,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3601,6 +3654,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3746,6 +3800,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -3891,6 +3946,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4040,6 +4096,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4213,6 +4270,7 @@
           "source_ref": "/workbook/worksheets/worksheet[19]/table/view/datasource-dependencies/column-instance[3]/table-calc"
         }
       ],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4340,6 +4398,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -4466,6 +4525,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [
         {
           "id": "refline0",
@@ -4666,6 +4726,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [
         {
           "id": "refline0",
@@ -4934,6 +4995,7 @@
           "source_ref": "/workbook/worksheets/worksheet[23]/table/view/datasource-dependencies/column-instance[4]/table-calc"
         }
       ],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5149,6 +5211,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5358,6 +5421,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5522,6 +5586,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5647,6 +5712,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5794,6 +5860,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -5921,6 +5988,7 @@
       "filters": [],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -6085,6 +6153,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],
@@ -6248,6 +6317,7 @@
       ],
       "sorts": [],
       "table_calcs": [],
+      "annotations": [],
       "reference_lines": [],
       "formats": {},
       "title": [],

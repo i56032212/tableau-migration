@@ -46,6 +46,7 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    AnnotationPoint,
     Axis,
     Banding,
     ColorPalette,
@@ -1286,6 +1287,13 @@ def build_spec(
     elif trend is not None and not multiple:
         # 多個量值時每張圖各自畫（見 _Builder.multi）
         _trend_lines(builder, body, trend, builder.records_of(ws.marks))
+
+    if ws.annotations:
+        if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
+            params = {p.id: p.value for p in ir.parameters} | (parameters or {})
+            body = _with_annotations(builder, body, values, ir, params)
+        else:
+            builder.notes.append("多個量值、圓餅等圖表上的註解尚未畫出（不影響數字）")
 
     if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
         body = _small_multiples(builder, body, values, rows_dims, cols_dims, rows_meas, cols_meas)
@@ -2601,6 +2609,207 @@ def _with_reference_lines(
     if not behind and not front:
         return body
     return {"layer": [*behind, body, *front]}
+
+
+ANNOTATION = f"{DECO}_annotation"
+"""註解的圖層名稱與資料欄前綴（裝飾圖層，檢視器選取標記時略過）。"""
+ANNOTATION_COLOR = "#333333"
+ANNOTATION_LINE = "#8c8c8c"
+
+
+def _with_annotations(
+    builder: _Builder,
+    body: dict[str, Any],
+    values: list[dict[str, Any]],
+    ir: IR,
+    params: dict[str, Scalar],
+) -> dict[str, Any]:
+    """註解：標記的註解畫在那個標記的位置，點與區域的註解畫在座標軸的值上；文字相對於位置偏移時
+    畫一條線連到文字（與 Tableau 相同）。只畫在第一列資料所在的窗格。"""
+    ws, notes = builder.ws, builder.notes
+    encoding = main_encoding(body)
+    rows = [v for v in values if not v.get(TOTAL)]
+    if not isinstance(encoding, dict) or not rows:
+        notes.append("這張圖表上的註解尚未畫出（不影響數字）")
+        return body
+    layers: list[dict[str, Any]] = []
+    for n, annotation in enumerate(ws.annotations):
+        name = f"{ANNOTATION}{n}"
+        dx, dy = annotation.offset
+        if annotation.kind == "mark":
+            assert annotation.point is not None
+            record = _annotation_record(builder, rows, annotation.point.mark or {})
+            if record is None:
+                notes.append(f"註解 {n + 1} 的標記不在目前的資料中，沒有畫出")
+                continue
+            record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
+            position = {
+                c: _band_center(encoding[c])
+                for c in ("x", "y")
+                if isinstance(encoding.get(c), dict)
+            }
+            layers += _annotation_text(name, position, dx, dy)
+            continue
+        record = rows[0]
+        if annotation.kind == "point":
+            assert annotation.point is not None
+            position = _annotation_position(builder, encoding, annotation.point, record, name)
+            if position is None:
+                notes.append(f"註解 {n + 1} 的位置不在這張圖的座標軸上，沒有畫出")
+                continue
+            record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
+            layers += _annotation_text(name, position, dx, dy)
+            continue
+        assert annotation.top_left is not None and annotation.bottom_right is not None
+        start = _annotation_position(builder, encoding, annotation.top_left, record, f"{name}_a")
+        end = _annotation_position(builder, encoding, annotation.bottom_right, record, f"{name}_b")
+        if start is None or end is None or set(start) != set(end):
+            notes.append(f"註解 {n + 1} 的區域不在這張圖的座標軸上，沒有畫出")
+            continue
+        record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
+        box: dict[str, Any] = dict(start)
+        for channel, enc in end.items():
+            box[f"{channel}2"] = {"field": enc["field"]}
+        center: dict[str, Any] = {}
+        for channel in start:
+            first = record.get(start[channel]["field"])
+            second = record.get(end[channel]["field"])
+            mid = f"{name}_{channel}mid"
+            record[mid] = (
+                (first + second) / 2 if _is_number(first) and _is_number(second) else first
+            )
+            center[channel] = {**start[channel], "field": mid}
+        layers.append(
+            {
+                "name": f"{name}_box",
+                "transform": [{"filter": f"isValid(datum[{name!r}])"}],
+                "mark": {
+                    "type": "rect",
+                    "fill": "#f2f2f2",
+                    "fillOpacity": 0.6,
+                    "stroke": "#9a9a9a",
+                    "strokeWidth": 1,
+                    "tooltip": False,
+                },
+                "encoding": box,
+            }
+        )
+        layers.append(
+            {
+                "name": name,
+                "transform": [{"filter": f"isValid(datum[{name!r}])"}],
+                "mark": {
+                    "type": "text",
+                    "align": "center",
+                    "baseline": "middle",
+                    "color": ANNOTATION_COLOR,
+                    "fontSize": 11,
+                    "lineBreak": "\n",
+                    "tooltip": False,
+                },
+                "encoding": {**center, "text": {"field": name}},
+            }
+        )
+    if not layers:
+        return body
+    return {"layer": [body, *layers]}
+
+
+def _annotation_record(
+    builder: _Builder, rows: list[dict[str, Any]], mark: dict[str, Scalar]
+) -> dict[str, Any] | None:
+    """標記的註解所在的那一列：標記的維度值都相同（工作表上沒有的欄位不比對）。"""
+    pairs = [(builder.channels[k].name, v) for k, v in mark.items() if k in builder.channels]
+    if not pairs:
+        return None
+    return next((r for r in rows if all(r.get(name) == value for name, value in pairs)), None)
+
+
+def _band_center(enc: dict[str, Any]) -> dict[str, Any]:
+    """離散軸上的位置取格子的中間（與標記相同）。"""
+    out = {k: v for k, v in enc.items() if k in ("field", "type", "title", "scale", "timeUnit")}
+    if out.get("type") in ("nominal", "ordinal"):
+        out["bandPosition"] = 0.5
+    return out
+
+
+def _annotation_position(
+    builder: _Builder,
+    encoding: dict[str, Any],
+    point: AnnotationPoint,
+    record: dict[str, Any],
+    name: str,
+) -> dict[str, Any] | None:
+    """點或區域角落的位置：座標軸的值寫入第一列資料（name_x、name_y），沿用座標軸的比例尺。"""
+    position: dict[str, Any] = {}
+    for value, axis in ((point.x, point.x_axis), (point.y, point.y_axis)):
+        if axis is None or value is None:
+            continue
+        channel = builder.channels.get(use_key(axis))
+        found = next(
+            (
+                c
+                for c in ("x", "y")
+                if channel is not None
+                and isinstance(encoding.get(c), dict)
+                and encoding[c].get("field") == channel.name
+            ),
+            None,
+        )
+        if found is None:
+            return None
+        field = f"{name}_{found}"
+        record[field] = value
+        position[found] = {**_band_center(encoding[found]), "field": field}
+    return position or None
+
+
+def _annotation_text(name: str, position: dict[str, Any], dx: int, dy: int) -> list[dict[str, Any]]:
+    """標記與點的註解：文字（相對於位置偏移 dx、dy 像素），偏移時畫一條線連到文字。"""
+    flt = [{"filter": f"isValid(datum[{name!r}])"}]
+    layers: list[dict[str, Any]] = []
+    if (dx or dy) and len(position) == 2:
+        line = {
+            **position,
+            "x2": {"field": position["x"]["field"]},
+            "y2": {"field": position["y"]["field"]},
+        }
+        for channel in ("x2", "y2"):
+            if "bandPosition" in position[channel[0]]:
+                line[channel]["bandPosition"] = 0.5
+        layers.append(
+            {
+                "name": f"{name}_line",
+                "transform": flt,
+                "mark": {
+                    "type": "rule",
+                    "color": ANNOTATION_LINE,
+                    "x2Offset": dx,
+                    "y2Offset": dy,
+                    "tooltip": False,
+                },
+                "encoding": line,
+            }
+        )
+    layers.append(
+        {
+            "name": name,
+            "transform": flt,
+            "mark": {
+                "type": "text",
+                "align": "left" if dx >= 0 else "right",
+                "baseline": "middle",
+                "dx": dx + (4 if dx >= 0 else -4),
+                "dy": dy,
+                "color": ANNOTATION_COLOR,
+                "fontSize": 11,
+                "lineBreak": "\n",
+                "tooltip": False,
+            },
+            "encoding": {**position, "text": {"field": name}},
+        }
+    )
+    return layers
 
 
 class _Placement:

@@ -88,109 +88,193 @@
       "fontSize": 12.0
     }
   },
-  "encoding": {
-    "x": {
-      "field": "c1",
-      "type": "quantitative",
-      "title": "Sales",
-      "axis": {
-        "grid": true,
-        "gridColor": {
-          "condition": {
-            "test": "datum.value === 0",
-            "value": "#cbcbcb"
-          },
-          "value": "#f0f0f0"
-        },
-        "gridDash": {
-          "condition": {
-            "test": "datum.value === 0",
-            "value": [
-              2,
-              1
-            ]
-          },
-          "value": []
-        },
-        "gridWidth": {
-          "condition": {
-            "test": "datum.value === 0",
-            "value": 1
-          },
-          "value": 1
-        }
-      }
-    },
-    "y": {
-      "field": "c0_label",
-      "type": "ordinal",
-      "sort": null,
-      "title": "Region",
-      "axis": {
-        "ticks": false,
-        "zindex": 1,
-        "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
-        "labelFontSize": 12.0,
-        "labelFontWeight": 400,
-        "labelAlign": "left",
-        "labelPadding": 58,
-        "labelLimit": 54,
-        "minExtent": 62,
-        "maxExtent": 62,
-        "title": "Region",
-        "titleAngle": 0,
-        "titleAlign": "left",
-        "titleBaseline": "bottom",
-        "titleX": -58,
-        "titleY": -4,
-        "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
-        "titleFontSize": 12.0,
-        "titleFontWeight": 600,
-        "titleLimit": 54
-      },
-      "scale": {
-        "type": "band",
-        "paddingInner": 0,
-        "paddingOuter": 0
-      }
-    },
-    "tooltip": [
-      {
-        "field": "c0_label",
-        "title": "Region"
-      },
-      {
-        "field": "c1_label",
-        "title": "Sales"
-      }
-    ]
-  },
   "layer": [
     {
+      "encoding": {
+        "x": {
+          "field": "c1",
+          "type": "quantitative",
+          "title": "Sales",
+          "axis": {
+            "grid": true,
+            "gridColor": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": "#cbcbcb"
+              },
+              "value": "#f0f0f0"
+            },
+            "gridDash": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": [
+                  2,
+                  1
+                ]
+              },
+              "value": []
+            },
+            "gridWidth": {
+              "condition": {
+                "test": "datum.value === 0",
+                "value": 1
+              },
+              "value": 1
+            }
+          }
+        },
+        "y": {
+          "field": "c0_label",
+          "type": "ordinal",
+          "sort": null,
+          "title": "Region",
+          "axis": {
+            "ticks": false,
+            "zindex": 1,
+            "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+            "labelFontSize": 12.0,
+            "labelFontWeight": 400,
+            "labelAlign": "left",
+            "labelPadding": 58,
+            "labelLimit": 54,
+            "minExtent": 62,
+            "maxExtent": 62,
+            "title": "Region",
+            "titleAngle": 0,
+            "titleAlign": "left",
+            "titleBaseline": "bottom",
+            "titleX": -58,
+            "titleY": -4,
+            "titleFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+            "titleFontSize": 12.0,
+            "titleFontWeight": 600,
+            "titleLimit": 54
+          },
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          }
+        },
+        "tooltip": [
+          {
+            "field": "c0_label",
+            "title": "Region"
+          },
+          {
+            "field": "c1_label",
+            "title": "Sales"
+          }
+        ]
+      },
+      "layer": [
+        {
+          "mark": {
+            "type": "bar",
+            "tooltip": true,
+            "color": "#4e79a7",
+            "height": {
+              "band": 0.75
+            }
+          }
+        },
+        {
+          "mark": {
+            "type": "text",
+            "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+            "fontSize": 12.0,
+            "lineBreak": "\n",
+            "align": "left",
+            "dx": 3
+          },
+          "encoding": {
+            "text": {
+              "field": "c1_label"
+            },
+            "color": {
+              "value": "#1f2328"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "__deco_annotation0_line",
+      "transform": [
+        {
+          "filter": "isValid(datum['__deco_annotation0'])"
+        }
+      ],
       "mark": {
-        "type": "bar",
-        "tooltip": true,
-        "color": "#4e79a7",
-        "height": {
-          "band": 0.75
+        "type": "rule",
+        "color": "#8c8c8c",
+        "x2Offset": -150,
+        "y2Offset": -22,
+        "tooltip": false
+      },
+      "encoding": {
+        "x": {
+          "field": "c1",
+          "type": "quantitative",
+          "title": "Sales"
+        },
+        "y": {
+          "field": "c0_label",
+          "type": "ordinal",
+          "title": "Region",
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          },
+          "bandPosition": 0.5
+        },
+        "x2": {
+          "field": "c1"
+        },
+        "y2": {
+          "field": "c0_label",
+          "bandPosition": 0.5
         }
       }
     },
     {
+      "name": "__deco_annotation0",
+      "transform": [
+        {
+          "filter": "isValid(datum['__deco_annotation0'])"
+        }
+      ],
       "mark": {
         "type": "text",
-        "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
-        "fontSize": 12.0,
+        "align": "right",
+        "baseline": "middle",
+        "dx": -154,
+        "dy": -22,
+        "color": "#333333",
+        "fontSize": 11,
         "lineBreak": "\n",
-        "align": "left",
-        "dx": 3
+        "tooltip": false
       },
       "encoding": {
-        "text": {
-          "field": "c1_label"
+        "x": {
+          "field": "c1",
+          "type": "quantitative",
+          "title": "Sales"
         },
-        "color": {
-          "value": "#1f2328"
+        "y": {
+          "field": "c0_label",
+          "type": "ordinal",
+          "title": "Region",
+          "scale": {
+            "type": "band",
+            "paddingInner": 0,
+            "paddingOuter": 0
+          },
+          "bandPosition": 0.5
+        },
+        "text": {
+          "field": "__deco_annotation0"
         }
       }
     }

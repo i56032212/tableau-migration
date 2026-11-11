@@ -40,6 +40,7 @@
   選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
   之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
 - 階層 Product：Category → Sub-Category → Product Name；Category Detail 等工作表上的 Category 可以向下切入
+- J5 註解：Region Picker 上 West 的長條有標記的註解（文字代入地區，偏移時畫線連到文字）
 - I3 裝置專屬版面：「篩選動作」dashboard 的手機版面（符合寬度、高 1400 像素，各工作表由上到下，固定高度）
 - 工具提示中的工作表（Viz in Tooltip）：Sales by Segment 的工具提示中顯示 Category Mix，以滑過的 Segment 篩選
   （Category Mix 上 Tableau 自動產生的工具提示篩選，直接檢視時顯示全部）
@@ -905,8 +906,49 @@ REGION_SALES_COLUMNS = [
 ]
 
 
+REGION_ANNOTATION = f"""        <annotations>
+          <annotation class='mark' id='1' text-width='160'>
+            <formatted-text>
+              <run>最高的地區：</run>
+              <run>{escape("<" + ref("none:Region:nk") + ">")}</run>
+            </formatted-text>
+            <point>
+              <visual-coordinate class='mark'>
+                <tuple-reference>
+                  <tuple-descriptor>
+                    <pane-descriptor>
+                      <x-fields><field>{ref("sum:Sales:qk")}</field></x-fields>
+                      <y-fields><field>{ref("none:Region:nk")}</field></y-fields>
+                    </pane-descriptor>
+                    <columns>
+                      <field>{ref("none:Region:nk")}</field>
+                      <field>{ref("sum:Sales:qk")}</field>
+                    </columns>
+                  </tuple-descriptor>
+                  <tuple>
+                    <value>&quot;West&quot;</value>
+                    <value>725457.82450000057</value>
+                  </tuple>
+                </tuple-reference>
+              </visual-coordinate>
+            </point>
+            <body x='-150' y='-22' />
+          </annotation>
+        </annotations>"""
+"""註解：Region Picker 上 West 的長條（標記的註解，文字代入地區）。"""
+
+
 def region_picker() -> str:
-    """篩選動作的來源：依地區的銷售額長條圖。"""
+    """篩選動作的來源：依地區的銷售額長條圖；West 的長條上有註解。"""
+    return _with_annotations(_region_picker(), REGION_ANNOTATION)
+
+
+def _with_annotations(sheet: str, annotations: str) -> str:
+    assert sheet.count("</cols>\n      </table>") == 1
+    return sheet.replace("</cols>\n      </table>", f"</cols>\n{annotations}\n      </table>")
+
+
+def _region_picker() -> str:
     return worksheet(
         "Region Picker",
         "7D6C2A1F-2B3C-4D5E-9F0A-000000000008",
