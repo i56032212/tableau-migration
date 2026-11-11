@@ -7120,6 +7120,239 @@
       "source_ref": "/workbook/dashboards/dashboard[3]"
     },
     {
+      "id": "db_8e998436",
+      "name": "醒目提示",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "sizing": "fixed",
+      "min_size": null,
+      "max_size": null,
+      "background": null,
+      "zones": [
+        {
+          "id": "z3",
+          "kind": "container",
+          "x": 0,
+          "y": 0,
+          "w": 1000,
+          "h": 700,
+          "worksheet": null,
+          "field": null,
+          "parameter": null,
+          "control": null,
+          "legend": null,
+          "text": null,
+          "content": [],
+          "image": null,
+          "button": null,
+          "url": null,
+          "children": [
+            {
+              "id": "z4",
+              "kind": "container",
+              "x": 8,
+              "y": 8,
+              "w": 984,
+              "h": 684,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "content": [],
+              "image": null,
+              "button": null,
+              "url": null,
+              "children": [
+                {
+                  "id": "z5",
+                  "kind": "title",
+                  "x": 8,
+                  "y": 8,
+                  "w": 984,
+                  "h": 40,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": "醒目提示",
+                  "content": [],
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [],
+                  "layout": null,
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "style": null,
+                  "fit": null,
+                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[1]"
+                },
+                {
+                  "id": "z6",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 56,
+                  "w": 984,
+                  "h": 636,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "content": [],
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 56,
+                      "w": 488,
+                      "h": 636,
+                      "worksheet": "ws_region_picker",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": "entire_view",
+                      "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[1]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "container",
+                      "x": 504,
+                      "y": 56,
+                      "w": 488,
+                      "h": 636,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [
+                        {
+                          "id": "z9",
+                          "kind": "highlighter",
+                          "x": 504,
+                          "y": 56,
+                          "w": 488,
+                          "h": 72,
+                          "worksheet": "ws_region_category_matrix",
+                          "field": {
+                            "field": "f_category",
+                            "agg": null,
+                            "date": null,
+                            "continuous": false,
+                            "table_calc": null
+                          },
+                          "parameter": null,
+                          "control": null,
+                          "legend": null,
+                          "text": null,
+                          "content": [],
+                          "image": null,
+                          "button": null,
+                          "url": null,
+                          "children": [],
+                          "layout": null,
+                          "fixed": null,
+                          "hidden": false,
+                          "show_title": true,
+                          "style": null,
+                          "fit": null,
+                          "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[2]/zone[1]"
+                        },
+                        {
+                          "id": "z10",
+                          "kind": "worksheet",
+                          "x": 504,
+                          "y": 136,
+                          "w": 488,
+                          "h": 556,
+                          "worksheet": "ws_region_category_matrix",
+                          "field": null,
+                          "parameter": null,
+                          "control": null,
+                          "legend": null,
+                          "text": null,
+                          "content": [],
+                          "image": null,
+                          "button": null,
+                          "url": null,
+                          "children": [],
+                          "layout": null,
+                          "fixed": null,
+                          "hidden": false,
+                          "show_title": true,
+                          "style": null,
+                          "fit": "entire_view",
+                          "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[2]/zone[2]"
+                        }
+                      ],
+                      "layout": "vertical",
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": null,
+                      "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[2]"
+                    }
+                  ],
+                  "layout": "horizontal",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "style": null,
+                  "fit": null,
+                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]"
+                }
+              ],
+              "layout": "vertical",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "style": null,
+              "fit": null,
+              "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone"
+            }
+          ],
+          "layout": "tiled",
+          "fixed": null,
+          "hidden": false,
+          "show_title": true,
+          "style": null,
+          "fit": null,
+          "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone"
+        }
+      ],
+      "source_ref": "/workbook/dashboards/dashboard[4]"
+    },
+    {
       "id": "db_e90cfe8a",
       "name": "群組與分組",
       "size": {
@@ -7191,7 +7424,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z6",
@@ -7235,7 +7468,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[1]"
                     },
                     {
                       "id": "z8",
@@ -7261,7 +7494,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[2]"
                     }
                   ],
                   "layout": "horizontal",
@@ -7270,7 +7503,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]"
                 },
                 {
                   "id": "z9",
@@ -7296,7 +7529,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": "entire_view",
-                  "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone/zone[3]"
+                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[3]"
                 }
               ],
               "layout": "vertical",
@@ -7305,7 +7538,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -7314,10 +7547,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[4]"
+      "source_ref": "/workbook/dashboards/dashboard[5]"
     },
     {
       "id": "db_eef81f0f",
@@ -7409,7 +7642,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[1]"
                     },
                     {
                       "id": "z7",
@@ -7453,7 +7686,7 @@
                           "show_title": true,
                           "style": null,
                           "fit": "entire_view",
-                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[2]/zone[1]"
+                          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[2]/zone[1]"
                         },
                         {
                           "id": "z9",
@@ -7479,7 +7712,7 @@
                           "show_title": true,
                           "style": null,
                           "fit": "entire_view",
-                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[2]/zone[2]"
+                          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[2]/zone[2]"
                         }
                       ],
                       "layout": "horizontal",
@@ -7488,7 +7721,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[2]"
                     },
                     {
                       "id": "z10",
@@ -7532,7 +7765,7 @@
                           "show_title": true,
                           "style": null,
                           "fit": "entire_view",
-                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[3]/zone[1]"
+                          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[3]/zone[1]"
                         },
                         {
                           "id": "z12",
@@ -7558,7 +7791,7 @@
                           "show_title": true,
                           "style": null,
                           "fit": "entire_view",
-                          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[3]/zone[2]"
+                          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[3]/zone[2]"
                         }
                       ],
                       "layout": "horizontal",
@@ -7567,7 +7800,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]/zone[3]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]/zone[3]"
                     }
                   ],
                   "layout": "vertical",
@@ -7576,7 +7809,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z13",
@@ -7626,7 +7859,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[1]"
                     },
                     {
                       "id": "z15",
@@ -7658,7 +7891,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[2]"
                     },
                     {
                       "id": "z16",
@@ -7684,7 +7917,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]/zone[3]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[3]"
                     }
                   ],
                   "layout": "vertical",
@@ -7693,7 +7926,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]"
                 }
               ],
               "layout": "horizontal",
@@ -7702,7 +7935,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -7711,10 +7944,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[5]"
+      "source_ref": "/workbook/dashboards/dashboard[6]"
     },
     {
       "id": "db_5901f0fb",
@@ -7788,7 +8021,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z6",
@@ -7814,7 +8047,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": "entire_view",
-                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[2]"
                 },
                 {
                   "id": "z7",
@@ -7840,7 +8073,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": "entire_view",
-                  "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[3]"
+                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]"
                 }
               ],
               "layout": "vertical",
@@ -7849,7 +8082,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -7858,10 +8091,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[6]"
+      "source_ref": "/workbook/dashboards/dashboard[7]"
     },
     {
       "id": "db_fbfea9a6",
@@ -7935,7 +8168,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z9",
@@ -7961,7 +8194,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]"
                 },
                 {
                   "id": "z6",
@@ -8005,7 +8238,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[3]/zone[1]"
                     },
                     {
                       "id": "z8",
@@ -8031,7 +8264,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[3]/zone[2]"
                     }
                   ],
                   "layout": "horizontal",
@@ -8040,7 +8273,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone/zone[3]"
+                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[3]"
                 }
               ],
               "layout": "vertical",
@@ -8049,7 +8282,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -8058,10 +8291,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[7]"
+      "source_ref": "/workbook/dashboards/dashboard[8]"
     },
     {
       "id": "db_0eea0abf",
@@ -8135,7 +8368,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z6",
@@ -8179,7 +8412,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone/zone[2]/zone[1]"
                     },
                     {
                       "id": "z8",
@@ -8205,7 +8438,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone/zone[2]/zone[2]"
                     }
                   ],
                   "layout": "horizontal",
@@ -8214,7 +8447,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone/zone[2]"
                 }
               ],
               "layout": "vertical",
@@ -8223,7 +8456,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -8232,10 +8465,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[8]"
+      "source_ref": "/workbook/dashboards/dashboard[9]"
     },
     {
       "id": "db_fdf1f080",
@@ -8291,7 +8524,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[1]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[1]"
             },
             {
               "id": "z5",
@@ -8317,7 +8550,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[2]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[2]"
             },
             {
               "id": "z6",
@@ -8356,7 +8589,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[3]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[3]"
             },
             {
               "id": "z7",
@@ -8395,7 +8628,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[4]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[4]"
             },
             {
               "id": "z8",
@@ -8434,7 +8667,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[5]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[5]"
             },
             {
               "id": "z9",
@@ -8475,7 +8708,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[6]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[6]"
             },
             {
               "id": "z10",
@@ -8501,7 +8734,7 @@
               "show_title": true,
               "style": null,
               "fit": "entire_view",
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[7]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[7]"
             },
             {
               "id": "z11",
@@ -8551,7 +8784,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[8]/zone"
+                  "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[8]/zone"
                 }
               ],
               "layout": "vertical",
@@ -8560,7 +8793,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[8]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[8]"
             },
             {
               "id": "z13",
@@ -8586,7 +8819,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone/zone[9]"
+              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone[9]"
             }
           ],
           "layout": "tiled",
@@ -8595,10 +8828,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[9]"
+      "source_ref": "/workbook/dashboards/dashboard[10]"
     },
     {
       "id": "db_4272d2c1",
@@ -8672,7 +8905,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z6",
@@ -8716,7 +8949,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[2]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]/zone[1]"
                     },
                     {
                       "id": "z8",
@@ -8742,7 +8975,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[2]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]/zone[2]"
                     }
                   ],
                   "layout": "horizontal",
@@ -8751,7 +8984,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]"
                 }
               ],
               "layout": "vertical",
@@ -8760,7 +8993,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -8769,10 +9002,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[10]"
+      "source_ref": "/workbook/dashboards/dashboard[11]"
     },
     {
       "id": "db_f8dd3e84",
@@ -8846,7 +9079,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[1]"
+                  "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[1]"
                 },
                 {
                   "id": "z6",
@@ -8890,7 +9123,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[2]/zone[1]"
                     },
                     {
                       "id": "z8",
@@ -8916,7 +9149,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[2]/zone[2]"
                     }
                   ],
                   "layout": "horizontal",
@@ -8925,7 +9158,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[2]"
+                  "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[2]"
                 },
                 {
                   "id": "z9",
@@ -8969,7 +9202,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[3]/zone[1]"
+                      "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[3]/zone[1]"
                     },
                     {
                       "id": "z11",
@@ -8995,7 +9228,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": "entire_view",
-                      "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[3]/zone[2]"
+                      "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[3]/zone[2]"
                     }
                   ],
                   "layout": "horizontal",
@@ -9004,7 +9237,7 @@
                   "show_title": true,
                   "style": null,
                   "fit": null,
-                  "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone/zone[3]"
+                  "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone/zone[3]"
                 }
               ],
               "layout": "vertical",
@@ -9013,7 +9246,7 @@
               "show_title": true,
               "style": null,
               "fit": null,
-              "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone/zone"
+              "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone/zone"
             }
           ],
           "layout": "tiled",
@@ -9022,10 +9255,10 @@
           "show_title": true,
           "style": null,
           "fit": null,
-          "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone"
+          "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone"
         }
       ],
-      "source_ref": "/workbook/dashboards/dashboard[11]"
+      "source_ref": "/workbook/dashboards/dashboard[12]"
     }
   ],
   "actions": [
@@ -9037,6 +9270,7 @@
       "url": null,
       "parameter": null,
       "set_action": null,
+      "highlight": null,
       "activation": "select",
       "dashboard": "db_577aa158",
       "sources": [
@@ -9060,6 +9294,7 @@
       "url": null,
       "parameter": null,
       "set_action": null,
+      "highlight": null,
       "activation": "select",
       "dashboard": "db_577aa158",
       "sources": [
@@ -9097,6 +9332,7 @@
       },
       "parameter": null,
       "set_action": null,
+      "highlight": null,
       "activation": "menu",
       "dashboard": "db_577aa158",
       "sources": [
@@ -9111,6 +9347,64 @@
       "source_ref": "/workbook/actions/action[3]"
     },
     {
+      "id": "act_highlight_region",
+      "name": "[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]",
+      "caption": "Highlight Region",
+      "kind": "highlight",
+      "url": null,
+      "parameter": null,
+      "set_action": null,
+      "highlight": {
+        "fields": []
+      },
+      "activation": "hover",
+      "dashboard": "db_577aa158",
+      "sources": [
+        "ws_region_category_matrix"
+      ],
+      "targets": [
+        "ws_region_picker",
+        "ws_category_detail",
+        "ws_segment_detail",
+        "ws_region_category_matrix"
+      ],
+      "target_dashboard": null,
+      "target_worksheet": null,
+      "target_story": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/action[4]"
+    },
+    {
+      "id": "act_highlight_by_region",
+      "name": "[Action8_7D6C2A1F2B3C4D5E9F0A000000000108]",
+      "caption": "Highlight by Region",
+      "kind": "highlight",
+      "url": null,
+      "parameter": null,
+      "set_action": null,
+      "highlight": {
+        "fields": [
+          "Region"
+        ]
+      },
+      "activation": "select",
+      "dashboard": "db_8e998436",
+      "sources": [
+        "ws_region_picker"
+      ],
+      "targets": [
+        "ws_region_picker",
+        "ws_region_category_matrix"
+      ],
+      "target_dashboard": null,
+      "target_worksheet": null,
+      "target_story": null,
+      "clearing": "show_all",
+      "single_select": false,
+      "source_ref": "/workbook/actions/action[5]"
+    },
+    {
       "id": "act_go_to_filter_actions",
       "name": "[Action6_7D6C2A1F2B3C4D5E9F0A000000000106]",
       "caption": "Go to Filter Actions",
@@ -9118,6 +9412,7 @@
       "url": null,
       "parameter": null,
       "set_action": null,
+      "highlight": null,
       "activation": "menu",
       "dashboard": "db_fbfea9a6",
       "sources": [
@@ -9143,6 +9438,7 @@
         "behavior": "assign",
         "clearing": "add_all"
       },
+      "highlight": null,
       "activation": "select",
       "dashboard": "db_f8dd3e84",
       "sources": [
@@ -9170,6 +9466,7 @@
         "clear_value": null
       },
       "set_action": null,
+      "highlight": null,
       "activation": "select",
       "dashboard": "db_fbfea9a6",
       "sources": [
@@ -9272,7 +9569,7 @@
         }
       ],
       "active": "sp1",
-      "source_ref": "/workbook/dashboards/dashboard[12]"
+      "source_ref": "/workbook/dashboards/dashboard[13]"
     }
   ],
   "unsupported": [],
@@ -9288,12 +9585,6 @@
       "reason": "dashboard「功能總覽」為自動尺寸：區塊座標以 1366×768 換算，檢視時依視窗大小重排（固定大小的區塊維持像素大小，其餘依比例分配），與 Tableau 的版面重排可能略有差異",
       "element": "size",
       "xml": "<size xmlns:user=\"http://www.tableausoftware.com/xml/user\" sizing-mode=\"automatic\"/>"
-    },
-    {
-      "source_ref": "/workbook/actions/action[4]",
-      "reason": "醒目提示動作「Highlight Region」（不影響數字）",
-      "element": "action",
-      "xml": "<action xmlns:user=\"http://www.tableausoftware.com/xml/user\" caption=\"Highlight Region\" name=\"[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]\">\n      <activation auto-clear=\"true\" type=\"on-hover\"/>\n      <source dashboard=\"篩選動作\" type=\"sheet\" worksheet=\"Region Category Matrix\"/>\n      <command command=\"tsc:brush\">\n        <param name=\"special-fields\" value=\"all\"/>\n        <param name=\"target\" value=\"篩選動作\"/>\n      </command>\n    </action>"
     }
   ]
 }

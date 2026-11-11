@@ -24,6 +24,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     FitMode,
+    HighlightAction,
     ParameterAction,
     Scalar,
     SetAction,
@@ -342,7 +343,7 @@ class WorkbookParser:
         worksheets: list[Worksheet],
         dashboards: list[Dashboard],
     ) -> list[Action]:
-        """篩選動作轉成 IR；醒目提示記在 ignored；網址動作等其餘種類列為不支援。"""
+        """篩選、醒目提示與網址動作轉成 IR；其餘種類列為不支援。"""
         ctx = self.ctx
         by_name = {state.name: state.id for state in ctx.sheets.values()}
         sheet_ds = {ws.id: ws.datasource for ws in worksheets}
@@ -375,7 +376,9 @@ class WorkbookParser:
             kind = ACTION_KINDS.get(raw, raw or "未知")
             caption = action.get("caption") or action.get("name", "")
             if raw == "tsc:brush":
-                ctx.ignore(action, f"醒目提示動作「{caption}」（不影響數字）")
+                found = self._highlight_action(action, caption, by_name, dashboards, worksheets)
+                if found is not None:
+                    result.append(found)
                 continue
             if raw not in ("tsc:tsl-filter", "tsc:url"):
                 ctx.flag(action, f"Dashboard action「{caption}」（{kind}）v0 不支援")
@@ -643,6 +646,69 @@ class WorkbookParser:
             p.get("name", ""): p.get("value", "") for p in children(child(item, "params"), "param")
         }
         return caption, activation, dashboard, sources, params
+
+    def _highlight_action(
+        self,
+        action: etree._Element,
+        caption: str,
+        by_name: dict[str, str],
+        dashboards: list[Dashboard],
+        worksheets: list[Worksheet],
+    ) -> Action | None:
+        """醒目提示動作（tsc:brush）：比對所有欄位（special-fields='all'）或選定的欄位（field-captions，
+        欄位的顯示名稱以逗號分隔）；目標為 target 的 dashboard 上的工作表（或指定的工作表），扣掉 exclude。
+
+        XML 依公開資料推定；「日期與時間」等其他 special-fields 列為不支援。"""
+        ctx = self.ctx
+        activation_el = child(action, "activation")
+        activation = {"on-select": "select", "on-hover": "hover"}.get(
+            activation_el.get("type", "") if activation_el is not None else "", "menu"
+        )
+        source_el = child(action, "source")
+        sources = self._action_sources(source_el, by_name, dashboards, worksheets)
+        if not sources:
+            ctx.flag(action, f"醒目提示動作「{caption}」的來源工作表無法移轉")
+            return None
+        boards = {d.name: d for d in dashboards}
+        dashboard = boards.get(source_el.get("dashboard", "")) if source_el is not None else None
+        params = {
+            p.get("name", ""): p.get("value", "")
+            for p in children(child(action, "command"), "param")
+        }
+        special = params.get("special-fields")
+        captions = [c.strip() for c in (params.get("field-captions") or "").split(",") if c.strip()]
+        if special not in (None, "all") or (special is None and not captions):
+            ctx.flag(
+                action, f"醒目提示動作「{caption}」比對的欄位（{special or '未指定'}）v0 不支援"
+            )
+            return None
+        target_name = params.get("target") or ""
+        board = boards.get(target_name) or dashboard
+        if board is not None:
+            targets: list[str] = []
+            for zone in iter_zones(board.zones):
+                if zone.kind == "worksheet" and zone.worksheet and zone.worksheet not in targets:
+                    targets.append(zone.worksheet)
+        else:
+            found = by_name.get(target_name)
+            targets = [found] if found else list(sources)
+        excluded = {by_name.get(n.strip()) for n in (params.get("exclude") or "").split(",")}
+        targets = [t for t in targets if t not in excluded]
+        target_dashboard = boards[target_name].id if target_name in boards else None
+        source_board = dashboard.id if dashboard is not None else None
+        return Action(
+            id=ctx.ids.make("act", caption or action.get("name", ""), action.get("name", "")),
+            name=action.get("name", "") or caption,
+            caption=caption,
+            kind="highlight",
+            highlight=HighlightAction(fields=[] if special == "all" else captions),
+            activation=activation,  # type: ignore[arg-type]
+            dashboard=source_board,
+            sources=sources,
+            targets=targets,
+            target_dashboard=target_dashboard if target_dashboard != source_board else None,
+            source_ref=xpath(action),
+        )
 
     def _set_action(
         self,

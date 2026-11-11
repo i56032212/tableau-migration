@@ -27,6 +27,10 @@ export interface ViewState {
   today?: string | null;
   /** 頁面架目前的頁：工作表 id → 頁面欄位的值（沒有列出的工作表為存檔時的頁） */
   pages?: Record<string, Scalar>;
+  /** 醒目提示動作 id → 觸發它的工作表與標記（目標工作表中欄位值相同的標記醒目） */
+  highlights?: Record<string, { sheet: string; marks: Mark[] }>;
+  /** 醒目提示控制項：工作表 id → 欄位鍵 → 醒目提示的值 */
+  highlighters?: Record<string, Record<string, Scalar[]>>;
 }
 
 /** 篩選狀態的欄位鍵，與查詢服務相同：f_region、year(f_order_date)、trunc_month(f_order_date)。 */
@@ -266,6 +270,74 @@ export function runActions(
     if (action.target_dashboard) navigate = action.target_dashboard;
   }
   return { actions: next, navigate };
+}
+
+/** 醒目提示動作：觸發後的醒目提示（清除選取時移除）。回傳更新後的物件（沒有變化時回傳原物件）。 */
+export function applyHighlights(
+  actions: Action[],
+  sheet: string,
+  marks: Mark[],
+  current: Record<string, { sheet: string; marks: Mark[] }>,
+): Record<string, { sheet: string; marks: Mark[] }> {
+  let next = current;
+  for (const action of actions) {
+    if (action.kind !== "highlight") continue;
+    const effective = action.single_select && marks.length > 1 ? [] : marks;
+    if (effective.length === 0) {
+      if (action.id in next) {
+        next = { ...next };
+        delete next[action.id];
+      }
+    } else if (JSON.stringify(next[action.id]) !== JSON.stringify({ sheet, marks: effective })) {
+      next = { ...next, [action.id]: { sheet, marks: effective } };
+    }
+  }
+  return next;
+}
+
+/** 欄位鍵 → 欄位 id 與日期的包裝（year(f)、trunc_month(f)）。 */
+function splitKey(key: string): { field: string; wrap: (id: string) => string } {
+  const match = /^([a-z_]+)\((.+)\)$/.exec(key);
+  if (!match) return { field: key, wrap: (id) => id };
+  return { field: match[2], wrap: (id) => `${match[1]}(${id})` };
+}
+
+/**
+ * 目標工作表上要醒目的標記（欄位鍵為目標工作表的鍵）：醒目提示動作與醒目提示控制項。
+ * 欄位依顯示名稱對應（與 Tableau 相同，不同資料源的同名欄位也算）；動作只比對選定的欄位。
+ * 沒有醒目提示時為 null；有醒目提示、但這張工作表沒有任何相同的欄位時不影響它（也是 null）。
+ */
+export function highlightsFor(ir: IR, worksheet: string, view: ViewState): Mark[] | null {
+  const target = ir.worksheets.find((w) => w.id === worksheet);
+  if (!target) return null;
+  const fieldsOf = (sheetId: string) => {
+    const sheet = ir.worksheets.find((w) => w.id === sheetId);
+    return ir.datasources.find((d) => d.id === sheet?.datasource)?.fields ?? [];
+  };
+  const targetFields = fieldsOf(worksheet);
+  const byCaption = new Map(targetFields.map((f) => [f.caption, f.id]));
+  const result: Mark[] = [];
+  for (const action of ir.actions ?? []) {
+    const fired = view.highlights?.[action.id];
+    if (action.kind !== "highlight" || !fired || !action.targets.includes(worksheet)) continue;
+    const sourceFields = new Map(fieldsOf(fired.sheet).map((f) => [f.id, f.caption]));
+    const wanted = new Set(action.highlight?.fields ?? []);
+    for (const mark of fired.marks) {
+      const mapped: Mark = {};
+      for (const [key, value] of Object.entries(mark)) {
+        const { field, wrap } = splitKey(key);
+        const caption = sourceFields.get(field);
+        if (caption === undefined || (wanted.size > 0 && !wanted.has(caption))) continue;
+        const id = byCaption.get(caption);
+        if (id !== undefined) mapped[wrap(id)] = value;
+      }
+      if (Object.keys(mapped).length > 0) result.push(mapped);
+    }
+  }
+  for (const [key, values] of Object.entries(view.highlighters?.[worksheet] ?? {})) {
+    for (const value of values) result.push({ [key]: value });
+  }
+  return result.length > 0 ? result : null;
 }
 
 /** 點選標記後的選取：一般點選取代，按住 Ctrl／⌘／Shift 加入或移除。 */

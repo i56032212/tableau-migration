@@ -1,4 +1,4 @@
-// 動作（Tableau 的「儀表板＞動作」）：篩選、網址、參數、切換與集合動作的新增、修改、刪除。
+// 動作（Tableau 的「儀表板＞動作」）：篩選、醒目提示、網址、參數、切換與集合動作的新增、修改、刪除。
 
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../Server";
@@ -11,6 +11,7 @@ type Kind = Action["kind"];
 
 const KINDS: [Kind, string][] = [
   ["filter", "篩選"],
+  ["highlight", "醒目提示"],
   ["url", "網址"],
   ["parameter", "變更參數"],
   ["navigate", "前往工作表"],
@@ -34,6 +35,8 @@ interface Draft {
   clearing: Action["clearing"];
   fields: string[];
   allFields: boolean;
+  /** 醒目提示動作比對的欄位（顯示名稱） */
+  highlightFields: string[];
   url: string;
   escape: boolean;
   parameter: string;
@@ -57,7 +60,8 @@ function draftOf(action: Action | null, dashboard: Dashboard, onBoard: string[])
     targets: action?.targets ?? onBoard.slice(1),
     clearing: action?.clearing ?? "show_all",
     fields: [],
-    allFields: true,
+    allFields: !action?.highlight?.fields.length,
+    highlightFields: action?.highlight?.fields ?? [],
     url: action?.url?.template ?? "https://",
     escape: action?.url?.escape ?? true,
     parameter: action?.parameter?.parameter ?? "",
@@ -128,12 +132,13 @@ export function ActionsDialog({
       activation: draft.activation,
       dashboard: draft.scope === "dashboard" ? dashboard.id : null,
       sources: draft.sources,
-      targets: draft.kind === "filter" ? draft.targets : [],
+      targets: draft.kind === "filter" || draft.kind === "highlight" ? draft.targets : [],
       clearing: draft.clearing,
       fields: draft.kind === "filter" && !draft.allFields ? draft.fields : [],
       url: null,
       parameter: null,
       set_action: null,
+      highlight: draft.kind === "highlight" ? { fields: draft.allFields ? [] : draft.highlightFields } : null,
       target_dashboard: null,
       target_worksheet: null,
       target_story: null,
@@ -332,6 +337,27 @@ export function ActionsDialog({
                     (fields) => set({ fields }),
                     (key) => label(sourceDims.find((u) => useKey(u) === key)!),
                     "篩選的欄位",
+                  )}
+              </div>
+            </>
+          )}
+          {draft.kind === "highlight" && (
+            <>
+              <div className="prop-group">
+                <div>目標工作表</div>
+                {checkboxes(sheetChoices, draft.targets, (targets) => set({ targets }), sheetName, "目標工作表")}
+              </div>
+              <div className="prop-group">
+                <label>
+                  <input type="checkbox" checked={draft.allFields} onChange={(e) => set({ allFields: e.target.checked })} /> 所有欄位
+                </label>
+                {!draft.allFields &&
+                  checkboxes(
+                    [...new Set(sourceDims.map((u) => allFields.get(u.field)?.caption ?? u.field))],
+                    draft.highlightFields,
+                    (highlightFields) => set({ highlightFields }),
+                    (caption) => caption,
+                    "醒目提示的欄位",
                   )}
               </div>
             </>

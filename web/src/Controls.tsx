@@ -21,6 +21,55 @@ interface FilterProps {
   onChange: (key: string, value: FilterValue) => void;
 }
 
+/**
+ * 醒目提示控制項（Tableau 的「醒目提示器」）：輸入時，名稱包含輸入文字的值的標記醒目、其餘淡化；
+ * 也可以從清單中選一個值。清空即取消醒目提示。
+ */
+export function HighlighterControl({
+  ir,
+  workbook,
+  zone,
+  values,
+  onChange,
+}: {
+  ir: IR;
+  workbook: string;
+  zone: Zone;
+  values: Scalar[];
+  onChange: (key: string, values: Scalar[]) => void;
+}) {
+  const use = zone.field!;
+  const key = fieldKey(use);
+  const [domain, setDomain] = useState<Scalar[]>([]);
+  const [text, setText] = useState(() => (values.length === 1 ? memberLabel(ir, use, values[0]) : ""));
+  useEffect(() => {
+    api
+      .domain(workbook, key, "values")
+      .then((d) => setDomain(d.kind === "values" ? d.values : []))
+      .catch(() => setDomain([]));
+  }, [workbook, key]);
+  const title = `醒目提示 ${fieldCaption(ir, use)}`;
+  const listId = `highlighter-${zone.id}`;
+  const update = (next: string) => {
+    setText(next);
+    const wanted = next.trim().toLowerCase();
+    if (!wanted) return onChange(key, []);
+    const exact = domain.filter((v) => memberLabel(ir, use, v).toLowerCase() === wanted);
+    onChange(key, exact.length > 0 ? exact : domain.filter((v) => memberLabel(ir, use, v).toLowerCase().includes(wanted)));
+  };
+  return (
+    <fieldset className="control highlighter" data-control="highlighter">
+      <legend>{title}</legend>
+      <input type="search" aria-label={title} placeholder={title} list={listId} value={text} onChange={(e) => update(e.target.value)} />
+      <datalist id={listId}>
+        {domain.map((v) => (
+          <option key={JSON.stringify(v)} value={memberLabel(ir, use, v)} />
+        ))}
+      </datalist>
+    </fieldset>
+  );
+}
+
 /** 依 IR 的篩選控制項：單選、多選、範圍、日期範圍、輸入。 */
 export function FilterControl(props: FilterProps) {
   const { ir, zone } = props;

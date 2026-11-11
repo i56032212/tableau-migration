@@ -13,6 +13,8 @@
 - H4 排除選取的標記：Region Category Matrix 排除 (West, Furniture)、(East, Technology) 兩個值組合
 - L1 篩選動作：點選 Region Picker 的地區篩選 Category Detail（清除時顯示全部）
   與 Segment Detail（清除時不顯示任何值），都在「篩選動作」dashboard 上；另有一個醒目提示動作
+- L3 醒目提示：「醒目提示」dashboard 上點選 Region Picker 的地區，Region Category Matrix 中同一個地區的格子醒目
+  （只比對 Region 欄位）；矩陣上方的醒目提示控制項（Category）
 - L2 網址動作：Region Picker 的選單中開啟以地區與銷售額代入的網址；「參數動作」dashboard 上點選地區設定參數
   Selected Region（Selected Region Sales 依參數計算），選單中切換到「篩選動作」dashboard
 - K1 群組與數值分組：Region (group)（East、West 合為 Coasts，其餘維持原值）、Ship Speed
@@ -238,6 +240,7 @@ ACTION_CATEGORY = "[Action1_7D6C2A1F2B3C4D5E9F0A000000000101]"
 ACTION_SEGMENT = "[Action2_7D6C2A1F2B3C4D5E9F0A000000000102]"
 ACTION_BRUSH = "[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]"
 ACTION_URL = "[Action4_7D6C2A1F2B3C4D5E9F0A000000000104]"
+ACTION_HIGHLIGHT = "[Action8_7D6C2A1F2B3C4D5E9F0A000000000108]"
 DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' name='[{ACTION_REGION}]' name-style='unqualified' user:auto-column='sheet_link'>
         <groupfilter function='crossjoin'>
           <groupfilter function='level-members' level='[Region]' />
@@ -1433,6 +1436,7 @@ def region_sales_bands() -> str:
 
 ACTIONS_DASHBOARD = "篩選動作"
 PARAMETER_DASHBOARD = "參數動作"
+HIGHLIGHT_DASHBOARD = "醒目提示"
 
 
 def actions() -> str:
@@ -1470,6 +1474,14 @@ def actions() -> str:
       <command command='tsc:brush'>
         <param name='special-fields' value='all' />
         <param name='target' value={attr(ACTIONS_DASHBOARD)} />
+      </command>
+    </action>
+    <action caption='Highlight by Region' name={attr(ACTION_HIGHLIGHT)}>
+      <activation auto-clear='true' type='on-select' />
+      <source dashboard={attr(HIGHLIGHT_DASHBOARD)} type='sheet' worksheet='Region Picker' />
+      <command command='tsc:brush'>
+        <param name='field-captions' value='Region' />
+        <param name='target' value={attr(HIGHLIGHT_DASHBOARD)} />
       </command>
     </action>
     <nav-action caption='Go to Filter Actions' name='[Action6_7D6C2A1F2B3C4D5E9F0A000000000106]'>
@@ -1519,6 +1531,30 @@ def actions_dashboard() -> str:
         </zone>
       </zones>
       <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000012}}' />
+    </dashboard>"""
+
+
+def highlight_dashboard() -> str:
+    """醒目提示（固定尺寸）：點選 Region Picker 的地區時，Region Category Matrix 中這個地區的格子醒目
+    （只比對 Region）；矩陣上方的醒目提示控制項選擇 Category。"""
+    return f"""    <dashboard name={attr(HIGHLIGHT_DASHBOARD)}>
+      <style />
+      <size maxheight='{DASHBOARD_H}' maxwidth='{DASHBOARD_W}' minheight='{DASHBOARD_H}' minwidth='{DASHBOARD_W}' sizing-mode='fixed' />
+      <zones>
+        <zone {zone_box(0, 0, 1000, 700)} id='3' type-v2='layout-basic'>
+          <zone {zone_box(8, 8, 984, 684)} id='4' param='vert' type-v2='layout-flow'>
+            <zone {zone_box(8, 8, 984, 40)} id='5' type-v2='title' />
+            <zone {zone_box(8, 56, 984, 636)} id='6' param='horz' type-v2='layout-flow'>
+              <zone {zone_box(8, 56, 488, 636)} id='7' name='Region Picker' />
+              <zone {zone_box(504, 56, 488, 636)} id='8' param='vert' type-v2='layout-flow'>
+                <zone {zone_box(504, 56, 488, 72)} id='9' name='Region Category Matrix' param={attr(ref("none:Category:nk"))} type-v2='highlighter' />
+                <zone {zone_box(504, 136, 488, 556)} id='10' name='Region Category Matrix' />
+              </zone>
+            </zone>
+          </zone>
+        </zone>
+      </zones>
+      <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-00000000002F}}' />
     </dashboard>"""
 
 
@@ -1871,6 +1907,7 @@ def all_dashboards() -> str:
             dashboard(),
             charts_dashboard(),
             actions_dashboard(),
+            highlight_dashboard(),
             groups_dashboard(),
             conditions_dashboard(),
             growth_dashboard(),

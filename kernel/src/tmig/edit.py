@@ -589,6 +589,10 @@ def outline(ir: IR) -> dict[str, Any]:
                     if not isinstance(f, TupleFilter)
                 ],
                 "dimensions": [u.model_dump(mode="json") for u in _view_dims(ir, ws)],
+                "highlighters": [
+                    {"field": u.model_dump(mode="json"), "label": _use_label(ir, ws, u)}
+                    for u in _view_dims(ir, ws)
+                ],
                 "pages": _use_label(ir, ws, ws.pages) if ws.pages is not None else None,
                 "legends": [
                     channel

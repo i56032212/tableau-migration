@@ -134,11 +134,13 @@ export interface Action {
   id: string;
   name: string;
   caption: string;
-  kind: "filter" | "url" | "parameter" | "navigate" | "set";
+  kind: "filter" | "highlight" | "url" | "parameter" | "navigate" | "set";
   url?: UrlAction | null;
   parameter?: ParameterAction | null;
   /** 集合動作：以選取的標記改變集合的成員 */
   set_action?: SetAction | null;
+  /** 醒目提示動作：比對的欄位（欄位的顯示名稱）；空的表示所有欄位 */
+  highlight?: { fields: string[] } | null;
   /** 切換動作的目標工作表 */
   target_worksheet?: string | null;
   /** 切換動作的目標 Story */
@@ -172,6 +174,7 @@ export type ZoneKind =
   | "parameter"
   | "legend"
   | "page"
+  | "highlighter"
   | "text"
   | "image"
   | "title"

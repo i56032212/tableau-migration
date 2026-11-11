@@ -297,6 +297,41 @@ def test_dashboard_story_and_action_api(client: TestClient) -> None:
     assert client.delete(f"/api/edit/demo/actions/{action_id}").status_code == 200
     sheet = client.get("/api/edit/demo/worksheets/ws_region_share_by_year").json()["worksheet"]
     assert all(f.get("action") != action_id for f in sheet["filters"])
+    # 醒目提示動作：目標工作表與比對的欄位（顯示名稱），不在目標工作表上加篩選
+    highlight = client.post(
+        "/api/edit/demo/actions",
+        json={
+            "action": {
+                "caption": "醒目提示區域",
+                "kind": "highlight",
+                "activation": "hover",
+                "dashboard": "db_ee909b0c",
+                "sources": ["ws_sales_by_region"],
+                "targets": ["ws_sales_by_region", "ws_region_share_by_year"],
+                "highlight": {"fields": ["Region"]},
+            }
+        },
+    )
+    assert highlight.status_code == 200, highlight.text
+    saved_action = highlight.json()["action"]
+    assert (saved_action["kind"], saved_action["highlight"]) == (
+        "highlight",
+        {"fields": ["Region"]},
+    )
+    sheet = client.get("/api/edit/demo/worksheets/ws_region_share_by_year").json()["worksheet"]
+    assert all(f.get("action") != saved_action["id"] for f in sheet["filters"])
+    missing = client.post(
+        "/api/edit/demo/actions",
+        json={
+            "action": {
+                "caption": "x",
+                "kind": "highlight",
+                "activation": "select",
+                "sources": ["ws_sales_by_region"],
+            }
+        },
+    )
+    assert missing.status_code == 422  # 醒目提示動作要有 highlight
 
 
 def test_desktop_export_writes_the_file(client: TestClient, tmp_path: Path) -> None:

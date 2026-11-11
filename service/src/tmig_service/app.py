@@ -284,12 +284,12 @@ User = Annotated[Identity | None, Depends(current_user)]
 
 
 def controlled_fields(ir: IR) -> set[str]:
-    """報表上有篩選控制項的欄位 id，以及工作表頁面架上的欄位（頁面控制項列出各頁）。"""
+    """報表上有篩選控制項與醒目提示控制項的欄位 id，以及工作表頁面架上的欄位（頁面控制項列出各頁）。"""
     found = {
         zone.field.field
         for dashboard in ir.dashboards
         for zone in iter_zones(dashboard.zones)
-        if zone.kind == "filter" and zone.field is not None
+        if zone.kind in ("filter", "highlighter") and zone.field is not None
     }
     return found | {ws.pages.field for ws in ir.worksheets if ws.pages is not None}
 

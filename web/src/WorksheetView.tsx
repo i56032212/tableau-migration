@@ -28,6 +28,8 @@ interface Props {
   onMarks?: (event: MarkEvent) => void;
   /** 目前選取的標記：其餘標記淡化 */
   selected?: Mark[];
+  /** 醒目提示動作與醒目提示控制項：欄位值相同的標記醒目、其餘淡化（工作表上沒有的欄位不比對） */
+  highlighted?: Mark[] | null;
   /** 編輯器：工作表的定義改變後遞增，重新查詢 */
   revision?: number;
 }
@@ -234,6 +236,7 @@ export function WorksheetView({
   onRendered,
   onMarks,
   selected,
+  highlighted,
   revision = 0,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -242,6 +245,7 @@ export function WorksheetView({
   onMarksRef.current = onMarks;
   const interactive = onMarks !== undefined;
   const selectedKey = JSON.stringify(selected ?? []);
+  const highlightKey = JSON.stringify(highlighted ?? null);
   const [response, setResponse] = useState<RenderResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -289,11 +293,20 @@ export function WorksheetView({
           if (node.encoding?.[channel]?.field) node.encoding[channel].legend = null;
       });
     const marks = JSON.parse(selectedKey) as Mark[];
-    if (marks.length) {
+    // 醒目提示：只比對這張工作表上有的欄位；完全沒有相同欄位的條件不影響這張工作表
+    const present = new Set(Object.values(dimensions));
+    const lit = ((JSON.parse(highlightKey) as Mark[] | null) ?? [])
+      .map((h) => Object.fromEntries(Object.entries(h).filter(([k]) => present.has(k))) as Mark)
+      .filter((h) => Object.keys(h).length > 0);
+    if (marks.length || lit.length) {
       // 以原始值比對（Vega 會把日期欄解析成 Date，所以用回應中未經處理的資料）
       const rows = records
         .map((record, i) => [markOf(record, dimensions), i] as const)
-        .filter(([mark]) => marks.some((m) => Object.keys(m).every((k) => !(k in mark) || mark[k] === m[k])))
+        .filter(
+          ([mark]) =>
+            marks.some((m) => Object.keys(m).every((k) => !(k in mark) || mark[k] === m[k])) ||
+            lit.some((h) => Object.keys(h).every((k) => mark[k] === h[k])),
+        )
         .map(([, i]) => i);
       highlight(spec, rows);
     }
@@ -354,7 +367,7 @@ export function WorksheetView({
       window.clearTimeout(leaveTimer);
       view?.finalize();
     };
-  }, [response, hideLegend, showTable, interactive, selectedKey, fit]);
+  }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit]);
 
   const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;

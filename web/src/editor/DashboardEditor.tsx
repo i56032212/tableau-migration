@@ -803,6 +803,15 @@ export function DashboardEditor({
               圖例：{legend === "color" ? "色彩" : legend === "size" ? "大小" : "形狀"}
             </button>
           ))}
+          {controlTarget?.highlighters?.map((h) => (
+            <button
+              key={`highlighter:${JSON.stringify(h.field)}`}
+              type="button"
+              onClick={() => add(makeZone("highlighter", { worksheet: controlTarget.id, field: h.field }, floating), { w: 220, h: 70 })}
+            >
+              醒目提示：{h.label}
+            </button>
+          ))}
           {outline.parameters.map((p) => (
             <button
               key={p.id}

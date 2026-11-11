@@ -1355,6 +1355,7 @@ ZoneKind = Literal[
     "parameter",
     "legend",
     "page",
+    "highlighter",
     "text",
     "image",
     "title",
@@ -1394,6 +1395,7 @@ _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {
     "parameter": ("parameter", "control"),
     "legend": ("worksheet", "legend"),
     "page": ("worksheet",),
+    "highlighter": ("worksheet", "field"),
     "text": ("text",),
     "image": ("image",),
     "title": (),
@@ -1473,7 +1475,7 @@ class Zone(IRModel):
     w: int = Field(ge=0)
     h: int = Field(ge=0)
     worksheet: Id | None = Field(default=None, description="工作表、篩選、圖例區塊所屬的工作表")
-    field: FieldUse | None = Field(default=None, description="篩選控制項的欄位")
+    field: FieldUse | None = Field(default=None, description="篩選控制項與醒目提示控制項的欄位")
     parameter: Id | None = Field(default=None, description="參數控制項的參數")
     control: ControlType | None = None
     legend: Literal["color", "size", "shape"] | None = None
@@ -1673,11 +1675,21 @@ class SetAction(IRModel):
     )
 
 
+class HighlightAction(IRModel):
+    """醒目提示動作：目標工作表中欄位值與選取的標記相同的標記醒目，其餘淡化（不影響數字）。"""
+
+    fields: list[str] = Field(
+        default_factory=list,
+        description="比對的欄位（Tableau 存下的欄位顯示名稱）；空的表示所有欄位",
+    )
+
+
 class Action(IRModel):
     """Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。
 
     - filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的
       TupleFilter，清除選取時依 clearing 處理
+    - highlight：目標工作表中欄位值相同的標記醒目、其餘淡化（targets 為目標工作表）
     - url：以標記的欄位值代入網址後開啟
     - parameter：把標記的欄位值設給參數
     - navigate：切換到 target_dashboard 或 target_worksheet
@@ -1687,10 +1699,11 @@ class Action(IRModel):
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱，例如 [Action1_…]")
     caption: str
-    kind: Literal["filter", "url", "parameter", "navigate", "set"]
+    kind: Literal["filter", "highlight", "url", "parameter", "navigate", "set"]
     url: UrlAction | None = None
     parameter: ParameterAction | None = None
     set_action: SetAction | None = None
+    highlight: HighlightAction | None = None
     activation: Literal["select", "hover", "menu"]
     dashboard: Id | None = Field(
         default=None,
@@ -1723,8 +1736,10 @@ class Action(IRModel):
             raise ValueError("參數動作必須、也只有參數動作能指定 parameter")
         if (self.kind == "set") != (self.set_action is not None):
             raise ValueError("集合動作必須、也只有集合動作能指定 set_action")
-        if self.kind != "filter" and self.targets:
-            raise ValueError("只有篩選動作有目標工作表")
+        if (self.kind == "highlight") != (self.highlight is not None):
+            raise ValueError("醒目提示動作必須、也只有醒目提示動作能指定 highlight")
+        if self.kind not in ("filter", "highlight") and self.targets:
+            raise ValueError("只有篩選與醒目提示動作有目標工作表")
         if self.kind == "navigate" and (
             sum(
                 t is not None

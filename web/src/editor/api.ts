@@ -23,6 +23,8 @@ export interface Outline {
     datasource: string;
     filters: { id: string; kind: string; field: FieldUse; label: string }[];
     dimensions: FieldUse[];
+    /** 可以加入醒目提示控制項的欄位（欄列架與標記卡上的維度） */
+    highlighters?: { field: FieldUse; label: string }[];
     legends: ("color" | "size" | "shape")[];
     /** 頁面架上的欄位（顯示名稱）；沒有頁面架為 null */
     pages: string | null;

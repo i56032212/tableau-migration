@@ -4,7 +4,7 @@
   "$defs": {
     "Action": {
       "additionalProperties": false,
-      "description": "Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。\n\n- filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的\n  TupleFilter，清除選取時依 clearing 處理\n- url：以標記的欄位值代入網址後開啟\n- parameter：把標記的欄位值設給參數\n- navigate：切換到 target_dashboard 或 target_worksheet\n- set：以標記的欄位值改變集合的成員（用到這個集合的工作表隨之改變）",
+      "description": "Dashboard 的動作：選取（或滑過）來源工作表的標記時執行。\n\n- filter：以標記的欄位值篩選目標工作表；目標工作表上對應的篩選是 action 指向這個動作的\n  TupleFilter，清除選取時依 clearing 處理\n- highlight：目標工作表中欄位值相同的標記醒目、其餘淡化（targets 為目標工作表）\n- url：以標記的欄位值代入網址後開啟\n- parameter：把標記的欄位值設給參數\n- navigate：切換到 target_dashboard 或 target_worksheet\n- set：以標記的欄位值改變集合的成員（用到這個集合的工作表隨之改變）",
       "properties": {
         "id": {
           "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
@@ -25,6 +25,7 @@
         "kind": {
           "enum": [
             "filter",
+            "highlight",
             "url",
             "parameter",
             "navigate",
@@ -59,6 +60,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/SetAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HighlightAction"
             },
             {
               "type": "null"
@@ -2159,6 +2171,22 @@
         }
       },
       "title": "FontStyle",
+      "type": "object"
+    },
+    "HighlightAction": {
+      "additionalProperties": false,
+      "description": "醒目提示動作：目標工作表中欄位值與選取的標記相同的標記醒目，其餘淡化（不影響數字）。",
+      "properties": {
+        "fields": {
+          "description": "比對的欄位（Tableau 存下的欄位顯示名稱）；空的表示所有欄位",
+          "items": {
+            "type": "string"
+          },
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "title": "HighlightAction",
       "type": "object"
     },
     "JoinCondition": {
@@ -5975,6 +6003,7 @@
             "parameter",
             "legend",
             "page",
+            "highlighter",
             "text",
             "image",
             "title",
@@ -6030,7 +6059,7 @@
             }
           ],
           "default": null,
-          "description": "篩選控制項的欄位"
+          "description": "篩選控制項與醒目提示控制項的欄位"
         },
         "parameter": {
           "anyOf": [

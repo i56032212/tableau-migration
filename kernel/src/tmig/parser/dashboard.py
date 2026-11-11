@@ -205,8 +205,17 @@ class DashboardParser:
                 return Zone(kind="blank", **base)
             return Zone(kind="web", url=url, **base)
         if kind_attr == "highlighter":
-            self.ctx.ignore(element, "醒目提示控制項（只影響醒目提示，不影響數字）：以空白區塊呈現")
-            return Zone(kind="blank", **base)
+            # 醒目提示控制項：選擇欄位的值，工作表中這個值的標記醒目、其餘淡化（不影響數字）
+            sheet = self._sheet(element, name)
+            if sheet is None:
+                return Zone(kind="blank", **base)
+            use = sheet.uses.get(instance_key(element.get("param", "")))
+            if use is None:
+                self.ctx.flag(
+                    element, f"醒目提示控制項的欄位 {element.get('param')} 不在工作表「{name}」上"
+                )
+                return Zone(kind="blank", **base)
+            return Zone(kind="highlighter", worksheet=sheet.id, field=use, **base)
         if kind_attr == "filter":
             return self._filter_zone(element, name, base)
         if kind_attr == "currpage":

@@ -2,13 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { fileUrl } from "./api";
 import { isDesktop } from "./desktop";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
-import { FilterControl, ParameterControl } from "./Controls";
+import { FilterControl, HighlighterControl, ParameterControl } from "./Controls";
 import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
 import { PageControl, pagesOf } from "./PageControl";
 import {
   actionUrl,
+  applyHighlights,
   applySetActions,
   fieldKey,
+  highlightsFor,
   nextSelection,
   parameterValue,
   runActions,
@@ -39,6 +41,7 @@ import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
 
 const isFieldFilter = (f: { kind: string }): f is FieldFilter => f.kind !== "top_n" && f.kind !== "tuple";
 const NO_SETS: Record<string, SetValue> = {};
+const NO_HIGHLIGHTS: Record<string, { sheet: string; marks: Mark[] }> = {};
 
 /** 篩選控制項的變更：同一篩選群組（套用到選取的工作表、全域篩選）的工作表一起更新。 */
 export function applyFilter(
@@ -160,6 +163,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
         selections: { ...view.selections, [worksheet]: marks },
         parameters: applyParameters(selectActions, values, view.parameters),
         sets: applySetActions(ir, selectActions, marks, view.sets ?? {}),
+        highlights: applyHighlights(selectActions, worksheet, marks, view.highlights ?? NO_HIGHLIGHTS),
       });
       // 選取時執行的網址動作：在新分頁開啟（點選的當下開啟，瀏覽器不會擋）
       for (const action of selectActions) {
@@ -185,12 +189,14 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
     const result = runActions(hover, marks, view.actions);
     const parameters = applyParameters(hover, values, view.parameters);
     const sets = applySetActions(ir, hover, marks, view.sets ?? NO_SETS);
+    const highlights = applyHighlights(hover, worksheet, marks, view.highlights ?? NO_HIGHLIGHTS);
     if (
       JSON.stringify(result.actions) !== JSON.stringify(view.actions) ||
       parameters !== view.parameters ||
-      sets !== (view.sets ?? NO_SETS)
+      sets !== (view.sets ?? NO_SETS) ||
+      highlights !== (view.highlights ?? NO_HIGHLIGHTS)
     ) {
-      onView({ ...view, actions: result.actions, parameters, sets });
+      onView({ ...view, actions: result.actions, parameters, sets, highlights });
     }
   };
   const runMenu = (action: Action) => {
@@ -201,6 +207,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
       actions: result.actions,
       parameters: applyParameters([action], menu.values, view.parameters),
       sets: applySetActions(ir, [action], menu.marks, view.sets ?? {}),
+      highlights: applyHighlights([action], menu.worksheet, menu.marks, view.highlights ?? NO_HIGHLIGHTS),
     });
     setMenu(null);
     if (result.navigate && result.navigate !== dashboard.id) onNavigate({ dashboard: result.navigate });
@@ -412,6 +419,7 @@ function ZoneContent({
           onRendered={onRendered}
           onMarks={onMarks}
           selected={onMarks ? view.selections[zone.worksheet!] : undefined}
+          highlighted={highlightsFor(ir, zone.worksheet!, view)}
         />
       );
     case "filter":
@@ -441,6 +449,24 @@ function ZoneContent({
       return <Legend response={renders[zone.worksheet!]} kind={zone.legend} />;
     case "page":
       return <PageControl workbook={workbook} worksheet={zone.worksheet!} {...pagesOf(ir, zone.worksheet!)} view={view} onView={onView} />;
+    case "highlighter":
+      return (
+        <HighlighterControl
+          ir={ir}
+          workbook={workbook}
+          zone={zone}
+          values={view.highlighters?.[zone.worksheet!]?.[fieldKey(zone.field!)] ?? []}
+          onChange={(key, values) =>
+            onView({
+              ...view,
+              highlighters: {
+                ...view.highlighters,
+                [zone.worksheet!]: { ...view.highlighters?.[zone.worksheet!], [key]: values },
+              },
+            })
+          }
+        />
+      );
     case "title":
       return (
         <div className="title" style={richAlign(zone.content)}>

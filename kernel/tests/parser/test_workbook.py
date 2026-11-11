@@ -861,10 +861,12 @@ def test_actions(tmp_path: Path) -> None:
         "<source dashboard='Overview' type='sheet' /><command command='tsc:tsl-filter' /></action>"
     )
     ir = parse(tmp_path, b.workbook(worksheets=basic_sheet(), actions=actions))
-    # 篩選動作的來源 dashboard 不存在：無法轉成 IR
-    assert reasons(ir) == ["篩選動作「Filter 1」的來源工作表無法移轉"]
+    # 動作的來源 dashboard 不存在：無法轉成 IR
+    assert reasons(ir) == [
+        "醒目提示動作「Highlight 1」的來源工作表無法移轉",
+        "篩選動作「Filter 1」的來源工作表無法移轉",
+    ]
     assert ir.actions == []
-    assert any("醒目提示" in u.reason for u in ir.ignored)
 
 
 def test_unknown_workbook_element(tmp_path: Path) -> None:

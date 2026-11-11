@@ -309,6 +309,95 @@ def test_filter_actions(server: str) -> None:
         browser.close()
 
 
+MARKS_JS = """(sheet) => Array.from(document.querySelectorAll(
+    `[data-worksheet='${sheet}'] svg [aria-roledescription='text mark'],`
+    + `[data-worksheet='${sheet}'] svg [aria-roledescription='bar']`))
+  .map((e) => [e.getAttribute('aria-label'), e.getAttribute('opacity')])"""
+
+
+def opacities(page: Any, sheet: str) -> dict[str, str | None]:
+    """工作表上每個標記的說明（aria-label）→ 不透明度（沒有淡化時為 None）。"""
+    return dict(page.evaluate(MARKS_JS, sheet))
+
+
+def lit(page: Any, sheet: str) -> set[str] | None:
+    """醒目的標記（其餘淡化）；沒有醒目提示時為 None。"""
+    found = opacities(page, sheet)
+    if all(v is None for v in found.values()):
+        return None
+    return {label for label, v in found.items() if v == "1"}
+
+
+def test_highlight_actions_and_highlighter(server: str) -> None:
+    """L3：點選 Region Picker 的地區時 Region Category Matrix 中同一個地區的格子醒目（只比對 Region，
+    不重新查詢）；醒目提示控制項輸入 Category；「篩選動作」dashboard 上滑過矩陣的格子時，其他工作表中
+    同一個地區、類別的標記醒目（所有欄位）。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "醒目提示")
+    matrix = "ws_region_category_matrix"
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 2"
+        )
+        page.wait_for_timeout(300)
+        assert lit(page, matrix) is None
+        before = len(renders.items)
+        bar = "svg path[aria-roledescription='bar']"
+        east = page.locator(
+            f"[data-worksheet='ws_region_picker'] {bar}[aria-label$='Region: East']"
+        )
+        east.click()
+        page.wait_for_timeout(400)
+        shown = lit(page, matrix)
+        assert shown is not None and shown and all("Region: East" in label for label in shown)
+        assert len(shown) == 2  # 矩陣排除了 (East, Technology)
+        assert len(renders.items) == before  # 醒目提示不重新查詢
+        east.click()  # 再點一次＝清除選取，醒目提示跟著清除
+        page.wait_for_timeout(400)
+        assert lit(page, matrix) is None
+
+        # 醒目提示控制項：輸入部分文字，名稱包含它的類別醒目；清空即取消
+        box = page.get_by_label("醒目提示 Category")
+        box.fill("furn")
+        page.wait_for_timeout(400)
+        shown = lit(page, matrix)
+        assert shown is not None and len(shown) == 3
+        assert all("Category: Furniture" in label for label in shown)
+        box.fill("")
+        page.wait_for_timeout(400)
+        assert lit(page, matrix) is None
+
+        # 滑過時執行、比對所有欄位的醒目提示動作
+        filters = next(d for d in ir.dashboards if d.name == "篩選動作")
+        page.goto(f"{server}/w/superstore_features/d/{filters.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        page.wait_for_timeout(300)
+        cell = page.locator(
+            f"[data-worksheet='{matrix}'] svg [aria-roledescription='text mark']"
+            "[aria-label^='Category: Furniture; Region: Central']"
+        )
+        cell.hover()
+        page.wait_for_timeout(400)
+        picker = lit(page, "ws_region_picker")  # 長條與它的標籤
+        assert picker and all("Region: Central" in label for label in picker)
+        page.mouse.move(1, 1)
+        page.wait_for_timeout(700)
+        assert lit(page, "ws_region_picker") is None
+        assert errors == []
+        browser.close()
+
+
 def test_groups_and_bins_render(server: str) -> None:
     """K1：群組與數值分組的 dashboard 畫得出來；分組依下限排序，群組名稱取代成員。"""
     from playwright.sync_api import sync_playwright

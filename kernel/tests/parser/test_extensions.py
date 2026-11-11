@@ -254,7 +254,67 @@ def test_control_modes_and_highlighter(tmp_path: Path) -> None:
     zones = {z.id: z for z in iter_zones(ir.dashboards[0].zones)}
     assert (zones["z2"].kind, zones["z2"].control) == ("filter", "type_in")
     assert (zones["z3"].kind, zones["z3"].control) == ("parameter", "single_list")
-    assert zones["z4"].kind == "blank"
+    # 醒目提示控制項：工作表上的欄位
+    assert (zones["z4"].kind, zones["z4"].worksheet) == ("highlighter", "ws_s")
+    assert zones["z4"].field is not None and zones["z4"].field.field == "f_region"
+
+
+def test_highlight_actions(tmp_path: Path) -> None:
+    """醒目提示動作：所有欄位或選定的欄位（field-captions），目標為 dashboard 上的工作表扣掉 exclude。"""
+    sheets = worksheet(
+        "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+    ) + worksheet("T", BASIC, rows=ref("none:Category:nk"), cols=ref("sum:Sales:qk")).replace(
+        "name='S'", "name='T'"
+    )
+    board = """
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='50000' id='2' name='S' w='100000' x='0' y='0' />
+          <zone h='50000' id='3' name='T' w='100000' x='0' y='50000' />
+        </zone>
+      </zones>
+    </dashboard>"""
+
+    def brush(name: str, params: str, activation: str = "on-select") -> str:
+        return (
+            f"<action caption='{name}' name='[{name}]'><activation type='{activation}' />"
+            "<source dashboard='Board' type='sheet' worksheet='S' />"
+            f"<command command='tsc:brush'>{params}<param name='target' value='Board' /></command>"
+            "</action>"
+        )
+
+    actions = (
+        brush("All", "<param name='special-fields' value='all' />", "on-hover")
+        + brush("Picked", "<param name='field-captions' value='Region,Category' />")
+        + brush(
+            "Excluded",
+            "<param name='special-fields' value='all' /><param name='exclude' value='T' />",
+        )
+        + brush("Dates", "<param name='special-fields' value='dates-and-times' />")
+    )
+    ir = parse(
+        tmp_path,
+        b.workbook(worksheets=sheets, dashboards=board, actions=actions),
+    )
+    assert reasons(ir) == ["醒目提示動作「Dates」比對的欄位（dates-and-times）v0 不支援"]
+    found = {a.caption: a for a in ir.actions}
+    assert set(found) == {"All", "Picked", "Excluded"}
+    every = found["All"]
+    assert (every.kind, every.activation, every.sources, every.targets) == (
+        "highlight",
+        "hover",
+        ["ws_s"],
+        ["ws_s", "ws_t"],
+    )
+    assert every.highlight is not None and every.highlight.fields == []
+    assert found["Picked"].highlight is not None
+    assert found["Picked"].highlight.fields == ["Region", "Category"]
+    assert found["Excluded"].targets == ["ws_s"]
+    assert all(
+        a.dashboard == ir.dashboards[0].id and a.target_dashboard is None for a in found.values()
+    )
 
 
 @pytest.mark.parametrize(
