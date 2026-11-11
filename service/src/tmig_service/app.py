@@ -44,6 +44,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from tmig.access.permissions import ADMIN_ROLES
+from tmig.catalog import Catalog, Report, workbook_url_name
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
@@ -196,6 +197,35 @@ def open_site(store: ReportStore, authenticator: Authenticator) -> SiteStore | N
     return site
 
 
+def workspace_catalog(workspace: Workspace, site: SiteStore | None) -> Catalog:
+    """排程的對象：查詢服務看得到的報表（fixtures 與報表庫；IR 用查詢服務的快取）。"""
+    linked = {w.id: w for w in site.data().workbooks} if site is not None else {}
+    reports: list[Report] = []
+    for name in workspace.names():
+        try:
+            loaded = workspace.get(name)
+        except Exception:  # 解析不了的報表不能排程，其他報表照常
+            continue
+        record = loaded.published
+        if record is not None:
+            workbook = linked.get(record.tableau_workbook or "")
+            reports.append(
+                Report(
+                    loaded.directory,
+                    loaded.ir,
+                    workbook.content_url if workbook is not None else None,
+                    key=name,
+                    owner=record.owner,
+                    title=record.name,
+                )
+            )
+        else:
+            reports.append(
+                Report(loaded.directory, loaded.ir, workbook_url_name(loaded.directory), key=name)
+            )
+    return Catalog(reports)
+
+
 def current_user(request: Request) -> Identity | None:
     """目前請求的登入者（依 app.state.authenticator）；none 模式為 None，其他模式沒有登入時回應 401。"""
     authenticator: Authenticator = request.app.state.authenticator
@@ -287,8 +317,29 @@ def create_app(
         )
         if site is not None:
             from tmig_service.admin import admin_router
+            from tmig_service.schedule_api import schedule_router
+            from tmig_service.schedules import ScheduleStore
+
+            def report_access(report: str, user: Identity) -> Grant | None:
+                """某人對某份報表的權限（訂閱者要能檢視訂閱的報表）；報表不存在時為 None。"""
+                try:
+                    loaded = workspace.get(report)
+                except HTTPException:
+                    return None
+                return grant_for(loaded, user)
 
             app.include_router(admin_router(site, store, rights, authenticator.identity))
+            app.include_router(
+                schedule_router(
+                    ScheduleStore(store.root),
+                    site,
+                    store,
+                    rights,
+                    authenticator.identity,
+                    lambda: workspace_catalog(workspace, site),
+                    report_access,
+                )
+            )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

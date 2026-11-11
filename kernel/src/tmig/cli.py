@@ -15,6 +15,8 @@ tmig extract refresh <報表> [--incremental]       從來源資料庫更新萃�
 tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取比對（列數、總和、最小值、最大值）
 tmig published merge <報表> [--published 目錄]     把 Published Data Source 的 .tdsx 併入報表
 tmig schedule list|tick|run|serve <排程檔>         排程器：萃取更新與訂閱（Q2、Q3）
+tmig schedule list|tick|run|serve --store <報表庫>  排程器：報表庫中（站台管理的）排程、萃取更新與訂閱
+tmig schedule import <排程檔> --store <報表庫>      把 Tableau 匯出的排程檔匯入報表庫（之後在站台管理中修改）
 tmig usage summary <使用紀錄目錄> [--days 90]      每份報表的檢視次數、使用者數與最後一次檢視（R1）
 tmig site import|init|show --store <報表庫>         站台資料（Project、使用者、群組與權限）：從 Tableau 匯入或新建
 tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]  啟動查詢服務與檢視器
@@ -587,12 +589,49 @@ def _cmd_published_merge(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def _schedule_source(args: argparse.Namespace):
+    """報表庫模式（--store）：排程資料、站台資料與每次檢查時重新規劃的工作。"""
+    from tmig.schedule.model import ScheduleError
+
+    if args.schedules is not None:
+        raise ScheduleError("排程檔與 --store 二選一（報表庫模式讀報表庫中的排程）")
+    try:
+        from tmig_service.schedules import ScheduleStore, StoreJobs
+        from tmig_service.site import SiteStore
+        from tmig_service.store import ReportStore
+    except ImportError as exc:
+        raise ValueError(
+            "--store 需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync"
+        ) from exc
+    schedules = ScheduleStore(args.store)
+    site = SiteStore(args.store)
+    source = StoreJobs(
+        schedules, ReportStore(args.store), site if site.exists() else None, args.fixtures
+    )
+
+    def jobs() -> tuple[list[Any], str | None]:
+        planned, timezone = source()
+        return planned, args.timezone or timezone
+
+    return schedules, site if site.exists() else None, jobs
+
+
 def _schedule_inputs(args: argparse.Namespace):
-    """排程檔、報表目錄與工作；排程檔沒有時區時報錯。"""
+    """排程檔（或報表庫）、報表目錄與工作；沒有時區時報錯。"""
     from tmig.catalog import Catalog
     from tmig.schedule.model import ScheduleError, load_schedules
     from tmig.schedule.runner import plan_jobs
 
+    if getattr(args, "store", None) is not None:
+        store_schedules, _, jobs = _schedule_source(args)
+        planned, timezone = jobs()
+        if not timezone:
+            raise ScheduleError(
+                "報表庫的排程沒有時區：在站台管理的「排程」中設定，或以 --timezone 指定"
+            )
+        return store_schedules.data(), timezone, planned
+    if args.schedules is None:
+        raise ScheduleError("需要排程檔，或以 --store 指定報表庫")
     schedules = load_schedules(args.schedules)
     timezone = args.timezone or schedules.timezone
     if not timezone:
@@ -609,7 +648,11 @@ def _scheduler(args: argparse.Namespace):
 
     from tmig.schedule.runner import Handler, JobKind, Scheduler, extract_handler, utc_now
 
-    _, timezone, jobs = _schedule_inputs(args)
+    store_mode = getattr(args, "store", None) is not None
+    timezone: str = "UTC"
+    jobs: list[Any] = []
+    if not store_mode:
+        _, timezone, jobs = _schedule_inputs(args)
     clock = utc_now
     if getattr(args, "now", None):
         fixed = dt.datetime.fromisoformat(args.now)
@@ -623,23 +666,61 @@ def _scheduler(args: argparse.Namespace):
     subscription = _subscription_handler(args)
     if subscription is not None:
         handlers["subscription"] = subscription
-    state_dir = args.state_dir or args.schedules.parent / "schedule-state"
     cleanup = subscription.close if subscription is not None else (lambda: None)
+    if store_mode:
+        # 報表庫模式：每次檢查時重讀排程資料（還沒有時區時只處理立即執行）；連續失敗時暫停並寄信通知
+        from tmig_service.schedules import FailurePolicy
+
+        store_schedules, site, source = _schedule_source(args)
+        planned, found = source()
+        policy = FailurePolicy(
+            store_schedules,
+            site,
+            subscription.mail if subscription is not None else _mail_settings(args),
+            threshold=args.suspend_after,
+        )
+        scheduler = Scheduler(
+            planned,
+            found or "UTC",
+            handlers,
+            store_schedules.state_dir,
+            clock,
+            source=source,
+            on_result=policy,
+        )
+        return planned, scheduler, cleanup
+    state_dir = args.state_dir or args.schedules.parent / "schedule-state"
     return jobs, Scheduler(jobs, timezone, handlers, state_dir, clock), cleanup
 
 
+def _mail_settings(args: argparse.Namespace):
+    if not getattr(args, "mail", None):
+        return None
+    from tmig_service.subscriptions import load_mail
+
+    return load_mail(args.mail)
+
+
 def _subscription_handler(args: argparse.Namespace):
-    """訂閱的處理程式（Q3）：需要郵件設定檔（--mail）與身分驗證設定檔中的使用者目錄（--auth 或 TMIG_AUTH）；
-    沒有郵件設定時為 None（訂閱的工作記為失敗）。"""
+    """訂閱的處理程式（Q3）：需要郵件設定檔（--mail）與身分驗證設定檔中的使用者目錄（--auth 或 TMIG_AUTH；
+    報表庫模式用站台資料）；沒有郵件設定時為 None（訂閱的工作記為失敗）。"""
     if not getattr(args, "mail", None):
         return None
     try:
-        from tmig_service.auth import load_auth
+        from tmig_service.auth import AuthSettings, load_auth
+        from tmig_service.store import ReportStore
         from tmig_service.subscriptions import Renderer, SubscriptionHandler, load_mail
     except ImportError as exc:
         raise ValueError("訂閱需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync") from exc
     mail = load_mail(args.mail)
-    renderer = Renderer(args.fixtures, load_auth(args.auth), getattr(args, "web", None))
+    store = getattr(args, "store", None)
+    auth = load_auth(args.auth) if args.auth or store is None else AuthSettings()
+    renderer = Renderer(
+        args.fixtures,
+        auth,
+        getattr(args, "web", None),
+        store=ReportStore(store) if store is not None else None,
+    )
     return SubscriptionHandler(renderer, mail)
 
 
@@ -655,7 +736,10 @@ def _cmd_schedule_list(args: argparse.Namespace) -> int:
     except (ScheduleError, FileNotFoundError, ValueError) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
-    state_dir = args.state_dir or args.schedules.parent / "schedule-state"
+    if args.store is not None:
+        state_dir = args.store / "schedule-state"
+    else:
+        state_dir = args.state_dir or args.schedules.parent / "schedule-state"
     last = last_runs(state_dir)
     for job in sorted(jobs, key=lambda j: (not j.runnable, j.id)):
         schedule = job.schedule
@@ -714,12 +798,12 @@ def _cmd_schedule_run(args: argparse.Namespace) -> int:
         cleanup()
         print(f"失敗：找不到工作 {args.job}", file=sys.stderr)
         return 1
-    if not job.runnable:
+    if not job.runnable and not job.suspended:
         cleanup()
         print(f"失敗：{job.id} 不能執行：{job.problem}", file=sys.stderr)
         return 1
     try:
-        record = scheduler.run(job)
+        record = scheduler.run(job, trigger="manual", requested_by="（指令）")
     finally:
         cleanup()
     print(f"{'通過' if record.status == 'ok' else '失敗'}  {record.job}：{record.detail}")
@@ -740,12 +824,42 @@ def _cmd_schedule_serve(args: argparse.Namespace) -> int:
             on_record=lambda r: print(
                 f"{r.finished} {'通過' if r.status == 'ok' else '失敗'}  {r.job}：{r.detail}",
                 flush=True,
-            )
+            ),
+            # 報表庫模式：每 5 秒檢查一次站台管理排入的「立即執行」
+            poll=5.0 if args.store is not None else 60.0,
         )
     except KeyboardInterrupt:
         print("排程器已停止")
     finally:
         cleanup()
+    return 0
+
+
+def _cmd_schedule_import(args: argparse.Namespace) -> int:
+    from tmig.schedule.model import ScheduleError, load_schedules
+
+    try:
+        from tmig_service.schedules import ScheduleStore
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    try:
+        data = load_schedules(args.schedules)
+        if args.timezone:
+            data.timezone = args.timezone
+        if not data.timezone:
+            raise ScheduleError(
+                "排程檔沒有時區：以 --timezone 指定 Tableau Server 的時區（例如 Asia/Taipei）"
+            )
+        store = ScheduleStore(args.store)
+        store.initialize(data, actor="（匯入）", replace=args.replace)
+    except ScheduleError as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    print(
+        f"已匯入：{len(data.schedules)} 個排程、{len(data.extract_refreshes)} 個萃取更新工作、"
+        f"{len(data.subscriptions)} 個訂閱 → {store.path}"
+    )
     return 0
 
 
@@ -1165,8 +1279,14 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument(
             "schedules",
             type=Path,
+            nargs="?",
             metavar="排程檔",
-            help="tools/tableau_server 匯出的 schedules.json",
+            help="tools/tableau_server 匯出的 schedules.json（與 --store 二選一）",
+        )
+        sub.add_argument(
+            "--store",
+            type=Path,
+            help="報表庫：讀站台管理中的排程（每次檢查時重讀；狀態在報表庫的 schedule-state/）",
         )
         sub.add_argument(
             "--fixtures", type=Path, default=Path("fixtures"), help="報表目錄（預設 fixtures）"
@@ -1186,11 +1306,27 @@ def build_parser() -> argparse.ArgumentParser:
                 help="身分驗證設定檔（訂閱者的使用者目錄與權限）；預設讀 TMIG_AUTH",
             )
             sub.add_argument("--web", type=Path, help="檢視器的建置目錄；預設為 web/dist")
+            sub.add_argument(
+                "--suspend-after",
+                type=int,
+                default=5,
+                help="報表庫模式：連續失敗幾次後暫停工作（預設 5，與 Tableau Server 相同；0 為不暫停）",
+            )
         if name in ("list", "tick"):
             sub.add_argument("--now", help="以這個時間計算（ISO 格式含時區；測試用）")
         if name == "run":
             sub.add_argument("--job", required=True, help="工作 id，例如 extract:<id>")
         sub.set_defaults(handler=handler)
+    schedule_import = schedule_commands.add_parser(
+        "import", help="把 Tableau Server 匯出的排程檔匯入報表庫（之後在站台管理中修改）"
+    )
+    schedule_import.add_argument("schedules", type=Path, metavar="排程檔")
+    schedule_import.add_argument("--store", type=Path, required=True, help="報表庫")
+    schedule_import.add_argument("--timezone", help="Tableau Server 的時區；預設為排程檔中的時區")
+    schedule_import.add_argument(
+        "--replace", action="store_true", help="報表庫中已經有排程時取代（重新匯入）"
+    )
+    schedule_import.set_defaults(handler=_cmd_schedule_import)
 
     site_parser = commands.add_parser("site", help="站台資料：Project、使用者、群組與權限")
     site_commands = site_parser.add_subparsers(dest="site_command", required=True, metavar="子指令")

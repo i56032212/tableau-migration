@@ -8,6 +8,9 @@
 - 對應不到報表、排程無法辨識或已暫停的工作不執行，列出原因
 - 下次執行時間記在狀態檔（state.json）；停機期間錯過的排程，啟動後補跑一次，再從現在起算下一次
 - 同時到期的工作依 Tableau 的優先順序（數字小的先）逐一執行；結果逐行寫入 runs.jsonl
+- 「立即執行」：其他行程（查詢服務的站台管理）在狀態目錄的 queue/ 放一個要求，排程器下一次檢查時執行
+- 工作的來源可以是函式（source）：每次檢查時重新取得，排程的修改不必重新啟動；工作的排程改變時重新排定
+- 常駐時每次檢查寫入 scheduler.json（最後回報的時間），查詢服務據此顯示排程器是否在執行
 - 時間一律以參數注入（clock），測試不依賴實際時間
 """
 
@@ -15,6 +18,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import secrets
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,6 +32,10 @@ from tmig.schedule.model import ExtractTask, Schedule, ScheduleError, ScheduleFi
 
 JobKind = Literal["extract", "subscription"]
 Clock = Callable[[], dt.datetime]
+QUEUE = "queue"
+"""狀態目錄中「立即執行」的要求。"""
+STATUS = "scheduler.json"
+"""狀態目錄中排程器最後回報的時間。"""
 
 
 def utc_now() -> dt.datetime:
@@ -42,10 +52,10 @@ class Target:
 
     def describe(self) -> str:
         if self.datasource:
-            return f"{self.report.name}／{self.datasource}"
+            return f"{self.report.label}／{self.datasource}"
         if self.view:
-            return f"{self.report.name}／{self.view}"
-        return self.report.name
+            return f"{self.report.label}／{self.view}"
+        return self.report.label
 
 
 @dataclass
@@ -59,6 +69,8 @@ class Job:
     targets: list[Target] = field(default_factory=list)
     problem: str | None = None
     """不能執行的原因（對應不到報表、排程無法辨識或已暫停）；None 表示可以執行。"""
+    suspended: bool = False
+    """不能執行只是因為暫停（工作、訂閱或排程）：可以立即執行。"""
 
     @property
     def runnable(self) -> bool:
@@ -86,7 +98,15 @@ def plan_jobs(schedules: ScheduleFile, catalog: Catalog) -> list[Job]:
             priority=task.priority or (schedule.priority if schedule else None) or 50,
             task=task,
         )
-        if task.target_kind == "workbook":
+        if task.report is not None:
+            report = catalog.report(task.report)
+            if report is not None:
+                job.targets = [Target(report, ds) for ds in report.extract_datasources()]
+                if not job.targets:
+                    job.problem = f"報表「{report.label}」沒有萃取型的資料源"
+            else:
+                job.problem = f"找不到報表「{task.report}」"
+        elif task.target_kind == "workbook":
             report = catalog.workbook(task.content_url, task.target_name)
             if report is not None:
                 job.targets = [Target(report, ds) for ds in report.extract_datasources()]
@@ -101,6 +121,11 @@ def plan_jobs(schedules: ScheduleFile, catalog: Catalog) -> list[Job]:
             job.problem = (
                 f"找不到對應的報表（{task.target_kind}：{task.content_url or task.target_name}）"
             )
+        if task.suspended and job.problem is None:
+            job.problem = "萃取更新工作已暫停" + (
+                f"（連續失敗 {task.consecutive_failures} 次）" if task.consecutive_failures else ""
+            )
+            job.suspended = True
         jobs.append(_check_schedule(job))
     for sub in schedules.subscriptions:
         schedule = schedules.schedule(sub.schedule)
@@ -111,9 +136,13 @@ def plan_jobs(schedules: ScheduleFile, catalog: Catalog) -> list[Job]:
             priority=(schedule.priority if schedule else None) or 50,
             subscription=sub,
         )
-        report = catalog.workbook(sub.workbook, sub.workbook_name)
+        report = (
+            catalog.report(sub.report)
+            if sub.report is not None
+            else catalog.workbook(sub.workbook, sub.workbook_name)
+        )
         if report is None:
-            job.problem = f"找不到對應的報表（{sub.workbook or sub.workbook_name}）"
+            job.problem = f"找不到對應的報表（{sub.report or sub.workbook or sub.workbook_name}）"
         elif sub.content_kind == "view":
             if not any(v == sub.view for v in _view_names(report)):
                 job.problem = f"報表「{report.name}」沒有 view「{sub.view}」"
@@ -123,6 +152,7 @@ def plan_jobs(schedules: ScheduleFile, catalog: Catalog) -> list[Job]:
             job.targets = [Target(report)]
         if sub.suspended and job.problem is None:
             job.problem = "訂閱已暫停"
+            job.suspended = True
         jobs.append(_check_schedule(job))
     return jobs
 
@@ -132,16 +162,23 @@ def _view_names(report: Report) -> list[str]:
 
 
 def _check_schedule(job: Job) -> Job:
-    if job.problem is not None:
-        return job
     schedule = job.schedule
     if schedule is None:
-        job.problem = "找不到排程"
+        job.problem, job.suspended = job.problem or "找不到排程", False
     elif schedule.frequency is None:
-        job.problem = f"排程「{schedule.name}」無法辨識：{schedule.problem or '沒有頻率'}"
-    elif schedule.state != "Active":
+        if job.problem is None or job.suspended:
+            job.problem = f"排程「{schedule.name}」無法辨識：{schedule.problem or '沒有頻率'}"
+            job.suspended = False
+    elif schedule.state != "Active" and job.problem is None:
         job.problem = f"排程「{schedule.name}」已暫停"
+        job.suspended = True
     return job
+
+
+def _signature(job: Job, timezone: str) -> str:
+    """工作的排程（頻率與時區）：改變時重新排定下次執行時間。"""
+    assert job.schedule is not None and job.schedule.frequency is not None
+    return f"{timezone}|{job.schedule.frequency.model_dump_json()}"
 
 
 # ---------------------------------------------------------------- 執行
@@ -156,9 +193,39 @@ class RunRecord:
     finished: str
     status: Literal["ok", "failed"]
     detail: str
+    trigger: Literal["schedule", "manual"] = "schedule"
+    requested_by: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(self.__dict__, ensure_ascii=False)
+
+
+def request_run(state_dir: Path, job: str, user: str) -> str:
+    """排入「立即執行」（其他行程呼叫）：排程器下一次檢查時執行；回傳要求的 id。"""
+    queue = state_dir / QUEUE
+    queue.mkdir(parents=True, exist_ok=True)
+    request = f"{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%S%f')}-{secrets.token_hex(3)}"
+    payload = {"id": request, "job": job, "user": user, "requested_at": utc_now().isoformat()}
+    temporary = queue / f"{request}.tmp"
+    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary, queue / f"{request}.json")
+    return request
+
+
+def queued(state_dir: Path) -> list[dict[str, Any]]:
+    """排隊中的「立即執行」（先排的在前）。"""
+    queue = state_dir / QUEUE
+    if not queue.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    for path in sorted(queue.glob("*.json")):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(item, dict) and "job" in item:
+            items.append(item)
+    return items
 
 
 class Handler(Protocol):
@@ -168,7 +235,9 @@ class Handler(Protocol):
 
 
 class Scheduler:
-    """依排程執行工作；狀態（每個工作的下次執行時間）與執行紀錄存在 state_dir。"""
+    """依排程執行工作；狀態（每個工作的下次執行時間）與執行紀錄存在 state_dir。
+
+    source：每次檢查時重新取得（工作, 時區）；on_result：每次執行後呼叫（例如記下連續失敗、寄信通知）。"""
 
     def __init__(
         self,
@@ -177,29 +246,60 @@ class Scheduler:
         handlers: dict[JobKind, Handler],
         state_dir: Path,
         clock: Clock = utc_now,
+        *,
+        source: Callable[[], tuple[list[Job], str | None]] | None = None,
+        on_result: Callable[[Job, RunRecord], Any] | None = None,
     ) -> None:
+        self.all_jobs = list(jobs)
         self.jobs = [j for j in jobs if j.runnable]
         self.timezone = timezone
         self.handlers = handlers
         self.state_dir = state_dir
         self.clock = clock
+        self.source = source
+        self.on_result = on_result
         self.state_path = state_dir / "state.json"
         self.log_path = state_dir / "runs.jsonl"
-        self.due: dict[str, dt.datetime] = self._load_state()
+        self.started = clock()
+        self.due: dict[str, dt.datetime] = {}
+        self.keys: dict[str, str] = {}
+        self._load_state()
+        self.refresh()
 
-    def _load_state(self) -> dict[str, dt.datetime]:
+    def refresh(self) -> None:
+        """有工作的來源時重新取得工作與時區（沒有時區時不排程）。"""
+        if self.source is None:
+            return
+        jobs, timezone = self.source()
+        self.all_jobs = list(jobs)
+        if timezone:
+            self.timezone = timezone
+            self.jobs = [j for j in jobs if j.runnable]
+        else:
+            self.jobs = []
+
+    def _load_state(self) -> None:
         if not self.state_path.is_file():
-            return {}
+            return
         try:
             raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-            return {k: dt.datetime.fromisoformat(v) for k, v in raw.get("next", {}).items()}
-        except (OSError, ValueError):
-            return {}
+            self.due = {k: dt.datetime.fromisoformat(v) for k, v in raw.get("next", {}).items()}
+            self.keys = {str(k): str(v) for k, v in raw.get("keys", {}).items()}
+        except (OSError, ValueError, AttributeError):
+            self.due, self.keys = {}, {}
 
     def _save_state(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        data = {"next": {k: v.isoformat() for k, v in sorted(self.due.items())}}
-        temp = self.state_path.with_suffix(".tmp")
+        if self.source is not None:
+            # 刪除的工作不再保留
+            known = {j.id for j in self.all_jobs}
+            self.due = {k: v for k, v in self.due.items() if k in known}
+            self.keys = {k: v for k, v in self.keys.items() if k in known}
+        data = {
+            "next": {k: v.isoformat() for k, v in sorted(self.due.items())},
+            "keys": dict(sorted(self.keys.items())),
+        }
+        temp = self.state_path.with_name(f"state.{os.getpid()}.tmp")
         temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.state_path)
 
@@ -208,18 +308,26 @@ class Scheduler:
         return job.schedule.frequency.next_run(after, self.timezone)
 
     def tick(self) -> list[RunRecord]:
-        """執行到期的工作（優先順序數字小的先），回傳執行紀錄；第一次看到的工作只排定下次執行時間。"""
+        """執行「立即執行」的要求與到期的工作（優先順序數字小的先），回傳執行紀錄；
+        第一次看到的工作（或排程改變的工作）只排定下次執行時間。"""
+        self.refresh()
+        records = self.run_requests()
         now = self.clock()
         due: list[tuple[int, str, Job]] = []
         changed = False
         for job in self.jobs:
+            key = _signature(job, self.timezone)
             when = self.due.get(job.id)
-            if when is None:
+            if when is None or self.keys.get(job.id, key) != key:
                 self.due[job.id] = self.next_due(job, now)
+                self.keys[job.id] = key
                 changed = True
-            elif when <= now:
+                continue
+            if job.id not in self.keys:
+                self.keys[job.id] = key
+                changed = True
+            if when <= now:
                 due.append((job.priority, job.id, job))
-        records: list[RunRecord] = []
         for _, _, job in sorted(due, key=lambda item: (item[0], item[1])):
             records.append(self.run(job, self.due[job.id]))
             # 錯過多次時只補跑一次：下一次從現在起算
@@ -229,7 +337,14 @@ class Scheduler:
             self._save_state()
         return records
 
-    def run(self, job: Job, due: dt.datetime | None = None) -> RunRecord:
+    def run(
+        self,
+        job: Job,
+        due: dt.datetime | None = None,
+        *,
+        trigger: Literal["schedule", "manual"] = "schedule",
+        requested_by: str | None = None,
+    ) -> RunRecord:
         """立即執行一個工作並記錄結果（也供手動觸發使用）。"""
         started = self.clock()
         handler = self.handlers.get(job.kind)
@@ -248,11 +363,72 @@ class Scheduler:
             finished=self.clock().isoformat(),
             status=status,
             detail=detail,
+            trigger=trigger,
+            requested_by=requested_by,
         )
+        self._log(record)
+        if self.on_result is not None:
+            try:
+                self.on_result(job, record)
+            except Exception as exc:  # 記錄結果的程式失敗不影響排程器
+                print(f"無法記下 {job.id} 的結果：{type(exc).__name__}: {exc}", file=sys.stderr)
+        return record
+
+    def _log(self, record: RunRecord) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8", newline="\n") as log:
             log.write(record.to_json() + "\n")
-        return record
+
+    def run_requests(self) -> list[RunRecord]:
+        """執行排隊中的「立即執行」（先排的先執行）；找不到或不能執行的工作記為失敗。"""
+        queue = self.state_dir / QUEUE
+        if not queue.is_dir():
+            return []
+        records: list[RunRecord] = []
+        for path in sorted(queue.glob("*.json")):
+            try:
+                request = json.loads(path.read_text(encoding="utf-8"))
+                path.unlink()
+            except (OSError, ValueError):
+                path.unlink(missing_ok=True)
+                continue
+            job_id = str(request.get("job", ""))
+            user = request.get("user")
+            job = next((j for j in self.all_jobs if j.id == job_id), None)
+            if job is None or (job.problem is not None and not job.suspended):
+                now = self.clock().isoformat()
+                reason = f"找不到工作 {job_id}" if job is None else f"不能執行：{job.problem}"
+                record = RunRecord(
+                    job=job_id,
+                    kind=job.kind if job is not None else "extract",
+                    due=now,
+                    started=now,
+                    finished=now,
+                    status="failed",
+                    detail=reason,
+                    trigger="manual",
+                    requested_by=user,
+                )
+                self._log(record)
+                records.append(record)
+                continue
+            records.append(self.run(job, trigger="manual", requested_by=user))
+        return records
+
+    def beat(self) -> None:
+        """寫入排程器最後回報的時間（查詢服務據此顯示排程器是否在執行）。"""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "pid": os.getpid(),
+            "started_at": self.started.isoformat(),
+            "heartbeat_at": self.clock().isoformat(),
+            "jobs": len(self.jobs),
+            "timezone": self.timezone,
+        }
+        path = self.state_dir / STATUS
+        temp = path.with_name(f"scheduler.{os.getpid()}.tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
 
     def seconds_until_next(self, limit: float = 60.0) -> float:
         now = self.clock()
@@ -268,13 +444,15 @@ class Scheduler:
         sleep: Callable[[float], Any] = time.sleep,
         stop: Callable[[], bool] = lambda: False,
         on_record: Callable[[RunRecord], Any] | None = None,
+        poll: float = 60.0,
     ) -> None:
-        """常駐：執行到期的工作，等到下一個工作到期（最多 60 秒檢查一次）。"""
+        """常駐：執行到期的工作，等到下一個工作到期（最多 poll 秒檢查一次，也檢查「立即執行」）。"""
         while not stop():
+            self.beat()
             for record in self.tick():
                 if on_record is not None:
                     on_record(record)
-            sleep(self.seconds_until_next())
+            sleep(self.seconds_until_next(poll))
 
 
 def last_runs(state_dir: Path) -> dict[str, dict[str, Any]]:
@@ -329,6 +507,8 @@ def extract_handler(config: Path | str | None = None) -> Handler:
 
 
 __all__ = [
+    "QUEUE",
+    "STATUS",
     "Handler",
     "Job",
     "JobKind",
@@ -338,5 +518,7 @@ __all__ = [
     "extract_handler",
     "last_runs",
     "plan_jobs",
+    "queued",
+    "request_run",
     "utc_now",
 ]

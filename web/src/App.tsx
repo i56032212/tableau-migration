@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { AdminPage } from "./Admin";
 import { api } from "./api";
+import { scheduleApi } from "./schedules";
+import { MySubscriptionsPage, SubscribeButton } from "./Subscribe";
 import { caseState, DashboardView } from "./Dashboard";
 import {
   closeDocument,
@@ -34,10 +36,11 @@ import { PageControl, pagesOf } from "./PageControl";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
-// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）、/admin/<分頁>（站台管理）；?case=<篩選組合>
+// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）、/admin/<分頁>（站台管理）、/subscriptions（我的訂閱）；?case=<篩選組合>
 type Route =
   | { page: "home" }
   | { page: "admin"; tab?: string }
+  | { page: "subscriptions" }
   | { page: "workbook"; workbook: string }
   | { page: "dashboard"; workbook: string; dashboard: string }
   | { page: "sheet"; workbook: string; worksheet: string }
@@ -50,6 +53,7 @@ type Route =
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "admin") return { page: "admin", tab: parts[1] };
+  if (parts[0] === "subscriptions") return { page: "subscriptions" };
   if (parts[0] === "w" && parts[1]) {
     if (parts[2] === "d" && parts[3]) return { page: "dashboard", workbook: parts[1], dashboard: parts[3] };
     if (parts[2] === "s" && parts[3]) return { page: "sheet", workbook: parts[1], worksheet: parts[3] };
@@ -107,6 +111,8 @@ export function App() {
             <Home me={me} />
           ) : route.page === "admin" ? (
             <AdminPage me={me} tab={route.tab} go={navigate} />
+          ) : route.page === "subscriptions" ? (
+            <MySubscriptionsPage go={navigate} />
           ) : (
             <WorkbookPage route={route} caseName={caseName} me={me} />
           )}
@@ -142,10 +148,17 @@ function DesktopCommands() {
 function Home({ me }: { me: Me }) {
   const [workbooks, setWorkbooks] = useState<WorkbookSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 伺服器有排程管理時才有「我的訂閱」
+  const [subscriptions, setSubscriptions] = useState<number | null>(null);
+  const desktop = me.mode === "desktop";
   useEffect(() => {
     api.workbooks().then(setWorkbooks).catch((e: Error) => setError(e.message));
-  }, []);
-  const desktop = me.mode === "desktop";
+    if (!desktop && me.user)
+      scheduleApi
+        .mine()
+        .then((data) => setSubscriptions(data.subscriptions.length))
+        .catch(() => setSubscriptions(null));
+  }, [desktop, me.user]);
   return (
     <main className="home">
       <div className="home-header">
@@ -156,6 +169,7 @@ function Home({ me }: { me: Me }) {
           </button>
         )}
         {!desktop && me.user?.admin && <Link to="/admin">站台管理</Link>}
+        {subscriptions !== null && <Link to="/subscriptions">我的訂閱{subscriptions ? `（${subscriptions}）` : ""}</Link>}
         {!desktop && me.user && me.mode !== "none" && <DesktopTokensButton />}
         <UserBar me={me} />
       </div>
@@ -235,7 +249,7 @@ function WorkbookPage({
   caseName,
   me,
 }: {
-  route: Exclude<Route, { page: "home" } | { page: "admin" }>;
+  route: Exclude<Route, { page: "home" } | { page: "admin" } | { page: "subscriptions" }>;
   caseName: string | null;
   me: Me;
 }) {
@@ -438,6 +452,9 @@ function WorkbookPage({
         {ir.unsupported.length > 0 && <span className="error">不支援 {ir.unsupported.length} 筆</span>}
         {me.mode === "desktop" && <DocumentActions workbook={workbook} onClosed={() => undefined} />}
         {me.mode !== "desktop" && <VersionsButton workbook={workbook} />}
+        {me.mode !== "desktop" && me.user && (dashboard || worksheet) && (
+          <SubscribeButton workbook={workbook} view={dashboard?.name ?? worksheet?.name ?? null} />
+        )}
         <UserBar me={me} />
       </header>
       {dashboard && (

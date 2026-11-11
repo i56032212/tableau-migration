@@ -271,8 +271,12 @@ class ExtractTask(BaseModel):
     target_id: str | None = None
     target_name: str | None = None
     content_url: str | None = None
+    report: str | None = Field(
+        default=None, description="新平台上的報表 id（在新平台上建立的工作；有值時不依名稱對應）"
+    )
     priority: int | None = None
     consecutive_failures: int = 0
+    suspended: bool = Field(default=False, description="暫停（手動，或連續失敗到達門檻）")
 
 
 class Subscription(BaseModel):
@@ -287,6 +291,9 @@ class Subscription(BaseModel):
     user_domain: str | None = None
     schedule: str
     content_kind: Literal["view", "workbook"]
+    report: str | None = Field(
+        default=None, description="新平台上的報表 id（在新平台上訂閱的；有值時不依名稱對應）"
+    )
     workbook: str | None = Field(default=None, description="報表的網址名稱（content_url）")
     workbook_name: str | None = None
     view: str | None = Field(default=None, description="view 名稱（content_kind 為 view 時）")
@@ -297,6 +304,7 @@ class Subscription(BaseModel):
     page_size: str | None = None
     suspended: bool = False
     send_if_view_empty: bool = True
+    consecutive_failures: int = 0
 
 
 class ScheduleFile(BaseModel):

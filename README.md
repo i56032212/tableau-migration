@@ -38,7 +38,7 @@ Relationship 模型（見「Relationship 模型」）；公開報表盤點中符
 以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）；
 查詢服務與檢視器可以要求登入（反向代理標頭或 OIDC，開發模式可切換使用者；見「身分驗證」），並依 Tableau Server 匯出的
 Project、workbook、view 權限開放（見「權限」）；匯入之後 Project、權限、使用者與群組在新平台上管理（見「站台管理」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
-PDF、PNG 寄出訂閱（見「排程與訂閱」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
+PDF、PNG 寄出訂閱（見「排程與訂閱」），排程、萃取更新與訂閱也在新平台上管理，使用者可以自己訂閱（見「排程管理」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
 一份報表可以有多個資料源（各工作表用各自的資料源，網址參數套用到所有資料源中同名的欄位）；同一張工作表混用多個資料源的
 Data Blending 支援主要與次要資料源都是嵌入式萃取、次要資料源只用量值的工作表（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
 不會生效，盤點時列為不符合起步條件（見「依檢視者的身分連線」）。以 156 份公開報表重新盤點：放寬多個資料源後 12 份
@@ -420,6 +420,26 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
   圖片內嵌在郵件內文、PDF（依紙張大小與方向）合併成一個附件，內文附每個 view 的連結
 - view 沒有資料、而訂閱設定為不寄送時不寄（與 Tableau 的「view 為空時不傳送」相同）
 
+### 排程管理
+
+有報表庫時，排程、萃取更新工作與訂閱改在新平台上管理，Tableau 下線後也能新增與修改
+（`service/src/tmig_service/schedules.py`、`schedule_api.py`）：
+
+- 匯入：`uv run tmig schedule import schedules.json --store <報表庫>`（Tableau Server 匯出的排程檔；匯入的工作依報表的
+  網址名稱或名稱對應到報表），之後在站台管理中修改；沒有 Tableau 的排程時在「站台管理 → 排程」設定時區後新增
+- 排程器：`uv run tmig schedule serve --store <報表庫> --mail mail.toml`，每次檢查時重讀排程資料（修改不必重新啟動）、
+  每 5 秒檢查一次「立即執行」；使用者與權限以站台資料為準，發布到伺服器的報表也能更新萃取與訂閱。
+  狀態與執行紀錄在報表庫的 `schedule-state/`，排程器每次檢查時回報，站台管理據此顯示排程器是否在執行
+- 站台管理員（「站台管理」的排程、工作、執行紀錄）：
+  - 排程：新增、修改（名稱、萃取更新或訂閱、頻率：每小時／每天／每週／每月、優先順序）、暫停、繼續、刪除（要先沒有工作）
+  - 工作：萃取更新（完整或增量）與訂閱的上次與下次執行、連續失敗次數；新增萃取更新、立即執行、改排程、暫停、繼續、刪除
+  - 執行紀錄：每次執行的時間、觸發（排程，或立即執行的人）、結果與說明
+- 連續失敗（與 Tableau Server 相同）：萃取更新每次失敗寄信給報表的擁有者；萃取更新與訂閱連續失敗 5 次
+  （`--suspend-after`）後暫停，訂閱暫停時寄信給訂閱者；暫停的工作可以立即執行確認問題排除，繼續時重新計算
+- 訂閱（與 Tableau 的「訂閱」相同）：檢視器工具列的「訂閱」選擇這個 view 或整份報表、排程、圖片或 PDF（紙張大小、
+  方向）、主旨、訊息與「view 沒有資料時不寄送」；訂閱者要能檢視這份報表並在站台中有 email，報表的擁有者、
+  Project Leader 與站台管理員可以替別人訂閱。首頁的「我的訂閱」修改主旨、排程與格式，暫停、繼續或取消訂閱
+
 ## 使用紀錄
 
 查詢服務記錄每次檢視的使用者、報表與時間（`service/src/tmig_service/usage.py`），供報表管理與廢棄判定，不做完整稽核：
@@ -450,6 +470,8 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 | `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
 | `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
 | `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2、Q3：`--mail`、`--auth`） |
+| `tmig schedule list\|tick\|run\|serve --store <報表庫> [--mail 設定檔]` | 排程器：報表庫中（站台管理的）排程；連續失敗暫停、寄信通知（見「排程管理」） |
+| `tmig schedule import <排程檔> --store <報表庫> [--replace]` | 把 Tableau 匯出的排程檔匯入報表庫（見「排程管理」） |
 | `tmig site import\|init\|show --store <報表庫>` | 站台資料：從 Tableau 匯出的檔案匯入、建立新的站台、顯示摘要（見「站台管理」） |
 | `tmig usage summary <使用紀錄目錄> [--fixtures 目錄] [--days 90] [--csv 檔案]` | 每份報表的檢視次數、使用者數與最後一次檢視（R1） |
 | `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔] [--usage-dir 目錄] [--store 目錄]` | 查詢服務與檢視器（F2–F4；身分驗證、使用紀錄、發布與版本見各節） |

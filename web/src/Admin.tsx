@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { request } from "./api";
+import { ScheduleTabs } from "./AdminSchedules";
 import { ChecklistDialog, ConfirmDialog, PromptDialog } from "./dialogs";
 import { Modal } from "./Server";
 import type { Me } from "./types";
@@ -169,13 +170,29 @@ const ACTION_NAMES: Record<string, string> = {
   "report.permissions": "設定報表權限",
   "report.delete": "刪除報表",
   "workbook.update": "修改 workbook 的權限",
+  "schedule.import": "匯入排程",
+  "schedule.settings": "設定排程的時區",
+  "schedule.create": "新增排程",
+  "schedule.update": "修改排程",
+  "schedule.delete": "刪除排程",
+  "task.create": "新增萃取更新",
+  "task.update": "修改萃取更新",
+  "task.delete": "刪除萃取更新",
+  "task.run": "立即執行",
+  "task.suspend": "連續失敗而暫停",
+  "subscription.create": "新增訂閱",
+  "subscription.update": "修改訂閱",
+  "subscription.delete": "刪除訂閱",
 };
 
-type Tab = "content" | "users" | "groups" | "changes";
+type Tab = "content" | "users" | "groups" | "schedules" | "tasks" | "runs" | "changes";
 const TABS: [Tab, string][] = [
   ["content", "內容與權限"],
   ["users", "使用者"],
   ["groups", "群組"],
+  ["schedules", "排程"],
+  ["tasks", "工作"],
+  ["runs", "執行紀錄"],
   ["changes", "修改紀錄"],
 ];
 
@@ -210,6 +227,10 @@ export function AdminPage({ me, tab, go }: { me: Me; tab?: string; go: (to: stri
     },
     [reload],
   );
+  const notify = useCallback((message: string | null, failure: string | null) => {
+    setNotice(message);
+    setError(failure);
+  }, []);
   // 換分頁時清掉上一個分頁的訊息
   useEffect(() => {
     setNotice(null);
@@ -264,6 +285,9 @@ export function AdminPage({ me, tab, go }: { me: Me; tab?: string; go: (to: stri
       {site && current === "content" && <ContentTab site={site} run={run} />}
       {site && current === "users" && <UsersTab site={site} me={me} run={run} />}
       {site && current === "groups" && <GroupsTab site={site} run={run} />}
+      {(current === "schedules" || current === "tasks" || current === "runs") && (
+        <ScheduleTabs tab={current} go={go} notify={notify} />
+      )}
       {current === "changes" && <ChangesTab />}
     </main>
   );

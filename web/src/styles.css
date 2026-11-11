@@ -425,3 +425,23 @@ button.danger-link { color: var(--error); }
 .admin-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .admin-field input, .admin-field select { font: inherit; padding: 3px 6px; }
 .checklist { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-top: 6px; }
+.admin-section h3 { font-size: 14px; margin: 18px 0 8px; }
+.admin-section h3:first-of-type { margin-top: 4px; }
+.scheduler-status { margin: 0 0 10px; padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+.scheduler-status.ok { background: #ecfdf3; color: #166534; }
+.scheduler-status.warn { background: #fff7ed; color: var(--warn); }
+.scheduler-status code { font-size: 12px; }
+.warn-text { color: var(--warn); }
+.run-ok { color: #166534; }
+.run-failed { color: var(--error); }
+.admin-table tr.failed-row td { background: #fef2f2; }
+.admin-table td.run-detail { max-width: 520px; overflow-wrap: anywhere; color: var(--muted); }
+fieldset.frequency { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin: 0 0 10px; display: flex; flex-direction: column; gap: 8px; }
+fieldset.frequency legend { font-size: 13px; padding: 0 4px; }
+fieldset.frequency .row label, .weekdays label { display: inline-flex; align-items: center; gap: 3px; }
+fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
+.publish-form label.inline { flex-direction: row; align-items: center; gap: 6px; }
+.publish-form .row { display: flex; gap: 12px; flex-wrap: wrap; }
+.publish-form .row label { flex-direction: row; align-items: center; }
+.publish-form textarea, .publish-form input:not([type]), .publish-form select { font: inherit; padding: 3px 6px; }
+.admin-section.standalone { border-top: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }

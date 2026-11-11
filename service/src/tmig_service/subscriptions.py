@@ -43,6 +43,8 @@ from tmig.catalog import Report
 from tmig.data.sources import ENV_REF
 from tmig.schedule.runner import Job
 from tmig_service.auth import SESSION_COOKIE, Authenticator, AuthError, AuthSettings
+from tmig_service.site import SiteStore
+from tmig_service.store import ReportStore
 
 PAPER = {
     "A3": "A3",
@@ -139,13 +141,23 @@ def subscription_views(report: Report, view: str | None) -> list[tuple[str, str]
 
 
 class Renderer:
-    """只在本機的查詢服務與 Chromium：第一次使用時啟動，close() 關閉。"""
+    """只在本機的查詢服務與 Chromium：第一次使用時啟動，close() 關閉。
 
-    def __init__(self, fixtures: Path, auth: AuthSettings, web_dist: Path | None = None) -> None:
-        if auth.directory is None:
+    store：報表庫（發布的報表也能訂閱；使用者目錄與權限以站台資料為準，修改後立即生效）。"""
+
+    def __init__(
+        self,
+        fixtures: Path,
+        auth: AuthSettings,
+        web_dist: Path | None = None,
+        store: ReportStore | None = None,
+    ) -> None:
+        site = SiteStore(store.root) if store is not None else None
+        if auth.directory is None and not (site is not None and site.exists()):
             raise AuthError("訂閱需要使用者目錄（以訂閱者的身分查詢）")
         self.fixtures = fixtures
         self.web_dist = web_dist
+        self.store = store
         settings = AuthSettings(
             mode="internal",
             directory=auth.directory,
@@ -155,6 +167,8 @@ class Renderer:
             session_secret=secrets.token_bytes(32),
         )
         self.authenticator = Authenticator(settings)
+        if site is not None and site.exists():
+            self.authenticator.site = site
         self._stack: ExitStack | None = None
         self._browser: Any = None
         self.base_url = ""
@@ -174,7 +188,7 @@ class Renderer:
                     f"找不到檢視器 {dist}；先執行 cd web && pnpm install && pnpm build"
                 )
             self.base_url = stack.enter_context(
-                running_server(self.fixtures, dist, auth=self.authenticator)
+                running_server(self.fixtures, dist, auth=self.authenticator, store=self.store)
             )
             playwright = stack.enter_context(sync_playwright())
             self._browser = playwright.chromium.launch()

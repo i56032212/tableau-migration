@@ -394,3 +394,78 @@ def test_example_mail_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TMIG_SMTP_PASSWORD", "pw")
     mail = load_mail(ROOT / "service" / "mail.example.toml")
     assert mail.host == "smtp.example.com" and mail.starttls and not mail.use_ssl
+
+
+def test_cli_store_mode_renders_published_report(
+    fixtures: Path, smtp: MailSettings, tmp_path: Path
+) -> None:
+    """報表庫模式（tmig schedule run --store）：發布的報表也能訂閱，使用者與權限以站台資料為準。"""
+    from tmig.access.permissions import Grantee, Rule
+    from tmig.cli import main
+    from tmig.package import write_package
+    from tmig.verify.run import ensure_data, load_fixture_ir
+    from tmig_service.schedules import ScheduleStore
+    from tmig_service.site import SiteStore, from_exports
+    from tmig_service.store import ReportStore
+
+    source = fixtures / "secure"
+    ir = load_fixture_ir(source)
+    ensure_data(source, ir)
+    package = tmp_path / "secure.tmigx"
+    write_package(package, ir, source)
+    store = tmp_path / "store"
+    SiteStore(store).initialize(from_exports(PERMISSIONS, DIRECTORY), actor="test")
+    reports = ReportStore(store)
+    everyone = Rule(grantee=Grantee(kind="group", name="All Users"), capabilities={"Read": "Allow"})
+    reports.commit(
+        reports.stage(package),
+        report_id="sales",
+        name="銷售",
+        project="default",
+        owner="dave",
+        publisher="dave",
+        comment="",
+        expected=None,
+        rules=[everyone],
+    )
+    plan = schedules(
+        {**subscription("a", "alice"), "workbook_name": None, "report": "sales"},
+        {**subscription("o", "outsider"), "workbook_name": None, "report": "sales"},
+    )
+    ScheduleStore(store).initialize(plan, actor="test")
+    mail = tmp_path / "mail.toml"
+    mail.write_text(
+        f'[smtp]\nhost = "127.0.0.1"\nport = {smtp.port}\nstarttls = false\nsender = "bi@example.com"\n',
+        encoding="utf-8",
+    )
+    empty = tmp_path / "no-fixtures"
+    empty.mkdir()
+    common = [
+        "--store",
+        str(store),
+        "--fixtures",
+        str(empty),
+        "--mail",
+        str(mail),
+        "--web",
+        str(DIST),
+    ]
+    assert main(["schedule", "run", *common, "--job", "subscription:a"]) == 0
+    ((recipients, raw),) = SmtpHandler.messages
+    assert recipients == ["alice@example.com"]
+    _, images, _, html = parts(raw)
+    assert len(images) == 1 and "/w/sales/s/" in html
+    # 站台資料中沒有 email 的訂閱者：這次失敗並記錄原因
+    SiteStore(store).change(
+        "test",
+        "user.update",
+        "outsider",
+        lambda data: data.users.__setitem__(
+            next(i for i, u in enumerate(data.users) if u.name == "outsider"),
+            next(u for u in data.users if u.name == "outsider").model_copy(update={"email": None}),
+        ),
+    )
+    assert main(["schedule", "run", *common, "--job", "subscription:o"]) == 1
+    runs = ScheduleStore(store).runs()
+    assert runs[0]["status"] == "failed" and "沒有 email" in runs[0]["detail"]
+    assert ScheduleStore(store).data().subscriptions[1].consecutive_failures == 1

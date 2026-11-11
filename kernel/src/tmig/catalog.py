@@ -47,10 +47,19 @@ class Report:
     directory: Path
     ir: IR
     url_name: str | None = None
+    key: str | None = None
+    """檢視器網址中的報表 id（報表庫的報表）；None 時為目錄名稱（fixtures）。"""
+    owner: str | None = None
+    title: str | None = None
+    """畫面上的名稱（報表庫中的報表名稱）；None 時同 name。"""
 
     @property
     def name(self) -> str:
-        return self.directory.name
+        return self.key or self.directory.name
+
+    @property
+    def label(self) -> str:
+        return self.title or self.name
 
     def extract_datasources(self) -> list[str]:
         return [ds.id for ds in self.ir.datasources if has_local_data(ds.connection)]
@@ -70,6 +79,10 @@ class Catalog:
                 for d in report_directories(fixtures)
             ]
         )
+
+    def report(self, key: str) -> Report | None:
+        """依報表 id（檢視器網址中的名稱）找報表。"""
+        return next((r for r in self.reports if r.name == key), None)
 
     def workbook(self, url_name: str | None, name: str | None = None) -> Report | None:
         """依網址名稱（優先）或報表名稱找報表；名稱重複時無法判斷，回傳 None。"""
