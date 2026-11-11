@@ -200,7 +200,10 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
             (
                 i
                 for i, flt in enumerate(filters)
-                if not isinstance(flt, TopNFilter | TupleFilter) and _same_dimension(flt.field, use)
+                if not isinstance(flt, TupleFilter)
+                and _same_dimension(flt.field, use)
+                # Top N 篩選的控制項：類別的選取改變 Top N 篩選排名前的選取
+                and not (isinstance(flt, TopNFilter) and value.is_range)
             ),
             None,
         )
@@ -286,7 +289,13 @@ def _with_selection(flt: Filter, state: QueryState) -> Filter:
 
 
 def _replace(existing: Filter, value: FilterValue) -> Filter:
-    assert not isinstance(existing, TupleFilter | TopNFilter)
+    assert not isinstance(existing, TupleFilter)
+    if isinstance(existing, TopNFilter):
+        # 排名前先選取的成員（篩選對話框的「一般」頁）；Top N 本身不變
+        mode = value.mode or "include"
+        return existing.model_copy(
+            update={"mode": mode, "values": [] if mode == "all" else list(value.values)}
+        )
     if value.is_range:
         if isinstance(existing, RangeFilter):
             return existing.model_copy(

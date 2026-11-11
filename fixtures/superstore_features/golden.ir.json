@@ -8246,12 +8246,44 @@
                       "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[2]"
                     },
                     {
-                      "id": "z16",
-                      "kind": "blank",
+                      "id": "z17",
+                      "kind": "filter",
                       "x": 788,
                       "y": 232,
                       "w": 204,
-                      "h": 460,
+                      "h": 80,
+                      "worksheet": "ws_top_sub_categories",
+                      "field": {
+                        "field": "f_sub_category",
+                        "agg": null,
+                        "date": null,
+                        "continuous": false,
+                        "table_calc": null
+                      },
+                      "parameter": null,
+                      "control": "multi_dropdown",
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": null,
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[3]"
+                    },
+                    {
+                      "id": "z16",
+                      "kind": "blank",
+                      "x": 788,
+                      "y": 320,
+                      "w": 204,
+                      "h": 372,
                       "worksheet": null,
                       "field": null,
                       "parameter": null,
@@ -8269,7 +8301,7 @@
                       "show_title": true,
                       "style": null,
                       "fit": null,
-                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[3]"
+                      "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone/zone/zone[2]/zone[4]"
                     }
                   ],
                   "layout": "vertical",

@@ -21,7 +21,8 @@
   （First Class、Same Day 合為 Fast，其餘歸入 Other）、Quantity (bin)（每 3 一格，顯示缺少的值），
   在「群組與分組」dashboard 上
 - K4 篩選條件：相對日期（最近 3 個月）、彙總條件（總銷售額大於 5000 的客戶）、萬用字元
-  （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別），在「篩選條件」dashboard 上
+  （客戶名稱包含 son）、在一般選取中取 Top N（排除 Phones 後的前 3 名子類別，有篩選控制項改變一般選取），
+  在「篩選條件」dashboard 上
 - K3 快速 Table Calculation：Sales Growth by Year 的差異與差異百分比（與前一年比較）；Monthly Moving Average
   的移動平均（前兩個月與當月）與移動總和（前後各一個月，不足時為 Null），在「年度成長」dashboard 上
 - I2 dashboard 物件：「首頁」dashboard 上的標誌圖片、切換到 dashboard（文字按鈕）與工作表（圖片按鈕）、
@@ -1718,7 +1719,8 @@ def conditions_dashboard() -> str:
             <zone {zone_box(788, 56, 204, 636)} fixed-size='204' id='13' is-fixed='true' param='vert' type-v2='layout-flow'>
               <zone {zone_box(788, 56, 204, 80)} id='14' mode='relevant' name='Recent Sales by Category' param={attr(ref("none:Order Date:qk"))} type-v2='filter' />
               <zone {zone_box(788, 144, 204, 80)} id='15' mode='pattern' name='Son Customers by Region' param={attr(ref("none:Customer Name:nk"))} type-v2='filter' />
-              <zone {zone_box(788, 232, 204, 460)} id='16' type-v2='empty' />
+              <zone {zone_box(788, 232, 204, 80)} id='17' mode='checkdropdown' name='Top Sub-Categories' param={attr(ref("none:Sub-Category:nk"))} type-v2='filter' />
+              <zone {zone_box(788, 320, 204, 372)} id='16' type-v2='empty' />
             </zone>
           </zone>
         </zone>

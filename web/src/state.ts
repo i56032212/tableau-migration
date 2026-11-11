@@ -48,7 +48,8 @@ export function findFilter(ir: IR, worksheet: string, key: string): FieldFilter 
   const sheet = ir.worksheets.find((w) => w.id === worksheet);
   return sheet?.filters.find(
     (f): f is FieldFilter =>
-      f.kind !== "top_n" && f.kind !== "tuple" && f.field.agg === null && fieldKey(f.field) === key,
+      // Top N 篩選的控制項選的是排名前先選取的成員（篩選對話框的「一般」頁）
+      f.kind !== "tuple" && f.field.agg === null && fieldKey(f.field) === key,
   );
 }
 

@@ -774,6 +774,21 @@ def test_condition_filters_render(server: str) -> None:
         assert relative == "最近 3 個月"
         condition = page.locator("[data-zone='z15'] .fixed-filter").inner_text()
         assert "CONTAINS" in condition
+        # Top N 篩選的控制項：勾選 Phones 改變排名前的選取（存檔時排除 Phones），仍取前 3 名
+        before = next(d for w, _, d in renders.items if w == "ws_top_sub_categories")
+        assert "Phones" not in [row[0] for row in before["table"]["raw"]]
+        start = len(renders.items)
+        control = page.locator("[data-zone='z17']")
+        control.locator("button.dropdown").click()
+        control.get_by_label("Phones").click()
+        renders.wait_for(page, {"ws_top_sub_categories"}, start)
+        page.wait_for_timeout(300)
+        body, data = next(
+            (b, d) for w, b, d in reversed(renders.items[start:]) if w == "ws_top_sub_categories"
+        )
+        assert data["rows"] == 3
+        assert "Phones" in [row[0] for row in data["table"]["raw"]]
+        check_numbers(ir, "ws_top_sub_categories", body, data, approx=True)
         assert errors == []
         browser.close()
 

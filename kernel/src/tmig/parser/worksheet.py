@@ -284,6 +284,8 @@ LINE_PATTERNS = {"solid": "solid", "dashed": "dashed", "dotted": "dotted", "dash
 REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
 REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
 KNOWN_UNSUPPORTED = {
+    # 日期篩選的「開啟活頁簿時篩選到最新的日期值」：開啟時以目前資料的最新值取代存檔時的選取
+    "preset": "篩選的「開啟報表時篩選到最新的值」（<preset type='last-values'>）",
     "forecast-specification": "預測",
     "mapsources": "地圖",
     "mapsource": "地圖",
@@ -1055,6 +1057,18 @@ class SheetParser:
                 continue
             if tag in singles:
                 attr_name = singles[tag]
+                if tag == "color" and marks.color is not None and not self._is_measure(use):
+                    # 色彩上有多個欄位（Tableau 以組合著色）：以第一個欄位著色，其他的維度當作詳細資料
+                    # （詳細程度相同，數字不變）；Measure Names 不改變詳細程度，略過
+                    self.ctx.ignore(
+                        enc,
+                        f"工作表「{self.name}」的色彩上有多個欄位：以第一個欄位著色，"
+                        "其他的欄位當作詳細資料（Tableau 以欄位值的組合著色）",
+                    )
+                    if use.field != MEASURE_NAMES and use not in marks.detail:
+                        marks.detail.append(use)
+                        dims.append(use)
+                    continue
                 if getattr(marks, attr_name) is not None:
                     self.ctx.flag(enc, f"標記編碼 {tag} 重複設定")
                     continue

@@ -231,6 +231,22 @@ def test_top_n_ignores_dimension_filters(run: Run) -> None:
     assert by_region(rows, "sum(f_sales)") == {"East": 150, "West": 300}
 
 
+def test_top_n_control_changes_the_general_selection(run: Run) -> None:
+    """Top N 篩選的控制項：選取的成員是排名前的選取（篩選對話框的「一般」頁），再取前 2 名。"""
+    state = QueryState(
+        filters={"f_region": FilterValue(mode="include", values=["East", "South", "North"])}
+    )
+    rows = run(region_sheet(view_extra=top_n("none:Region:nk", "2")), state=state)
+    assert by_region(rows, "sum(f_sales)") == {"East": 350, "South": 100}
+    state = QueryState(filters={"f_region": FilterValue(mode="exclude", values=["West"])})
+    rows = run(region_sheet(view_extra=top_n("none:Region:nk", "2")), state=state)
+    assert by_region(rows, "sum(f_sales)") == {"East": 350, "South": 100}
+    # 全部：與存檔時相同
+    state = QueryState(filters={"f_region": FilterValue(mode="all")})
+    rows = run(region_sheet(view_extra=top_n("none:Region:nk", "2")), state=state)
+    assert by_region(rows, "sum(f_sales)") == {"East": 350, "West": 800}
+
+
 def test_context_filter_applies_before_top_n(run: Run) -> None:
     dimension = top_n("none:Region:nk", "2") + categorical("none:Category:nk", ["Office"])
     assert run(region_sheet(view_extra=dimension)) == []

@@ -409,9 +409,7 @@ class DashboardParser:
         if filter_kind is None:
             self.ctx.flag(element, f"篩選控制項的欄位 {param} 在工作表「{name}」上沒有篩選")
             return Zone(kind="blank", **base)
-        if filter_kind == "top_n":
-            self.ctx.flag(element, "Top N 篩選的控制項 v0 不支援")
-            return Zone(kind="blank", **base)
+        # Top N 篩選的控制項：選取的成員是 Top N 篩選「一般」頁的選取（排名前先選取），樣式與一般的類別篩選相同
         mode = element.get("mode")
         control: ControlType
         if filter_kind in ("relative_date", "condition"):

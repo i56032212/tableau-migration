@@ -903,6 +903,28 @@ def test_device_layouts(tmp_path: Path) -> None:
     assert tablet_layout.zones[0].w == 1000
 
 
+def test_several_fields_on_color(tmp_path: Path) -> None:
+    """色彩上有多個欄位：以第一個欄位著色，其他的維度當作詳細資料（詳細程度相同、數字不變）；
+    Measure Names 不改變詳細程度，略過。"""
+    deps = [
+        instance("[Region]", "None", "[none:Region:nk]"),
+        instance("[Category]", "None", "[none:Category:nk]"),
+        instance("[Sales]", "Sum", "[sum:Sales:qk]", "quantitative"),
+    ]
+    encodings = (
+        f"<color column='{ref('none:Region:nk')}' />"
+        f"<color column='{ref('none:Category:nk')}' />"
+        f"<color column='{ref(':Measure Names')}' />"
+    )
+    sheet = worksheet("S", deps, cols=ref("sum:Sales:qk"), encodings=encodings)
+    ir = parse(tmp_path, b.workbook(worksheets=sheet))
+    assert reasons(ir) == []
+    marks = ir.worksheets[0].marks
+    assert marks.color is not None and marks.color.field == "f_region"
+    assert [u.field for u in marks.detail] == ["f_category"]
+    assert sum("色彩上有多個欄位" in u.reason for u in ir.ignored) == 2
+
+
 def test_zone_for_missing_worksheet(tmp_path: Path) -> None:
     xml = b.workbook(
         worksheets=basic_sheet(), dashboards=dashboard(zone(1, 0, 0, 100000, 100000, "name='Nope'"))
