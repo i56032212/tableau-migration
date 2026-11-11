@@ -229,6 +229,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
     from tmig.data.executor import ExecutionError
     from tmig.data.runtime import DataRuntime
     from tmig.data.sources import SourceConnectionError
+    from tmig.planner.dynamic import resolve_parameters
     from tmig.planner.state import StateError
     from tmig.sqlgen.query import QueryError, worksheet_sql
     from tmig.verify.cases import CasesError
@@ -239,18 +240,29 @@ def _cmd_query(args: argparse.Namespace) -> int:
         query = worksheet_sql(ir, args.worksheet, state, user)
         ws = next(w for w in ir.worksheets if w.id == query.worksheet)
         datasource = next(d for d in ir.datasources if d.id == ws.datasource)
+        prepared: list[bool] = []
 
-        def database() -> Path:
-            if args.db is not None:
+        def database_of(datasource_id: str) -> Path:
+            if args.db is not None and datasource_id == ws.datasource:
                 return args.db
             # 與 tmig verify 相同：缺 DuckDB 檔時由同目錄的 .twbx 匯入
-            for note in ensure_data(args.ir.parent, ir):
-                print(note, file=sys.stderr)
-            return args.ir.parent / "data" / f"{ws.datasource}.duckdb"
+            if not prepared:
+                for note in ensure_data(args.ir.parent, ir):
+                    print(note, file=sys.stderr)
+                prepared.append(True)
+            return args.ir.parent / "data" / f"{datasource_id}.duckdb"
 
         # Live 連線依連線設定檔（TMIG_CONNECTIONS）連到來源資料庫
         with DataRuntime() as runtime:
-            result = runtime.run(query, datasource, database)
+            # 動態參數：與 Tableau 開啟報表時相同，以目前的資料取值
+            resolved, notes = resolve_parameters(
+                ir, lambda q, ds: runtime.run(q, ds, database_of(ds.id)), user
+            )
+            for note in notes:
+                print(note, file=sys.stderr)
+            if resolved is not ir:
+                query = worksheet_sql(resolved, args.worksheet, state, user)
+            result = runtime.run(query, datasource, lambda: database_of(ws.datasource))
     except (
         FileNotFoundError,
         ValueError,

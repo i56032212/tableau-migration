@@ -633,3 +633,57 @@ def test_tooltip_sheet_in_editor(engine: str) -> None:
         assert sheet()["marks"]["tooltip_sheets"] == []
         assert errors == []
         browser.close()
+
+
+def test_dynamic_parameters_in_editor(engine: str) -> None:
+    """參數對話框的「開啟報表時的值」與「開啟報表時取自欄位」：選了欄位就以目前的資料填入，存成動態參數；
+    檢視器取得的參數是以資料取值後的。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    calc = call(
+        engine,
+        "/api/edit/demo/calcs",
+        {"datasource": "ds_orders", "caption": "Latest", "formula": "{MAX([Order Date])}"},
+    )["field"]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+
+        page.locator("button[title='建立參數']").click()
+        dialog = page.locator(".parameter-dialog")
+        dialog.get_by_label("參數名稱").fill("As Of")
+        dialog.get_by_label("參數的資料類型").select_option("date")
+        dialog.get_by_label("開啟報表時的值").select_option(calc["id"])
+        expect(dialog.get_by_label("參數的目前值")).to_have_value("2024-12-30")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+
+        page.locator("button[title='建立參數']").click()
+        dialog.get_by_label("參數名稱").fill("Region Choice")
+        dialog.get_by_label("參數的資料類型").select_option("string")
+        dialog.get_by_role("radio", name="清單").check()
+        dialog.get_by_label("開啟報表時取自欄位").select_option("f_region")
+        expect(dialog.get_by_label("允許的值清單")).to_have_value("Central\nEast\nSouth\nWest")
+        expect(dialog.get_by_label("參數的目前值")).to_have_value("Central")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+
+        catalog = call(engine, "/api/edit/demo/catalog")
+        params = {p["caption"]: p for p in catalog["parameters"]}
+        assert params["As Of"]["value_field"] == calc["id"]
+        assert params["As Of"]["value"] == "2024-12-30"
+        assert params["Region Choice"]["domain_field"] == "f_region"
+        assert params["Region Choice"]["allowed"]["values"] == ["Central", "East", "South", "West"]
+        viewer = {p["caption"]: p for p in call(engine, "/api/workbooks/demo/ir")["parameters"]}
+        assert viewer["As Of"]["value"] == "2024-12-30"
+        assert errors == []
+        browser.close()

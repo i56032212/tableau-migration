@@ -176,6 +176,8 @@ class ParseContext:
     """dashboard 名稱 → IR id；導覽按鈕可能先參照之後才解析的 dashboard，所以第一次用到時配發。"""
     navigations: list[tuple[etree._Element, Zone]] = field(default_factory=list)
     story_ids: dict[str, str] = field(default_factory=dict)
+    dynamic_parameters: list[tuple[Parameter, etree._Element]] = field(default_factory=list)
+    """動態參數（<column default-value-field=… source-field=…>）：資料源解析完後才對應到欄位。"""
     tooltip_refs: list[TooltipRef] = field(default_factory=list)
     """工具提示中的工作表（Viz in Tooltip），依工作表解析的順序。"""
     story_names: set[str] = field(default_factory=set)

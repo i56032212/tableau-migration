@@ -29,10 +29,12 @@ API：
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 import mimetypes
 import os
 import threading
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -48,10 +50,11 @@ from tmig.catalog import Catalog, Report, workbook_url_name
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, Worksheet, iter_zones, save_ir
+from tmig.ir import IR, LiveConnection, Worksheet, iter_zones, save_ir
 from tmig.package import read_report_file
 from tmig.planner.drill import apply_drill, drill_info
-from tmig.planner.identity import Identity
+from tmig.planner.dynamic import dynamic_fields, resolve_parameters
+from tmig.planner.identity import Identity, protected_fields
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.datasource import datasource_summary
@@ -105,6 +108,11 @@ class DomainRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["values", "range"] | None = None
+
+
+logger = logging.getLogger(__name__)
+DYNAMIC_TTL = 60.0
+"""動態參數取值的結果快取的秒數（Tableau 在開啟報表時取值）。"""
 
 
 @dataclass
@@ -361,12 +369,70 @@ def create_app(
         return authorizer.grant(user, loaded.directory, loaded.ir)
 
     def granted(wb: str, user: Identity | None) -> tuple[Loaded, Grant]:
-        """報表與登入者的存取；沒有權限時與報表不存在相同，回應 404。"""
+        """報表與登入者的存取；沒有權限時與報表不存在相同，回應 404。動態參數以目前的資料取值。"""
         loaded = workspace.get(wb)
         grant = grant_for(loaded, user)
         if not grant.allowed:
             raise HTTPException(404, f"找不到報表「{wb}」")
+        resolved = dynamic_ir(wb, loaded, user)
+        if resolved is not loaded.ir:
+            loaded = Loaded(loaded.directory, resolved, loaded.stamp, loaded.published)
         return loaded, grant
+
+    dynamic_cache: dict[tuple[Any, ...], tuple[float, IR]] = {}
+    dynamic_lock = threading.Lock()
+
+    def dynamic_ir(wb: str, loaded: Loaded, user: Identity | None) -> IR:
+        """動態參數（開啟報表時取自欄位的目前值與允許值）以目前的資料取值後的 IR。
+
+        同一份報表、同一份萃取與使用者（只有用到列層級權限的資料源才分使用者）的結果快取一分鐘；
+        查詢失敗或沒有連線權限時維持存檔時的值。"""
+        fields = dynamic_fields(loaded.ir)
+        if not fields:
+            return loaded.ir
+        sources = sorted(
+            d.id for d in loaded.ir.datasources if any(f.id in fields for f in d.fields)
+        )
+        try:
+            require_connect(loaded, sources, user)
+        except HTTPException:
+            return loaded.ir
+        stamps: list[float] = []
+        personal = False
+        for source in sources:
+            datasource = next(d for d in loaded.ir.datasources if d.id == source)
+            personal = personal or bool(protected_fields(loaded.ir, datasource))
+            if not isinstance(datasource.connection, LiveConnection):
+                path = workspace.database(wb, source)
+                stamps.append(path.stat().st_mtime if path.is_file() else 0.0)
+        who = (
+            (
+                user.username,
+                user.domain,
+                tuple(sorted(user.groups)),
+                tuple(sorted(user.attributes.items())),
+            )
+            if personal and user is not None
+            else None
+        )
+        key = (wb, loaded.stamp, tuple(stamps), who)
+        now = time.monotonic()
+        with dynamic_lock:
+            cached = dynamic_cache.get(key)
+            if cached is not None and now - cached[0] < DYNAMIC_TTL:
+                return cached[1]
+
+        def run(query: Any, datasource: Any) -> Any:
+            return data.run(query, datasource, lambda: workspace.database(wb, datasource.id))
+
+        resolved, notes = resolve_parameters(loaded.ir, run, user)
+        for note in notes:
+            logger.info("報表 %s：%s", wb, note)
+        with dynamic_lock:
+            if len(dynamic_cache) > 256:
+                dynamic_cache.clear()
+            dynamic_cache[key] = (now, resolved)
+        return resolved
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

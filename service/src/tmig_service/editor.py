@@ -45,6 +45,7 @@ from tmig.edit import (
     upsert_parameter,
 )
 from tmig.ir import FieldUse
+from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import QueryError, custom_sql_parameters, domain_sql, worksheet_sql
 from tmig.verify.cases import CasesError, load_cases
@@ -95,6 +96,14 @@ class HierarchyBody(BaseModel):
     name: str
     fields: list[str]
     original: str | None = None
+
+
+class FieldValuesBody(BaseModel):
+    """參數對話框的「開啟報表時」：欄位目前的值（轉成參數的型別）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    field: str
+    datatype: Literal["string", "integer", "real", "boolean", "date", "datetime"] | None = None
 
 
 class ParameterBody(BaseModel):
@@ -243,6 +252,28 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         if not values:
             return {"kind": "range", "min": None, "max": None}
         return {"kind": "range", "min": _json(min(values)), "max": _json(max(values))}
+
+    @router.post("/{workbook}/field-values")
+    def post_field_values(workbook: str, body: FieldValuesBody, request: Request) -> dict[str, Any]:
+        """欄位目前的不重複值（含 LOD 的計算欄位；最多 1000 個）：動態參數的目前值與允許值。"""
+        space = workspace(request)
+        runtime: DataRuntime = request.app.state.runtime
+        ir = space.get(workbook).ir
+        if not any(f.id == body.field for d in ir.datasources for f in d.fields):
+            raise HTTPException(404, f"找不到欄位「{body.field}」")
+
+        def run(query: Any, datasource: Any) -> Any:
+            return runtime.run(query, datasource, lambda: space.database(workbook, datasource.id))
+
+        try:
+            values = parameter_values(ir, body.field, body.datatype, run, current_user(request))
+        except QueryError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except SourceConnectionError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ExecutionError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        return {"values": [_json(v) for v in values[:1000]], "more": len(values) > 1000}
 
     @router.put("/{workbook}/worksheets/{worksheet}")
     def put_worksheet(

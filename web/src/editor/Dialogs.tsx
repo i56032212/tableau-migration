@@ -754,7 +754,50 @@ export function ParameterDialog({ parameter, onClose, onSaved }: { parameter: st
   const [min, setMin] = useState(existing?.allowed.min === null || existing?.allowed.min === undefined ? "" : String(existing.allowed.min));
   const [max, setMax] = useState(existing?.allowed.max === null || existing?.allowed.max === undefined ? "" : String(existing.allowed.max));
   const [step, setStep] = useState(existing?.allowed.step === null || existing?.allowed.step === undefined ? "" : String(existing.allowed.step));
+  // 動態參數：開啟報表時的值、允許值取自欄位
+  const [valueField, setValueField] = useState<string>(existing?.value_field ?? "");
+  const [domainField, setDomainField] = useState<string>(existing?.domain_field ?? "");
+  const [hint, setHint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const compatible = (fieldType: string) =>
+    fieldType === datatype ||
+    (["integer", "real"].includes(fieldType) && ["integer", "real"].includes(datatype)) ||
+    (["date", "datetime"].includes(fieldType) && ["date", "datetime"].includes(datatype));
+  const sources = editor.catalog.datasources.flatMap((d) =>
+    d.fields
+      .filter((f) => f.kind !== "set" && f.level !== "aggregate" && f.level !== "table_calc" && compatible(f.datatype))
+      .map((f) => ({ id: f.id, label: editor.catalog.datasources.length > 1 ? `${d.caption}：${f.caption}` : f.caption })),
+  );
+  const show = (v: Scalar) => (v === null || v === undefined ? "" : String(v));
+  const chooseValueField = async (field: string) => {
+    setValueField(field);
+    setHint(null);
+    if (!field) return;
+    try {
+      const { values } = await editApi.fieldValues(editor.workbook, field, datatype);
+      if (values.length === 1) setValue(show(values[0]));
+      else setHint(`這個欄位目前有 ${values.length} 個值：開啟報表時維持目前值（必須是單一值，例如 FIXED 的 LOD 運算式）`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const chooseDomainField = async (field: string) => {
+    setDomainField(field);
+    if (!field) return;
+    try {
+      const { values, more } = await editApi.fieldValues(editor.workbook, field, datatype);
+      if (allowed === "list") {
+        setList(values.map(show).join("\n"));
+        if (values.length > 0 && !values.some((v) => show(v) === value)) setValue(show(values[0]));
+        if (more) setHint("值超過 1000 個，只列出前 1000 個");
+      } else if (values.length > 0) {
+        setMin(show(values[0]));
+        setMax(show(values[values.length - 1]));
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
   const convert = (text: string): Scalar => {
     if (datatype === "integer") return text.trim() === "" ? null : Math.trunc(Number(text));
     if (datatype === "real") return text.trim() === "" ? null : Number(text);
@@ -763,7 +806,15 @@ export function ParameterDialog({ parameter, onClose, onSaved }: { parameter: st
   };
   const save = async () => {
     setError(null);
-    const body: Record<string, unknown> = { id: existing?.id ?? null, caption, datatype, value: convert(value), aliases: existing?.aliases ?? [] };
+    const body: Record<string, unknown> = {
+      id: existing?.id ?? null,
+      caption,
+      datatype,
+      value: convert(value),
+      aliases: existing?.aliases ?? [],
+      value_field: valueField || null,
+      domain_field: allowed !== "all" && domainField ? domainField : null,
+    };
     if (allowed === "list") {
       const values = list
         .split("\n")
@@ -813,6 +864,17 @@ export function ParameterDialog({ parameter, onClose, onSaved }: { parameter: st
           目前值
           <input aria-label="參數的目前值" value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
+        <label className="inline">
+          開啟報表時的值
+          <select aria-label="開啟報表時的值" value={valueField} onChange={(e) => void chooseValueField(e.target.value)}>
+            <option value="">目前值</option>
+            {sources.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="row" role="radiogroup" aria-label="允許的值">
           {(
             [
@@ -826,6 +888,19 @@ export function ParameterDialog({ parameter, onClose, onSaved }: { parameter: st
             </label>
           ))}
         </div>
+        {allowed !== "all" && (
+          <label className="inline">
+            開啟報表時取自欄位
+            <select aria-label="開啟報表時取自欄位" value={domainField} onChange={(e) => void chooseDomainField(e.target.value)}>
+              <option value="">固定的值</option>
+              {sources.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {allowed === "list" && (
           <textarea aria-label="允許的值清單" rows={5} className="formula" value={list} placeholder="每行一個值" onChange={(e) => setList(e.target.value)} />
         )}
@@ -844,6 +919,10 @@ export function ParameterDialog({ parameter, onClose, onSaved }: { parameter: st
               <input aria-label="參數的間距" value={step} onChange={(e) => setStep(e.target.value)} />
             </label>
           </div>
+        )}
+        {hint && <p className="hint">{hint}</p>}
+        {(valueField || (allowed !== "all" && domainField)) && (
+          <p className="hint">開啟報表時（伺服器上每次開啟檢視時）以目前的資料重新取值；上面是目前的資料的值。</p>
         )}
         {error && <p className="error">{error}</p>}
         <div className="dialog-actions">

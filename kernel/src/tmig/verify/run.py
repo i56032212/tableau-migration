@@ -20,6 +20,7 @@ from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
 from tmig.ir import IR, has_local_data, load_ir
 from tmig.parser.workbook import parse_workbook
+from tmig.planner.dynamic import resolve_parameters
 from tmig.planner.state import StateError
 from tmig.sqlgen.query import QueryError, worksheet_sql
 from tmig.verify.cases import CasesError, CasesFile, case_state, load_cases
@@ -175,6 +176,13 @@ def verify_fixture(
     owned = runtime is None
     active = runtime or DataRuntime()
     try:
+        # 動態參數：與 Tableau 開啟報表時相同，以目前的資料取值
+        ir, dynamic_notes = resolve_parameters(
+            ir,
+            lambda query, ds: active.run(query, ds, root / "data" / f"{ds.id}.duckdb"),
+            cases.user,
+        )
+        notes.extend(dynamic_notes)
         checks = [
             _check(root, ir, cases, mapping, sheet.worksheet, sheet.view, case.name, active)
             for sheet in cases.sheets

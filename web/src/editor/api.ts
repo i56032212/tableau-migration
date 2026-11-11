@@ -1,7 +1,7 @@
 // 桌面版編輯器的 API（/api/edit）：資料窗格、工作表、計算欄位與篩選的可選值。
 
 import { request } from "../api";
-import type { Action, Dashboard, Domain, FieldUse, Story } from "../types";
+import type { Action, Dashboard, Domain, FieldUse, Scalar, Story } from "../types";
 import type { Catalog, CatalogField, CatalogHierarchy, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
@@ -123,6 +123,12 @@ export const editApi = {
       `${edit(workbook)}/datasources/${part(datasource)}/hierarchies?name=${encodeURIComponent(name)}`,
       { method: "DELETE" },
     ),
+  /** 欄位目前的不重複值（含 LOD 的計算欄位），轉成參數的型別：動態參數的目前值與允許值 */
+  fieldValues: (workbook: string, field: string, datatype?: string | null) =>
+    request<{ values: Scalar[]; more: boolean }>(`${edit(workbook)}/field-values`, {
+      method: "POST",
+      body: JSON.stringify({ field, datatype: datatype ?? null }),
+    }),
   saveParameter: (workbook: string, parameter: Record<string, unknown>) =>
     request<{ parameter: Record<string, unknown> }>(`${edit(workbook)}/parameters`, {
       method: "POST",

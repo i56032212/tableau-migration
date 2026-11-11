@@ -39,7 +39,13 @@ from tmig.ir.models import (
 )
 from tmig.parser.context import DsState, ParseContext, SharedView, TooltipRef
 from tmig.parser.dashboard import DashboardParser
-from tmig.parser.datasource import DatasourceParser, add_calc_field, analyze_calcs, parse_parameters
+from tmig.parser.datasource import (
+    DatasourceParser,
+    add_calc_field,
+    analyze_calcs,
+    parse_parameters,
+    resolve_dynamic_parameters,
+)
 from tmig.parser.fields import instance_key, use_from_name
 from tmig.parser.refs import qualified_parts
 from tmig.parser.story import StoryParser
@@ -222,6 +228,7 @@ class WorkbookParser:
                 name = action.get("name", "")
                 ctx.action_ids[name] = ctx.ids.make("act", action.get("caption") or name, name)
 
+        resolve_dynamic_parameters(ctx)
         self._fits(child(root, "windows"))
         worksheets = []
         for ws_el in children(child(root, "worksheets"), "worksheet"):

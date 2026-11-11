@@ -3206,6 +3206,36 @@
           "title": "Aliases",
           "type": "array"
         },
+        "value_field": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "動態參數：開啟報表時目前值取自這個欄位（Tableau 的「開啟活頁簿時的值」，.twb 的 default-value-field）；欄位只有一個值時才取代 value",
+          "title": "Value Field"
+        },
+        "domain_field": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "動態參數：開啟報表時允許值的清單或範圍取自這個欄位的值（「開啟活頁簿時」重新整理，.twb 的 source-field）",
+          "title": "Domain Field"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,

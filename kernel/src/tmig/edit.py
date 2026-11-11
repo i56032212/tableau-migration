@@ -88,6 +88,8 @@ def catalog(ir: IR) -> dict[str, Any]:
                 "value": p.value,
                 "allowed": p.allowed.model_dump(mode="json"),
                 "aliases": [a.model_dump(mode="json") for a in p.aliases],
+                "value_field": p.value_field,
+                "domain_field": p.domain_field,
             }
             for p in ir.parameters
         ],
@@ -583,7 +585,8 @@ def _without_tooltip(sheet: Worksheet, removed: str) -> Worksheet:
 
 
 def upsert_parameter(ir: IR, data: dict[str, Any]) -> tuple[IR, Parameter]:
-    """新增或修改參數（名稱、型別、允許的值、目前值、別名）：名稱不能重複；修改時保留 id 與內部名稱。"""
+    """新增或修改參數（名稱、型別、允許的值、目前值、別名、開啟報表時取值的欄位）：名稱不能重複；
+    修改時保留 id 與內部名稱。"""
     parameter_id = data.get("id")
     existing = next((p for p in ir.parameters if p.id == parameter_id), None)
     if parameter_id is not None and existing is None:
@@ -606,6 +609,9 @@ def upsert_parameter(ir: IR, data: dict[str, Any]) -> tuple[IR, Parameter]:
         "allowed": data.get("allowed") or {"kind": "all"},
         "value": data.get("value"),
         "aliases": data.get("aliases") or [],
+        # 動態參數：開啟報表時的目前值、允許值取自欄位
+        "value_field": data.get("value_field"),
+        "domain_field": data.get("domain_field"),
         "source_ref": existing.source_ref if existing else EDITOR_REF,
     }
     try:

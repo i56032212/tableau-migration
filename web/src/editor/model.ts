@@ -37,6 +37,10 @@ export interface CatalogParameter {
   value: Scalar;
   allowed: { kind: "all" | "list" | "range"; values?: Scalar[]; min?: Scalar; max?: Scalar; step?: number | null };
   aliases: { value: Scalar; label: string }[];
+  /** 動態參數：開啟報表時目前值取自這個欄位 */
+  value_field?: string | null;
+  /** 動態參數：開啟報表時允許值的清單或範圍取自這個欄位 */
+  domain_field?: string | null;
 }
 
 export interface CatalogPalette {

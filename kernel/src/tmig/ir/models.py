@@ -743,7 +743,23 @@ class Parameter(IRModel):
     aliases: list[MemberAlias] = Field(
         default_factory=list, description="參數值的顯示名稱（控制項與標題中顯示）"
     )
+    value_field: Id | None = Field(
+        default=None,
+        description="動態參數：開啟報表時目前值取自這個欄位（Tableau 的「開啟活頁簿時的值」，"
+        ".twb 的 default-value-field）；欄位只有一個值時才取代 value",
+    )
+    domain_field: Id | None = Field(
+        default=None,
+        description="動態參數：開啟報表時允許值的清單或範圍取自這個欄位的值（「開啟活頁簿時」重新整理，"
+        ".twb 的 source-field）",
+    )
     source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check_dynamic(self) -> Self:
+        if self.domain_field is not None and self.allowed.kind == "all":
+            raise ValueError("允許值取自欄位時必須是清單或範圍")
+        return self
 
 
 # ---------------------------------------------------------------- 工作表

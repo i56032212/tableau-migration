@@ -164,6 +164,8 @@
       },
       "value": 10,
       "aliases": [],
+      "value_field": null,
+      "domain_field": null,
       "source_ref": "/workbook/datasources/datasource[1]/column[1]"
     }
   ],

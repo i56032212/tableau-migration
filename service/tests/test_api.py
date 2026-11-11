@@ -291,3 +291,45 @@ def test_tooltip_sheet_is_allowed_with_its_source() -> None:
     assert not Grant(allowed=True, views=frozenset({"沒有的 view"})).worksheet_allowed(
         ir, "ws_category_mix"
     )
+
+
+def test_dynamic_parameters(tmp_path: Path) -> None:
+    """動態參數：開啟報表時的目前值與允許值以目前的資料取值（檢視器的 IR 與查詢都用取值後的參數）。"""
+    import shutil
+
+    from tmig.edit import upsert_calc, upsert_parameter
+    from tmig.ir import load_ir, save_ir
+
+    fixtures = tmp_path / "fixtures"
+    shutil.copytree(ROOT / "fixtures" / "superstore_demo", fixtures / "superstore_demo")
+    golden = fixtures / "superstore_demo" / "golden.ir.json"
+    ir = load_ir(golden)
+    ir, latest = upsert_calc(ir, "ds_orders", "Latest", "{MAX([Order Date])}")
+    ir, _ = upsert_parameter(
+        ir,
+        {
+            "caption": "As Of",
+            "datatype": "date",
+            "value": "2020-01-01",
+            "allowed": {"kind": "all"},
+            "value_field": latest.id,
+        },
+    )
+    ir, _ = upsert_parameter(
+        ir,
+        {
+            "caption": "Region Choice",
+            "datatype": "string",
+            "value": "East",
+            "allowed": {"kind": "list", "values": ["East"]},
+            "domain_field": "f_region",
+        },
+    )
+    save_ir(ir, golden)
+    client = TestClient(create_app(fixtures, ROOT / "no-web-dist"))
+    params = {p["caption"]: p for p in client.get(f"{WB}/ir").json()["parameters"]}
+    assert params["As Of"]["value"] == "2024-12-30"
+    assert params["Region Choice"]["allowed"]["values"] == ["Central", "East", "South", "West"]
+    assert params["Region Choice"]["value"] == "East"
+    # 報表本身（golden.ir.json）不變
+    assert {p.caption: p.value for p in load_ir(golden).parameters}["As Of"] == "2020-01-01"

@@ -290,6 +290,20 @@ def check_references(ir: IR) -> list[str]:
         for flt in ds.filters:
             check_filter(flt, ds.id, f"datasources[{ds.id}].filters[{flt.id}]", None)
 
+    all_fields = {f.id: f for ds in ir.datasources for f in ds.fields}
+    for param in ir.parameters:
+        for name, field_id in (
+            ("value_field", param.value_field),
+            ("domain_field", param.domain_field),
+        ):
+            if field_id is None:
+                continue
+            found = all_fields.get(field_id)
+            if found is None:
+                errors.append(f"parameters[{param.id}].{name}：欄位「{field_id}」不存在")
+            elif found.calc is not None and found.calc.level in ("aggregate", "table_calc"):
+                errors.append(f"parameters[{param.id}].{name}：欄位「{field_id}」是彙總的計算欄位")
+
     for ws in ir.worksheets:
         base = f"worksheets[{ws.id}]"
         if ws.datasource not in fields_by_ds:

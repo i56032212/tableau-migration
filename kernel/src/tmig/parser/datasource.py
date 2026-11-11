@@ -178,6 +178,71 @@ def parse_parameters(ctx: ParseContext, ds_el: etree._Element) -> None:
         ctx.parameters.append(param)
         ctx.params_by_name[name] = param
         ctx.param_columns[param.id] = column
+        if column.get("default-value-field") or column.get("source-field"):
+            ctx.dynamic_parameters.append((param, column))
+
+
+def resolve_dynamic_parameters(ctx: ParseContext) -> None:
+    """動態參數的欄位（[資料源].[欄位]）→ 欄位 id；所有資料源解析完後呼叫。找不到的欄位、彙總的計算欄位
+    與型別不相容的欄位列為不支援（不能默默以存檔時的值計算）。"""
+    for param, column in ctx.dynamic_parameters:
+        for attribute, target in (
+            ("default-value-field", "value_field"),
+            ("source-field", "domain_field"),
+        ):
+            ref = column.get(attribute)
+            if not ref:
+                continue
+            found = _dynamic_field(ctx, ref)
+            what = "目前值" if target == "value_field" else "允許值"
+            if found is None:
+                ctx.flag(
+                    column, f"動態參數「{param.caption}」的{what}取自欄位 {ref}，找不到這個欄位"
+                )
+                continue
+            level = found.calc.level if found.calc is not None else None
+            if level in ("aggregate", "table_calc"):
+                ctx.flag(
+                    column,
+                    f"動態參數「{param.caption}」的{what}取自彙總的計算欄位「{found.caption}」，"
+                    "必須是與檢視無關的單一值（例如 FIXED 的 LOD 運算式）",
+                )
+                continue
+            if not _compatible(found.datatype, param.datatype):
+                ctx.flag(
+                    column,
+                    f"動態參數「{param.caption}」（{param.datatype}）的{what}取自型別不同的欄位"
+                    f"「{found.caption}」（{found.datatype}）",
+                )
+                continue
+            if target == "domain_field" and param.allowed.kind == "all":
+                ctx.ignore(column, f"動態參數「{param.caption}」的允許值為全部：略過取值的欄位")
+                continue
+            setattr(param, target, found.id)
+
+
+def _dynamic_field(ctx: ParseContext, ref: str) -> DataField | None:
+    parts = qualified_parts(ref)
+    if len(parts) == 2:
+        state = ctx.datasources.get(parts[0])
+        candidates = [state] if state is not None else []
+    else:
+        candidates = list(ctx.datasources.values())
+    name = "[" + parts[-1].replace("]", "]]") + "]" if parts else ref
+    for state in candidates:
+        found = state.by_name.get(name)
+        if found is not None:
+            return found
+    return None
+
+
+def _compatible(field: str, parameter: str) -> bool:
+    """欄位的值可以當參數的值：相同型別，或數字之間、日期之間。"""
+    if field == parameter:
+        return True
+    numbers = {"integer", "real"}
+    dates = {"date", "datetime"}
+    return {field, parameter} <= numbers or {field, parameter} <= dates
 
 
 def _parameter_aliases(

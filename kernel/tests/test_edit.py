@@ -360,3 +360,39 @@ def test_tooltip_sheets_follow_removed_worksheets(ir: IR) -> None:
     itself = sheet.marks.model_copy(update={"tooltip_sheets": [TooltipSheet(worksheet=sheet.id)]})
     with pytest.raises(EditError, match="tooltip_sheets"):
         replace_worksheet(ir, sheet.model_copy(update={"marks": itself}))
+
+
+def test_dynamic_parameter_fields(ir: IR) -> None:
+    """參數的「開啟報表時的值」與允許值取自欄位；彙總的計算欄位不行。"""
+    ir, latest = upsert_calc(ir, "ds_orders", "Latest", "{MAX([Order Date])}")
+    ir, param = upsert_parameter(
+        ir,
+        {
+            "caption": "As Of",
+            "datatype": "date",
+            "value": "2024-01-01",
+            "allowed": {"kind": "all"},
+            "value_field": latest.id,
+        },
+    )
+    assert param.value_field == latest.id
+    assert (
+        next(p for p in catalog(ir)["parameters"] if p["id"] == param.id)["value_field"]
+        == latest.id
+    )
+    ir, region = upsert_parameter(
+        ir,
+        {
+            "caption": "Region Choice",
+            "datatype": "string",
+            "value": "East",
+            "allowed": {"kind": "list", "values": ["East", "West"]},
+            "domain_field": "f_region",
+        },
+    )
+    assert region.domain_field == "f_region"
+    with pytest.raises(EditError, match="彙總的計算欄位"):
+        ir2, agg = upsert_calc(ir, "ds_orders", "Max Date", "MAX([Order Date])")
+        upsert_parameter(ir2, {**param.model_dump(mode="json"), "value_field": agg.id})
+    with pytest.raises(EditError, match="清單或範圍"):
+        upsert_parameter(ir, {**region.model_dump(mode="json"), "allowed": {"kind": "all"}})
