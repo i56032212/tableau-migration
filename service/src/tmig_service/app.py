@@ -76,8 +76,9 @@ from tmig.sqlgen.query import (
 )
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
-from tmig_service.access import Authorizer, Grant, Rights, viewer_ir
+from tmig_service.access import Authorizer, Grant, PermissionsSource, Rights, viewer_ir
 from tmig_service.auth import Authenticator, AuthSettings, auth_router, load_auth
+from tmig_service.site import SiteStore, from_exports
 from tmig_service.store import STORE_ENV, ReportRecord, ReportStore
 from tmig_service.usage import UsageLog, Visit, summarize
 
@@ -147,6 +148,10 @@ class Workspace:
                 cached = Loaded(directory, load_fixture_ir(directory), stamp, record)
                 self._cache[name] = cached
                 self._data_ready.discard(name)
+            elif cached.published is not record:
+                # 同一版的報表在站台管理中改了名稱、Project、擁有者或權限：換上新的紀錄
+                cached = Loaded(cached.directory, cached.ir, cached.stamp, record)
+                self._cache[name] = cached
         return cached
 
     def save_ir(self, name: str, ir: IR) -> Loaded:
@@ -174,6 +179,21 @@ class Workspace:
                 ensure_data(loaded.directory, loaded.ir)
                 self._data_ready.add(name)
         return loaded.directory / "data" / f"{datasource}.duckdb"
+
+
+def open_site(store: ReportStore, authenticator: Authenticator) -> SiteStore | None:
+    """報表庫的站台資料：還沒有時以身分驗證設定中 Tableau 匯出的權限與使用者目錄建立（第一次啟動）；
+    都沒有時（沒有權限檔、沒有使用者目錄）不管理站台，與先前相同不限制登入的人。"""
+    site = SiteStore(store.root)
+    settings = authenticator.settings
+    if not site.exists():
+        if settings.permissions is None and settings.directory is None:
+            return None
+        site.initialize(
+            from_exports(settings.permissions, settings.directory), actor="（第一次啟動時匯入）"
+        )
+    authenticator.site = site
+    return site
 
 
 def current_user(request: Request) -> Identity | None:
@@ -217,8 +237,12 @@ def create_app(
     dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
     data = runtime or DataRuntime()
     authenticator = auth if isinstance(auth, Authenticator) else Authenticator(auth or load_auth())
-    authorizer = Authorizer(authenticator.settings.permissions)
-    rights = Rights(authenticator.settings.permissions)
+    site = open_site(store, authenticator) if store is not None else None
+    permissions: PermissionsSource = (
+        site.permissions if site is not None else authenticator.settings.permissions
+    )
+    authorizer = Authorizer(permissions)
+    rights = Rights(permissions)
 
     def grant_for(loaded: Loaded, user: Identity | None) -> Grant:
         if loaded.published is not None:
@@ -261,6 +285,10 @@ def create_app(
                 store, rights, data, loaded_ir, workspace.names, authenticator.identity
             )
         )
+        if site is not None:
+            from tmig_service.admin import admin_router
+
+            app.include_router(admin_router(site, store, rights, authenticator.identity))
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

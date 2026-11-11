@@ -120,7 +120,14 @@ def test_dev_users_from_settings(fixtures: Path) -> None:
     assert client.get("/api/me").json()["users"] == ["bob"]
     client.post("/auth/dev", json={"username": "bob"})
     me = client.get("/api/me").json()["user"]
-    assert me == {"username": "bob", "full_name": None, "domain": None, "groups": []}
+    assert me == {
+        "username": "bob",
+        "full_name": None,
+        "domain": None,
+        "groups": [],
+        "site_role": None,
+        "admin": False,
+    }
     assert regions(client.post(SHEET)) == {"West"}
 
 
@@ -306,6 +313,8 @@ def test_oidc_login_flow(fixtures: Path, idp: FakeIdP) -> None:
         "full_name": "Alice Wang",
         "domain": "local",
         "groups": ["All Users"],
+        "site_role": None,
+        "admin": False,
     }
     assert regions(client.post(SHEET)) == {"East"}
 

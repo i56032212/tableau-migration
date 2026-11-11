@@ -13,6 +13,7 @@ import uvicorn
 
 from tmig_service.app import create_app
 from tmig_service.auth import Authenticator, AuthSettings
+from tmig_service.store import ReportStore
 
 
 def free_port() -> int:
@@ -28,11 +29,15 @@ def running_server(
     port: int | None = None,
     auth: AuthSettings | Authenticator | None = None,
     usage_dir: Path | None = None,
+    store: ReportStore | None = None,
 ) -> Iterator[str]:
-    """啟動服務並回傳網址；離開時關閉。auth 省略時不驗證身分（不讀環境變數 TMIG_AUTH）。"""
+    """啟動服務並回傳網址；離開時關閉。auth 省略時不驗證身分（不讀環境變數 TMIG_AUTH）；
+    store：報表庫（發布的報表與站台管理）。"""
     chosen = port or free_port()
     config = uvicorn.Config(
-        create_app(fixtures, web_dist, auth=auth or AuthSettings(), usage_dir=usage_dir),
+        create_app(
+            fixtures, web_dist, auth=auth or AuthSettings(), usage_dir=usage_dir, store=store
+        ),
         host="127.0.0.1",
         port=chosen,
         log_level="warning",

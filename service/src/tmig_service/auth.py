@@ -59,7 +59,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from tmig.access.directory import Directory, DirectoryError, load_directory, login_name
-from tmig.access.permissions import Permissions, PermissionsError, load_permissions
+from tmig.access.permissions import ADMIN_ROLES, Permissions, PermissionsError, load_permissions
 from tmig.data.sources import ENV_REF
 from tmig.planner.identity import Identity
 
@@ -407,6 +407,12 @@ class OidcClient:
 # ---------------------------------------------------------------- 驗證
 
 
+class SiteSource(Protocol):
+    """站台資料（tmig_service.site.SiteStore）：使用者目錄。"""
+
+    def directory(self) -> Directory: ...
+
+
 class TokenIdentity(Protocol):
     """桌面版的權杖對應的登入者（tmig_service.desktop_auth.TokenEntry）。"""
 
@@ -456,6 +462,13 @@ class Authenticator:
         )
         self.tokens: BearerTokens | None = None
         """桌面版的權杖（有報表庫時由查詢服務設定）。"""
+        self.site: SiteSource | None = None
+        """站台資料（有報表庫時由查詢服務設定）：使用者目錄以它為準，修改後立即生效。"""
+
+    def directory(self) -> Directory | None:
+        if self.site is not None:
+            return self.site.directory()
+        return self.settings.directory
 
     @property
     def mode(self) -> Mode:
@@ -463,7 +476,7 @@ class Authenticator:
 
     def resolve(self, login: str, groups: Sequence[str] = (), name: str | None = None) -> Identity:
         """登入的帳號 → 身分：有目錄時以目錄為準，否則用標頭或宣告中的群組。"""
-        directory = self.settings.directory
+        directory = self.directory()
         if directory is not None:
             user = directory.find(login)
             if user is None and self.settings.strip_domain:
@@ -526,7 +539,7 @@ class Authenticator:
     def dev_users(self) -> list[str]:
         if self.settings.dev_users:
             return list(self.settings.dev_users)
-        directory = self.settings.directory
+        directory = self.directory()
         return [u.name for u in directory.users] if directory is not None else []
 
     def session_token(self, login: str, seconds: float | None = None) -> str:
@@ -555,6 +568,8 @@ def user_json(identity: Identity | None) -> dict[str, Any] | None:
         "full_name": identity.full_name,
         "domain": identity.domain,
         "groups": list(identity.groups),
+        "site_role": identity.site_role,
+        "admin": (identity.site_role or "") in ADMIN_ROLES,
     }
 
 

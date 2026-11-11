@@ -37,7 +37,7 @@ Relationship 模型（見「Relationship 模型」）；公開報表盤點中符
 萃取型的報表可以由萃取層從來源資料庫更新（完整或增量、原子替換），並與 Tableau 的萃取比對（見「萃取層」）。
 以使用者函式或使用者篩選限制可見資料的報表，以登入者的身分查詢，網址參數改不了權限篩選（見「列層級權限」）；
 查詢服務與檢視器可以要求登入（反向代理標頭或 OIDC，開發模式可切換使用者；見「身分驗證」），並依 Tableau Server 匯出的
-Project、workbook、view 權限開放（見「權限」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
+Project、workbook、view 權限開放（見「權限」）；匯入之後 Project、權限、使用者與群組在新平台上管理（見「站台管理」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
 PDF、PNG 寄出訂閱（見「排程與訂閱」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
 一份報表可以有多個資料源（各工作表用各自的資料源，網址參數套用到所有資料源中同名的欄位）；同一張工作表混用多個資料源的
 Data Blending 支援主要與次要資料源都是嵌入式萃取、次要資料源只用量值的工作表（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
@@ -362,6 +362,28 @@ Tableau 的權限評估規則開放（`kernel/src/tmig/access/permissions.py`、
 - 報表依 cases.yaml 的 `tableau_views_url`（Tableau 上的網址名稱）或報表名稱對應到 Tableau 的 workbook；
   權限檔中找不到的報表只有管理員看得到
 
+## 站台管理
+
+查詢服務有報表庫（`tmig serve --store <報表庫>`）時，Project、權限、使用者與群組改在新平台上管理，Tableau 下線後
+也能新增與修改（`service/src/tmig_service/site.py`、`admin.py`）：
+
+- 第一次啟動時以 `[auth]` 的 `directory`、`permissions`（Tableau 匯出的檔案）建立報表庫中的 `site.json`，之後以站台管理
+  修改、不再讀匯出的檔案。要重新從 Tableau 匯入：
+  `uv run tmig site import --store <報表庫> --directory directory.json --permissions permissions.json --replace`；
+  沒有 Tableau 時以 `uv run tmig site init --store <報表庫> --admin <帳號>` 建立只有「預設」Project 與一位站台管理員的站台，
+  `uv run tmig site show --store <報表庫>` 顯示摘要
+- 站台管理員在首頁的「站台管理」（`/admin`）：
+  - 內容與權限：新增、改名、移動、刪除 Project（要先沒有報表與子 Project；新的 Project 沿用上層的權限）、Project 的擁有者、
+    權限管理方式（由擁有者管理、鎖定）、Project 的權限與報表的預設權限；報表改名、移到其他 Project、換擁有者、設定權限、
+    刪除（含每一版，移到報表庫的 `trash/`）；Tableau 匯入的 workbook 與各 view 的權限。權限可以套用範本
+    （與 Tableau 相同的檢視、探索、發布、管理、拒絕）或逐項設定允許、拒絕
+  - 使用者：新增（站台角色、網域、email）、修改站台角色與群組、刪除（擁有內容的人要先換擁有者；不能拿掉自己的管理員角色）
+  - 群組：新增、改名、成員、刪除；報表公式的 `ISMEMBEROF()` 以群組名稱判斷，改名後用到舊名稱的列層級權限要一併修改
+  - 修改紀錄：每次修改的時間、修改的人、動作與對象（`site-changes.jsonl`，不記錄修改前後的值）
+- 修改立即生效：下一個請求就依新的權限、站台角色與群組判斷；刪除的使用者不能再登入
+- 與 Tableau 相同，報表的擁有者、所在 Project（與上層）的擁有者與 Project Leader，以及有「設定權限」的人可以設定報表的權限，
+  有「刪除」的人可以刪除報表（`PATCH`、`DELETE /api/admin/reports/{id}`）；Project 鎖定權限時只能在 Project 上設定
+
 ## 排程與訂閱
 
 `uv run python tools/tableau_server/tableau_server.py schedules --timezone Asia/Taipei --out schedules.json` 匯出排程、
@@ -428,6 +450,7 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 | `tmig extract compare <.twbx> [--data-dir 目錄]` | 新萃取與 Tableau 的萃取比對列數、總和、最小值、最大值（N7） |
 | `tmig published merge <報表> [--published 目錄] [--out .twbx]` | 把 Published Data Source 的 .tdsx 併入報表（N8） |
 | `tmig schedule list\|tick\|run\|serve <排程檔> [--fixtures 目錄]` | 排程器：萃取更新與訂閱的工作、下次執行時間與執行紀錄（Q2、Q3：`--mail`、`--auth`） |
+| `tmig site import\|init\|show --store <報表庫>` | 站台資料：從 Tableau 匯出的檔案匯入、建立新的站台、顯示摘要（見「站台管理」） |
 | `tmig usage summary <使用紀錄目錄> [--fixtures 目錄] [--days 90] [--csv 檔案]` | 每份報表的檢視次數、使用者數與最後一次檢視（R1） |
 | `tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔] [--usage-dir 目錄] [--store 目錄]` | 查詢服務與檢視器（F2–F4；身分驗證、使用紀錄、發布與版本見各節） |
 | `tmig desktop serve [--workspace 目錄] [--port 0] [--clean] [--exit-with-parent]` | 桌面版的本機引擎：只接受本機、帶權杖的連線，由桌面版外殼啟動（D0，見「桌面版」） |

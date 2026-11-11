@@ -399,3 +399,29 @@ textarea.formula { width: 100%; font-family: ui-monospace, "Cascadia Mono", Menl
 .page-control button {
   min-width: 28px;
 }
+
+/* 站台管理 */
+.home.admin { max-width: 1200px; }
+.admin .tabs { margin-top: 12px; }
+.admin > .error, .admin > .success { margin: 8px 0; }
+.admin-section { background: var(--panel); border: 1px solid var(--line); border-top: none; padding: 12px; overflow-x: auto; }
+.admin-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.admin-actions input[type="search"] { font: inherit; padding: 3px 6px; min-width: min(240px, 60vw); }
+.admin-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.admin-table th, .admin-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.admin-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.admin-table td.actions { white-space: nowrap; text-align: right; }
+.admin-table td.actions > * + * { margin-left: 8px; }
+.admin-table tr.project-row td { background: #f8fafc; }
+.modal.wide:has(.admin-table.permissions) { width: min(1280px, 100%); }
+.admin-table.permissions th { font-size: 12px; text-align: center; white-space: normal; line-height: 1.25; min-width: 52px; }
+.admin-table.permissions th:first-child { text-align: left; }
+.admin-table.permissions td { padding: 4px; text-align: center; }
+.admin-table.permissions td.grantee { text-align: left; white-space: nowrap; }
+.admin-table.permissions select { font: inherit; font-size: 12px; padding: 1px 2px; }
+.admin-table.permissions select.allow { color: #166534; background: #ecfdf3; }
+.admin-table.permissions select.deny { color: var(--error); background: #fef2f2; }
+button.danger-link { color: var(--error); }
+.admin-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.admin-field input, .admin-field select { font: inherit; padding: 3px 6px; }
+.checklist { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-top: 6px; }

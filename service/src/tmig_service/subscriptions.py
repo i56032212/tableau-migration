@@ -342,7 +342,7 @@ class SubscriptionHandler:
         if sub is None or not job.targets:
             raise SubscriptionError(f"{job.id} 不是訂閱")
         report = job.targets[0].report
-        directory = self.renderer.authenticator.settings.directory
+        directory = self.renderer.authenticator.directory()
         assert directory is not None
         user = directory.find(f"{sub.user_domain}\\{sub.user}" if sub.user_domain else sub.user)
         if user is None:

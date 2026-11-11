@@ -436,6 +436,10 @@ export interface UserInfo {
   full_name: string | null;
   domain: string | null;
   groups: string[];
+  /** Tableau 的站台角色（使用者目錄中有時） */
+  site_role?: string | null;
+  /** 站台管理員：可以使用站台管理 */
+  admin?: boolean;
 }
 
 /** /api/me：身分驗證的模式與目前的登入者 */

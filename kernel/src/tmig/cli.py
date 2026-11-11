@@ -16,6 +16,7 @@ tmig extract compare <.twbx> [--data-dir 目錄]    新萃取與 Tableau 萃取�
 tmig published merge <報表> [--published 目錄]     把 Published Data Source 的 .tdsx 併入報表
 tmig schedule list|tick|run|serve <排程檔>         排程器：萃取更新與訂閱（Q2、Q3）
 tmig usage summary <使用紀錄目錄> [--days 90]      每份報表的檢視次數、使用者數與最後一次檢視（R1）
+tmig site import|init|show --store <報表庫>         站台資料（Project、使用者、群組與權限）：從 Tableau 匯入或新建
 tmig serve [--fixtures 目錄] [--port 8000] [--auth 設定檔]  啟動查詢服務與檢視器
 tmig desktop serve [--workspace 目錄] [--port 0]   桌面版的本機引擎（由桌面版外殼啟動）
 tmig ir schema [--out 檔案]                     輸出 IR 的 JSON Schema
@@ -29,6 +30,7 @@ import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -827,6 +829,107 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _site_store(args: argparse.Namespace) -> Any:
+    from tmig_service.site import SiteStore
+
+    return SiteStore(args.store)
+
+
+def _cmd_site_import(args: argparse.Namespace) -> int:
+    """Tableau Server 匯出的使用者目錄與權限 → 報表庫的站台資料。"""
+    try:
+        from tmig.access.directory import DirectoryError, load_directory
+        from tmig.access.permissions import PermissionsError, load_permissions
+        from tmig_service.site import SiteError, from_exports
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    if args.directory is None and args.permissions is None:
+        print("失敗：至少要給 --directory 或 --permissions", file=sys.stderr)
+        return 1
+    try:
+        directory = load_directory(args.directory) if args.directory else None
+        permissions = load_permissions(args.permissions) if args.permissions else None
+        data = from_exports(permissions, directory)
+        _site_store(args).initialize(data, actor="tmig site import", replace=args.replace)
+    except (DirectoryError, PermissionsError, SiteError) as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    print(
+        f"站台資料：{len(data.projects)} 個 Project、{len(data.workbooks)} 份 workbook 的權限、"
+        f"{len(data.users)} 位使用者、{len(data.groups)} 個群組 → {args.store / 'site.json'}"
+    )
+    return 0
+
+
+def _cmd_site_init(args: argparse.Namespace) -> int:
+    """沒有 Tableau 可以匯入時新建站台：一個「預設」Project 與一位站台管理員。"""
+    try:
+        from tmig.access.directory import DirectoryUser
+        from tmig.access.permissions import Grantee, ProjectEntry, Rule
+        from tmig_service.site import ALL_USERS, SiteData, SiteError, now_text
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    everyone = Grantee(kind="group", name=ALL_USERS)
+    data = SiteData(
+        source="tmig site init",
+        imported_at=now_text(),
+        projects=[
+            ProjectEntry(
+                id="default",
+                name="預設",
+                owner=args.admin,
+                rules=[Rule(grantee=everyone, capabilities={"Read": "Allow"})],
+                workbook_defaults=[
+                    Rule(grantee=everyone, capabilities={"Read": "Allow", "Filter": "Allow"})
+                ],
+            )
+        ],
+        users=[
+            DirectoryUser(
+                name=args.admin,
+                email=args.email,
+                site_role="SiteAdministratorCreator",
+                groups=[ALL_USERS],
+            )
+        ],
+    )
+    try:
+        _site_store(args).initialize(data, actor="tmig site init", replace=args.replace)
+    except SiteError as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    print(f"站台資料：預設 Project 與站台管理員 {args.admin} → {args.store / 'site.json'}")
+    return 0
+
+
+def _cmd_site_show(args: argparse.Namespace) -> int:
+    try:
+        from tmig_service.site import SiteError
+    except ImportError:
+        print("失敗：需要查詢服務套件 tmig-service；在 repo 根目錄執行 uv sync", file=sys.stderr)
+        return 1
+    try:
+        data = _site_store(args).data()
+    except SiteError as exc:
+        print(f"失敗：{exc}", file=sys.stderr)
+        return 1
+    print(
+        f"來源：{data.source or '（未記錄）'}；匯入：{data.imported_at}；最後修改：{data.updated_at or '—'}"
+    )
+    print(
+        f"Project {len(data.projects)} 個、workbook 權限 {len(data.workbooks)} 份、使用者 {len(data.users)} 位、群組 {len(data.groups)} 個"
+    )
+    admins = [
+        u.name
+        for u in data.users
+        if (u.site_role or "").startswith(("SiteAdministrator", "Server"))
+    ]
+    print(f"站台管理員：{'、'.join(admins) or '（沒有）'}")
+    return 0
+
+
 def _cmd_desktop_serve(args: argparse.Namespace) -> int:
     try:
         from tmig_service.desktop import default_workspace, serve_desktop
@@ -1088,6 +1191,33 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             sub.add_argument("--job", required=True, help="工作 id，例如 extract:<id>")
         sub.set_defaults(handler=handler)
+
+    site_parser = commands.add_parser("site", help="站台資料：Project、使用者、群組與權限")
+    site_commands = site_parser.add_subparsers(dest="site_command", required=True, metavar="子指令")
+    site_import = site_commands.add_parser(
+        "import", help="從 Tableau Server 匯出的使用者目錄與權限建立站台資料"
+    )
+    site_import.add_argument(
+        "--directory", type=Path, help="tools/tableau_server 匯出的 directory.json"
+    )
+    site_import.add_argument(
+        "--permissions", type=Path, help="tools/tableau_server 匯出的 permissions.json"
+    )
+    site_import.add_argument(
+        "--replace", action="store_true", help="取代已經存在的站台資料（之前的修改會不見）"
+    )
+    site_import.set_defaults(handler=_cmd_site_import)
+    site_init = site_commands.add_parser("init", help="新建站台：預設 Project 與一位站台管理員")
+    site_init.add_argument("--admin", required=True, help="站台管理員的使用者名稱（登入的帳號）")
+    site_init.add_argument("--email")
+    site_init.add_argument("--replace", action="store_true", help="取代已經存在的站台資料")
+    site_init.set_defaults(handler=_cmd_site_init)
+    site_show = site_commands.add_parser("show", help="站台資料的摘要")
+    site_show.set_defaults(handler=_cmd_site_show)
+    for sub in (site_import, site_init, site_show):
+        sub.add_argument(
+            "--store", type=Path, required=True, help="報表庫的目錄（tmig serve --store）"
+        )
 
     serve = commands.add_parser("serve", help="啟動查詢服務與檢視器")
     serve.add_argument(

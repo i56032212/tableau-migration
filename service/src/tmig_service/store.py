@@ -254,6 +254,32 @@ class ReportStore:
             self._prune(folder / "current", number)
             return record
 
+    # ------------------------------------------------------------ 管理
+
+    def update(self, report_id: str, changes: dict[str, object]) -> ReportRecord:
+        """改名、移到其他 Project、換擁有者或權限（版本不動）。"""
+        with self._lock:
+            current = self.get(report_id)
+            if current is None:
+                raise StoreError(f"找不到報表 {report_id}")
+            record = ReportRecord.model_validate({**current.model_dump(), **changes})
+            self._write(record)
+            return record
+
+    def remove(self, report_id: str) -> Path:
+        """刪除報表（含每一版）：整個目錄移到 trash/，回傳新的位置（管理員可以搬回 reports/ 救回）。"""
+        with self._lock:
+            folder = self.reports / report_id
+            if not _plain(report_id) or not (folder / RECORD).is_file():
+                raise StoreError(f"找不到報表 {report_id}")
+            trash = self.root / "trash"
+            trash.mkdir(parents=True, exist_ok=True)
+            stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
+            target = trash / f"{report_id}-{stamp}-{secrets.token_hex(2)}"
+            os.replace(folder, target)
+            self._cache.pop(report_id, None)
+            return target
+
     def _write(self, record: ReportRecord) -> None:
         path = self.reports / record.id / RECORD
         temporary = path.with_name(f"{RECORD}.{secrets.token_hex(4)}.tmp")

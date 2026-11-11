@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AdminPage } from "./Admin";
 import { api } from "./api";
 import { caseState, DashboardView } from "./Dashboard";
 import {
@@ -33,9 +34,10 @@ import { PageControl, pagesOf } from "./PageControl";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
-// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）；?case=<篩選組合>
+// /w/<報表>/ds/<資料源>、/w/<報表>/edit/<工作表>（桌面版的編輯器）、/admin/<分頁>（站台管理）；?case=<篩選組合>
 type Route =
   | { page: "home" }
+  | { page: "admin"; tab?: string }
   | { page: "workbook"; workbook: string }
   | { page: "dashboard"; workbook: string; dashboard: string }
   | { page: "sheet"; workbook: string; worksheet: string }
@@ -47,6 +49,7 @@ type Route =
 
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === "admin") return { page: "admin", tab: parts[1] };
   if (parts[0] === "w" && parts[1]) {
     if (parts[2] === "d" && parts[3]) return { page: "dashboard", workbook: parts[1], dashboard: parts[3] };
     if (parts[2] === "s" && parts[3]) return { page: "sheet", workbook: parts[1], worksheet: parts[3] };
@@ -100,7 +103,13 @@ export function App() {
       {(me) => (
         <>
           {me.mode === "desktop" && <DesktopCommands />}
-          {route.page === "home" ? <Home me={me} /> : <WorkbookPage route={route} caseName={caseName} me={me} />}
+          {route.page === "home" ? (
+            <Home me={me} />
+          ) : route.page === "admin" ? (
+            <AdminPage me={me} tab={route.tab} go={navigate} />
+          ) : (
+            <WorkbookPage route={route} caseName={caseName} me={me} />
+          )}
         </>
       )}
     </SessionGate>
@@ -146,6 +155,7 @@ function Home({ me }: { me: Me }) {
             開啟檔案…
           </button>
         )}
+        {!desktop && me.user?.admin && <Link to="/admin">站台管理</Link>}
         {!desktop && me.user && me.mode !== "none" && <DesktopTokensButton />}
         <UserBar me={me} />
       </div>
@@ -225,7 +235,7 @@ function WorkbookPage({
   caseName,
   me,
 }: {
-  route: Exclude<Route, { page: "home" }>;
+  route: Exclude<Route, { page: "home" } | { page: "admin" }>;
   caseName: string | null;
   me: Me;
 }) {

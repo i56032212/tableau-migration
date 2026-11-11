@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -88,10 +89,21 @@ class Grant:
 
 OPEN = Grant(allowed=True)
 
+PermissionsSource = Permissions | Callable[[], Permissions | None] | None
+"""權限：固定的（匯出的權限檔）或每次取用時才讀的（站台資料，修改後立即生效）。"""
+
+
+def _current(source: PermissionsSource) -> Permissions | None:
+    return source() if callable(source) else source
+
 
 class Authorizer:
-    def __init__(self, permissions: Permissions | None) -> None:
-        self.permissions = permissions
+    def __init__(self, permissions: PermissionsSource) -> None:
+        self._permissions = permissions
+
+    @property
+    def permissions(self) -> Permissions | None:
+        return _current(self._permissions)
 
     def entry(self, directory: Path, ir: IR) -> WorkbookEntry | None:
         assert self.permissions is not None
@@ -130,9 +142,13 @@ ALLOWED = Access(allowed=True)
 class Rights:
     """報表庫的報表：誰能看、發布、覆蓋、下載。沒有權限檔時登入的人都可以；沒有身分驗證時不能發布。"""
 
-    def __init__(self, permissions: Permissions | None) -> None:
-        self.permissions = permissions
+    def __init__(self, permissions: PermissionsSource) -> None:
+        self._permissions = permissions
         self.authorizer = Authorizer(permissions)
+
+    @property
+    def permissions(self) -> Permissions | None:
+        return _current(self._permissions)
 
     def projects(self) -> list[ProjectEntry]:
         return self.permissions.projects if self.permissions is not None else [DEFAULT_PROJECT]
@@ -166,7 +182,8 @@ class Rights:
                 (w for w in self.permissions.workbooks if w.id == record.tableau_workbook), None
             )
             if found is not None:
-                return found.model_copy(update={"project": record.project})
+                # Project 與擁有者以報表庫為準（可以在站台管理中移動、換擁有者）
+                return found.model_copy(update={"project": record.project, "owner": record.owner})
         return WorkbookEntry(
             id=record.id,
             name=record.name,
@@ -240,4 +257,12 @@ def viewer_ir(ir: IR, grant: Grant) -> dict[str, Any]:
     return data
 
 
-__all__ = ["DEFAULT_PROJECT", "OPEN", "Authorizer", "Grant", "Rights", "viewer_ir"]
+__all__ = [
+    "DEFAULT_PROJECT",
+    "OPEN",
+    "Authorizer",
+    "Grant",
+    "PermissionsSource",
+    "Rights",
+    "viewer_ir",
+]
