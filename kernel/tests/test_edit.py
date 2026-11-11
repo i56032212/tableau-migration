@@ -396,3 +396,23 @@ def test_dynamic_parameter_fields(ir: IR) -> None:
         upsert_parameter(ir2, {**param.model_dump(mode="json"), "value_field": agg.id})
     with pytest.raises(EditError, match="清單或範圍"):
         upsert_parameter(ir, {**region.model_dump(mode="json"), "allowed": {"kind": "all"}})
+
+
+def test_device_layouts_are_validated(ir: IR) -> None:
+    """裝置版面：每種裝置一個；版面中的工作表必須存在；刪除工作表時版面中用到的也不能刪。"""
+    from tmig.ir import DeviceLayout, Size, Zone
+
+    board = ir.dashboards[0]
+    phone = DeviceLayout(
+        device="phone", sizing="fit_width", size=Size(width=375, height=900), zones=board.zones
+    )
+    ir, saved = replace_dashboard(ir, board.model_copy(update={"layouts": [phone]}))
+    assert [layout.device for layout in saved.layouts] == ["phone"]
+    with pytest.raises(EditError, match="同一種裝置只能有一個版面"):
+        replace_dashboard(ir, saved.model_copy(update={"layouts": [phone, phone]}))
+    missing = Zone(
+        id="z900", kind="worksheet", worksheet="ws_nope", x=0, y=0, w=10, h=10, source_ref="/editor"
+    )
+    broken = phone.model_copy(update={"zones": [*phone.zones, missing]})
+    with pytest.raises(EditError, match="ws_nope"):
+        replace_dashboard(ir, saved.model_copy(update={"layouts": [broken]}))

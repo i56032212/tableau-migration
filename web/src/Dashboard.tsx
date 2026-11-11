@@ -4,6 +4,7 @@ import { isDesktop } from "./desktop";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
 import { FilterControl, HighlighterControl, ParameterControl } from "./Controls";
 import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
+import { deviceLayout, useDevice, withDeviceLayout } from "./device";
 import { PageControl, pagesOf } from "./PageControl";
 import {
   actionUrl,
@@ -107,7 +108,11 @@ interface ActionMenu {
   y: number;
 }
 
-export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigate }: Props) {
+export function DashboardView({ workbook, ir, dashboard: base, view, onView, onNavigate }: Props) {
+  // 裝置專屬版面：手機、平板上改用那個裝置的版面（區塊參照同樣的工作表與控制項）
+  const device = useDevice();
+  const layout = deviceLayout(base, device);
+  const dashboard = useMemo(() => withDeviceLayout(base, device), [base, device]);
   const [renders, setRenders] = useState<Record<string, RenderResponse>>({});
   const unsupported = useMemo(() => new Map(ir.unsupported.map((u) => [u.source_ref, u.reason])), [ir]);
 
@@ -296,6 +301,7 @@ export function DashboardView({ workbook, ir, dashboard, view, onView, onNavigat
       <div
         className="dashboard"
         data-sizing={dashboard.sizing ?? "fixed"}
+        data-device={layout?.device ?? "default"}
         style={{ width, height, background: cssColor(dashboard.background) }}
         ref={dashboardRef}
       >

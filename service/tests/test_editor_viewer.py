@@ -687,3 +687,75 @@ def test_dynamic_parameters_in_editor(engine: str) -> None:
         assert viewer["As Of"]["value"] == "2024-12-30"
         assert errors == []
         browser.close()
+
+
+def test_device_layouts_in_dashboard_editor(engine: str) -> None:
+    """dashboard 編輯器的裝置版面：新增手機版面（預設版面上的物件由上到下排列）、在手機版面上移除區塊
+    只影響手機版面、刪除手機版面；檢視器在手機大小的畫面上用手機版面。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('[data-saving="false"]')
+        page.wait_for_timeout(300)
+
+    def board() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/dashboards/db_ee909b0c")["dashboard"]
+
+    def sheets(zones: list[dict[str, Any]]) -> list[str]:
+        found: list[str] = []
+        for zone in zones:
+            if zone["kind"] == "worksheet":
+                found.append(zone["worksheet"])
+            found.extend(sheets(zone["children"]))
+        return found
+
+    default_sheets = sheets(board()["zones"])
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
+        page.get_by_label("新增裝置版面").select_option("phone")
+        settle(page)
+        expect(page.get_by_label("裝置版面", exact=True)).to_have_value("phone")
+        (phone,) = board()["layouts"]
+        assert (phone["device"], phone["sizing"], phone["size"]["width"]) == (
+            "phone",
+            "fit_width",
+            375,
+        )
+        assert sheets(phone["zones"]) == default_sheets
+        stage = page.locator(".dash-stage")
+        box = stage.bounding_box()
+        assert box is not None and box["width"] <= 376
+        # 手機版面上移除第一個工作表：只影響手機版面
+        first = next(
+            z for z in phone["zones"][0]["children"][0]["children"] if z["kind"] == "worksheet"
+        )
+        page.locator(f'[data-tree-zone="{first["id"]}"]').click()
+        expect(page.locator(f'[data-zone-props="{first["id"]}"]')).to_be_visible()
+        page.locator(".dash-props").get_by_role("button", name="移除").click()
+        settle(page)
+        saved = board()
+        assert sheets(saved["layouts"][0]["zones"]) == default_sheets[1:]
+        assert sheets(saved["zones"]) == default_sheets
+
+        # 檢視器：手機大小的畫面用手機版面
+        phone_page = browser.new_page(viewport={"width": 390, "height": 844})
+        phone_page.goto(f"{engine}/?token={TOKEN}")
+        phone_page.goto(f"{engine}/w/demo/d/db_ee909b0c")
+        phone_page.wait_for_selector(
+            ".dashboard[data-device='phone'] [data-zone] svg", timeout=30000
+        )
+        phone_page.close()
+
+        page.get_by_role("button", name="刪除手機版面").click()
+        settle(page)
+        assert board()["layouts"] == []
+        expect(page.get_by_label("裝置版面", exact=True)).to_have_value("default")
+        assert errors == []
+        browser.close()

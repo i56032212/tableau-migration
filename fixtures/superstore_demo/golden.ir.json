@@ -1773,6 +1773,7 @@
           "source_ref": "/workbook/dashboards/dashboard/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard"
     }
   ],

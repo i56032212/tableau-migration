@@ -178,7 +178,7 @@ def parse_parameters(ctx: ParseContext, ds_el: etree._Element) -> None:
         ctx.parameters.append(param)
         ctx.params_by_name[name] = param
         ctx.param_columns[param.id] = column
-        if column.get("default-value-field") or column.get("source-field"):
+        if attr(column, "default-value-field") or attr(column, "source-field"):
             ctx.dynamic_parameters.append((param, column))
 
 
@@ -190,7 +190,7 @@ def resolve_dynamic_parameters(ctx: ParseContext) -> None:
             ("default-value-field", "value_field"),
             ("source-field", "domain_field"),
         ):
-            ref = column.get(attribute)
+            ref = attr(column, attribute)
             if not ref:
                 continue
             found = _dynamic_field(ctx, ref)

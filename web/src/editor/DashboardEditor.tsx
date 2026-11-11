@@ -4,15 +4,19 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { caseState, DashboardView } from "../Dashboard";
-import type { Dashboard, IR, Zone, ZoneStyle } from "../types";
+import type { Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
 import { ActionsDialog } from "./ActionsDialog";
 import { editApi, type Outline } from "./api";
 import {
+  DEVICE_NAMES,
   findZone,
   insertFloating,
   insertTiled,
   isFloating,
+  layoutDashboard,
+  mergeLayout,
   moveZone,
+  newDeviceLayout,
   type NewZone,
   placeZone,
   relayout,
@@ -181,7 +185,17 @@ export function DashboardEditor({
     return () => observer.disconnect();
   }, [history.current === null]);
 
-  const dashboard = history.current;
+  // 裝置專屬版面：選了裝置版面時，以它的區塊與尺寸當作 dashboard 編輯，變更寫回那個版面
+  const [device, setDevice] = useState<Device | "default">("default");
+  const full = history.current;
+  const layout = full && device !== "default" ? (full.layouts ?? []).find((l) => l.device === device) ?? null : null;
+  const dashboard = full ? (layout ? layoutDashboard(full, layout) : full) : null;
+  const applyLayout = (change: (d: Dashboard) => Dashboard) =>
+    history.apply((d) => {
+      const current = device === "default" ? null : (d.layouts ?? []).find((l) => l.device === device);
+      if (!current || device === "default") return change(d);
+      return mergeLayout(d, device, change(layoutDashboard(d, current)));
+    });
   const names = useMemo(() => {
     const map = new Map<string, string>();
     for (const w of outline?.worksheets ?? []) map.set(w.id, w.name);
@@ -191,8 +205,8 @@ export function DashboardEditor({
 
   // 浮動區塊的拖曳：移動與調整大小（以畫面的縮放換算成 dashboard 的像素）
   const scaleRef = useRef(1);
-  const applyRef = useRef(history.apply);
-  applyRef.current = history.apply;
+  const applyRef = useRef(applyLayout);
+  applyRef.current = applyLayout;
   const dragRef = useRef<Drag | null>(null);
   dragRef.current = drag;
   useEffect(() => {
@@ -232,7 +246,7 @@ export function DashboardEditor({
 
   const scale = zoom === "fit" ? Math.min(1, Math.max(0.2, (canvasWidth - 24) / dashboard.size.width)) : zoom;
   scaleRef.current = scale;
-  const apply = history.apply;
+  const apply = applyLayout;
   const selectedZone = selected ? findZone(dashboard, selected) : null;
 
   const add = (zone: NewZone, size = DEFAULT_FLOAT, at?: { x: number; y: number }, near?: string | null) =>
@@ -526,22 +540,50 @@ export function DashboardEditor({
 
   const dashboardProps = (
     <div className="zone-props">
-      <div className="prop-title">dashboard</div>
-      <label className="inline">
-        大小
-        <select
-          aria-label="dashboard 的大小"
-          value={dashboard.sizing ?? "fixed"}
-          onChange={(e) => {
-            const sizing = e.target.value as Dashboard["sizing"];
-            apply((d) => ({ ...d, sizing, min_size: sizing === "range" ? (d.min_size ?? { width: 800, height: 600 }) : null, max_size: sizing === "range" ? (d.max_size ?? { width: 1600, height: 1200 }) : null }));
-          }}
-        >
-          <option value="fixed">固定大小</option>
-          <option value="automatic">自動</option>
-          <option value="range">範圍</option>
-        </select>
-      </label>
+      <div className="prop-title">{layout ? `${DEVICE_NAMES[layout.device]}版面` : "dashboard"}</div>
+      {layout ? (
+        <label className="inline">
+          大小
+          <select
+            aria-label="版面的大小"
+            value={layout.sizing}
+            onChange={(e) => {
+              const sizing = e.target.value as DeviceLayout["sizing"];
+              const kind = layout.device;
+              history.apply((d) => ({
+                ...d,
+                layouts: (d.layouts ?? []).map((l) => (l.device === kind ? { ...l, sizing } : l)),
+              }));
+            }}
+          >
+            <option value="default">與預設版面相同</option>
+            <option value="fixed">固定大小</option>
+            <option value="automatic">符合畫面</option>
+            <option value="fit_width">符合寬度（上下捲動）</option>
+          </select>
+        </label>
+      ) : (
+        <label className="inline">
+          大小
+          <select
+            aria-label="dashboard 的大小"
+            value={dashboard.sizing ?? "fixed"}
+            onChange={(e) => {
+              const sizing = e.target.value as Dashboard["sizing"];
+              apply((d) => ({ ...d, sizing, min_size: sizing === "range" ? (d.min_size ?? { width: 800, height: 600 }) : null, max_size: sizing === "range" ? (d.max_size ?? { width: 1600, height: 1200 }) : null }));
+            }}
+          >
+            <option value="fixed">固定大小</option>
+            <option value="automatic">自動</option>
+            <option value="range">範圍</option>
+          </select>
+        </label>
+      )}
+      {layout && (
+        <p className="hint">
+          檢視的畫面較短的一邊 500 像素以下用手機版面（沒有時用平板的）、501 到 800 用平板版面、超過 800 用桌面版面。
+        </p>
+      )}
       <div className="row">
         <label>
           寬
@@ -632,6 +674,60 @@ export function DashboardEditor({
             <option value="1">100%</option>
           </select>
         </label>
+        <label className="inline">
+          版面
+          <select
+            aria-label="裝置版面"
+            value={layout ? device : "default"}
+            onChange={(e) => {
+              setDevice(e.target.value as Device | "default");
+              setSelected(null);
+            }}
+          >
+            <option value="default">預設</option>
+            {(full?.layouts ?? []).map((l) => (
+              <option key={l.device} value={l.device}>
+                {DEVICE_NAMES[l.device]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {layout ? (
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              if (!window.confirm(`刪除${DEVICE_NAMES[layout.device]}版面？`)) return;
+              const removed = layout.device;
+              setDevice("default");
+              setSelected(null);
+              history.apply((d) => ({ ...d, layouts: (d.layouts ?? []).filter((l) => l.device !== removed) }));
+            }}
+          >
+            刪除{DEVICE_NAMES[layout.device]}版面
+          </button>
+        ) : (
+          <select
+            aria-label="新增裝置版面"
+            value=""
+            onChange={(e) => {
+              const kind = e.target.value as Device;
+              if (!kind) return;
+              history.apply((d) => ({ ...d, layouts: [...(d.layouts ?? []), newDeviceLayout(d, kind)] }));
+              setDevice(kind);
+              setSelected(null);
+            }}
+          >
+            <option value="">新增裝置版面…</option>
+            {(["desktop", "tablet", "phone"] as Device[])
+              .filter((kind) => !(full?.layouts ?? []).some((l) => l.device === kind))
+              .map((kind) => (
+                <option key={kind} value={kind}>
+                  {DEVICE_NAMES[kind]}
+                </option>
+              ))}
+          </select>
+        )}
         <span className="sep" />
         <button
           type="button"
@@ -851,7 +947,8 @@ export function DashboardEditor({
             <DashboardView
               workbook={workbook}
               ir={ir}
-              dashboard={{ ...dashboard, sizing: "fixed" }}
+              // 編輯中的版面本身（不依編輯器的視窗改用裝置版面）
+              dashboard={{ ...dashboard, sizing: "fixed", layouts: [] }}
               view={view}
               onView={setView}
               onNavigate={() => undefined}

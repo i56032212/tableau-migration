@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import sys
 import time
 from pathlib import Path
@@ -434,6 +435,60 @@ def test_viz_in_tooltip(server: str) -> None:
         assert seen["Consumer"]["table"]["raw"] != seen["Corporate"]["table"]["raw"]
         page.mouse.move(5, 5)
         expect(tooltip).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
+def test_phone_layout(server: str) -> None:
+    """裝置專屬版面：手機大小的畫面（或網址的 :device=phone）改用「篩選動作」dashboard 的手機版面——
+    各工作表由上到下、寬度符合畫面；篩選動作照常作用。桌面大小的畫面用預設版面。"""
+    from playwright.sync_api import sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    loaded = "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(loaded)
+        assert page.locator(".dashboard").get_attribute("data-device") == "phone"
+        boxes = [
+            page.locator(f"[data-zone='{z}']").bounding_box() for z in ("z7", "z8", "z10", "z11")
+        ]
+        assert all(b is not None for b in boxes)
+        page_width = page.evaluate("document.documentElement.clientWidth")
+        for upper, lower in itertools.pairwise(boxes):
+            assert upper is not None and lower is not None
+            assert lower["y"] >= upper["y"] + upper["height"] - 1  # 由上到下
+            assert abs(lower["x"] - upper["x"]) < 1 and abs(lower["width"] - upper["width"]) < 1
+        first = boxes[0]
+        assert first is not None and first["height"] == 300 and first["width"] < page_width
+        # 篩選動作照常作用
+        start = len(renders.items)
+        page.locator(
+            "[data-worksheet='ws_region_picker'] svg path[aria-roledescription='bar']"
+            "[aria-label$='Region: East']:not(.frozen *)"
+        ).click()
+        renders.wait_for(page, {"ws_category_detail", "ws_segment_detail"}, start)
+        latest = {w: body for w, body, _ in renders.items[start:]}
+        assert latest["ws_category_detail"]["actions"] == {
+            "act_filter_category_detail": [{"f_region": "East"}]
+        }
+        page.close()
+
+        desktop = browser.new_page(viewport={"width": 1300, "height": 900})
+        desktop.goto(f"{server}/w/superstore_features/d/{board.id}")
+        desktop.wait_for_function(loaded)
+        assert desktop.locator(".dashboard").get_attribute("data-device") == "default"
+        desktop.goto(f"{server}/w/superstore_features/d/{board.id}?:device=phone")
+        desktop.wait_for_function(loaded)
+        assert desktop.locator(".dashboard").get_attribute("data-device") == "phone"
         assert errors == []
         browser.close()
 

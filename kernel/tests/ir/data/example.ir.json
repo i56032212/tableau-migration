@@ -736,6 +736,7 @@
           "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[1]"
     }
   ],

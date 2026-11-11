@@ -1290,6 +1290,14 @@
           "title": "Zones",
           "type": "array"
         },
+        "layouts": {
+          "description": "裝置專屬版面（手機、平板、桌面），每種裝置最多一個",
+          "items": {
+            "$ref": "#/$defs/DeviceLayout"
+          },
+          "title": "Layouts",
+          "type": "array"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -1662,6 +1670,56 @@
         "unit"
       ],
       "title": "DateDerivation",
+      "type": "object"
+    },
+    "DeviceLayout": {
+      "additionalProperties": false,
+      "description": "裝置專屬版面（Tableau 的 Device Layouts）：依檢視的畫面較短的一邊選用——500 像素以下為手機、\n501 到 800 為平板、超過 800 為桌面；沒有那個裝置的版面時手機改用平板的，都沒有時用預設的版面。\n版面中的區塊參照 dashboard 預設版面上的同樣的工作表與控制項（與 Tableau 相同）。",
+      "properties": {
+        "device": {
+          "enum": [
+            "desktop",
+            "tablet",
+            "phone"
+          ],
+          "title": "Device",
+          "type": "string"
+        },
+        "sizing": {
+          "default": "default",
+          "description": "default＝與預設版面相同；fixed＝固定尺寸；automatic＝符合畫面（全部）；fit_width＝符合寬度，高度固定（可以上下捲動，手機常用）",
+          "enum": [
+            "default",
+            "fixed",
+            "automatic",
+            "fit_width"
+          ],
+          "title": "Sizing",
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/$defs/Size",
+          "description": "區塊座標換算時的尺寸（像素）；fit_width 時高度即為版面的高度"
+        },
+        "auto_generated": {
+          "default": false,
+          "description": "Tableau 自動產生的手機版面（隨預設版面自動調整）",
+          "title": "Auto Generated",
+          "type": "boolean"
+        },
+        "zones": {
+          "items": {
+            "$ref": "#/$defs/Zone"
+          },
+          "title": "Zones",
+          "type": "array"
+        }
+      },
+      "required": [
+        "device",
+        "size"
+      ],
+      "title": "DeviceLayout",
       "type": "object"
     },
     "Divider": {

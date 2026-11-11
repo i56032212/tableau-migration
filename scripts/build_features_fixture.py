@@ -40,6 +40,7 @@
   選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
   之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
 - 階層 Product：Category → Sub-Category → Product Name；Category Detail 等工作表上的 Category 可以向下切入
+- I3 裝置專屬版面：「篩選動作」dashboard 的手機版面（符合寬度、高 1400 像素，各工作表由上到下，固定高度）
 - 工具提示中的工作表（Viz in Tooltip）：Sales by Segment 的工具提示中顯示 Category Mix，以滑過的 Segment 篩選
   （Category Mix 上 Tableau 自動產生的工具提示篩選，直接檢視時顯示全部）
 """
@@ -134,6 +135,17 @@ def windows(dashboards: str) -> str:
 
 SEGMENT_GROUP = "5"
 """Segment 篩選套用到「Sales by Segment」與「Profit by Ship Mode」兩張工作表（套用到選取的工作表）。"""
+
+
+PHONE_W, PHONE_H = 375, 1400
+"""手機版面的尺寸（符合寬度：寬度隨畫面，座標以一般手機的寬度換算）。"""
+
+
+def phone_box(x: int, y: int, w: int, h: int) -> str:
+    def u(px: int, total: int) -> int:
+        return round(px * 100000 / total)
+
+    return f"h='{u(h, PHONE_H)}' w='{u(w, PHONE_W)}' x='{u(x, PHONE_W)}' y='{u(y, PHONE_H)}'"
 
 
 def zone_box(x: int, y: int, w: int, h: int) -> str:
@@ -1577,6 +1589,22 @@ def actions_dashboard() -> str:
           </zone>
         </zone>
       </zones>
+      <devicelayouts>
+        <devicelayout name='Phone'>
+          <size maxheight='{PHONE_H}' minheight='{PHONE_H}' sizing-mode='vscroll' />
+          <zones>
+            <zone {phone_box(0, 0, 375, 1400)} id='3' type-v2='layout-basic'>
+              <zone {phone_box(8, 8, 359, 1384)} id='4' param='vert' type-v2='layout-flow'>
+                <zone {phone_box(8, 8, 359, 40)} fixed-size='40' id='5' is-fixed='true' type-v2='title' />
+                <zone {phone_box(8, 48, 359, 300)} fixed-size='300' id='7' is-fixed='true' name='Region Picker' />
+                <zone {phone_box(8, 348, 359, 300)} fixed-size='300' id='8' is-fixed='true' name='Category Detail' />
+                <zone {phone_box(8, 648, 359, 300)} fixed-size='300' id='10' is-fixed='true' name='Segment Detail' />
+                <zone {phone_box(8, 948, 359, 444)} id='11' name='Region Category Matrix' />
+              </zone>
+            </zone>
+          </zones>
+        </devicelayout>
+      </devicelayouts>
       <simple-id uuid='{{7D6C2A1F-2B3C-4D5E-9F0A-000000000012}}' />
     </dashboard>"""
 

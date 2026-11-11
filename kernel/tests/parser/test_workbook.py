@@ -860,6 +860,49 @@ def test_automatic_dashboard_is_supported(tmp_path: Path) -> None:
     assert any("自動尺寸" in u.reason for u in ir.ignored)
 
 
+def test_device_layouts(tmp_path: Path) -> None:
+    """裝置專屬版面：手機版面（符合寬度）的區塊依手機的寬度與版面的高度換算；平板版面沒有寫尺寸時
+    與預設版面相同；不認得的裝置列為不支援。"""
+    phone = zone(
+        1,
+        0,
+        0,
+        100000,
+        100000,
+        "type-v2='layout-basic'",
+        zone(2, 0, 0, 100000, 50000, "fixed-size='300' is-fixed='true' name='Sheet A'"),
+    )
+    tablet = zone(1, 0, 0, 100000, 100000, "name='Sheet A'")
+    layouts = (
+        "<devicelayouts>"
+        "<devicelayout auto-generated='true' name='Phone'>"
+        "<size maxheight='600' minheight='600' sizing-mode='vscroll' />"
+        f"<zones>{phone}</zones></devicelayout>"
+        f"<devicelayout name='Tablet'><zones>{tablet}</zones></devicelayout>"
+        f"<devicelayout name='Watch'><zones>{tablet}</zones></devicelayout>"
+        "</devicelayouts>"
+    )
+    board = dashboard(zone(1, 0, 0, 100000, 100000, "name='Sheet A'")).replace(
+        "</zones></dashboard>", f"</zones>{layouts}</dashboard>"
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=basic_sheet(), dashboards=board))
+    assert reasons(ir) == ["dashboard「Overview」的裝置版面「Watch」不支援"]
+    phone_layout, tablet_layout = ir.dashboards[0].layouts
+    assert (phone_layout.device, phone_layout.sizing, phone_layout.auto_generated) == (
+        "phone",
+        "fit_width",
+        True,
+    )
+    assert (phone_layout.size.width, phone_layout.size.height) == (375, 600)
+    (container,) = phone_layout.zones
+    sheet_zone = container.children[0]
+    assert (sheet_zone.w, sheet_zone.h, sheet_zone.fixed) == (375, 300, 300)
+    assert sheet_zone.worksheet == ir.worksheets[0].id
+    assert (tablet_layout.device, tablet_layout.sizing) == ("tablet", "default")
+    assert (tablet_layout.size.width, tablet_layout.size.height) == (1000, 800)
+    assert tablet_layout.zones[0].w == 1000
+
+
 def test_zone_for_missing_worksheet(tmp_path: Path) -> None:
     xml = b.workbook(
         worksheets=basic_sheet(), dashboards=dashboard(zone(1, 0, 0, 100000, 100000, "name='Nope'"))

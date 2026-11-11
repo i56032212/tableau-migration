@@ -17,9 +17,11 @@ from lxml import etree
 
 from tmig.ir.integrity import iter_zones
 from tmig.ir.models import (
+    DEVICE_SIZES,
     Button,
     ControlType,
     Dashboard,
+    DeviceLayout,
     Size,
     TextRun,
     TextStyle,
@@ -102,12 +104,12 @@ class DashboardParser:
         self.width, self.height = width, height
         for item in children(el):
             tag = local_name(item)
-            if tag == "devicelayouts":
-                ctx.ignore(item, "裝置專屬版面（本階段只轉桌面版面）")
-            elif tag not in DASHBOARD_CHILDREN:
+            if tag not in DASHBOARD_CHILDREN:
                 ctx.flag(item, f"dashboard 中的未知元素 <{tag}>")
         zones = [self._zone(z) for z in children(child(el, "zones"), "zone")]
         self._check_toggles(zones)
+        layouts = self._layouts(child(el, "devicelayouts"), sizing)
+        self.width, self.height = width, height
         return Dashboard(
             id=ctx.dashboard_id(self.name),
             name=self.name,
@@ -117,8 +119,55 @@ class DashboardParser:
             max_size=sizing.max_size,
             background=dashboard_background(el),
             zones=zones,
+            layouts=layouts,
             source_ref=xpath(el),
         )
+
+    def _layouts(self, element: etree._Element | None, default: Sizing) -> list[DeviceLayout]:
+        """裝置專屬版面：<devicelayout name='Phone'|'Tablet'|'Desktop'>，各有尺寸（sizing-mode 為
+        vscroll 時是符合寬度）與區塊。區塊座標依版面的尺寸換算；沒有寫尺寸時與預設版面相同。"""
+        layouts: list[DeviceLayout] = []
+        for item in children(element, "devicelayout"):
+            name = (item.get("name") or "").lower()
+            if name not in DEVICE_SIZES:
+                self.ctx.flag(
+                    item, f"dashboard「{self.name}」的裝置版面「{item.get('name')}」不支援"
+                )
+                continue
+            if any(layout.device == name for layout in layouts):
+                self.ctx.ignore(item, f"dashboard「{self.name}」重複的{name}版面：只用第一個")
+                continue
+            size_el = child(item, "size")
+            mode = size_el.get("sizing-mode") if size_el is not None else None
+            device_w, device_h = DEVICE_SIZES[name]
+            if size_el is None:
+                kind, width, height = "default", default.width, default.height
+            elif mode == "vscroll":
+                height = (
+                    _int(size_el.get("maxheight")) or _int(size_el.get("minheight")) or device_h
+                )
+                kind, width = "fit_width", device_w
+            elif mode == "automatic":
+                kind, width, height = "automatic", device_w, device_h
+            else:
+                sized = _size(size_el)
+                if sized.mode == "fixed":
+                    kind, width, height = "fixed", sized.width, sized.height
+                else:
+                    kind, width, height = "automatic", sized.width, sized.height
+            self.width, self.height = width, height
+            zones = [self._zone(z) for z in children(child(item, "zones"), "zone")]
+            self._check_toggles(zones)
+            layouts.append(
+                DeviceLayout(
+                    device=name,  # type: ignore[arg-type]
+                    sizing=kind,  # type: ignore[arg-type]
+                    size=Size(width=width, height=height),
+                    auto_generated=item.get("auto-generated") == "true",
+                    zones=zones,
+                )
+            )
+        return layouts
 
     # ------------------------------------------------------------ 區塊
 
@@ -417,6 +466,14 @@ class Sizing:
     """區塊座標換算時的尺寸。"""
     min_size: Size | None = None
     max_size: Size | None = None
+
+
+def _int(value: str | None) -> int | None:
+    try:
+        number = int(value) if value is not None else None
+    except ValueError:
+        return None
+    return number if number and number > 0 else None
 
 
 def _size(size: etree._Element | None) -> Sizing:

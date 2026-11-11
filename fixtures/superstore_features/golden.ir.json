@@ -6718,6 +6718,7 @@
           "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[1]"
     },
     {
@@ -6945,6 +6946,7 @@
           "source_ref": "/workbook/dashboards/dashboard[2]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[2]"
     },
     {
@@ -7198,6 +7200,203 @@
           "source_ref": "/workbook/dashboards/dashboard[3]/zones/zone"
         }
       ],
+      "layouts": [
+        {
+          "device": "phone",
+          "sizing": "fit_width",
+          "size": {
+            "width": 375,
+            "height": 1400
+          },
+          "auto_generated": false,
+          "zones": [
+            {
+              "id": "z3",
+              "kind": "container",
+              "x": 0,
+              "y": 0,
+              "w": 375,
+              "h": 1400,
+              "worksheet": null,
+              "field": null,
+              "parameter": null,
+              "control": null,
+              "legend": null,
+              "text": null,
+              "content": [],
+              "image": null,
+              "button": null,
+              "url": null,
+              "children": [
+                {
+                  "id": "z4",
+                  "kind": "container",
+                  "x": 8,
+                  "y": 8,
+                  "w": 359,
+                  "h": 1384,
+                  "worksheet": null,
+                  "field": null,
+                  "parameter": null,
+                  "control": null,
+                  "legend": null,
+                  "text": null,
+                  "content": [],
+                  "image": null,
+                  "button": null,
+                  "url": null,
+                  "children": [
+                    {
+                      "id": "z5",
+                      "kind": "title",
+                      "x": 8,
+                      "y": 8,
+                      "w": 359,
+                      "h": 40,
+                      "worksheet": null,
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": "篩選動作",
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": 40,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": null,
+                      "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone/zone/zone[1]"
+                    },
+                    {
+                      "id": "z7",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 48,
+                      "w": 359,
+                      "h": 300,
+                      "worksheet": "ws_region_picker",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": 300,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": "entire_view",
+                      "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone/zone/zone[2]"
+                    },
+                    {
+                      "id": "z8",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 348,
+                      "w": 359,
+                      "h": 300,
+                      "worksheet": "ws_category_detail",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": 300,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": "entire_view",
+                      "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone/zone/zone[3]"
+                    },
+                    {
+                      "id": "z10",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 648,
+                      "w": 359,
+                      "h": 300,
+                      "worksheet": "ws_segment_detail",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": 300,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": "entire_view",
+                      "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone/zone/zone[4]"
+                    },
+                    {
+                      "id": "z11",
+                      "kind": "worksheet",
+                      "x": 8,
+                      "y": 948,
+                      "w": 359,
+                      "h": 444,
+                      "worksheet": "ws_region_category_matrix",
+                      "field": null,
+                      "parameter": null,
+                      "control": null,
+                      "legend": null,
+                      "text": null,
+                      "content": [],
+                      "image": null,
+                      "button": null,
+                      "url": null,
+                      "children": [],
+                      "layout": null,
+                      "fixed": null,
+                      "hidden": false,
+                      "show_title": true,
+                      "style": null,
+                      "fit": "entire_view",
+                      "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone/zone/zone[5]"
+                    }
+                  ],
+                  "layout": "vertical",
+                  "fixed": null,
+                  "hidden": false,
+                  "show_title": true,
+                  "style": null,
+                  "fit": null,
+                  "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone/zone"
+                }
+              ],
+              "layout": "tiled",
+              "fixed": null,
+              "hidden": false,
+              "show_title": true,
+              "style": null,
+              "fit": null,
+              "source_ref": "/workbook/dashboards/dashboard[3]/devicelayouts/devicelayout/zones/zone"
+            }
+          ]
+        }
+      ],
       "source_ref": "/workbook/dashboards/dashboard[3]"
     },
     {
@@ -7431,6 +7630,7 @@
           "source_ref": "/workbook/dashboards/dashboard[4]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[4]"
     },
     {
@@ -7631,6 +7831,7 @@
           "source_ref": "/workbook/dashboards/dashboard[5]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[5]"
     },
     {
@@ -8028,6 +8229,7 @@
           "source_ref": "/workbook/dashboards/dashboard[6]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[6]"
     },
     {
@@ -8175,6 +8377,7 @@
           "source_ref": "/workbook/dashboards/dashboard[7]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[7]"
     },
     {
@@ -8375,6 +8578,7 @@
           "source_ref": "/workbook/dashboards/dashboard[8]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[8]"
     },
     {
@@ -8549,6 +8753,7 @@
           "source_ref": "/workbook/dashboards/dashboard[9]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[9]"
     },
     {
@@ -8912,6 +9117,7 @@
           "source_ref": "/workbook/dashboards/dashboard[10]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[10]"
     },
     {
@@ -9086,6 +9292,7 @@
           "source_ref": "/workbook/dashboards/dashboard[11]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[11]"
     },
     {
@@ -9339,6 +9546,7 @@
           "source_ref": "/workbook/dashboards/dashboard[12]/zones/zone"
         }
       ],
+      "layouts": [],
       "source_ref": "/workbook/dashboards/dashboard[12]"
     }
   ],

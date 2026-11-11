@@ -140,3 +140,15 @@ def test_unusable_fields_are_flagged(tmp_path: Path) -> None:
     assert [u.reason for u in ir.unsupported] == [
         "動態參數「As Of」（date）的目前值取自型別不同的欄位「Region」（string）"
     ]
+
+
+def test_feature_flag_prefixed_attributes(tmp_path: Path, db: Path) -> None:
+    """Tableau 2020.1 起的 .twb 把屬性寫成 _.fcp.ParameterDefaultValues.true...default-value-field。"""
+    params = parameters().replace(
+        "default-value-field=", "_.fcp.ParameterDefaultValues.true...default-value-field="
+    )
+    ir = parsed(tmp_path, params)
+    assert ir.unsupported == []
+    assert ir.parameters[0].value_field is not None
+    resolved, _ = resolve_parameters(ir, runner(db))
+    assert resolved.parameters[0].value == "2024-03-15"

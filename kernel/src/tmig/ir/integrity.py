@@ -385,6 +385,19 @@ def check_references(ir: IR) -> list[str]:
                 check_use(line.value, ws.datasource, f"{where}.value", tcs)
 
     for db in ir.dashboards:
+        for layout in db.layouts:
+            where = f"dashboards[{db.id}].layouts[{layout.device}]"
+            layout_ids: set[str] = set()
+            for zone in iter_zones(layout.zones):
+                if zone.id in layout_ids:
+                    errors.append(f"{where}.zones[{zone.id}]：區塊 id 重複")
+                layout_ids.add(zone.id)
+                if zone.worksheet is not None and zone.worksheet not in sheets:
+                    errors.append(f"{where}.zones[{zone.id}]：工作表「{zone.worksheet}」不存在")
+                if zone.parameter is not None and zone.parameter not in params:
+                    errors.append(f"{where}.zones[{zone.id}]：參數「{zone.parameter}」不存在")
+
+    for db in ir.dashboards:
         seen: set[str] = set()
         zone_ids = {zone.id for zone in iter_zones(db.zones)}
         for zone in iter_zones(db.zones):

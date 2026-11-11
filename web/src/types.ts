@@ -270,6 +270,18 @@ export interface Size {
   height: number;
 }
 
+export type Device = "desktop" | "tablet" | "phone";
+
+/** 裝置專屬版面：手機、平板或桌面上改用的版面（區塊參照預設版面上同樣的工作表與控制項） */
+export interface DeviceLayout {
+  device: Device;
+  /** default：與預設版面相同；fit_width：寬度隨畫面、高度固定（上下捲動） */
+  sizing: "default" | "fixed" | "automatic" | "fit_width";
+  size: Size;
+  auto_generated?: boolean;
+  zones: Zone[];
+}
+
 export interface Dashboard {
   id: string;
   name: string;
@@ -280,6 +292,7 @@ export interface Dashboard {
   /** dashboard 的背景顏色；沒有時為白色 */
   background?: string | null;
   zones: Zone[];
+  layouts?: DeviceLayout[];
 }
 
 export interface Unsupported {

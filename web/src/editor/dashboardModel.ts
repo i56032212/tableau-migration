@@ -2,7 +2,7 @@
 // 區塊的座標是 dashboard 參考尺寸上的像素；水平、垂直容器的子區塊沿排列方向依序排列，固定大小的子區塊不變，
 // 其餘依原本的比例分配；tiled 容器的子區塊依比例縮放。最外層的第一個區塊以外都是浮動的區塊。
 
-import type { Dashboard, Zone, ZoneStyle } from "../types";
+import type { Dashboard, Device, DeviceLayout, Zone, ZoneStyle } from "../types";
 import { EDITOR_REF } from "./model";
 
 export const TILED_STYLE: ZoneStyle = {
@@ -317,4 +317,59 @@ export function zoneLabel(zone: Zone, names: Map<string, string>): string {
     default:
       return zone.kind;
   }
+}
+
+// ---------------------------------------------------------------- 裝置專屬版面
+
+export const DEVICE_NAMES: Record<Device, string> = { desktop: "桌面", tablet: "平板", phone: "手機" };
+const PHONE_WIDTH = 375;
+
+/** 編輯裝置版面：以版面的區塊與尺寸當作 dashboard 編輯（名稱、背景等其餘的設定是 dashboard 的）。 */
+export function layoutDashboard(dashboard: Dashboard, layout: DeviceLayout): Dashboard {
+  return { ...dashboard, zones: layout.zones, size: layout.size, sizing: "fixed", min_size: null, max_size: null, layouts: [] };
+}
+
+/** 裝置版面的編輯結果寫回 dashboard：版面的區塊與尺寸，其餘（名稱、背景）寫到 dashboard。 */
+export function mergeLayout(dashboard: Dashboard, device: Device, edited: Dashboard): Dashboard {
+  return {
+    ...dashboard,
+    name: edited.name,
+    background: edited.background,
+    layouts: (dashboard.layouts ?? []).map((l) => (l.device === device ? { ...l, zones: edited.zones, size: edited.size } : l)),
+  };
+}
+
+/**
+ * 新的裝置版面。手機：與 Tableau 自動產生的手機版面相同，預設版面上的物件由上到下排列（符合寬度、
+ * 工作表 300 像素高）；平板、桌面：複製預設版面的區塊與尺寸。
+ */
+export function newDeviceLayout(dashboard: Dashboard, device: Device): DeviceLayout {
+  if (device !== "phone") {
+    return { device, sizing: "default", size: { ...dashboard.size }, auto_generated: false, zones: structuredClone(dashboard.zones) };
+  }
+  const items: Zone[] = [];
+  walkZones(dashboard.zones, (zone) => {
+    if (zone.kind !== "container" && zone.kind !== "blank" && !zone.hidden) items.push(zone);
+  });
+  const pad = 8;
+  const inner = PHONE_WIDTH - 2 * pad;
+  let y = pad;
+  const children: Zone[] = items.map((zone) => {
+    const h = zone.kind === "worksheet" ? 300 : Math.round(Math.min(Math.max(zone.h, 40), zone.kind === "text" ? 160 : 120));
+    const placed: Zone = { ...structuredClone(zone), x: pad, y, w: inner, h, fixed: h, children: [] };
+    y += h;
+    return placed;
+  });
+  const height = Math.max(y + pad, 200);
+  const base = { worksheet: null, field: null, parameter: null, control: null, legend: null, text: null, image: null, source_ref: EDITOR_REF };
+  const ids = new Set(items.map((z) => z.id));
+  let next = 1;
+  const freshId = () => {
+    while (ids.has(`z${next}`)) next += 1;
+    ids.add(`z${next}`);
+    return `z${next}`;
+  };
+  const flow: Zone = { ...base, id: freshId(), kind: "container", layout: "vertical", x: pad, y: pad, w: inner, h: height - 2 * pad, children };
+  const root: Zone = { ...base, id: freshId(), kind: "container", layout: "tiled", x: 0, y: 0, w: PHONE_WIDTH, h: height, children: [flow] };
+  return { device, sizing: "fit_width", size: { width: PHONE_WIDTH, height }, auto_generated: false, zones: [root] };
 }

@@ -1591,6 +1591,33 @@ class Size(IRModel):
     height: int = Field(gt=0)
 
 
+DeviceKind = Literal["desktop", "tablet", "phone"]
+DEVICE_SIZES: dict[str, tuple[int, int]] = {
+    "desktop": (1000, 800),
+    "tablet": (768, 1024),
+    "phone": (375, 667),
+}
+"""沒有寫尺寸的裝置版面換算座標用的尺寸（Tableau 裝置預覽的一般裝置）。"""
+
+
+class DeviceLayout(IRModel):
+    """裝置專屬版面（Tableau 的 Device Layouts）：依檢視的畫面較短的一邊選用——500 像素以下為手機、
+    501 到 800 為平板、超過 800 為桌面；沒有那個裝置的版面時手機改用平板的，都沒有時用預設的版面。
+    版面中的區塊參照 dashboard 預設版面上的同樣的工作表與控制項（與 Tableau 相同）。"""
+
+    device: DeviceKind
+    sizing: Literal["default", "fixed", "automatic", "fit_width"] = Field(
+        default="default",
+        description="default＝與預設版面相同；fixed＝固定尺寸；automatic＝符合畫面（全部）；"
+        "fit_width＝符合寬度，高度固定（可以上下捲動，手機常用）",
+    )
+    size: Size = Field(description="區塊座標換算時的尺寸（像素）；fit_width 時高度即為版面的高度")
+    auto_generated: bool = Field(
+        default=False, description="Tableau 自動產生的手機版面（隨預設版面自動調整）"
+    )
+    zones: list[Zone] = Field(default_factory=list)
+
+
 class Dashboard(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -1605,7 +1632,17 @@ class Dashboard(IRModel):
         default=None, description="dashboard 的背景顏色；None 為白色"
     )
     zones: list[Zone] = Field(default_factory=list)
+    layouts: list[DeviceLayout] = Field(
+        default_factory=list, description="裝置專屬版面（手機、平板、桌面），每種裝置最多一個"
+    )
     source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check_layouts(self) -> Self:
+        devices = [layout.device for layout in self.layouts]
+        if len(devices) != len(set(devices)):
+            raise ValueError("同一種裝置只能有一個版面")
+        return self
 
 
 # ---------------------------------------------------------------- Story
