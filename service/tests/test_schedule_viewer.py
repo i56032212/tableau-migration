@@ -90,6 +90,15 @@ def test_schedules_and_subscriptions(tmp_path: Path) -> None:
         page.get_by_role("button", name="儲存").click()
         expect(page.locator(".success")).to_have_text("已設定時區")
         expect(page.locator(".scheduler-status")).to_contain_text("排程器沒有在執行")
+        # 同時執行的工作數上限（預設 2）
+        workers = page.locator(".workers-row")
+        expect(workers).to_contain_text("最多 2 個工作（預設）")
+        workers.get_by_role("button", name="修改").click()
+        page.get_by_label("同時執行的工作數上限").fill("3")
+        page.get_by_role("button", name="儲存").click()
+        expect(page.locator(".success")).to_have_text("已設定同時執行的上限")
+        expect(workers).to_contain_text("最多 3 個工作")
+        assert ScheduleStore(tmp_path / "store").data().workers == 3
         page.get_by_role("button", name="新增排程").click()
         dialog = page.get_by_role("dialog")
         dialog.get_by_label("名稱").fill("每天 6 點")
@@ -102,12 +111,13 @@ def test_schedules_and_subscriptions(tmp_path: Path) -> None:
         dialog = page.get_by_role("dialog")
         dialog.get_by_label("名稱").fill("每週一早上")
         dialog.get_by_label("類型").select_option("Subscription")
+        dialog.get_by_label("執行方式").select_option("Serial")
         dialog.get_by_label("頻率").select_option("weekly")
         dialog.get_by_label("開始時間").fill("08:30")
         dialog.get_by_role("button", name="儲存").click()
-        expect(page.locator("tr[data-schedule]", has_text="每週一早上")).to_contain_text(
-            "每週一 08:30"
-        )
+        monday = page.locator("tr[data-schedule]", has_text="每週一早上")
+        expect(monday).to_contain_text("每週一 08:30")
+        expect(monday).to_contain_text("依序")
 
         # 工作：新增萃取更新、立即執行（排入佇列）
         page.click("nav.tabs >> text=工作")

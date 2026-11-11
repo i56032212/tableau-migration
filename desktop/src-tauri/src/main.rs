@@ -164,6 +164,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         .item(&MenuItemBuilder::with_id("sign_in", "登入…").build(app)?)
         .item(&MenuItemBuilder::with_id("open_server", "從伺服器開啟…").build(app)?)
         .item(&MenuItemBuilder::with_id("publish", "發布到伺服器…").build(app)?)
+        .item(&MenuItemBuilder::with_id("publish_datasource", "發布資料源…").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("sign_out", "登出").build(app)?)
         .build()?;
@@ -188,6 +189,7 @@ fn menu_action(app: &AppHandle, id: &str) {
         "sign_in" => "window.tmigDesktop && window.tmigDesktop.signIn()",
         "open_server" => "window.tmigDesktop && window.tmigDesktop.openFromServer()",
         "publish" => "window.tmigDesktop && window.tmigDesktop.publish()",
+        "publish_datasource" => "window.tmigDesktop && window.tmigDesktop.publishDatasource()",
         "sign_out" => "window.tmigDesktop && window.tmigDesktop.signOut()",
         "home" => "window.location.assign('/')",
         "reload" => "window.location.reload()",

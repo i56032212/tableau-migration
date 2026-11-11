@@ -29,14 +29,17 @@ import os
 import secrets
 import smtplib
 import ssl
+import threading
 import tomllib
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import make_msgid
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import quote
 
 from tmig.catalog import Report
@@ -57,6 +60,7 @@ PAPER = {
 }
 """Tableau 的紙張大小 → Chromium 支援的名稱；其他（含 Unspecified）用 A4。"""
 VIEWPORT = {"width": 1400, "height": 1000}
+T = TypeVar("T")
 
 
 class SubscriptionError(RuntimeError):
@@ -140,8 +144,50 @@ def subscription_views(report: Report, view: str | None) -> list[tuple[str, str]
     return found[:1]
 
 
+class _Browser:
+    """一個 Chromium：Playwright 的同步 API 只能在啟動它的執行緒中使用，每個瀏覽器有自己的執行緒。"""
+
+    def __init__(self) -> None:
+        self.thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tmig-render")
+        self._stack: ExitStack | None = None
+        self._browser: Any = None
+
+    def call(self, work: Callable[[Any], T]) -> T:
+        return self.thread.submit(self._call, work).result()
+
+    def _call(self, work: Callable[[Any], T]) -> T:
+        if self._browser is None:
+            from playwright.sync_api import sync_playwright
+
+            stack = ExitStack()
+            try:
+                playwright = stack.enter_context(sync_playwright())
+                self._browser = playwright.chromium.launch()
+                stack.callback(self._browser.close)
+            except Exception:
+                stack.close()
+                self._browser = None
+                raise
+            self._stack = stack
+        return work(self._browser)
+
+    def close(self) -> None:
+        def stop() -> None:
+            if self._stack is not None:
+                self._stack.close()
+            self._stack, self._browser = None, None
+
+        try:
+            self.thread.submit(stop).result()
+        finally:
+            self.thread.shutdown(wait=True)
+
+
 class Renderer:
     """只在本機的查詢服務與 Chromium：第一次使用時啟動，close() 關閉。
+
+    可以同時從多個執行緒呼叫 render（排程器同時執行多個訂閱）：每個呼叫用一個空著的 Chromium，
+    沒有空著的時候再啟動一個（數量不超過同時執行的工作數）。
 
     store：報表庫（發布的報表也能訂閱；使用者目錄與權限以站台資料為準，修改後立即生效）。"""
 
@@ -169,39 +215,46 @@ class Renderer:
         self.authenticator = Authenticator(settings)
         if site is not None and site.exists():
             self.authenticator.site = site
-        self._stack: ExitStack | None = None
-        self._browser: Any = None
+        self._lock = threading.Lock()
+        self._server: ExitStack | None = None
+        self._browsers: list[_Browser] = []
+        self._idle: list[_Browser] = []
         self.base_url = ""
 
     def _start(self) -> None:
-        if self._stack is not None:
-            return
-        from playwright.sync_api import sync_playwright
+        with self._lock:
+            if self._server is not None:
+                return
+            from tmig_service.background import running_server
 
-        from tmig_service.background import running_server
-
-        stack = ExitStack()
-        try:
-            dist = self.web_dist or Path(__file__).resolve().parents[3] / "web" / "dist"
-            if not (dist / "index.html").is_file():
-                raise SubscriptionError(
-                    f"找不到檢視器 {dist}；先執行 cd web && pnpm install && pnpm build"
+            stack = ExitStack()
+            try:
+                dist = self.web_dist or Path(__file__).resolve().parents[3] / "web" / "dist"
+                if not (dist / "index.html").is_file():
+                    raise SubscriptionError(
+                        f"找不到檢視器 {dist}；先執行 cd web && pnpm install && pnpm build"
+                    )
+                self.base_url = stack.enter_context(
+                    running_server(self.fixtures, dist, auth=self.authenticator, store=self.store)
                 )
-            self.base_url = stack.enter_context(
-                running_server(self.fixtures, dist, auth=self.authenticator, store=self.store)
-            )
-            playwright = stack.enter_context(sync_playwright())
-            self._browser = playwright.chromium.launch()
-            stack.callback(self._browser.close)
-        except Exception:
-            stack.close()
-            raise
-        self._stack = stack
+            except Exception:
+                stack.close()
+                raise
+            self._server = stack
+
+    @property
+    def browsers(self) -> int:
+        """啟動了幾個 Chromium。"""
+        return len(self._browsers)
 
     def close(self) -> None:
-        if self._stack is not None:
-            self._stack.close()
-            self._stack = None
+        with self._lock:
+            browsers, self._browsers, self._idle = self._browsers, [], []
+            server, self._server = self._server, None
+        for browser in browsers:
+            browser.close()
+        if server is not None:
+            server.close()
 
     def render(
         self,
@@ -214,7 +267,42 @@ class Renderer:
         landscape: bool = False,
     ) -> list[Rendered]:
         self._start()
-        context = self._browser.new_context(viewport=VIEWPORT, device_scale_factor=1)
+        with self._lock:
+            browser = self._idle.pop() if self._idle else None
+            if browser is None:
+                browser = _Browser()
+                self._browsers.append(browser)
+        healthy = False
+        try:
+            result = browser.call(
+                lambda chromium: self._render(chromium, user, views, png, pdf, paper, landscape)
+            )
+            healthy = True
+            return result
+        except SubscriptionError:
+            healthy = True  # view 的問題（不是瀏覽器的問題）：瀏覽器繼續使用
+            raise
+        finally:
+            with self._lock:
+                if browser in self._browsers:
+                    if healthy:
+                        self._idle.append(browser)
+                    else:
+                        # 出了問題的瀏覽器（例如 Chromium 結束了）：在背景關閉，下一次啟動新的
+                        self._browsers.remove(browser)
+                        threading.Thread(target=browser.close, daemon=True).start()
+
+    def _render(
+        self,
+        chromium: Any,
+        user: str,
+        views: list[tuple[str, str]],
+        png: bool,
+        pdf: bool,
+        paper: str | None,
+        landscape: bool,
+    ) -> list[Rendered]:
+        context = chromium.new_context(viewport=VIEWPORT, device_scale_factor=1)
         try:
             context.add_cookies(
                 [

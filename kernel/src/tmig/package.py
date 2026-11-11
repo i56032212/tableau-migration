@@ -9,6 +9,9 @@ zip 檔，內容：
 
 開啟時解到報表目錄：golden.ir.json、data/、files/，與 fixtures 的結構相同，查詢服務照常使用。
 套件中沒有任何連線的帳號密碼（IR 本來就不記）。
+
+資料源套件（.tmigds）：桌面版發布資料源用，相當於 Tableau 的 .tdsx。格式與報表套件相同，manifest 的 kind 為
+datasource，報表定義只有這個資料源與它用到的參數（沒有工作表），data/ 中為它的萃取（見 datasource_ir）。
 """
 
 from __future__ import annotations
@@ -24,11 +27,14 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from tmig import __version__
-from tmig.ir import IR, dumps_ir, has_local_data, iter_zones, save_ir
+from tmig.ir import IR, Datasource, dumps_ir, has_local_data, iter_zones, save_ir
 
 FORMAT = "tmigx"
 FORMAT_VERSION = 1
 SUFFIX = ".tmigx"
+DATASOURCE_SUFFIX = ".tmigds"
+DATASOURCE_KIND = "datasource"
+"""manifest 的 kind：資料源套件（沒有 kind 的是報表套件）。"""
 MANIFEST = "manifest.json"
 REPORT = "report.ir.json"
 
@@ -97,11 +103,86 @@ def extract_ids(ir: IR) -> list[str]:
     return [ds.id for ds in ir.datasources if has_local_data(ds.connection)]
 
 
-def write_package(target: Path, ir: IR, directory: Path) -> PackageInfo:
+def parameters_used(ir: IR, datasource: Datasource) -> set[str]:
+    """資料源用到的參數 id：計算欄位的公式中的參數，與集合、篩選中參照的參數。"""
+    from tmig.formula.ast import FieldRef, walk
+    from tmig.formula.parser import parse_formula
+    from tmig.ir.scope import DatasourceScope
+
+    known = {p.id for p in ir.parameters}
+    scope = DatasourceScope.for_datasource(datasource, ir.parameters)
+    used: set[str] = set()
+    for field in datasource.fields:
+        if field.calc is None:
+            continue
+        try:
+            tree = parse_formula(field.calc.formula)
+        except Exception:  # 公式無法解析：計算欄位本來就不能用，不影響其他欄位
+            continue
+        for node in walk(tree):
+            if isinstance(node, FieldRef):
+                target = scope.lookup(node.parts)
+                if target is not None and target.kind == "param":
+                    used.add(target.id)
+
+    def scan(value: object) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "parameter" and isinstance(item, str) and item in known:
+                    used.add(item)
+                else:
+                    scan(item)
+        elif isinstance(value, list):
+            for item in value:
+                scan(item)
+
+    scan(datasource.model_dump(mode="json"))
+    return used
+
+
+def datasource_ir(ir: IR, datasource_id: str) -> IR:
+    """只有一個資料源的報表（資料源套件的內容）：這個資料源與它用到的參數；工作表、dashboard、動作與 Story 不帶。"""
+    datasource = next((d for d in ir.datasources if d.id == datasource_id), None)
+    if datasource is None:
+        raise PackageError(f"報表中沒有資料源「{datasource_id}」")
+    used = parameters_used(ir, datasource)
+    try:
+        return IR.model_validate(
+            {
+                "ir_version": ir.ir_version,
+                "workbook": ir.workbook.model_copy(update={"name": datasource.caption}).model_dump(
+                    mode="json"
+                ),
+                "datasources": [datasource.model_dump(mode="json")],
+                "parameters": [p.model_dump(mode="json") for p in ir.parameters if p.id in used],
+            }
+        )
+    except ValidationError as exc:
+        raise PackageError(f"資料源「{datasource.caption}」無法單獨發布：{exc}") from exc
+
+
+def package_kind(source: Path) -> str | None:
+    """套件的種類：報表套件為 report、資料源套件為 datasource；不是平台的套件時為 None。"""
+    try:
+        with zipfile.ZipFile(source) as archive:
+            if MANIFEST not in archive.namelist():
+                return None
+            manifest = json.loads(archive.read(MANIFEST))
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
+        return None
+    return str(manifest.get("kind") or "report")
+
+
+def write_package(target: Path, ir: IR, directory: Path, *, kind: str | None = None) -> PackageInfo:
     """把報表目錄存成報表套件；萃取的資料源必須已有 DuckDB 檔（見 tmig.verify.run.ensure_data）。
 
+    kind 為 DATASOURCE_KIND 時是資料源套件（ir 為 datasource_ir 的結果）。
     先寫到同一目錄的暫存檔再取代，寫到一半失敗不會留下壞掉的套件。
     """
+    if kind == DATASOURCE_KIND and (len(ir.datasources) != 1 or ir.worksheets or ir.dashboards):
+        raise PackageError("資料源套件只能有一個資料源，不能有工作表")
     extracts = extract_ids(ir)
     data = directory / "data"
     missing = [ds for ds in extracts if not (data / f"{ds}.duckdb").is_file()]
@@ -115,6 +196,8 @@ def write_package(target: Path, ir: IR, directory: Path) -> PackageInfo:
         "created": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "generator": f"tmig {__version__}",
     }
+    if kind is not None:
+        manifest["kind"] = kind
     included: list[str] = []
     absent: list[str] = []
     temporary = target.with_name(target.name + ".tmp")
@@ -191,14 +274,19 @@ def _extract(archive: zipfile.ZipFile, name: str, target: Path) -> None:
 
 
 __all__ = [
+    "DATASOURCE_KIND",
+    "DATASOURCE_SUFFIX",
     "FORMAT",
     "FORMAT_VERSION",
     "SUFFIX",
     "PackageError",
     "PackageInfo",
+    "datasource_ir",
     "image_paths",
     "local_file",
     "member_path",
+    "package_kind",
+    "parameters_used",
     "read_package",
     "read_report_file",
     "write_package",

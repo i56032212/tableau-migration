@@ -39,9 +39,12 @@ export function useSchedules() {
 
 function SchedulerBanner({ data }: { data: ScheduleOverview }) {
   const status = data.scheduler;
+  const active = status.active ?? [];
   return status.running ? (
     <p className="scheduler-status ok">
       排程器執行中（最後回報 {when(status.heartbeat_at, data.timezone)}）
+      {active.length > 0 && `；${active.length} 個工作執行中`}
+      {(status.waiting ?? 0) > 0 && `、${status.waiting} 個等候空出的位置`}
       {status.queued.length > 0 && `；${status.queued.length} 個工作排隊等待立即執行`}
     </p>
   ) : (
@@ -62,6 +65,7 @@ export function SchedulesTab({ data, run }: { data: ScheduleOverview; run: Run }
     <section className="admin-section">
       <SchedulerBanner data={data} />
       <TimezoneRow data={data} run={run} />
+      <WorkersRow data={data} run={run} />
       <div className="admin-actions">
         <button type="button" className="primary" disabled={!data.timezone} onClick={() => setEditing("new")}>
           新增排程
@@ -75,6 +79,7 @@ export function SchedulesTab({ data, run }: { data: ScheduleOverview; run: Run }
             <th>類型</th>
             <th>頻率</th>
             <th>優先順序</th>
+            <th>執行方式</th>
             <th>狀態</th>
             <th>工作</th>
             <th>下次執行</th>
@@ -94,6 +99,7 @@ export function SchedulesTab({ data, run }: { data: ScheduleOverview; run: Run }
               </td>
               <td>{schedule.description ?? <span className="error">無法辨識：{schedule.problem}</span>}</td>
               <td>{schedule.priority ?? 50}</td>
+              <td>{schedule.execution === "Serial" ? "依序" : "平行"}</td>
               <td>{schedule.state === "Active" ? "啟用" : <span className="warn-text">暫停</span>}</td>
               <td>
                 {schedule.tasks + schedule.subscriptions}
@@ -180,12 +186,75 @@ function TimezoneRow({ data, run }: { data: ScheduleOverview; run: Run }) {
       <button
         type="button"
         onClick={() =>
-          void run(() => scheduleApi.settings(value.trim()), "已設定時區").then((ok) => ok && setEditing(false))
+          void run(() => scheduleApi.settings({ timezone: value.trim() }), "已設定時區").then(
+            (ok) => ok && setEditing(false),
+          )
         }
       >
         儲存
       </button>
       {!data.timezone && <span className="hint">先設定時區才能新增排程（Tableau Server 匯出的排程檔中有時區）。</span>}
+    </div>
+  );
+}
+
+/** 同時執行的工作數上限（與 Tableau Server 的背景程式數相同的作用）。 */
+function WorkersRow({ data, run }: { data: ScheduleOverview; run: Run }) {
+  const [editing, setEditing] = useState(false);
+  const current = data.workers ?? data.default_workers;
+  const [value, setValue] = useState(String(current));
+  const reported = data.scheduler.running ? data.scheduler.workers : undefined;
+  const save = (workers: number | null, done: string) =>
+    void run(() => scheduleApi.settings({ workers }), done).then((ok) => ok && setEditing(false));
+  if (!editing) {
+    return (
+      <p className="workers-row">
+        同時執行：最多 <strong>{current}</strong> 個工作{data.workers === null && "（預設）"}{" "}
+        <button
+          type="button"
+          className="link"
+          onClick={() => {
+            setValue(String(current));
+            setEditing(true);
+          }}
+        >
+          修改
+        </button>
+        {reported !== undefined && reported !== current && (
+          <span className="hint">排程器目前用 {reported} 個（下一次檢查時改用新的設定）</span>
+        )}
+      </p>
+    );
+  }
+  const number = Number(value);
+  const valid = Number.isInteger(number) && number >= 1 && number <= data.max_workers;
+  return (
+    <div className="admin-actions">
+      <label>
+        同時執行的工作數上限（1–{data.max_workers}）{" "}
+        <input
+          type="number"
+          aria-label="同時執行的工作數上限"
+          min={1}
+          max={data.max_workers}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </label>
+      <button type="button" disabled={!valid} onClick={() => save(number, "已設定同時執行的上限")}>
+        儲存
+      </button>
+      {data.workers !== null && (
+        <button type="button" onClick={() => save(null, "已改用預設的上限")}>
+          使用預設（{data.default_workers}）
+        </button>
+      )}
+      <button type="button" onClick={() => setEditing(false)}>
+        取消
+      </button>
+      <span className="hint">
+        與 Tableau Server 的背景程式數相同的作用：1 為一個接一個執行；「依序」的排程不論上限一次只執行一個工作。
+      </span>
     </div>
   );
 }
@@ -217,9 +286,10 @@ function ScheduleDialog({ schedule, onClose, run }: { schedule: ScheduleItem | n
   const [name, setName] = useState(schedule?.name ?? "");
   const [kind, setKind] = useState(schedule?.kind ?? "Extract");
   const [priority, setPriority] = useState(schedule?.priority ?? 50);
+  const [execution, setExecution] = useState(schedule?.execution ?? "Parallel");
   const [frequency, setFrequency] = useState<Frequency>(schedule?.frequency ?? DEFAULT_FREQUENCY);
   const save = () => {
-    const body = { name: name.trim(), kind, priority, frequency };
+    const body = { name: name.trim(), kind, priority, execution, frequency };
     void run(
       () => (schedule ? scheduleApi.updateSchedule(schedule.id, body) : scheduleApi.createSchedule(body)),
       schedule ? "已更新排程" : "已新增排程",
@@ -251,6 +321,13 @@ function ScheduleDialog({ schedule, onClose, run }: { schedule: ScheduleItem | n
           value={priority}
           onChange={(e) => setPriority(Number(e.target.value) || 50)}
         />
+      </label>
+      <label className="admin-field">
+        執行方式
+        <select value={execution} onChange={(e) => setExecution(e.target.value as "Parallel" | "Serial")}>
+          <option value="Parallel">平行：工作可以同時執行（不超過同時執行的上限）</option>
+          <option value="Serial">依序：這個排程的工作一次執行一個</option>
+        </select>
       </label>
       <FrequencyEditor value={frequency} onChange={setFrequency} />
       <div className="dialog-actions">

@@ -10,10 +10,20 @@ from pathlib import Path
 import pytest
 
 from tmig.ir import load_ir
-from tmig.package import PackageError, member_path, read_package, write_package
+from tmig.package import (
+    DATASOURCE_KIND,
+    PackageError,
+    datasource_ir,
+    member_path,
+    package_kind,
+    parameters_used,
+    read_package,
+    write_package,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO = ROOT / "fixtures" / "superstore_demo"
+FEATURES = ROOT / "fixtures" / "superstore_features"
 
 
 @pytest.fixture
@@ -40,6 +50,35 @@ def test_round_trip(demo: Path, tmp_path: Path) -> None:
     assert (opened / "data" / "ds_orders.duckdb").read_bytes() == (
         demo / "data" / "ds_orders.duckdb"
     ).read_bytes()
+
+
+def test_datasource_package(demo: Path, tmp_path: Path) -> None:
+    """資料源套件：只有一個資料源與它用到的參數，沒有工作表；manifest 的 kind 為 datasource。"""
+    features = load_ir(FEATURES / "golden.ir.json")
+    orders = next(d for d in features.datasources if d.id == "ds_orders")
+    assert parameters_used(features, orders) == {"p_selected_region"}
+    single = datasource_ir(features, "ds_orders")
+    assert [d.id for d in single.datasources] == ["ds_orders"]
+    assert [p.id for p in single.parameters] == ["p_selected_region"]
+    assert single.worksheets == [] and single.dashboards == [] and single.actions == []
+    assert single.workbook.name == orders.caption
+    with pytest.raises(PackageError, match="nope"):
+        datasource_ir(features, "nope")
+
+    ir = load_ir(demo / "golden.ir.json")
+    target = tmp_path / "orders.tmigds"
+    write_package(target, datasource_ir(ir, "ds_orders"), demo, kind=DATASOURCE_KIND)
+    assert package_kind(target) == "datasource"
+    opened = tmp_path / "opened"
+    assert read_package(target, opened).datasources == ir.datasources
+    assert (opened / "data" / "ds_orders.duckdb").is_file()
+    with pytest.raises(PackageError, match="只能有一個資料源"):
+        write_package(tmp_path / "bad.tmigds", ir, demo, kind=DATASOURCE_KIND)
+    # 報表套件與不是平台的檔案
+    write_package(tmp_path / "demo.tmigx", ir, demo)
+    assert package_kind(tmp_path / "demo.tmigx") == "report"
+    (tmp_path / "x.tdsx").write_bytes(b"not a zip")
+    assert package_kind(tmp_path / "x.tdsx") is None
 
 
 def test_extract_data_is_required(demo: Path, tmp_path: Path) -> None:

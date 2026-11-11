@@ -16,6 +16,7 @@ import {
 import { type FavoriteItem, type RecentItem, type ViewerAccess, viewerApi } from "./viewerApi";
 import { caseState, DashboardView } from "./Dashboard";
 import {
+  CHANGED_EVENT,
   closeDocument,
   DIALOG_EVENT,
   type DesktopDialog,
@@ -27,7 +28,15 @@ import {
   toast,
 } from "./desktop";
 import { exportView } from "./exporter";
-import { DesktopTokensButton, Modal, OpenFromServerDialog, PublishDialog, ServerPanel, VersionsButton } from "./Server";
+import {
+  DesktopTokensButton,
+  Modal,
+  OpenFromServerDialog,
+  PublishDatasourceDialog,
+  PublishDialog,
+  ServerPanel,
+  VersionsButton,
+} from "./Server";
 import { SessionGate, UserBar } from "./Session";
 import { stateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
@@ -149,6 +158,8 @@ function DesktopCommands() {
   const close = () => setDialog(null);
   if (!dialog) return null;
   if (dialog.kind === "publish") return <PublishDialog workbook={dialog.workbook} onClose={close} />;
+  if (dialog.kind === "publish-datasource")
+    return <PublishDatasourceDialog workbook={dialog.workbook} datasource={dialog.datasource} onClose={close} />;
   if (dialog.kind === "open-server") return <OpenFromServerDialog onClose={close} go={navigate} />;
   return (
     <Modal title="登入伺服器" onClose={close}>
@@ -326,6 +337,9 @@ function DocumentActions({ workbook, onClosed }: { workbook: string; onClosed?: 
       <button type="button" onClick={() => openDialog({ kind: "publish", workbook })}>
         發布…
       </button>
+      <button type="button" onClick={() => openDialog({ kind: "publish-datasource", workbook })}>
+        發布資料源…
+      </button>
       {onClosed && (
         <button
           type="button"
@@ -370,6 +384,15 @@ function WorkbookPage({
   const [dialog, setDialog] = useState<"crosstab" | "data" | null>(null);
   const [customName, setCustomName] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // 報表的定義在檢視器之外改變（例如報表改用發布的資料源）：重新載入
+  useEffect(() => {
+    const changed = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === workbook) setVersion((v) => v + 1);
+    };
+    window.addEventListener(CHANGED_EVENT, changed);
+    return () => window.removeEventListener(CHANGED_EVENT, changed);
+  }, [workbook]);
 
   useEffect(() => {
     Promise.all([api.ir(workbook), api.cases(workbook)])

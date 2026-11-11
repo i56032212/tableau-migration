@@ -1,7 +1,9 @@
 import type {
   CaseInfo,
   DatasourcePreview,
+  DatasourcePublishResult,
   DatasourceSummary,
+  DesktopDatasource,
   DesktopDocument,
   DesktopOpened,
   DesktopSaved,
@@ -134,6 +136,24 @@ export const api = {
     overwrite?: boolean;
     force?: boolean;
   }) => request<PublishResult>("/api/desktop/server/publish", { method: "POST", body: JSON.stringify(body) }),
+  serverDatasources: (workbook: string) =>
+    request<{ datasources: DesktopDatasource[] }>(
+      `/api/desktop/server/datasources?workbook=${encodeURIComponent(workbook)}`,
+    ),
+  serverPublishDatasource: (body: {
+    workbook: string;
+    datasource: string;
+    name?: string;
+    project?: string;
+    comment?: string;
+    target?: string;
+    overwrite?: boolean;
+    link?: boolean;
+  }) =>
+    request<DatasourcePublishResult>("/api/desktop/server/publish-datasource", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   serverBrowse: (path: string) =>
     request<{ ok: boolean }>("/api/desktop/server/browse", { method: "POST", body: JSON.stringify({ path }) }),
   /** 伺服器：報表庫的版本、比較、回復；桌面版的登入 */

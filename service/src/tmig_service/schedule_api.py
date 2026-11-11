@@ -3,8 +3,9 @@
 站台管理員：
 
 - ``GET    /api/admin/schedules``：排程、萃取更新工作、訂閱、排程器的狀態與可以排程的報表
-- ``PATCH  /api/admin/schedule-settings``：排程的時區
-- ``POST   /api/admin/schedules``、``PATCH|DELETE /api/admin/schedules/{id}``：排程（名稱、類型、頻率、優先順序、暫停）
+- ``PATCH  /api/admin/schedule-settings``：排程的時區、同時執行的工作數上限（workers；null 為預設值）
+- ``POST   /api/admin/schedules``、``PATCH|DELETE /api/admin/schedules/{id}``：排程（名稱、類型、頻率、優先順序、
+  執行方式（Parallel／Serial）、暫停）
 - ``POST   /api/admin/extract-tasks``、``PATCH|DELETE /api/admin/extract-tasks/{id}``：萃取更新工作
 - ``POST   /api/admin/jobs/{job}/run``：立即執行（排入排程器的佇列；報表的擁有者也可以立即更新自己報表的萃取）
 - ``GET    /api/admin/runs?job=&limit=``：執行紀錄
@@ -32,6 +33,8 @@ from tmig.access.permissions import ADMIN_ROLES, decide
 from tmig.catalog import Catalog
 from tmig.planner.identity import Identity
 from tmig.schedule.model import (
+    DEFAULT_WORKERS,
+    MAX_WORKERS,
     ExtractTask,
     Frequency,
     Schedule,
@@ -56,6 +59,7 @@ class ScheduleBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=NAME_LIMIT)
     kind: Literal["Extract", "Subscription"] | None = None
     priority: int | None = Field(default=None, ge=1, le=100)
+    execution: Literal["Parallel", "Serial"] | None = None
     frequency: Frequency | None = None
     state: Literal["Active", "Suspended"] | None = None
 
@@ -63,7 +67,10 @@ class ScheduleBody(BaseModel):
 class SettingsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    timezone: str = Field(min_length=1)
+    timezone: str | None = Field(default=None, min_length=1)
+    workers: int | None = Field(
+        default=None, ge=1, le=MAX_WORKERS, description="同時執行的工作數上限；null 為預設值"
+    )
 
 
 class TaskCreate(BaseModel):
@@ -310,6 +317,9 @@ def schedule_router(
         last = schedules.last_runs()
         return {
             "timezone": data.timezone,
+            "workers": data.workers,
+            "default_workers": DEFAULT_WORKERS,
+            "max_workers": MAX_WORKERS,
             "source": data.source,
             "scheduler": schedules.status(now),
             "suspend_after": SUSPEND_AFTER,
@@ -326,16 +336,30 @@ def schedule_router(
     @router.patch("/api/admin/schedule-settings")
     def settings(body: SettingsBody, request: Request) -> dict[str, Any]:
         user = admin(request)
-        try:
-            zone_info(body.timezone)
-        except ScheduleError as exc:
-            raise _bad(str(exc)) from exc
+        fields = body.model_fields_set
+        if not fields:
+            raise _bad("沒有要修改的設定")
+        if "timezone" in fields:
+            if body.timezone is None:
+                raise _bad("排程的時區不能清除")
+            try:
+                zone_info(body.timezone)
+            except ScheduleError as exc:
+                raise _bad(str(exc)) from exc
 
         def apply(data: ScheduleFile) -> None:
-            data.timezone = body.timezone
+            if body.timezone is not None:
+                data.timezone = body.timezone
+            if "workers" in fields:
+                data.workers = body.workers  # 排程器下一次檢查時就依新的上限
 
-        data = change(user, "schedule.settings", body.timezone, apply)
-        return {"timezone": data.timezone}
+        target = body.timezone or f"workers={body.workers or '預設'}"
+        data = change(user, "schedule.settings", target, apply, {"fields": sorted(fields)})
+        return {
+            "timezone": data.timezone,
+            "workers": data.workers,
+            "default_workers": DEFAULT_WORKERS,
+        }
 
     # ------------------------------------------------------------ 排程
 
@@ -360,6 +384,7 @@ def schedule_router(
                     kind=body.kind or "Extract",
                     state=body.state or "Active",
                     priority=body.priority or 50,
+                    execution=body.execution or "Parallel",
                     frequency=body.frequency,
                 )
             )

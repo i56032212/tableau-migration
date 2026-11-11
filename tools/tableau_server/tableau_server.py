@@ -808,6 +808,10 @@ def _schedule_entry(item: dict[str, Any], schedule_id: str | None = None) -> dic
         "kind": item.get("type") or None,
         "state": str(item.get("state") or "Active"),
         "priority": _int(item.get("priority")),
+        # Serial：這個排程的工作一個接一個執行；Tableau Cloud 的排程（寫在工作裡）沒有這個屬性
+        "execution": "Serial"
+        if str(item.get("executionOrder") or "").casefold() == "serial"
+        else "Parallel",
         "frequency": None,
         "problem": None,
     }

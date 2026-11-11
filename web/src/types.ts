@@ -509,6 +509,35 @@ export interface ServerProject {
   can_publish: boolean;
 }
 
+/** 伺服器上的 Published Data Source（桌面版用到的部分） */
+export interface ServerDatasource {
+  id: string;
+  name: string;
+  content_url: string;
+  project: string;
+  project_path: string;
+  version: number;
+  extract: boolean;
+  can: Record<string, boolean>;
+}
+
+/** 桌面版：報表的資料源，與已經連到的伺服器上的資料源（看得到時） */
+export interface DesktopDatasource {
+  id: string;
+  caption: string;
+  connection: "extract" | "live" | "file";
+  /** 連到的伺服器上的資料源的網址名稱 */
+  content_url: string | null;
+  server: ServerDatasource | null;
+}
+
+export interface DatasourcePublishResult {
+  datasource: ServerDatasource;
+  /** 報表改用了發布的資料源 */
+  linked: boolean;
+  address: string;
+}
+
 export interface ServerReport {
   id: string;
   name: string;

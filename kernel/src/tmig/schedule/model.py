@@ -19,6 +19,9 @@
 - daily：每天（或 weekdays 列出的星期）在 start 執行；有間隔時與 hourly 相同
 - weekly：weekdays 列出的星期在 start 執行
 - monthly：month_days 列出的日期（LastDay 為月底），或每月第幾個星期幾（month_weekday 與 weekdays）在 start 執行
+
+同時執行（與 Tableau Server 的背景程式相同）：workers 為同時執行的工作數上限（沒有設定時 DEFAULT_WORKERS）；
+排程的 execution 為 Serial 時，這個排程的工作一個接一個執行（Tableau 的 executionOrder）。
 """
 
 from __future__ import annotations
@@ -46,6 +49,9 @@ WEEKDAYS: tuple[Weekday, ...] = (
 ORDINALS = {"First": 1, "Second": 2, "Third": 3, "Fourth": 4, "Fifth": 5, "Last": -1}
 SEARCH_DAYS = 800
 """找下次執行時間最多往後找的天數（每月第五個星期幾等少見的排程也找得到）。"""
+DEFAULT_WORKERS = 2
+"""同時執行的工作數上限的預設值（排程資料沒有設定、也沒有以 --workers 指定時）。"""
+MAX_WORKERS = 32
 
 
 class ScheduleError(ValueError):
@@ -255,6 +261,10 @@ class Schedule(BaseModel):
     kind: str | None = Field(default=None, description="Extract、Subscription、Flow 等")
     state: str = "Active"
     priority: int | None = None
+    execution: Literal["Parallel", "Serial"] = Field(
+        default="Parallel",
+        description="Parallel：工作可以同時執行；Serial：這個排程的工作一個接一個執行（Tableau 的 executionOrder）",
+    )
     frequency: Frequency | None = Field(default=None, description="無法辨識時為 None（見 problem）")
     problem: str | None = None
 
@@ -313,6 +323,12 @@ class ScheduleFile(BaseModel):
     source: str | None = None
     exported_at: str | None = None
     timezone: str | None = Field(default=None, description="Tableau Server 的時區（IANA 名稱）")
+    workers: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_WORKERS,
+        description="同時執行的工作數上限（相當於 Tableau Server 背景程式的數量）；None 時為 DEFAULT_WORKERS",
+    )
     schedules: list[Schedule] = Field(default_factory=list)
     extract_refreshes: list[ExtractTask] = Field(default_factory=list)
     subscriptions: list[Subscription] = Field(default_factory=list)
@@ -332,6 +348,8 @@ def load_schedules(path: str | Path) -> ScheduleFile:
 
 
 __all__ = [
+    "DEFAULT_WORKERS",
+    "MAX_WORKERS",
     "WEEKDAYS",
     "ExtractTask",
     "Frequency",

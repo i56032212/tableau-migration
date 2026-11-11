@@ -2,14 +2,18 @@
 // 與桌面版的登入管理。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, packageUrl } from "./api";
+import { workbookChanged } from "./desktop";
 import type {
   CheckProblem,
+  DatasourcePublishResult,
+  DesktopDatasource,
   DesktopDocument,
   DesktopToken,
   PublishFailure,
   PublishResult,
   ReportChange,
   ReportDetail,
+  ServerDatasource,
   ServerProject,
   ServerReport,
   ServerStatus,
@@ -461,6 +465,240 @@ export function PublishDialog({ workbook, onClose }: { workbook: string; onClose
   }
   return (
     <Modal title="發布到伺服器" onClose={onClose}>
+      {body}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 桌面版：發布資料源
+
+const CONNECTIONS: Record<DesktopDatasource["connection"], string> = { extract: "萃取", live: "即時連線", file: "檔案" };
+
+/** 發布報表中的一個資料源（與 Tableau Desktop 的「發布資料源」相同）；可以讓報表改用發布的資料源。 */
+export function PublishDatasourceDialog({
+  workbook,
+  datasource,
+  onClose,
+}: {
+  workbook: string;
+  datasource?: string;
+  onClose: () => void;
+}) {
+  const [status, setStatus] = useState<ServerStatus | null>(null);
+  const [items, setItems] = useState<DesktopDatasource[] | null>(null);
+  const [projects, setProjects] = useState<ServerProject[] | null>(null);
+  const [chosen, setChosen] = useState(datasource ?? "");
+  const [mode, setMode] = useState<"overwrite" | "new">("new");
+  const [project, setProject] = useState("");
+  const [name, setName] = useState("");
+  const [comment, setComment] = useState("");
+  const [link, setLink] = useState(true);
+  const [phase, setPhase] = useState<"form" | "busy" | "done" | "exists" | "error">("form");
+  const [result, setResult] = useState<DatasourcePublishResult | null>(null);
+  const [failure, setFailure] = useState<{ message: string; datasource?: ServerDatasource | null } | null>(null);
+
+  const fail = (e: Error) => {
+    setFailure({ message: e.message });
+    setPhase("error");
+  };
+  const load = useCallback(() => {
+    api
+      .serverStatus()
+      .then((next) => {
+        setStatus(next);
+        if (!next.signed_in) return;
+        Promise.all([api.serverDatasources(workbook), api.serverProjects()])
+          .then(([found, list]) => {
+            setItems(found.datasources);
+            setProjects(list);
+            setProject((current) => current || (list.find((p) => p.can_publish)?.id ?? ""));
+            setChosen((current) =>
+              found.datasources.some((d) => d.id === current) ? current : (found.datasources[0]?.id ?? ""),
+            );
+          })
+          .catch(fail);
+      })
+      .catch(fail);
+  }, [workbook]);
+  useEffect(() => load(), [load]);
+
+  const item = items?.find((d) => d.id === chosen) ?? null;
+  const writable = Boolean(item?.server?.can?.Write);
+  // 換資料源時：已經連到伺服器上的資料源（可以覆蓋）時預設覆蓋它；名稱預設為資料源的名稱
+  useEffect(() => {
+    if (!item) return;
+    setMode(item.server && item.server.can?.Write ? "overwrite" : "new");
+    setName(item.server?.name ?? item.caption);
+  }, [item?.id, items]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submit = (overwrite = false) => {
+    if (!item) return;
+    setPhase("busy");
+    const body =
+      mode === "overwrite" && item.server
+        ? { workbook, datasource: item.id, target: item.server.id, comment, link }
+        : { workbook, datasource: item.id, name: name.trim(), project, comment, link, overwrite };
+    api
+      .serverPublishDatasource(body)
+      .then((r) => {
+        setResult(r);
+        setPhase("done");
+        if (r.linked) workbookChanged(workbook);
+      })
+      .catch((e: Error) => {
+        const detail =
+          e instanceof ApiError && e.detail && typeof e.detail === "object"
+            ? (e.detail as { error?: string; message?: string; datasource?: ServerDatasource | null })
+            : null;
+        setFailure({ message: detail?.message ?? e.message, datasource: detail?.datasource });
+        setPhase(detail?.error === "exists" ? "exists" : "error");
+      });
+  };
+
+  let body: React.ReactNode;
+  if (!status) {
+    body = <p>載入中…</p>;
+  } else if (!status.signed_in) {
+    body = (
+      <>
+        <p>發布前先登入伺服器：</p>
+        <ServerPanel onChange={(next) => next.signed_in && load()} />
+      </>
+    );
+  } else if (phase === "busy") {
+    body = <p>發布中…（資料源的定義與萃取一起上傳）</p>;
+  } else if (phase === "done" && result) {
+    body = (
+      <>
+        <p className="success">
+          已發布資料源「{result.datasource.name}」第 {result.datasource.version} 版到「{result.datasource.project_path}」。
+        </p>
+        {result.linked && (
+          <p className="hint">
+            報表已改用發布的資料源：之後發布這份報表，伺服器上的報表直接使用伺服器上的資料源（萃取更新一次，每份報表都看到新的資料）。記得儲存報表。
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={() => void api.serverBrowse("/datasources")}>
+            在瀏覽器開啟
+          </button>
+          <button type="button" onClick={onClose}>
+            關閉
+          </button>
+        </div>
+      </>
+    );
+  } else if (phase === "exists" && failure) {
+    body = (
+      <>
+        <p>{failure.message}。</p>
+        <p>要覆蓋它嗎？發布後是它的新版本，用到它的報表會看到新的定義與資料；或返回改用其他名稱。</p>
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={() => submit(true)}>
+            覆蓋
+          </button>
+          <button type="button" onClick={() => setPhase("form")}>
+            返回
+          </button>
+        </div>
+      </>
+    );
+  } else if (phase === "error" && failure) {
+    body = (
+      <>
+        <p className="error">{failure.message}</p>
+        <div className="dialog-actions">
+          <button type="button" onClick={() => setPhase("form")}>
+            返回
+          </button>
+        </div>
+      </>
+    );
+  } else if (!items) {
+    body = <p>載入中…</p>;
+  } else {
+    const allowed = (projects ?? []).filter((p) => p.can_publish);
+    const ready = Boolean(item) && (mode === "overwrite" ? Boolean(item?.server) : Boolean(project && name.trim()));
+    body = (
+      <form
+        className="publish-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready) submit();
+        }}
+      >
+        <p className="hint">伺服器：{status.url}（{status.name || status.username}）</p>
+        <label>
+          資料源
+          <select value={chosen} onChange={(e) => setChosen(e.target.value)} aria-label="資料源">
+            {items.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.caption}（{CONNECTIONS[d.connection]}）
+              </option>
+            ))}
+          </select>
+        </label>
+        {item?.server && (
+          <fieldset>
+            <label>
+              <input
+                type="radio"
+                checked={mode === "overwrite"}
+                disabled={!writable}
+                onChange={() => setMode("overwrite")}
+              />
+              覆蓋「{item.server.name}」（{item.server.project_path}；目前第 {item.server.version} 版）
+              {!writable && <span className="hint">（沒有覆蓋的權限）</span>}
+            </label>
+            <label>
+              <input type="radio" checked={mode === "new"} onChange={() => setMode("new")} />
+              發布成新的資料源
+            </label>
+          </fieldset>
+        )}
+        {mode === "new" && (
+          <>
+            <label>
+              Project
+              <select value={project} onChange={(e) => setProject(e.target.value)} aria-label="Project">
+                {allowed.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.path}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {projects && allowed.length === 0 && <p className="error">你沒有可以發布的 Project。</p>}
+            <label>
+              資料源名稱
+              <input value={name} onChange={(e) => setName(e.target.value)} aria-label="資料源名稱" />
+            </label>
+          </>
+        )}
+        <label>
+          版本說明（選填）
+          <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} aria-label="版本說明" />
+        </label>
+        <label className="inline">
+          <input type="checkbox" checked={link} onChange={(e) => setLink(e.target.checked)} />
+          報表改用發布的資料源
+        </label>
+        {item?.connection === "live" && (
+          <p className="hint">即時連線：伺服器以自己的連線設定連到資料庫（帳號密碼不會上傳）。</p>
+        )}
+        <div className="dialog-actions">
+          <button type="submit" className="primary" disabled={!ready}>
+            發布
+          </button>
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </form>
+    );
+  }
+  return (
+    <Modal title="發布資料源" onClose={onClose}>
       {body}
     </Modal>
   );

@@ -9,12 +9,22 @@ interface TauriGlobal {
 
 type Go = (to: string) => void;
 
-/** 伺服器的對話框（登入、從伺服器開啟、發布）：選單與按鈕發出事件，App 顯示對話框。 */
-export type DesktopDialog = { kind: "sign-in" } | { kind: "open-server" } | { kind: "publish"; workbook: string };
+/** 伺服器的對話框（登入、從伺服器開啟、發布報表或資料源）：選單與按鈕發出事件，App 顯示對話框。 */
+export type DesktopDialog =
+  | { kind: "sign-in" }
+  | { kind: "open-server" }
+  | { kind: "publish"; workbook: string }
+  | { kind: "publish-datasource"; workbook: string; datasource?: string };
 export const DIALOG_EVENT = "tmig:desktop-dialog";
+/** 報表的定義在檢視器之外改變了（例如報表改用發布的資料源）：畫面重新載入報表。 */
+export const CHANGED_EVENT = "tmig:workbook-changed";
 
 export function openDialog(dialog: DesktopDialog): void {
   window.dispatchEvent(new CustomEvent<DesktopDialog>(DIALOG_EVENT, { detail: dialog }));
+}
+
+export function workbookChanged(workbook: string): void {
+  window.dispatchEvent(new CustomEvent<string>(CHANGED_EVENT, { detail: workbook }));
 }
 
 function shell(): TauriGlobal | undefined {
@@ -135,7 +145,7 @@ export function currentWorkbook(): string | null {
   return parts[0] === "w" && parts[1] ? parts[1] : null;
 }
 
-/** 外殼的選單（開啟、儲存、另存新檔、關閉報表；伺服器的登入、從伺服器開啟、發布、登出）呼叫的入口。 */
+/** 外殼的選單（開啟、儲存、另存新檔、關閉報表；伺服器的登入、從伺服器開啟、發布報表與資料源、登出）呼叫的入口。 */
 export function installMenuCommands(go: Go): void {
   const withWorkbook = (run: (workbook: string) => Promise<void>) => () => {
     const workbook = currentWorkbook();
@@ -151,6 +161,7 @@ export function installMenuCommands(go: Go): void {
     signIn: async () => openDialog({ kind: "sign-in" }),
     openFromServer: async () => openDialog({ kind: "open-server" }),
     publish: withWorkbook(async (wb) => openDialog({ kind: "publish", workbook: wb })),
+    publishDatasource: withWorkbook(async (wb) => openDialog({ kind: "publish-datasource", workbook: wb })),
     signOut: () =>
       api
         .serverSignOut()

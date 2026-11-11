@@ -178,6 +178,7 @@ SCHEDULES = [
         "state": "Active",
         "type": "Subscription",
         "frequency": "Weekly",
+        "executionOrder": "Serial",
     },
     {"id": "s-3", "name": "壞掉的", "state": "Suspended", "type": "Extract", "frequency": "Yearly"},
 ]
@@ -922,8 +923,10 @@ def test_schedules_export(server: str, tmp_path: Path, capsys: pytest.CaptureFix
     daily = data.schedule("s-1")
     assert daily is not None and daily.frequency is not None
     assert daily.frequency.describe() == "每天 06:00"
+    assert daily.execution == "Parallel"  # 沒有 executionOrder 時與 Tableau 的預設相同
     monday = data.schedule("s-2")
     assert monday is not None and monday.frequency is not None
+    assert monday.execution == "Serial"
     assert (
         monday.frequency.next_run(
             dt.datetime(2026, 11, 3, tzinfo=dt.UTC), data.timezone

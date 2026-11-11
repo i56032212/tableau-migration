@@ -19,6 +19,8 @@ export interface ScheduleItem {
   kind: string | null;
   state: string;
   priority: number | null;
+  /** Parallel：工作可以同時執行；Serial：這個排程的工作一個接一個 */
+  execution: "Parallel" | "Serial";
   frequency: Frequency | null;
   problem: string | null;
   description: string | null;
@@ -81,6 +83,12 @@ export interface SchedulerStatus {
   running: boolean;
   heartbeat_at: string | null;
   started_at?: string;
+  /** 排程器使用中的同時執行上限（排程器回報的） */
+  workers?: number;
+  /** 執行中的工作 */
+  active?: { job: string; trigger: string; started: string | null }[];
+  /** 等空出來的位置的工作數 */
+  waiting?: number;
   queued: { id: string; job: string; user: string; requested_at: string }[];
 }
 export interface SchedulableReport {
@@ -92,6 +100,10 @@ export interface SchedulableReport {
 }
 export interface ScheduleOverview {
   timezone: string | null;
+  /** 同時執行的工作數上限；null 為預設值（default_workers） */
+  workers: number | null;
+  default_workers: number;
+  max_workers: number;
   source: string | null;
   scheduler: SchedulerStatus;
   suspend_after: number;
@@ -114,8 +126,11 @@ const json = (method: string, body: unknown) => ({ method, body: JSON.stringify(
 
 export const scheduleApi = {
   overview: () => request<ScheduleOverview>("/api/admin/schedules"),
-  settings: (timezone: string) =>
-    request<{ timezone: string }>("/api/admin/schedule-settings", json("PATCH", { timezone })),
+  settings: (body: { timezone?: string; workers?: number | null }) =>
+    request<{ timezone: string | null; workers: number | null; default_workers: number }>(
+      "/api/admin/schedule-settings",
+      json("PATCH", body),
+    ),
   createSchedule: (body: Record<string, unknown>) => request<ScheduleItem>("/api/admin/schedules", json("POST", body)),
   updateSchedule: (id: string, body: Record<string, unknown>) =>
     request<ScheduleItem>(`/api/admin/schedules/${encodeURIComponent(id)}`, json("PATCH", body)),

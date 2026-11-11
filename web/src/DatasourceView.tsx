@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { isDesktop, openDialog } from "./desktop";
 import type { DatasourceConnection, DatasourceField, DatasourcePreview, DatasourceSummary, Scalar } from "./types";
 
 /** 資料格每次顯示的列數（Tableau 的資料源分頁預設 1,000 列）。 */
@@ -61,6 +62,15 @@ export function DatasourceView({ workbook, datasource }: { workbook: string; dat
           {{ extract: "萃取", file: "檔案", live: "即時" }[datasource.connection.kind]}
         </span>
         {datasource.published && <span className="ds-badge published">已發布的資料源</span>}
+        {isDesktop() && (
+          <button
+            type="button"
+            className="ds-publish"
+            onClick={() => openDialog({ kind: "publish-datasource", workbook, datasource: datasource.id })}
+          >
+            發布到伺服器…
+          </button>
+        )}
       </header>
       <div className="ds-top">
         <section className="ds-side" aria-label="連線">

@@ -2,7 +2,9 @@
 
 - ``GET    /api/datasources``：看得到的資料源（Read），與用到它的報表
 - ``POST   /api/datasources/publish?name=&project=&comment=``：發布 .tdsx（要 Project 的發布權限；
-  同一個網址名稱已經有時為新版本，要那個資料源的「覆蓋」）
+  同一個網址名稱已經有時為新版本，要那個資料源的「覆蓋」）。桌面版的資料源套件（.tmigds）：
+  ``datasource=<id>`` 覆蓋那個資料源；沒有時依 Project 與名稱，已經有同名的資料源時回應 409
+  （``{"error": "exists"}``），``overwrite=true`` 時覆蓋它
 - ``GET    /api/datasources/{id}``：連線、欄位、每一版
 - ``PATCH  /api/datasources/{id}``：改名、移到其他 Project、換擁有者（站台管理員）；權限（管理員、擁有者、
   Project Leader、有「設定權限」的人）
@@ -28,6 +30,7 @@ from tmig_service.datasources import (
     DatasourceError,
     DatasourceRecord,
     DatasourceStore,
+    upload_format,
 )
 from tmig_service.site import SiteStore
 
@@ -97,7 +100,10 @@ def datasource_router(
     def project_path(project_id: str) -> str:
         current = permissions()
         if current is None:
-            return project_id
+            from tmig_service.access import DEFAULT_PROJECT
+
+            # 沒有權限檔時只有一個 Project（與 /api/projects 相同的名稱）
+            return DEFAULT_PROJECT.name if project_id == DEFAULT_PROJECT.id else project_id
         names: list[str] = []
         for project in reversed(current.ancestors(project_id)):
             names.append(project.name)
@@ -151,14 +157,21 @@ def datasource_router(
 
     @router.post("/api/datasources/publish")
     async def publish(
-        request: Request, name: str, project: str = "default", comment: str = ""
+        request: Request,
+        name: str = "",
+        project: str = "default",
+        comment: str = "",
+        datasource: str | None = None,
+        overwrite: bool = False,
     ) -> dict[str, Any]:
         user = user_of(request)
-        allowed, reason = can_publish(user, project)
-        if not allowed:
-            raise HTTPException(403, reason or "沒有發布到這個 Project 的權限")
+        if datasource is None:
+            # 上傳之前先確認能發布到這個 Project（覆蓋時另外確認資料源所在的 Project）
+            allowed, reason = can_publish(user, project)
+            if not allowed:
+                raise HTTPException(403, reason or "沒有發布到這個 Project 的權限")
         upload_dir.mkdir(parents=True, exist_ok=True)
-        target = upload_dir / f"pds-{secrets.token_hex(8)}.tdsx"
+        target = upload_dir / f"pds-{secrets.token_hex(8)}.upload"
         size = 0
         try:
             with target.open("wb") as sink:
@@ -168,29 +181,55 @@ def datasource_router(
                         raise HTTPException(413, "資料源太大")
                     sink.write(chunk)
             if size == 0:
-                raise HTTPException(422, "沒有收到 .tdsx")
+                raise HTTPException(422, "沒有收到資料源的檔案")
             from tmig_service.datasources import _content_url, slugify
 
             try:
-                content_url = _content_url(target) or slugify(name)
+                kind = upload_format(target)
+                content_url: str | None = None
+                if kind == "tdsx":
+                    content_url = _content_url(target) or slugify(name)
             except DatasourceError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            existing = store.find(content_url)
+            if kind == "tdsx":
+                existing = store.find(content_url or "")
+            elif datasource is not None:
+                # 桌面版覆蓋伺服器上的某個資料源
+                existing = find(datasource, user)
+                content_url = existing.content_url
+            else:
+                existing = store.find_named(project, name) if name.strip() else None
+                if existing is not None and not overwrite:
+                    visible = may(permissions(), user, existing, "Read")
+                    raise HTTPException(
+                        409,
+                        {
+                            "error": "exists",
+                            "message": f"「{project_path(project)}」中已經有資料源「{existing.name}」",
+                            "datasource": record_json(existing, user) if visible else None,
+                        },
+                    )
+                content_url = existing.content_url if existing is not None else None
+            if existing is None and not name.strip():
+                raise HTTPException(422, "請輸入資料源的名稱")
+            allowed, reason = can_publish(
+                user, existing.project if existing is not None else project
+            )
+            if not allowed:
+                raise HTTPException(403, reason or "沒有發布到這個 Project 的權限")
             if existing is not None:
                 # 覆蓋：要資料源所在 Project 的發布權限與資料源的「覆蓋」（與 Tableau 相同）
-                allowed, reason = can_publish(user, existing.project)
-                if not allowed:
-                    raise HTTPException(403, reason or "沒有發布到這個 Project 的權限")
                 check(existing, user, "Write")
             owner = user.username if user is not None else "（沒有登入）"
             try:
                 record = store.publish(
                     target,
-                    name=existing.name if existing is not None else name,
+                    name=existing.name if existing is not None else name.strip(),
                     project=existing.project if existing is not None else project,
                     owner=existing.owner if existing is not None else owner,
                     publisher=owner,
                     comment=comment,
+                    content_url=content_url if kind == "tmigds" else None,
                 )
             except DatasourceError as exc:
                 raise HTTPException(422, str(exc)) from exc
@@ -254,7 +293,9 @@ def datasource_router(
         if not path.is_file():
             raise HTTPException(404, "找不到這一版")
         return FileResponse(
-            path, media_type="application/octet-stream", filename=f"{record.content_url}.tdsx"
+            path,
+            media_type="application/octet-stream",
+            filename=f"{record.content_url}{path.suffix}",
         )
 
     return router

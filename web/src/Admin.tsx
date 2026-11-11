@@ -172,7 +172,7 @@ const ACTION_NAMES: Record<string, string> = {
   "report.delete": "刪除報表",
   "workbook.update": "修改 workbook 的權限",
   "schedule.import": "匯入排程",
-  "schedule.settings": "設定排程的時區",
+  "schedule.settings": "修改排程的設定（時區、同時執行的上限）",
   "schedule.create": "新增排程",
   "schedule.update": "修改排程",
   "schedule.delete": "刪除排程",

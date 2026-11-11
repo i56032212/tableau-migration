@@ -41,7 +41,8 @@ export const datasourceApi = {
   remove: (id: string) => request<void>(path(id), { method: "DELETE" }),
   downloadUrl: (id: string, version: number) => `${path(id)}/versions/${version}/download`,
   async publish(file: File, name: string, project: string, comment: string): Promise<DatasourceItem> {
-    const query = new URLSearchParams({ name, project, comment });
+    // 網頁上傳：同名（或同一個網址名稱）的資料源直接覆蓋成新的版本（與 Tableau Server 的網頁上傳相同）
+    const query = new URLSearchParams({ name, project, comment, overwrite: "true" });
     const response = await fetch(`/api/datasources/publish?${query}`, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
@@ -81,15 +82,15 @@ export function PublishDatasourceDialog({
     <Modal title="發布資料源" onClose={onClose}>
       <div className="publish-form">
         <label>
-          資料源檔案（.tdsx 或 .tds）
+          資料源檔案（.tdsx、.tds，或桌面版的 .tmigds）
           <input
             type="file"
             aria-label="資料源檔案"
-            accept=".tdsx,.tds"
+            accept=".tdsx,.tds,.tmigds"
             onChange={(e) => {
               const chosen = e.target.files?.[0] ?? null;
               setFile(chosen);
-              if (chosen && !name) setName(chosen.name.replace(/\.tdsx?$/i, ""));
+              if (chosen && !name) setName(chosen.name.replace(/\.(tdsx?|tmigds)$/i, ""));
             }}
           />
         </label>

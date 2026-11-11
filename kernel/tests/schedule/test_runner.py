@@ -320,7 +320,8 @@ def test_extract_job_refreshes_data(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     ]
     assert main(["schedule", "list", str(path), *common, "--now", "2026-11-02T05:00:00+08:00"]) == 0
     assert main(["schedule", "tick", str(path), *common, "--now", "2026-11-02T05:00:00+08:00"]) == 0
-    assert main(["schedule", "tick", str(path), *common, "--now", "2026-11-02T06:00:00+08:00"]) == 0
+    at_six = ["--now", "2026-11-02T06:00:00+08:00", "--workers", "3"]
+    assert main(["schedule", "tick", str(path), *common, *at_six]) == 0
     assert main(["schedule", "run", str(path), *common, "--job", "extract:t"]) == 0
     assert main(["schedule", "run", str(path), *common, "--job", "extract:none"]) == 1
     assert len(last_runs(tmp_path / "cli-state")) == 1

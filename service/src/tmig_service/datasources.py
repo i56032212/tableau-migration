@@ -2,11 +2,13 @@
 
     <報表庫>/datasources/<id>/
     ├── datasource.json        名稱、網址名稱、Project、擁有者、權限、每一版的紀錄
-    ├── versions/<n>.tdsx      每一版的 .tdsx（發布後不再改動）
+    ├── versions/<n>.tdsx      每一版上傳的檔案（.tdsx，或桌面版的資料源套件 .tmigds；發布後不再改動）
     └── current/<n>/           目前的版本：golden.ir.json（只有這個資料源的報表）與 data/<資料源>.duckdb
 
 - 發布：上傳 .tdsx（或 .tds）→ 以 N8 的方式（tmig.parser.published）併入一份只有這個資料源的報表 →
   解析、匯入萃取 → 存成新的版本；同一個網址名稱再發布為新版本（覆蓋）
+- 桌面版發布：資料源套件（tmig.package 的 datasource_ir：資料源的定義、用到的參數與萃取）→ 存成新的版本；
+  網址名稱由伺服器配給（新的資料源由名稱產生、不與現有的重複；覆蓋時沿用）
 - 報表連到這個資料源（IR 的 Datasource.published.content_url 相同、萃取取自 .tdsx）時，查詢服務改用這裡的萃取：
   萃取更新一次，每份用到它的報表都看到新的資料
 - 權限：Tableau 的資料源能力：Read（檢視）、Connect（連線）、ExportXml（下載）、Write（覆蓋）、Delete（刪除）、
@@ -25,12 +27,16 @@ import tempfile
 import threading
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tmig.access.permissions import Grantee, Rule
-from tmig.ir import IR, Datasource, ExtractConnection, save_ir
+from tmig.ir import IR, Datasource, ExtractConnection, has_local_data, save_ir
+from tmig.ir.models import PublishedSource
+from tmig.package import DATASOURCE_KIND, PackageError, package_kind, read_package
+
+Format = Literal["tdsx", "tmigds"]
 
 RECORD = "datasource.json"
 CONTENT_URL = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,254}")
@@ -69,6 +75,9 @@ class DatasourceVersion(BaseModel):
     comment: str = ""
     size: int
     sha256: str
+    format: Format = Field(
+        default="tdsx", description="上傳的檔案：.tdsx（或 .tds），或桌面版的資料源套件"
+    )
 
 
 class DatasourceRecord(BaseModel):
@@ -178,6 +187,50 @@ def read_datasource(tdsx: Path, caption: str, directory: Path) -> tuple[IR, str]
     return ir, content_url
 
 
+def upload_format(upload: Path) -> Format:
+    """上傳的檔案：桌面版的資料源套件，或 Tableau 的 .tdsx／.tds（報表套件不是資料源）。"""
+    kind = package_kind(upload)
+    if kind is None:
+        return "tdsx"
+    if kind != DATASOURCE_KIND:
+        raise DatasourceError("這是報表套件，不是資料源；報表在報表的頁面發布")
+    return "tmigds"
+
+
+def read_package_datasource(upload: Path, directory: Path) -> IR:
+    """桌面版的資料源套件 → directory 中的 golden.ir.json 與 data/（只有一個資料源，萃取的資料要在套件中）。"""
+    try:
+        ir = read_package(upload, directory)
+    except PackageError as exc:
+        raise DatasourceError(str(exc)) from exc
+    if len(ir.datasources) != 1 or ir.worksheets or ir.dashboards or ir.stories:
+        raise DatasourceError("資料源套件只能有一個資料源，不能有工作表")
+    datasource = ir.datasources[0]
+    if (
+        has_local_data(datasource.connection)
+        and not (directory / "data" / f"{datasource.id}.duckdb").is_file()
+    ):
+        raise DatasourceError(f"資料源套件中沒有「{datasource.caption}」的萃取")
+    return ir
+
+
+def content_url_base(name: str, fallback: str) -> str:
+    """新資料源的網址名稱：取名稱中的英數字（與 Tableau 相同）；沒有時用資料源的 id。"""
+    for text in (name, fallback):
+        cleaned = re.sub(r"[^A-Za-z0-9_-]+", "", text.replace(" ", ""))[:64]
+        if cleaned and CONTENT_URL.fullmatch(cleaned):
+            return cleaned
+    return "datasource"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def connection_kind(datasource: Datasource) -> str:
     connection = datasource.connection
     if isinstance(connection, ExtractConnection):
@@ -227,11 +280,27 @@ class DatasourceStore:
         key = content_url.casefold()
         return next((r for r in self.records() if r.content_url.casefold() == key), None)
 
+    def find_named(self, project: str, name: str) -> DatasourceRecord | None:
+        """同一個 Project 中同名的資料源（與 Tableau 相同，名稱在 Project 中不重複）。"""
+        key = name.strip().casefold()
+        return next(
+            (r for r in self.records() if r.project == project and r.name.casefold() == key), None
+        )
+
+    def _unique_content_url(self, base: str) -> str:
+        candidate, n = base, 1
+        while self.find(candidate) is not None:
+            n += 1
+            candidate = f"{base}_{n}"
+        return candidate
+
     def directory(self, record: DatasourceRecord) -> Path:
         return self.root / record.id / "current" / str(record.latest.version)
 
     def package(self, record: DatasourceRecord, version: int) -> Path:
-        return self.root / record.id / "versions" / f"{version}.tdsx"
+        found = next((v for v in record.versions if v.version == version), None)
+        suffix = found.format if found is not None else "tdsx"
+        return self.root / record.id / "versions" / f"{version}.{suffix}"
 
     def data_path(self, record: DatasourceRecord) -> Path:
         return self.directory(record) / "data" / f"{record.datasource}.duckdb"
@@ -251,21 +320,40 @@ class DatasourceStore:
         publisher: str,
         comment: str = "",
         rules: list[Rule] | None = None,
+        content_url: str | None = None,
     ) -> DatasourceRecord:
-        """發布（同一個網址名稱已經有時為新版本）。失敗時不留下任何檔案。"""
+        """發布（同一個網址名稱已經有時為新版本）。失敗時不留下任何檔案。
+
+        .tdsx／.tds 的網址名稱取自檔案；桌面版的資料源套件：content_url 為要覆蓋的資料源，
+        None 時為新的資料源（網址名稱由名稱產生、不與現有的重複）。"""
         staging = self.root.parent / "staging" / f"pds-{secrets.token_hex(6)}"
         try:
-            ir, content_url = read_datasource(upload, name, staging)
-            digest = hashlib.sha256(upload.read_bytes()).hexdigest()
-            datasource = ir.datasources[0]
+            kind = upload_format(upload)
+            if kind == "tmigds":
+                ir = read_package_datasource(upload, staging)
+                url = content_url
+            else:
+                ir, url = read_datasource(upload, name, staging)
+            digest = _sha256(upload)
             with self._lock:
+                if url is None:
+                    url = self._unique_content_url(content_url_base(name, ir.datasources[0].id))
+                content_url = url
                 current = self.find(content_url)
+                number = (current.latest.version if current is not None else 0) + 1
+                if kind == "tmigds":
+                    # 資料源記下伺服器上的網址名稱（報表連到它時以此對應）
+                    linked = ir.datasources[0].model_copy(
+                        update={"published": PublishedSource(content_url=url, revision=str(number))}
+                    )
+                    ir = ir.model_copy(update={"datasources": [linked]})
+                    save_ir(ir, staging / "golden.ir.json")
+                datasource = ir.datasources[0]
                 record_id = current.id if current is not None else self._new_id(content_url)
                 folder = self.root / record_id
-                number = (current.latest.version if current is not None else 0) + 1
                 (folder / "versions").mkdir(parents=True, exist_ok=True)
                 (folder / "current").mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(upload, folder / "versions" / f"{number}.tdsx")
+                shutil.copyfile(upload, folder / "versions" / f"{number}.{kind}")
                 target = folder / "current" / str(number)
                 if target.exists():
                     shutil.rmtree(target)
@@ -277,6 +365,7 @@ class DatasourceStore:
                     comment=comment,
                     size=upload.stat().st_size,
                     sha256=digest,
+                    format=kind,
                 )
                 extract = isinstance(datasource.connection, ExtractConnection)
                 if current is None:
@@ -374,6 +463,9 @@ __all__ = [
     "DatasourceError",
     "DatasourceRecord",
     "DatasourceStore",
+    "content_url_base",
     "read_datasource",
+    "read_package_datasource",
+    "upload_format",
     "uses_published",
 ]

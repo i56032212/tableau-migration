@@ -165,10 +165,18 @@ def test_admin_manages_schedules_and_tasks(tmp_path: Path, package: Path) -> Non
     )
     assert daily.status_code == 201, daily.text
     assert daily.json()["description"] == "每天 06:00" and daily.json()["next_run"]
+    assert daily.json()["execution"] == "Parallel"
     weekly = amy.post(
         "/api/admin/schedules",
-        json={"name": "每週一", "kind": "Subscription", "frequency": MONDAY, "priority": 20},
+        json={
+            "name": "每週一",
+            "kind": "Subscription",
+            "frequency": MONDAY,
+            "priority": 20,
+            "execution": "Serial",
+        },
     ).json()
+    assert weekly["execution"] == "Serial"
     assert (
         amy.post("/api/admin/schedules", json={"name": "每天 6 點", "frequency": DAILY}).status_code
         == 422
@@ -192,7 +200,27 @@ def test_admin_manages_schedules_and_tasks(tmp_path: Path, package: Path) -> Non
     assert body["problem"] is None and body["next_run"]
     overview = amy.get("/api/admin/schedules").json()
     assert overview["timezone"] == "Asia/Taipei"
+    assert (overview["workers"], overview["default_workers"]) == (None, 2)
     assert overview["scheduler"]["running"] is False
+
+    # 同時執行的工作數上限：排程器每次檢查時重讀；null 改回預設值
+    settings = amy.patch("/api/admin/schedule-settings", json={"workers": 4})
+    assert settings.status_code == 200 and settings.json()["workers"] == 4
+    assert ScheduleStore(tmp_path / "store").data().workers == 4
+    assert ScheduleStore(tmp_path / "store").data().timezone == "Asia/Taipei"  # 時區不變
+    for bad_settings in ({"workers": 0}, {"workers": 33}, {}, {"timezone": None}):
+        assert amy.patch("/api/admin/schedule-settings", json=bad_settings).status_code == 422, (
+            bad_settings
+        )
+    assert (
+        login(app, "bob").patch("/api/admin/schedule-settings", json={"workers": 8}).status_code
+        == 403
+    )
+    assert (
+        amy.patch("/api/admin/schedule-settings", json={"workers": None}).json()["workers"] is None
+    )
+    serial = amy.patch(f"/api/admin/schedules/{weekly['id']}", json={"execution": "Parallel"})
+    assert serial.json()["execution"] == "Parallel"
     assert [s["tasks"] for s in overview["schedules"]] == [1, 0]
     assert any(r["id"] == report and r["datasources"] for r in overview["reports"])
 
@@ -416,12 +444,13 @@ def test_scheduler_reads_store_queue_and_suspends(tmp_path: Path, package: Path)
 def test_scheduler_heartbeat(tmp_path: Path) -> None:
     store = ScheduleStore(tmp_path)
     clock = Clock(dt.datetime(2026, 11, 2, 5, 0, tzinfo=dt.UTC))
-    scheduler = Scheduler([], "UTC", {}, store.state_dir, clock)
+    scheduler = Scheduler([], "UTC", {}, store.state_dir, clock, workers=3)
     sleeps: list[float] = []
     scheduler.serve(sleep=sleeps.append, stop=lambda: len(sleeps) >= 1, poll=5)
     assert sleeps == [5]
     status = store.status(clock.now + dt.timedelta(seconds=30))
     assert status["running"] is True and status["queued"] == []
+    assert (status["workers"], status["active"], status["waiting"]) == (3, [], 0)
     assert store.status(clock.now + dt.timedelta(hours=1))["running"] is False
 
 
@@ -457,3 +486,5 @@ def test_cli_store_mode(tmp_path: Path, package: Path, capsys: pytest.CaptureFix
     assert "extract:t1" in out and "Superstore／ds_orders" in out and report
     assert main(["schedule", "list", str(path), "--store", str(store)]) == 1
     assert "二選一" in capsys.readouterr().err
+    assert main(["schedule", "tick", "--store", str(store), "--workers", "0"]) == 1
+    assert "--workers 必須是 1 到 32" in capsys.readouterr().err

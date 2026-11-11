@@ -150,6 +150,26 @@ def test_publish_from_desktop_and_versions_on_server(
         expect(dialog).to_contain_text("第 2 版", timeout=60_000)
         dialog.locator(".dialog-actions").get_by_role("button", name="關閉").click()
 
+        # 發布資料源：在資料源分頁發布，報表改用發布的資料源
+        desktop.goto(f"{engine}/w/demo/ds/ds_orders")
+        expect(desktop.locator(".ds-badge.published")).to_have_count(0)
+        desktop.locator(".ds-header").get_by_role("button", name="發布到伺服器…").click()
+        sources = desktop.get_by_role("dialog", name="發布資料源")
+        expect(sources.get_by_label("資料源", exact=True)).to_have_value("ds_orders")
+        expect(sources.get_by_label("報表改用發布的資料源")).to_be_checked()
+        sources.get_by_label("資料源名稱").fill("訂單")
+        sources.get_by_role("button", name="發布", exact=True).click()
+        expect(sources).to_contain_text("已發布資料源「訂單」第 1 版", timeout=60_000)
+        expect(sources).to_contain_text("報表已改用發布的資料源")
+        sources.locator(".dialog-actions").get_by_role("button", name="關閉").click()
+        expect(desktop.locator(".ds-badge.published")).to_be_visible()  # 畫面重新載入報表
+        # 再發布：預設覆蓋同一個資料源
+        desktop.locator(".toolbar").get_by_role("button", name="發布資料源…").click()
+        expect(sources.get_by_role("radio", name=re.compile("覆蓋「訂單」"))).to_be_checked()
+        sources.get_by_role("button", name="發布", exact=True).click()
+        expect(sources).to_contain_text("已發布資料源「訂單」第 2 版", timeout=60_000)
+        sources.locator(".dialog-actions").get_by_role("button", name="關閉").click()
+
         # 伺服器的檢視器：版本清單、比較、回復舊版
         viewer = system.new_page()
         viewer.goto(f"{server}/w/report")
@@ -163,6 +183,10 @@ def test_publish_from_desktop_and_versions_on_server(
         versions.get_by_role("button", name="回復", exact=True).click()
         versions.get_by_role("button", name="確定回復第 1 版").click()
         expect(viewer.get_by_role("button", name="版本（第 3 版）")).to_be_visible()
+
+        # 伺服器的資料源頁面：桌面版發布的資料源
+        viewer.goto(f"{server}/datasources")
+        expect(viewer.locator("body")).to_contain_text("訂單")
 
         # 伺服器的檢視器：桌面版的登入，可以撤銷
         viewer.goto(f"{server}/")

@@ -188,6 +188,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .datasource { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; }
 .ds-header { display: flex; align-items: center; gap: 10px; }
 .ds-header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+.ds-header .ds-publish { margin-left: auto; font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
 .ds-badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #e5edf6; color: var(--accent); }
 .ds-badge.live { background: #e7f5ec; color: #15803d; }
 .ds-badge.file { background: #fef3c7; color: #a16207; }

@@ -10,6 +10,10 @@
 - ``POST /api/desktop/server/publish``：先在本機檢查，存成報表套件上傳；伺服器的回應（同名、衝突、
   檢查沒有通過）原樣轉給檢視器。發布後記下伺服器上的報表與版本：下一次發布預設覆蓋同一份，
   並以這一版為基準判斷伺服器上是否已有別人發布的新版本
+- ``GET  /api/desktop/server/datasources?workbook=<id>``：報表的資料源，與已經連到的伺服器上的資料源
+- ``POST /api/desktop/server/publish-datasource``：發布報表中的一個資料源（與 Tableau Desktop 的「發布資料源」
+  相同）：存成資料源套件（定義、用到的參數與萃取）上傳；``link`` 時報表改用發布的資料源（之後發布這份報表，
+  伺服器上的報表直接使用伺服器上的資料源，萃取更新一次每份報表都看到新的資料）
 
 設定檔（desktop-server.json）只記伺服器網址與帳號，權杖存在認證管理員（見 tmig_service.credentials）。
 連線用作業系統的憑證存放區（truststore）：公司內部 CA 簽發的伺服器憑證不必另外設定。
@@ -40,7 +44,15 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict
 
-from tmig.package import PackageError, read_package, write_package
+from tmig.ir import IR, ExtractConnection
+from tmig.ir.models import PublishedSource
+from tmig.package import (
+    DATASOURCE_KIND,
+    PackageError,
+    datasource_ir,
+    read_package,
+    write_package,
+)
 from tmig.verify.run import ensure_data
 from tmig_service.app import Workspace
 from tmig_service.checks import check_report, errors
@@ -51,6 +63,7 @@ CALLBACK_PATH = "/desktop-auth/callback"
 SETTINGS_FILE = "desktop-server.json"
 SIGN_IN_SECONDS = 600
 MEDIA_TYPE = "application/vnd.tmig.tmigx"
+DATASOURCE_MEDIA_TYPE = "application/vnd.tmig.tmigds"
 
 
 LOOPBACK_HOSTS = frozenset({"localhost", "::1"})
@@ -264,6 +277,48 @@ class PublishRequest(BaseModel):
     overwrite: bool = False
     force: bool = False
     """伺服器上已有比基準更新的版本時仍要覆蓋。"""
+
+
+class PublishDatasourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workbook: str
+    datasource: str
+    """報表中資料源的 id。"""
+    name: str = ""
+    project: str | None = None
+    comment: str = ""
+    target: str | None = None
+    """覆蓋伺服器上的哪一個資料源（id）；省略時依 Project 與名稱。"""
+    overwrite: bool = False
+    """同一個 Project 中已經有同名的資料源時覆蓋它。"""
+    link: bool = True
+    """報表改用發布的資料源（與 Tableau 的「更新活頁簿以使用發布的資料來源」相同）。"""
+
+
+def link_datasource(ir: IR, datasource_id: str, content_url: str, version: int) -> IR:
+    """報表的資料源改連到伺服器上的資料源：記下網址名稱（與併入 .tdsx 的報表相同，萃取取自伺服器）。
+    資料在報表中仍有一份：桌面版照常查詢，伺服器上改用資料源的萃取。"""
+    changed = []
+    for datasource in ir.datasources:
+        if datasource.id == datasource_id:
+            connection = datasource.connection
+            if isinstance(connection, ExtractConnection) and not connection.hyper_file.startswith(
+                "Data/Published/"
+            ):
+                connection = connection.model_copy(
+                    update={"hyper_file": f"Data/Published/{content_url}/{datasource.id}.hyper"}
+                )
+            datasource = datasource.model_copy(
+                update={
+                    "published": PublishedSource(content_url=content_url, revision=str(version)),
+                    "connection": connection,
+                }
+            )
+        changed.append(datasource)
+    return IR.model_validate(
+        {**ir.model_dump(mode="json"), "datasources": [d.model_dump(mode="json") for d in changed]}
+    )
 
 
 def remote_router(
@@ -504,6 +559,84 @@ def remote_router(
             "address": f"{settings.url}{report['url']}",
         }
 
+    # ------------------------------------------------------------ 資料源
+
+    def server_datasources() -> list[dict[str, Any]]:
+        found = relay(remote.call("GET", "/api/datasources"))
+        return found if isinstance(found, list) else []
+
+    @router.get("/api/desktop/server/datasources")
+    def datasources(workbook: str, request: Request) -> dict[str, Any]:
+        """報表的資料源；已經連到伺服器上的資料源（網址名稱相同、看得到）時一併回傳，可以覆蓋它。"""
+        document = documents.get(workbook)
+        loaded = workspace(request).get(document.id)
+        remote.signed_in()
+        published = {d["content_url"].casefold(): d for d in server_datasources()}
+        items = []
+        for datasource in loaded.ir.datasources:
+            url = datasource.published.content_url if datasource.published else None
+            items.append(
+                {
+                    "id": datasource.id,
+                    "caption": datasource.caption,
+                    "connection": datasource.connection.kind,
+                    "content_url": url,
+                    "server": published.get(url.casefold()) if url else None,
+                }
+            )
+        return {"datasources": items}
+
+    @router.post("/api/desktop/server/publish-datasource")
+    def publish_datasource(body: PublishDatasourceRequest, request: Request) -> dict[str, Any]:
+        document = documents.get(body.workbook)
+        settings, _ = remote.signed_in()
+        loaded = workspace(request).get(document.id)
+        found = next((d for d in loaded.ir.datasources if d.id == body.datasource), None)
+        if found is None:
+            raise HTTPException(404, f"報表中沒有資料源「{body.datasource}」")
+        try:
+            ensure_data(loaded.directory, loaded.ir)
+            single = datasource_ir(loaded.ir, found.id)
+        except (PackageError, FileNotFoundError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        params: dict[str, Any] = {
+            "name": body.name.strip() or found.caption,
+            "comment": body.comment,
+            "overwrite": "true" if body.overwrite else "false",
+        }
+        if body.target:
+            params["datasource"] = body.target
+        elif body.project:
+            params["project"] = body.project
+        package = documents.root / ".publish" / f"{secrets.token_hex(6)}.tmigds"
+        package.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            write_package(package, single, loaded.directory, kind=DATASOURCE_KIND)
+            with package.open("rb") as content:
+                response = remote.call(
+                    "POST",
+                    "/api/datasources/publish",
+                    params=params,
+                    content=content,
+                    headers={"Content-Type": DATASOURCE_MEDIA_TYPE},
+                )
+        except PackageError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        finally:
+            package.unlink(missing_ok=True)
+        record = relay(response)
+        linked = False
+        if body.link:
+            updated = link_datasource(loaded.ir, found.id, record["content_url"], record["version"])
+            workspace(request).save_ir(document.id, updated)
+            documents.mark_modified(document.id)
+            linked = True
+        return {
+            "datasource": record,
+            "linked": linked,
+            "address": f"{settings.url}/datasources",
+        }
+
     return router
 
 
@@ -512,6 +645,7 @@ __all__ = [
     "Remote",
     "ServerSettings",
     "bypass_proxy",
+    "link_datasource",
     "normalize_url",
     "remote_router",
 ]

@@ -314,6 +314,43 @@ def test_scheduler_runs_subscriptions(
     assert len(SmtpHandler.messages) == 1
 
 
+def test_scheduler_sends_subscriptions_at_the_same_time(
+    fixtures: Path, handler: SubscriptionHandler, tmp_path: Path
+) -> None:
+    """同時執行的訂閱：每個在自己的 Chromium 中產生（Playwright 的同步 API 不能跨執行緒），結果互不影響。"""
+    planned = list(jobs(fixtures, subscription("a", "alice"), subscription("d", "dave")).values())
+    renderer = handler.renderer
+    original = renderer._render
+    barrier = threading.Barrier(2, timeout=60)
+    threads: set[int] = set()
+
+    def together(*args: Any) -> Any:
+        threads.add(threading.get_ident())
+        barrier.wait()  # 兩個訂閱同時在產生檔案
+        return original(*args)
+
+    renderer._render = together  # type: ignore[method-assign]
+    tpe = ZoneInfo("Asia/Taipei")
+    now = [dt.datetime(2026, 11, 1, 12, 0, tzinfo=tpe)]
+    scheduler = Scheduler(
+        planned, "Asia/Taipei", {"subscription": handler}, tmp_path, lambda: now[0], workers=2
+    )
+    assert scheduler.tick() == []
+    now[0] = dt.datetime(2026, 11, 2, 8, 0, tzinfo=tpe)
+    records = scheduler.tick()
+    assert [r.status for r in records] == ["ok", "ok"], [r.detail for r in records]
+    assert renderer.browsers == 2 and len(threads) == 2
+    sent = {to[0]: raw for to, raw in SmtpHandler.messages}
+    assert sorted(sent) == ["alice@example.com", "dave@example.com"]
+    (alice,) = parts(sent["alice@example.com"])[1]
+    (dave,) = parts(sent["dave@example.com"])[1]
+    assert alice != dave  # 各自的列層級權限
+    # 之後的訂閱沿用已經啟動的 Chromium
+    renderer._render = original  # type: ignore[method-assign]
+    assert handler(planned[0]).startswith("已寄給")
+    assert renderer.browsers == 2
+
+
 def test_load_mail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = tmp_path / "mail.toml"
     config.write_text(

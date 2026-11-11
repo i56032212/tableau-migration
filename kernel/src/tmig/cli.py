@@ -646,13 +646,18 @@ def _scheduler(args: argparse.Namespace):
     """（工作, 排程器, 結束時的清理）。"""
     import datetime as dt
 
+    from tmig.schedule.model import DEFAULT_WORKERS, MAX_WORKERS
     from tmig.schedule.runner import Handler, JobKind, Scheduler, extract_handler, utc_now
 
     store_mode = getattr(args, "store", None) is not None
     timezone: str = "UTC"
     jobs: list[Any] = []
+    limit: int | None = getattr(args, "workers", None)
+    if limit is not None and not 1 <= limit <= MAX_WORKERS:
+        raise ValueError(f"--workers 必須是 1 到 {MAX_WORKERS}")
     if not store_mode:
-        _, timezone, jobs = _schedule_inputs(args)
+        file_schedules, timezone, jobs = _schedule_inputs(args)
+        limit = limit or file_schedules.workers
     clock = utc_now
     if getattr(args, "now", None):
         fixed = dt.datetime.fromisoformat(args.now)
@@ -687,6 +692,8 @@ def _scheduler(args: argparse.Namespace):
             clock=clock,
             threshold=args.suspend_after,
         )
+        # 同時執行的上限：--workers，或站台管理「排程」中的設定（每次檢查時重讀）
+        override = limit
         scheduler = Scheduler(
             planned,
             found or "UTC",
@@ -697,10 +704,14 @@ def _scheduler(args: argparse.Namespace):
             on_result=policy,
             after_tick=alerts,
             extras={"alert": alerts.run_request},
+            workers=lambda: override or store_schedules.data().workers,
         )
         return planned, scheduler, cleanup
     state_dir = args.state_dir or args.schedules.parent / "schedule-state"
-    return jobs, Scheduler(jobs, timezone, handlers, state_dir, clock), cleanup
+    scheduler = Scheduler(
+        jobs, timezone, handlers, state_dir, clock, workers=limit or DEFAULT_WORKERS
+    )
+    return jobs, scheduler, cleanup
 
 
 def _mail_settings(args: argparse.Namespace):
@@ -828,7 +839,10 @@ def _cmd_schedule_serve(args: argparse.Namespace) -> int:
     except (ScheduleError, FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
-    print(f"排程器：{sum(1 for j in jobs if j.runnable)} 個工作，狀態在 {scheduler.state_dir}")
+    print(
+        f"排程器：{sum(1 for j in jobs if j.runnable)} 個工作，同時最多執行 {scheduler.workers} 個，"
+        f"狀態在 {scheduler.state_dir}"
+    )
     try:
         scheduler.serve(
             on_record=lambda r: print(
@@ -1321,6 +1335,12 @@ def build_parser() -> argparse.ArgumentParser:
                 type=int,
                 default=5,
                 help="報表庫模式：連續失敗幾次後暫停工作（預設 5，與 Tableau Server 相同；0 為不暫停）",
+            )
+        if name in ("tick", "serve"):
+            sub.add_argument(
+                "--workers",
+                type=int,
+                help="同時執行的工作數上限（1 為一個接一個）；預設為排程資料中的設定，沒有設定時 2",
             )
         if name in ("list", "tick"):
             sub.add_argument("--now", help="以這個時間計算（ISO 格式含時區；測試用）")
