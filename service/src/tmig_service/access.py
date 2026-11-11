@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from tmig.access.permissions import ADMIN_ROLES, Access, Permissions, ProjectEntry, WorkbookEntry
 from tmig.catalog import workbook_url_name
-from tmig.ir import IR, iter_zones
+from tmig.ir import IR, Worksheet, iter_zones
 from tmig.planner.identity import Identity
 
 if TYPE_CHECKING:
@@ -70,7 +70,8 @@ class Grant:
         }
 
     def worksheet_allowed(self, ir: IR, worksheet_id: str) -> bool:
-        """工作表本身是可以看的 view，或在可以看的 dashboard、Story 中。"""
+        """工作表本身是可以看的 view，或在可以看的 dashboard、Story 中，或在這樣的工作表的工具提示中
+        （Viz in Tooltip 的工作表常是隱藏的工作表）。"""
         if self.views is None:
             return True
         sheet = next(
@@ -78,6 +79,19 @@ class Grant:
         )
         if sheet is None:
             return False
+        if self._shown(ir, sheet):
+            return True
+        return any(
+            tip.worksheet == sheet.id and self._shown(ir, source)
+            for source in ir.worksheets
+            if source.id != sheet.id
+            for marks in (source.marks, *(p.marks for p in source.panes))
+            for tip in marks.tooltip_sheets
+        )
+
+    def _shown(self, ir: IR, sheet: Worksheet) -> bool:
+        """工作表本身是可以看的 view，或在可以看的 dashboard、Story 中。"""
+        assert self.views is not None
         if sheet.name in self.views:
             return True
         in_story = self.story_dashboards(ir)

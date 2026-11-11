@@ -341,3 +341,22 @@ def test_removed_calc_leaves_its_hierarchy(ir: IR) -> None:
     ir, _ = upsert_hierarchy(ir, "ds_orders", "Geo", ["f_city", field.id], original="Geo")
     ir, field = upsert_calc(ir, "ds_orders", "Flag", "SUM([Sales])", field.id)
     assert [(h.name, h.fields) for h in ir.datasources[0].hierarchies] == [("Geo", ["f_city"])]
+
+
+def test_tooltip_sheets_follow_removed_worksheets(ir: IR) -> None:
+    """工具提示中的工作表：刪除目標工作表時一併從工具提示移除；不能放這張工作表本身。"""
+    from tmig.ir import TooltipSheet
+
+    ir, target = add_worksheet(ir, "Tooltip Target", None)
+    sheet = next(w for w in ir.worksheets if w.id == "ws_sales_by_region")
+    marks = sheet.marks.model_copy(
+        update={"tooltip_sheets": [TooltipSheet(worksheet=target.id, max_width=200)]}
+    )
+    ir, saved = replace_worksheet(ir, sheet.model_copy(update={"marks": marks}))
+    assert saved.marks.tooltip_sheets[0].worksheet == target.id
+    ir = remove_worksheet(ir, target.id)
+    sheet = next(w for w in ir.worksheets if w.id == "ws_sales_by_region")
+    assert sheet.marks.tooltip_sheets == []
+    itself = sheet.marks.model_copy(update={"tooltip_sheets": [TooltipSheet(worksheet=sheet.id)]})
+    with pytest.raises(EditError, match="tooltip_sheets"):
+        replace_worksheet(ir, sheet.model_copy(update={"marks": itself}))

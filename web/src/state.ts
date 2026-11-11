@@ -104,6 +104,11 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
   return state;
 }
 
+/** 工具提示中的工作表（Viz in Tooltip）的查詢狀態：目標工作表自己的篩選與參數，加上來源工作表滑過的標記。 */
+export function tooltipStateFor(ir: IR, source: string, target: string, view: ViewState, mark: Mark): QueryState {
+  return { ...stateFor(ir, target, view), tooltip: { source, mark } };
+}
+
 /** 階層的切入：工作表上一組階層（以最上層的欄位鍵）切入 delta 層後的狀態；0 為存檔時的層數。 */
 export function setDrill(view: ViewState, worksheet: string, key: string, delta: number): ViewState {
   const sheet = { ...(view.drills?.[worksheet] ?? {}) };

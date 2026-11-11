@@ -48,7 +48,7 @@ from tmig.catalog import Catalog, Report, workbook_url_name
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, iter_zones, save_ir
+from tmig.ir import IR, Worksheet, iter_zones, save_ir
 from tmig.package import read_report_file
 from tmig.planner.drill import apply_drill, drill_info
 from tmig.planner.identity import Identity
@@ -293,6 +293,27 @@ def controlled_fields(ir: IR) -> set[str]:
         if zone.kind in ("filter", "highlighter") and zone.field is not None
     }
     return found | {ws.pages.field for ws in ir.worksheets if ws.pages is not None}
+
+
+def viz_tooltips(ir: IR, sheet: Worksheet, grant: Grant) -> list[dict[str, Any]]:
+    """工作表的工具提示中的工作表（Viz in Tooltip）：檢視器滑過標記時以標記的值查詢它們。"""
+    names = {w.id: w.name for w in ir.worksheets}
+    found: list[dict[str, Any]] = []
+    for marks in (sheet.marks, *(p.marks for p in sheet.panes)):
+        for tip in marks.tooltip_sheets:
+            if any(t["worksheet"] == tip.worksheet for t in found):
+                continue
+            if not grant.worksheet_allowed(ir, tip.worksheet):
+                continue
+            found.append(
+                {
+                    "worksheet": tip.worksheet,
+                    "name": names.get(tip.worksheet, tip.worksheet),
+                    "max_width": tip.max_width,
+                    "max_height": tip.max_height,
+                }
+            )
+    return found
 
 
 def create_app(
@@ -699,6 +720,7 @@ def create_app(
         target = next((w for w in ir.worksheets if w.id == ws), None)
         # 階層的切入：以切入後的欄、列架查詢與繪製；切入的控制項依存檔的工作表
         drill = drill_info(ir, target, state.drill) if target is not None else []
+        tooltip_sheets = viz_tooltips(ir, target, grant) if target is not None else []
         ir = apply_drill(ir, ws, state.drill)
         empty = {
             "worksheet": ws,
@@ -854,6 +876,7 @@ def create_app(
             "applied": query.state.applied,
             "skipped": query.state.skipped,
             "drill": drill,
+            "tooltip_sheets": tooltip_sheets,
             "table": {
                 "keys": [c.key for c in shown],
                 "headers": [caption(fields[c.use.field], c.use, sheet) for c in shown if c.use],

@@ -557,8 +557,29 @@ def remove_worksheet(ir: IR, worksheet: str) -> IR:
     sheet = next((w for w in ir.worksheets if w.id == worksheet), None)
     if sheet is None:
         raise EditError(f"找不到工作表 {worksheet}")
-    updated = ir.model_copy(update={"worksheets": [w for w in ir.worksheets if w.id != worksheet]})
+    remaining = [_without_tooltip(w, worksheet) for w in ir.worksheets if w.id != worksheet]
+    updated = ir.model_copy(update={"worksheets": remaining})
     return _validated(updated, f"「{sheet.name}」還在 dashboard、Story 或動作中使用，不能刪除")
+
+
+def _without_tooltip(sheet: Worksheet, removed: str) -> Worksheet:
+    """工作表的工具提示中不再有刪除的工作表（與 Tableau 相同，工具提示的其他內容不變）。"""
+
+    def strip(marks: Marks) -> Marks:
+        kept = [t for t in marks.tooltip_sheets if t.worksheet != removed]
+        return (
+            marks
+            if len(kept) == len(marks.tooltip_sheets)
+            else marks.model_copy(update={"tooltip_sheets": kept})
+        )
+
+    marks = strip(sheet.marks)
+    panes = [p.model_copy(update={"marks": strip(p.marks)}) for p in sheet.panes]
+    if marks is sheet.marks and all(
+        a.marks is b.marks for a, b in zip(panes, sheet.panes, strict=True)
+    ):
+        return sheet
+    return sheet.model_copy(update={"marks": marks, "panes": panes})
 
 
 def upsert_parameter(ir: IR, data: dict[str, Any]) -> tuple[IR, Parameter]:

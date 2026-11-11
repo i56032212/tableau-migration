@@ -669,6 +669,13 @@ export function MarksCard() {
         <button type="button" onClick={() => editor.openDialog({ kind: "colors", card })}>
           色彩…
         </button>
+        <button
+          type="button"
+          title="工具提示中的工作表（Viz in Tooltip）"
+          onClick={() => editor.openDialog({ kind: "tooltip", card })}
+        >
+          工具提示…
+        </button>
         <label className="mark-size" title="標記的大小">
           大小
           <input

@@ -386,6 +386,16 @@ export interface QueryState {
   pages?: Record<string, Scalar>;
   /** 階層的切入：欄、列架上一組階層欄位最上層的欄位鍵 → 向下多顯示的層數（負數收合存檔時的下層） */
   drill?: Record<string, number>;
+  /** 在另一張工作表的工具提示中顯示（Viz in Tooltip）：來源工作表與滑過的標記 */
+  tooltip?: { source: string; mark: Mark } | null;
+}
+
+/** 工具提示中的工作表（Viz in Tooltip）：滑過標記時顯示，以標記的值篩選 */
+export interface TooltipSheetInfo {
+  worksheet: string;
+  name: string;
+  max_width: number;
+  max_height: number;
 }
 
 /** 檢視器的切入控制項：工作表欄、列架上可以向下切入或向上收合的一組階層 */
@@ -446,6 +456,8 @@ export interface RenderResponse {
   skipped?: string[];
   /** 階層的切入控制項（依存檔的工作表） */
   drill?: DrillControl[];
+  /** 工具提示中的工作表 */
+  tooltip_sheets?: TooltipSheetInfo[];
   table?: { keys: string[]; headers: string[]; rows: string[][]; raw: string[][] };
 }
 

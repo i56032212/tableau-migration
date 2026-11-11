@@ -40,6 +40,8 @@
   選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
   之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
 - 階層 Product：Category → Sub-Category → Product Name；Category Detail 等工作表上的 Category 可以向下切入
+- 工具提示中的工作表（Viz in Tooltip）：Sales by Segment 的工具提示中顯示 Category Mix，以滑過的 Segment 篩選
+  （Category Mix 上 Tableau 自動產生的工具提示篩選，直接檢視時顯示全部）
 """
 
 from __future__ import annotations
@@ -242,7 +244,14 @@ ACTION_SEGMENT = "[Action2_7D6C2A1F2B3C4D5E9F0A000000000102]"
 ACTION_BRUSH = "[Action3_7D6C2A1F2B3C4D5E9F0A000000000103]"
 ACTION_URL = "[Action4_7D6C2A1F2B3C4D5E9F0A000000000104]"
 ACTION_HIGHLIGHT = "[Action8_7D6C2A1F2B3C4D5E9F0A000000000108]"
-DATASOURCE_GROUPS = f"""      <group caption='{ACTION_REGION}' hidden='true' name='[{ACTION_REGION}]' name-style='unqualified' user:auto-column='sheet_link'>
+TOOLTIP_GROUP = "Tooltip (Sales by Segment)"
+"""Viz in Tooltip：Category Mix 上自動產生的篩選（滑過 Sales by Segment 的標記時以 Segment 篩選）。"""
+DATASOURCE_GROUPS = f"""      <group caption='{TOOLTIP_GROUP}' hidden='true' name='[{TOOLTIP_GROUP}]' name-style='unqualified' user:auto-column='sheet_link' user:ui-vit-column='true'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='level-members' level='[Segment]' />
+        </groupfilter>
+      </group>
+      <group caption='{ACTION_REGION}' hidden='true' name='[{ACTION_REGION}]' name-style='unqualified' user:auto-column='sheet_link'>
         <groupfilter function='crossjoin'>
           <groupfilter function='level-members' level='[Region]' />
         </groupfilter>
@@ -384,7 +393,10 @@ def worksheets() -> str:
             [],
         ),
         segment_filter() + "\n" + slices("none:Segment:nk", "none:Region:nk", "none:Ship Mode:nk"),
-        pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+        with_tooltip(
+            pane("Bar", f"              <text column={attr(ref('sum:Sales:qk'))} />"),
+            "Category Mix",
+        ),
         ref("none:Segment:nk"),
         ref("sum:Sales:qk"),
     )
@@ -810,8 +822,33 @@ def sales_and_profit_by_year() -> str:
     )
 
 
+def with_tooltip(pane_xml: str, sheet: str) -> str:
+    """標記卡的工具提示：Segment 與工具提示中的工作表（Viz in Tooltip，篩選所有欄位）。"""
+    tag = f'<Sheet name="{sheet}" maxwidth="320" maxheight="240" filter="<All Fields>">'
+    tooltip = f"""            <customized-tooltip>
+              <formatted-text>
+                <run fontcolor='#787878'>Segment:&#9;</run>
+                <run bold='true'>{escape("<" + ref("none:Segment:nk") + ">")}</run>
+                <run>Æ&#10;</run>
+                <run>{escape(tag)}</run>
+              </formatted-text>
+            </customized-tooltip>"""
+    return pane_xml.replace("          </pane>", f"{tooltip}\n          </pane>")
+
+
+def tooltip_filter() -> str:
+    """Viz in Tooltip 在目標工作表上自動產生的篩選：直接檢視時顯示全部。"""
+    return f"""          <filter class='categorical' column={attr(ref(TOOLTIP_GROUP))}>
+            <groupfilter function='crossjoin' user:ui-enumeration='all' user:ui-marker='enumerate'>
+              <groupfilter function='level-members' level='[Segment]' />
+            </groupfilter>
+          </filter>
+{slices(TOOLTIP_GROUP)}"""
+
+
 def category_mix() -> str:
-    """圓餅：顏色為 Category，角度為 SUM(Sales)，標籤為類別與合計百分比。"""
+    """圓餅：顏色為 Category，角度為 SUM(Sales)，標籤為類別與合計百分比。
+    也是 Sales by Segment 工具提示中的工作表（Viz in Tooltip）。"""
     return worksheet(
         "Category Mix",
         "7D6C2A1F-2B3C-4D5E-9F0A-000000000007",
@@ -833,7 +870,7 @@ def category_mix() -> str:
             ],
             [],
         ),
-        "",
+        tooltip_filter(),
         pane(
             "Pie",
             "\n".join(

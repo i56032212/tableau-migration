@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
-import { editApi, type FormulaCheck } from "./api";
+import { editApi, type FormulaCheck, type Outline } from "./api";
 import { useEditor } from "./context";
 import {
   type Card,
@@ -17,6 +17,7 @@ import {
   pillLabel,
   sameUse,
   type SheetIR,
+  type TooltipSheetIR,
   updateCard,
   useKey,
 } from "./model";
@@ -996,6 +997,139 @@ export function HierarchyDialog({
               刪除階層
             </button>
           )}
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 工具提示
+
+/**
+ * 工具提示中的工作表（Tableau 工具提示編輯器的「插入＞工作表」）：滑過標記時，工具提示中顯示另一張工作表，
+ * 以標記的所有欄位或選定的欄位篩選；設定最大寬、高。
+ */
+export function TooltipDialog({ card, onClose }: { card: Card; onClose: () => void }) {
+  const editor = useEditor();
+  const marks = cardMarks(editor.sheet, card);
+  const [sheets, setSheets] = useState<TooltipSheetIR[]>(marks.tooltip_sheets ?? []);
+  const [outline, setOutline] = useState<Outline | null>(null);
+  useEffect(() => {
+    editApi
+      .outline(editor.workbook)
+      .then(setOutline)
+      .catch((e: Error) => editor.notify(e.message, "error"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor.workbook]);
+  const targets = (outline?.worksheets ?? []).filter((w) => w.id !== editor.sheet.id);
+  // 可以篩選的欄位：檢視上的維度
+  const dimensions: FieldUse[] = [];
+  for (const use of [...editor.sheet.rows, ...editor.sheet.columns, ...markUses(marks)]) {
+    if (isSpecial(use) || isMeasure(use, editor.fields)) continue;
+    if (!dimensions.some((d) => useKey(d) === useKey(use))) dimensions.push(use);
+  }
+  const change = (index: number, update: Partial<TooltipSheetIR>) =>
+    setSheets(sheets.map((s, i) => (i === index ? { ...s, ...update } : s)));
+  const save = () => {
+    editor.apply((s) => updateCard(s, card, (m) => ({ ...m, tooltip_sheets: sheets })));
+    onClose();
+  };
+  return (
+    <Modal title="工具提示中的工作表" onClose={onClose}>
+      <div className="tooltip-dialog">
+        {sheets.length === 0 && <p className="hint">滑過標記時，工具提示中顯示另一張工作表，以標記的值篩選。</p>}
+        {sheets.map((sheet, i) => (
+          <fieldset key={i} className="tooltip-sheet" data-tooltip-sheet={sheet.worksheet}>
+            <div className="row">
+              <label className="inline">
+                工作表
+                <select aria-label="工具提示中的工作表" value={sheet.worksheet} onChange={(e) => change(i, { worksheet: e.target.value })}>
+                  {targets.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inline">
+                最大寬度
+                <input
+                  type="number"
+                  min={50}
+                  aria-label="最大寬度"
+                  value={sheet.max_width}
+                  onChange={(e) => change(i, { max_width: Math.max(1, Number(e.target.value) || 300) })}
+                />
+              </label>
+              <label className="inline">
+                最大高度
+                <input
+                  type="number"
+                  min={50}
+                  aria-label="最大高度"
+                  value={sheet.max_height}
+                  onChange={(e) => change(i, { max_height: Math.max(1, Number(e.target.value) || 300) })}
+                />
+              </label>
+              <button type="button" className="link" aria-label="移除工具提示中的工作表" onClick={() => setSheets(sheets.filter((_, k) => k !== i))}>
+                ✕
+              </button>
+            </div>
+            <div className="row" role="radiogroup" aria-label="篩選">
+              <label>
+                <input type="radio" checked={sheet.fields === null} onChange={() => change(i, { fields: null })} /> 所有欄位
+              </label>
+              <label>
+                <input type="radio" checked={sheet.fields !== null} onChange={() => change(i, { fields: [] })} /> 選定的欄位
+              </label>
+            </div>
+            {sheet.fields !== null && (
+              <div className="row">
+                {dimensions.map((use) => {
+                  const key = useKey(use);
+                  const checked = (sheet.fields ?? []).some((f) => useKey(f) === key);
+                  return (
+                    <label key={key}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          change(i, {
+                            fields: checked
+                              ? (sheet.fields ?? []).filter((f) => useKey(f) !== key)
+                              : [...(sheet.fields ?? []), use],
+                          })
+                        }
+                      />{" "}
+                      {pillLabel(use, editor.fields, editor.sheet.table_calcs)}
+                    </label>
+                  );
+                })}
+                {dimensions.length === 0 && <span className="hint">檢視上沒有維度：不篩選</span>}
+              </div>
+            )}
+          </fieldset>
+        ))}
+        <div className="row">
+          <button
+            type="button"
+            disabled={targets.length === 0}
+            onClick={() => {
+              const used = new Set(sheets.map((s) => s.worksheet));
+              const target = targets.find((w) => !used.has(w.id)) ?? targets[0];
+              if (target) setSheets([...sheets, { worksheet: target.id, max_width: 300, max_height: 300, fields: null }]);
+            }}
+          >
+            加入工作表
+          </button>
+        </div>
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={save}>
+            確定
+          </button>
           <button type="button" onClick={onClose}>
             取消
           </button>

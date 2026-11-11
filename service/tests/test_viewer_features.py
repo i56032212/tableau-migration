@@ -73,15 +73,30 @@ class Renders:
         raise AssertionError(f"沒有重新查詢 {worksheets - {w for w, _, _ in self.items[since:]}}")
 
 
-def check_numbers(ir: Any, worksheet: str, body: dict[str, Any], data: dict[str, Any]) -> None:
-    """畫面上的數字與以同樣狀態直接查詢的結果相同。"""
+def check_numbers(
+    ir: Any, worksheet: str, body: dict[str, Any], data: dict[str, Any], approx: bool = False
+) -> None:
+    """畫面上的數字與以同樣狀態直接查詢的結果相同。approx：浮點數只比到有效位數（合計百分比等
+    以視窗函式加總的值，加總的順序不同時最後幾位可能不同）。"""
     query = worksheet_sql(ir, worksheet, QueryState.model_validate(body))
     sheet = next(w for w in ir.worksheets if w.id == worksheet)
     result = execute(FEATURES / "data" / f"{sheet.datasource}.duckdb", query.sql)
     index = {key: i for i, key in enumerate(result.columns)}
     keys = data["table"]["keys"]
     expected = [[format_value(row[index[k]]) for k in keys] for row in result.rows]
-    assert data["table"]["raw"] == expected, worksheet
+    if not approx:
+        assert data["table"]["raw"] == expected, worksheet
+        return
+
+    def close(a: str, b: str) -> bool:
+        try:
+            return float(a) == pytest.approx(float(b), rel=1e-12)
+        except ValueError:
+            return a == b
+
+    assert len(data["table"]["raw"]) == len(expected), worksheet
+    for got, want in zip(data["table"]["raw"], expected, strict=True):
+        assert all(close(a, b) for a, b in zip(got, want, strict=True)), (worksheet, got, want)
 
 
 def test_filter_group_and_global_filter_controls(server: str) -> None:
@@ -367,6 +382,58 @@ def test_drill_down_in_dashboard(server: str) -> None:
         assert data["rows"] == 3
         check_numbers(ir, sheet, body, data)
         assert view.get_by_role("button", name="向上收合 Sub-Category").count() == 0
+        assert errors == []
+        browser.close()
+
+
+def test_viz_in_tooltip(server: str) -> None:
+    """工具提示中的工作表：滑過 Sales by Segment 的長條，工具提示中顯示以滑過的 Segment 篩選的
+    Category Mix；數字與直接以同樣狀態查詢相同；移開後工具提示消失。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = ir.dashboards[0]
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        renders.wait_for(page, SHEETS, 0)
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 3"
+        )
+        tooltip = page.locator(".viz-tooltip")
+        bars = page.locator(
+            "[data-worksheet='ws_sales_by_segment'] svg path[aria-roledescription='bar']"
+        )
+        seen: dict[str, dict[str, Any]] = {}
+        for segment in ("Consumer", "Corporate"):
+            start = len(renders.items)
+            bars.and_(page.locator(f"[aria-label*='Segment: {segment}']")).hover()
+            tooltip.wait_for()
+            renders.wait_for(page, {"ws_category_mix"}, start)
+            page.wait_for_timeout(300)
+            body, data = next(
+                (b, d) for w, b, d in reversed(renders.items[start:]) if w == "ws_category_mix"
+            )
+            assert body["tooltip"] == {
+                "source": "ws_sales_by_segment",
+                "mark": {"f_segment": segment},
+            }
+            check_numbers(ir, "ws_category_mix", body, data, approx=True)
+            seen[segment] = data
+            sheet = tooltip.locator("[data-tooltip-sheet='ws_category_mix']")
+            expect(sheet.locator(".worksheet[data-loading='false'] svg")).to_have_count(1)
+            assert segment in tooltip.inner_text()
+            box = sheet.bounding_box()
+            assert box is not None and box["width"] <= 320 and box["height"] <= 240
+        assert seen["Consumer"]["table"]["raw"] != seen["Corporate"]["table"]["raw"]
+        page.mouse.move(5, 5)
+        expect(tooltip).to_have_count(0)
         assert errors == []
         browser.close()
 

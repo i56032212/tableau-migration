@@ -155,6 +155,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .worksheet[data-interactive="true"] .chart svg path,
 .worksheet[data-interactive="true"] .chart svg text { cursor: pointer; }
 .worksheet-meta .selection { color: var(--accent); font-weight: 600; }
+/* 工具提示中的工作表（Viz in Tooltip）：不攔截滑鼠，文字下方是以標記篩選的工作表 */
+.viz-tooltip { position: fixed; z-index: 1000; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); padding: 6px 8px; font-size: 12px; max-width: calc(100vw - 8px); }
+.viz-tooltip-text { border-collapse: collapse; }
+.viz-tooltip-text td { padding: 1px 4px; vertical-align: top; }
+.viz-tooltip-text td.key { color: var(--muted); text-align: right; white-space: nowrap; }
+.viz-tooltip-sheet { display: flex; margin-top: 6px; max-width: 100%; }
+.viz-tooltip-sheet .worksheet { flex: 1; min-width: 0; }
 /* 階層的切入：⊟ 收合目前最下層、⊞ 向下切入到下一層 */
 .worksheet-meta .drill { display: inline-flex; gap: 6px; }
 .worksheet-meta .drill .link { font-size: 12px; }
@@ -275,6 +282,9 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .hierarchy-name .toggle { width: 12px; color: var(--muted); }
 .hierarchy > .fields { padding-left: 16px; }
 .hierarchy-dialog { display: flex; flex-direction: column; gap: 8px; min-width: 320px; }
+.tooltip-dialog { display: flex; flex-direction: column; gap: 8px; min-width: 420px; }
+.tooltip-dialog .tooltip-sheet { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
+.tooltip-dialog input[type="number"] { width: 72px; }
 .hierarchy-levels { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
 .hierarchy-levels li { display: flex; align-items: center; gap: 6px; }
 .hierarchy-levels .level-name { flex: 1; }

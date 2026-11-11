@@ -36,6 +36,7 @@ STORY_SHEETS = {
     "ws_segment_detail",
     "ws_region_category_matrix",
     "ws_sales_by_segment",
+    "ws_category_mix",  # Sales by Segment 的工具提示中的工作表
 }
 DIRECTORY = Directory(
     users=[

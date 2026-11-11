@@ -43,7 +43,8 @@ export type EditorDialog =
   | { kind: "parameter"; parameter: string | null }
   /** 建立階層（name 為 null，field 為第一個欄位）或改變既有的階層 */
   | { kind: "hierarchy"; datasource: string; name: string | null; field?: string }
-  | { kind: "colors"; card: Card };
+  | { kind: "colors"; card: Card }
+  | { kind: "tooltip"; card: Card };
 
 export const EditorContext = createContext<EditorContextValue | null>(null);
 

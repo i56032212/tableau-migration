@@ -18,6 +18,7 @@ import {
   ReferenceDialog,
   SheetFormatDialog,
   TitleDialog,
+  TooltipDialog,
   TrendDialog,
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
@@ -504,7 +505,13 @@ export function Editor({
             {empty ? (
               <div className="placeholder">將欄位從資料窗格拖曳到欄、列或標記卡</div>
             ) : (
-              <WorksheetView workbook={workbook} worksheet={sheet.id} state={EMPTY_STATE} revision={revision} />
+              <WorksheetView
+                workbook={workbook}
+                worksheet={sheet.id}
+                state={EMPTY_STATE}
+                revision={revision}
+                tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
+              />
             )}
           </div>
         </div>
@@ -534,6 +541,7 @@ export function Editor({
       {dialog?.kind === "reference" && <ReferenceDialog index={dialog.index} axis={dialog.axis} onClose={() => setDialog(null)} />}
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "colors" && <ColorsDialog card={dialog.card} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "tooltip" && <TooltipDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "hierarchy" && (
         <HierarchyDialog
           datasource={dialog.datasource}

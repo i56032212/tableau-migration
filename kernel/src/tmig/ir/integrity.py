@@ -319,6 +319,14 @@ def check_references(ir: IR) -> list[str]:
                 check_use(
                     use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True, extra=blended
                 )
+            for i, tip in enumerate(card.tooltip_sheets):
+                where = f"{base}.{name}.tooltip_sheets[{i}]"
+                if tip.worksheet not in sheets or tip.worksheet == ws.id:
+                    errors.append(f"{where}：工作表「{tip.worksheet}」不存在或是這張工作表本身")
+                for j, use in enumerate(tip.fields or []):
+                    check_use(use, ws.datasource, f"{where}.fields[{j}]", None, extra=blended)
+                    if use.agg is not None or use.table_calc is not None:
+                        errors.append(f"{where}.fields[{j}]：只能以維度篩選")
         for i, pane in enumerate(ws.panes):
             check_use(pane.measure, ws.datasource, f"{base}.panes[{i}].measure", tcs, extra=blended)
             if pane.measure not in (ws.rows if pane.axis == "rows" else ws.columns):

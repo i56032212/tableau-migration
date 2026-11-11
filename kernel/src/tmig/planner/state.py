@@ -68,6 +68,15 @@ class SetValue(BaseModel):
     members: list[list[Scalar]] = Field(default_factory=list, max_length=10000)
 
 
+class TooltipMark(BaseModel):
+    """工具提示中的工作表（Viz in Tooltip）：來源工作表與滑過的標記。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(min_length=1, description="來源工作表 id（工具提示中放了這張工作表）")
+    mark: dict[str, Scalar] = Field(description="滑過的標記：來源工作表的欄位鍵 → 值")
+
+
 class QueryState(BaseModel):
     """篩選與參數的目前狀態。API 只接受這個格式，不接受 SQL。"""
 
@@ -96,6 +105,10 @@ class QueryState(BaseModel):
         default_factory=dict,
         description="階層的切入（見 tmig.planner.drill）：欄、列架上一組階層欄位最上層的欄位鍵 → "
         "向下多顯示的層數；負數收合存檔時原本顯示的下層",
+    )
+    tooltip: TooltipMark | None = Field(
+        default=None,
+        description="在另一張工作表的工具提示中顯示（Viz in Tooltip）：以滑過的標記篩選這張工作表",
     )
 
 
@@ -162,6 +175,12 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
         params[param_id] = value
 
     filters: list[Filter] = [_with_selection(f, state) for f in worksheet.filters]
+    if state.tooltip is not None:
+        # 工具提示中的工作表：以滑過的標記篩選，取代 Tableau 自動產生的工具提示篩選
+        filters = [f for f in filters if not (isinstance(f, TupleFilter) and f.tooltip)]
+        tip = _tooltip_filter(ir, worksheet, state.tooltip)
+        if tip is not None:
+            filters.append(tip)
     if worksheet.pages is not None:
         # 頁面架：只顯示目前這一頁（等同這個值的維度篩選）；不知道是哪一頁時不篩選
         page = state.pages.get(worksheet.id, worksheet.page)
@@ -191,6 +210,50 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
         filters.append(_new_filter(f"state_{n}", use, value))
     return EffectiveState(
         filters=filters, parameters=params, applied=applied, skipped=skipped, today=state.today
+    )
+
+
+def _tooltip_filter(ir: IR, worksheet: Worksheet, tooltip: TooltipMark) -> TupleFilter | None:
+    """滑過的標記 → 這張工作表的篩選：工具提示設定的欄位（沒有設定時為標記的所有維度）中、這張工作表的
+    資料源也有的欄位（不同資料源依欄位名稱對應，與 Tableau 相同）；一個都沒有時不篩選。"""
+    source = next((w for w in ir.worksheets if w.id == tooltip.source), None)
+    cards = [source.marks, *(p.marks for p in source.panes)] if source is not None else []
+    entry = next((t for m in cards for t in m.tooltip_sheets if t.worksheet == worksheet.id), None)
+    if source is None or entry is None:
+        raise StateError(f"工作表「{worksheet.name}」不在「{tooltip.source}」的工具提示中")
+    origin = next(d for d in ir.datasources if d.id == source.datasource)
+    target = next(d for d in ir.datasources if d.id == worksheet.datasource)
+    known = {f.id: f for f in origin.fields}
+    ids = {f.id for f in target.fields}
+    by_caption = {f.caption: f.id for f in target.fields}
+    keys = [use_key(u) for u in entry.fields] if entry.fields is not None else list(tooltip.mark)
+    uses: list[FieldUse] = []
+    row: list[Scalar] = []
+    for key in keys:
+        if key not in tooltip.mark:
+            continue
+        try:
+            use = parse_key(key)
+        except StateError:
+            continue  # 量值等不是維度的欄位鍵
+        field = known.get(use.field)
+        if field is None:
+            continue  # Measure Names 等
+        mapped = use.field if origin.id == target.id else by_caption.get(field.caption)
+        if mapped is None or mapped not in ids:
+            continue
+        uses.append(use.model_copy(update={"field": mapped}))
+        row.append(tooltip.mark[key])
+    if not uses:
+        return None
+    return TupleFilter(
+        kind="tuple",
+        id="tooltip",
+        fields=uses,
+        stage="dimension",
+        mode="include",
+        tuples=[row],
+        source_ref="state:tooltip",
     )
 
 

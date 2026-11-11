@@ -123,6 +123,43 @@ def test_render_with_drill(client: TestClient) -> None:
     assert client.post(url, json={"drill": {"f_category": "down"}}).status_code == 422
 
 
+def test_render_tooltip_sheet(client: TestClient) -> None:
+    """工具提示中的工作表（Viz in Tooltip）：Sales by Segment 的工具提示中顯示 Category Mix，以滑過的
+    Segment 篩選；直接檢視 Category Mix 時顯示全部。"""
+    features = "/api/workbooks/superstore_features"
+    source = client.post(f"{features}/worksheets/ws_sales_by_segment/render").json()
+    assert source["tooltip_sheets"] == [
+        {
+            "worksheet": "ws_category_mix",
+            "name": "Category Mix",
+            "max_width": 320,
+            "max_height": 240,
+        }
+    ]
+    url = f"{features}/worksheets/ws_category_mix/render"
+    everything = client.post(url).json()
+    assert everything["tooltip_sheets"] == []
+
+    def sales(data: dict) -> dict[str, float]:
+        keys = data["table"]["keys"]
+        category, total = keys.index("f_category"), keys.index("sum(f_sales)")
+        return {row[category]: float(row[total]) for row in data["table"]["raw"]}
+
+    segments = {}
+    for segment in ("Consumer", "Corporate", "Home Office"):
+        tip = {"source": "ws_sales_by_segment", "mark": {"f_segment": segment}}
+        data = client.post(url, json={"tooltip": tip}).json()
+        assert data["rows"] == 3
+        segments[segment] = sales(data)
+    # 三個區隔的合計等於全部
+    for category, total in sales(everything).items():
+        assert sum(s[category] for s in segments.values()) == pytest.approx(total)
+    assert segments["Consumer"] != segments["Corporate"]
+    # 不在工具提示中的組合不接受
+    bad = {"tooltip": {"source": "ws_region_picker", "mark": {"f_region": "East"}}}
+    assert client.post(url, json=bad).status_code == 422
+
+
 def test_relative_date_defaults_to_cases_today(client: TestClient) -> None:
     """相對日期篩選的基準日：沒有指定時用 cases.yaml 的 today（與計算比對相同）。"""
     url = "/api/workbooks/superstore_features/worksheets/ws_recent_sales_by_category/render"
@@ -217,6 +254,7 @@ def test_cases(client: TestClient) -> None:
         "today": None,
         "pages": {},
         "drill": {},
+        "tooltip": None,
     }
 
 
@@ -232,3 +270,24 @@ def test_package_images(client: TestClient) -> None:
     assert client.get(f"{features}/files/superstore_features.twb").status_code == 404
     assert client.get(f"{features}/files/Data/Extracts/x.hyper").status_code == 404
     assert client.get("/api/workbooks/nope/files/Image/logo.png").status_code == 404
+
+
+def test_tooltip_sheet_is_allowed_with_its_source() -> None:
+    """只能看部分 view 時，可以看的工作表的工具提示中的工作表也可以看（常是隱藏的工作表）。"""
+    from tmig.ir import iter_zones, load_ir
+    from tmig_service.access import Grant
+
+    ir = load_ir(ROOT / "fixtures" / "superstore_features" / "golden.ir.json")
+    board = next(
+        d
+        for d in ir.dashboards
+        if any(z.worksheet == "ws_sales_by_segment" for z in iter_zones(d.zones))
+    )
+    assert all(z.worksheet != "ws_category_mix" for z in iter_zones(board.zones))
+    grant = Grant(allowed=True, views=frozenset({board.name}))
+    assert grant.worksheet_allowed(ir, "ws_sales_by_segment")
+    assert grant.worksheet_allowed(ir, "ws_category_mix")
+    assert not grant.worksheet_allowed(ir, "ws_region_picker")
+    assert not Grant(allowed=True, views=frozenset({"沒有的 view"})).worksheet_allowed(
+        ir, "ws_category_mix"
+    )

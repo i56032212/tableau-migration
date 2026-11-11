@@ -38,7 +38,7 @@ import {
   VersionsButton,
 } from "./Server";
 import { SessionGate, UserBar } from "./Session";
-import { setDrill, stateFor, type ViewState } from "./state";
+import { setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
 import { DashboardEditor } from "./editor/DashboardEditor";
 import { Editor } from "./editor/Editor";
@@ -815,6 +815,7 @@ function WorkbookPage({
             state={stateFor(ir, worksheet.id, view)}
             revision={refresh}
             onDrill={(key, delta) => changeView(setDrill(view, worksheet.id, key, delta))}
+            tooltipState={(target, mark) => tooltipStateFor(ir, worksheet.id, target, view, mark)}
           />
         </div>
       )}

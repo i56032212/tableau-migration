@@ -73,6 +73,15 @@ export interface SortIR {
   manual_values: Scalar[];
 }
 
+/** 工具提示中的工作表（Viz in Tooltip） */
+export interface TooltipSheetIR {
+  worksheet: string;
+  max_width: number;
+  max_height: number;
+  /** 以標記的哪些欄位篩選；null 為所有欄位 */
+  fields: FieldUse[] | null;
+}
+
 export interface MarksIR {
   type: string;
   color: FieldUse | null;
@@ -83,6 +92,7 @@ export interface MarksIR {
   shape: FieldUse | null;
   angle: FieldUse | null;
   path: FieldUse | null;
+  tooltip_sheets?: TooltipSheetIR[];
   [key: string]: unknown;
 }
 

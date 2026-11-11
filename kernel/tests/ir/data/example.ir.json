@@ -230,6 +230,7 @@
             "table_calc": "tc_running_sales"
           }
         ],
+        "tooltip_sheets": [],
         "shape": null,
         "angle": null,
         "path": null
@@ -423,6 +424,7 @@
             "table_calc": null
           }
         ],
+        "tooltip_sheets": [],
         "shape": null,
         "angle": null,
         "path": null

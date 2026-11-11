@@ -1,8 +1,9 @@
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
-import type { FitMode, Mark, QueryState, RenderResponse, Scalar } from "./types";
+import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
 export interface MarkEvent {
@@ -34,6 +35,87 @@ interface Props {
   revision?: number;
   /** 階層的切入（檢視器）：一組階層（最上層的欄位鍵）改成切入 delta 層；沒有傳入時不顯示切入的按鈕 */
   onDrill?: (key: string, delta: number) => void;
+  /** 工具提示中的工作表（Viz in Tooltip）的查詢狀態；沒有傳入時工具提示只有文字（工具提示中的工作表本身也不再巢狀） */
+  tooltipState?: (target: string, mark: Mark) => QueryState;
+}
+
+/** 滑過標記時的工具提示：位置（視窗座標）、Vega 算好的欄位與值、標記的維度值。 */
+interface Tip {
+  x: number;
+  y: number;
+  value: unknown;
+  mark: Mark | null;
+}
+
+/** 工具提示中的工作表的狀態更新前等待的時間（滑過許多標記時不必每個都查詢） */
+const TOOLTIP_DELAY = 150;
+
+/**
+ * 有工具提示中的工作表時的工具提示（取代 Vega 的預設工具提示）：標記的欄位與值，下方是以標記的值篩選的
+ * 各張工作表（不超過設定的最大寬、高）。不攔截滑鼠，放不下時移到游標的另一側。
+ */
+function VizTooltip({
+  tip,
+  mark,
+  sheets,
+  workbook,
+  stateFor,
+}: {
+  tip: Tip;
+  mark: Mark | null;
+  sheets: TooltipSheetInfo[];
+  workbook: string;
+  stateFor: (target: string, mark: Mark) => QueryState;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: tip.x + 12, top: tip.y + 12 });
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const { width, height } = element.getBoundingClientRect();
+    let left = tip.x + 12;
+    let top = tip.y + 12;
+    if (left + width > window.innerWidth - 4) left = Math.max(4, tip.x - width - 12);
+    if (top + height > window.innerHeight - 4) top = Math.max(4, tip.y - height - 12);
+    setPosition((current) => (current.left === left && current.top === top ? current : { left, top }));
+  }, [tip.x, tip.y, mark, sheets]);
+  const lines =
+    tip.value !== null && typeof tip.value === "object"
+      ? Object.entries(tip.value as Record<string, unknown>)
+      : [["", tip.value] as [string, unknown]];
+  return createPortal(
+    <div ref={ref} className="viz-tooltip" role="tooltip" style={position}>
+      <table className="viz-tooltip-text">
+        <tbody>
+          {lines.map(([key, value]) => (
+            <tr key={key}>
+              {key && <td className="key">{key}</td>}
+              <td>{String(value ?? "")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {mark &&
+        sheets.map((sheet) => (
+          <div
+            key={sheet.worksheet}
+            className="viz-tooltip-sheet"
+            data-tooltip-sheet={sheet.worksheet}
+            style={{ width: sheet.max_width, height: sheet.max_height }}
+          >
+            <WorksheetView
+              workbook={workbook}
+              worksheet={sheet.worksheet}
+              state={stateFor(sheet.worksheet, mark)}
+              showTitle={false}
+              fit="entire_view"
+              hideLegend
+            />
+          </div>
+        ))}
+    </div>,
+    document.body,
+  );
 }
 
 type Spec = Record<string, any>;
@@ -241,11 +323,27 @@ export function WorksheetView({
   highlighted,
   revision = 0,
   onDrill,
+  tooltipState,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
   // 事件處理以 ref 取最新的回呼，圖表不必因父元件重繪而重建
   const onMarksRef = useRef(onMarks);
   onMarksRef.current = onMarks;
+  const tooltipStateRef = useRef(tooltipState);
+  tooltipStateRef.current = tooltipState;
+  const [tip, setTip] = useState<Tip | null>(null);
+  // 工具提示中的工作表以稍後的標記查詢（滑過許多標記時不必每個都查詢）
+  const [tipMark, setTipMark] = useState<Mark | null>(null);
+  const tipMarkKey = JSON.stringify(tip?.mark ?? null);
+  useEffect(() => {
+    const next = JSON.parse(tipMarkKey) as Mark | null;
+    if (next === null) {
+      setTipMark(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setTipMark(next), TOOLTIP_DELAY);
+    return () => window.clearTimeout(timer);
+  }, [tipMarkKey]);
   const interactive = onMarks !== undefined;
   const selectedKey = JSON.stringify(selected ?? []);
   const highlightKey = JSON.stringify(highlighted ?? null);
@@ -254,6 +352,8 @@ export function WorksheetView({
   const [loading, setLoading] = useState(true);
   const [showTable, setShowTable] = useState(false);
   const stateKey = JSON.stringify(state);
+  const tooltipSheets = tooltipState ? (response?.tooltip_sheets ?? []) : [];
+  const vizTooltips = tooltipSheets.length > 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -318,7 +418,17 @@ export function WorksheetView({
     // 固定大小的方向（例如標準大小下每一列固定高度）：放不下時在區塊內捲動
     const scroll = applyFit(spec, fit, element.clientWidth);
     element.dataset.scroll = scroll.x && scroll.y ? "both" : scroll.y ? "y" : scroll.x ? "x" : "false";
-    embed(element, spec as any, { actions: false, renderer: "svg" })
+    // 工具提示中的工作表：以自己的工具提示取代 Vega 的（文字相同，下方加上以標記篩選的工作表）
+    const tooltip = (_handler: unknown, event: MouseEvent, item: any, value: unknown) => {
+      if (value === null || value === undefined || value === "") {
+        setTip(null);
+        return;
+      }
+      const row = item?.datum?.__row;
+      const mark = typeof row === "number" && records[row] ? markOf(records[row], dimensions) : null;
+      setTip({ x: event.clientX, y: event.clientY, value, mark });
+    };
+    embed(element, spec as any, { actions: false, renderer: "svg", ...(vizTooltips ? { tooltip } : {}) })
       .then((result) => {
         if (disposed) {
           result.finalize();
@@ -369,8 +479,9 @@ export function WorksheetView({
       disposed = true;
       window.clearTimeout(leaveTimer);
       view?.finalize();
+      setTip(null);
     };
-  }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit]);
+  }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips]);
 
   const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;
@@ -478,6 +589,15 @@ export function WorksheetView({
         {!error && !response?.unsupported && !showTable && <div className="chart" ref={chartRef} />}
         {loading && !response && <div className="placeholder">載入中…</div>}
       </div>
+      {tip && vizTooltips && (
+        <VizTooltip
+          tip={tip}
+          mark={tipMark}
+          sheets={tooltipSheets}
+          workbook={workbook}
+          stateFor={(target, mark) => tooltipStateRef.current?.(target, mark) ?? { filters: {}, parameters: {} }}
+        />
+      )}
     </div>
   );
 }

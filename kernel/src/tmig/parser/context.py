@@ -16,6 +16,7 @@ from tmig.ir.models import (
     Filter,
     FitMode,
     Hierarchy,
+    Marks,
     Parameter,
     PublishedSource,
     Unsupported,
@@ -115,6 +116,24 @@ class SharedView:
 
 
 @dataclass
+class TooltipRef:
+    """工作表的工具提示文字中的 <Sheet name="…" maxwidth="…" maxheight="…" filter="…">（Viz in Tooltip）：
+    所有工作表解析完後才對應到目標工作表（見 tmig.parser.workbook）。"""
+
+    sheet: str
+    """來源工作表的名稱。"""
+    marks: Marks
+    """工具提示所在的標記卡。"""
+    element: etree._Element
+    name: str
+    """目標工作表的名稱。"""
+    width: int
+    height: int
+    filter: str | None
+    """filter 屬性的原文，例如 <All Fields>、<Region>,<Category>；沒寫時為 None。"""
+
+
+@dataclass
 class ParseContext:
     package: WorkbookPackage
     lenient: bool = False
@@ -157,6 +176,8 @@ class ParseContext:
     """dashboard 名稱 → IR id；導覽按鈕可能先參照之後才解析的 dashboard，所以第一次用到時配發。"""
     navigations: list[tuple[etree._Element, Zone]] = field(default_factory=list)
     story_ids: dict[str, str] = field(default_factory=dict)
+    tooltip_refs: list[TooltipRef] = field(default_factory=list)
+    """工具提示中的工作表（Viz in Tooltip），依工作表解析的順序。"""
     story_names: set[str] = field(default_factory=set)
     """workbook 中 Story 的名稱（導覽按鈕與切換動作的目標可能是 Story）。"""
     """導覽到 dashboard 的按鈕：所有 dashboard 解析完後確認目標存在。"""

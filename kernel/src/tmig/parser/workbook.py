@@ -17,6 +17,7 @@ from tmig.ir.integrity import iter_zones
 from tmig.ir.models import (
     IR,
     IR_VERSION,
+    SPECIAL_FIELDS,
     Action,
     Dashboard,
     Datasource,
@@ -28,6 +29,7 @@ from tmig.ir.models import (
     ParameterAction,
     Scalar,
     SetAction,
+    TooltipSheet,
     TupleFilter,
     Unsupported,
     UrlAction,
@@ -35,7 +37,7 @@ from tmig.ir.models import (
     Workbook,
     Worksheet,
 )
-from tmig.parser.context import DsState, ParseContext, SharedView
+from tmig.parser.context import DsState, ParseContext, SharedView, TooltipRef
 from tmig.parser.dashboard import DashboardParser
 from tmig.parser.datasource import DatasourceParser, add_calc_field, analyze_calcs, parse_parameters
 from tmig.parser.fields import instance_key, use_from_name
@@ -226,6 +228,7 @@ class WorkbookParser:
             sheet = SheetParser(ctx, ws_el).parse()
             if sheet is not None:
                 worksheets.append(sheet)
+        self._tooltip_sheets(worksheets, root)
 
         for window in children(child(root, "windows"), "window"):
             simple_id = child(window, "simple-id")
@@ -320,6 +323,73 @@ class WorkbookParser:
             )
         except ValidationError as exc:
             raise WorkbookParseError(f"解析結果不是合法的 IR：{exc}") from exc
+
+    def _tooltip_sheets(self, worksheets: list[Worksheet], root: etree._Element) -> None:
+        """工具提示中的工作表（Viz in Tooltip）：所有工作表解析完後對應到目標工作表。
+
+        只能放工作表（dashboard、Story 列為不支援）；找不到的工作表 Tableau 不顯示，略過。"""
+        ctx = self.ctx
+        by_name = {ws.name: ws for ws in worksheets}
+        boards = {el.get("name", "") for el in children(child(root, "dashboards"), "dashboard")}
+        for ref in ctx.tooltip_refs:
+            source = by_name.get(ref.sheet)
+            if source is None:
+                continue  # 來源工作表本身沒有轉成 IR
+            target = by_name.get(ref.name)
+            if target is None or target.id == source.id:
+                if ref.name in boards:
+                    ctx.flag(
+                        ref.element,
+                        f"工作表「{ref.sheet}」的工具提示中放了 dashboard 或 Story「{ref.name}」，"
+                        "只能放工作表",
+                    )
+                else:
+                    ctx.ignore(
+                        ref.element,
+                        f"工作表「{ref.sheet}」工具提示中的工作表「{ref.name}」不存在，Tableau 不顯示",
+                    )
+                continue
+            fields = self._tooltip_fields(ref, source)
+            if isinstance(fields, str):
+                ctx.flag(ref.element, fields)
+                continue
+            ref.marks.tooltip_sheets.append(
+                TooltipSheet(
+                    worksheet=target.id,
+                    max_width=ref.width,
+                    max_height=ref.height,
+                    fields=fields,
+                )
+            )
+
+    def _tooltip_fields(self, ref: TooltipRef, source: Worksheet) -> list[FieldUse] | str | None:
+        """filter 屬性 → 篩選的欄位：<All Fields>（或沒寫）為 None，空的不篩選；其餘為逗號分隔的
+        <欄位>，對應來源工作表上的維度（日期含層級，例如 <MONTH(Order Date)>）。找不到時回傳說明。"""
+        text = ref.filter
+        if text is None or text.strip().casefold() == "<all fields>":
+            return None
+        captions = {
+            f.id: f.caption for state in self.ctx.datasources.values() for f in state.fields
+        }
+        cards = [source.marks, *(p.marks for p in source.panes)]
+        labels: dict[str, FieldUse] = {}
+        for use in (*source.rows, *source.columns, *(u for m in cards for u in m.uses())):
+            if use.agg is not None or use.table_calc is not None or use.field in SPECIAL_FIELDS:
+                continue
+            caption = captions.get(use.field, use.field)
+            label = f"{use.date.unit.upper()}({caption})" if use.date is not None else caption
+            labels.setdefault(label.casefold(), use)
+        uses: list[FieldUse] = []
+        for name in re.findall(r"<([^<>]+)>", text):
+            use = labels.get(name.strip().casefold())
+            if use is None:
+                return (
+                    f"工作表「{ref.sheet}」工具提示中的工作表「{ref.name}」以「{name}」篩選，"
+                    "但這個欄位不在檢視上"
+                )
+            if use not in uses:
+                uses.append(use)
+        return uses
 
     def _fits(self, windows: etree._Element | None) -> None:
         """工作表的顯示大小：工作表視窗的 <viewpoint>，與 dashboard 視窗中各工作表的 <viewpoint>

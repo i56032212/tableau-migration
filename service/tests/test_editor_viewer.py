@@ -554,3 +554,82 @@ def test_hierarchies_and_drill(engine: str) -> None:
         assert page.locator('[data-shelf="rows"] .pill-drill').count() == 0
         assert errors == []
         browser.close()
+
+
+def test_tooltip_sheet_in_editor(engine: str) -> None:
+    """標記卡的「工具提示…」：加入工具提示中的工作表（以選定的欄位篩選）；檢視器滑過長條時工具提示中
+    顯示以 Region 篩選的 Monthly Profit。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="工具提示…").click()
+        dialog = page.locator(".tooltip-dialog")
+        dialog.get_by_role("button", name="加入工作表").click()
+        dialog.get_by_label("工具提示中的工作表", exact=True).select_option(label="Monthly Profit")
+        dialog.get_by_label("最大寬度").fill("280")
+        dialog.get_by_label("選定的欄位").check()
+        dialog.get_by_label("Region").check()
+        dialog.get_by_role("button", name="確定").click()
+        settle(page)
+        tips = sheet()["marks"]["tooltip_sheets"]
+        assert tips == [
+            {
+                "worksheet": "ws_monthly_profit",
+                "max_width": 280,
+                "max_height": 300,
+                "fields": [
+                    {
+                        "field": "f_region",
+                        "agg": None,
+                        "date": None,
+                        "continuous": False,
+                        "table_calc": None,
+                    }
+                ],
+            }
+        ]
+
+        page.goto(f"{engine}/w/demo/s/ws_sales_by_region")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        # 圖表本身的長條（凍結的欄標題、座標軸是圖表的複本，也有同樣的標記）
+        bar = page.locator(".single-sheet svg path[aria-roledescription='bar']:not(.frozen *)").last
+        label = bar.get_attribute("aria-label") or ""
+        region = label.split("Region: ")[1].split(";")[0]
+        with page.expect_response(
+            lambda r: "ws_monthly_profit" in r.url and r.url.endswith("/render")
+        ) as response:
+            bar.hover()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert body["tooltip"]["source"] == "ws_sales_by_region"
+        # 標記的所有維度都送出；只以選定的 Region 篩選
+        assert body["tooltip"]["mark"]["f_region"] == region
+        tooltip = page.locator(".viz-tooltip")
+        expect(tooltip.locator("[data-tooltip-sheet='ws_monthly_profit'] svg")).to_have_count(1)
+        west = response.value.json()
+        everything = call(engine, "/api/workbooks/demo/worksheets/ws_monthly_profit/render", {})
+        assert west["table"]["raw"] != everything["table"]["raw"]
+
+        # 移除工具提示中的工作表
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="工具提示…").click()
+        dialog.get_by_role("button", name="移除工具提示中的工作表").click()
+        dialog.get_by_role("button", name="確定").click()
+        settle(page)
+        assert sheet()["marks"]["tooltip_sheets"] == []
+        assert errors == []
+        browser.close()

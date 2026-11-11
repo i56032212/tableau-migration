@@ -55,7 +55,14 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
-from tmig.parser.context import DsState, FilterKind, ParseContext, SharedView, SheetState
+from tmig.parser.context import (
+    DsState,
+    FilterKind,
+    ParseContext,
+    SharedView,
+    SheetState,
+    TooltipRef,
+)
 from tmig.parser.datasource import TABLE_ID_PREFIX, add_calc_field, add_table_count, analyze_calcs
 from tmig.parser.fields import (
     FilterParser,
@@ -82,6 +89,9 @@ from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
 
 TEXT_TOKEN = re.compile(r"<([^<>]+)>")
+SHEET_TAG = re.compile(r'<Sheet((?:\s+[\w-]+="[^"]*")*)\s*/?>')
+"""工具提示文字中的工作表（Viz in Tooltip）：<Sheet name="…" maxwidth="300" maxheight="300" filter="<All Fields>">"""
+SHEET_ATTR = re.compile(r'([\w-]+)="([^"]*)"')
 """自訂文字中的參照：<[資料源].[欄位實例]>、<[Parameters].[參數]>、<Sheet Name>。"""
 LINE_BREAK = "\u00c6\n"
 """Tableau 格式化文字的換行（Æ 加換行）。"""
@@ -1058,6 +1068,9 @@ class SheetParser:
         label = child(child(pane, "customized-label"), "formatted-text")
         if label is not None:
             marks.label_text = self._text_runs(label, f"工作表「{self.name}」的自訂標籤")
+        tooltip = child(child(pane, "customized-tooltip"), "formatted-text")
+        if tooltip is not None:
+            self._tooltip_sheets(tooltip, marks)
         if marks.color is not None and color_ref is not None:
             marks.color_palette = self._color_palette(color_ref, marks.color)
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
@@ -1147,6 +1160,24 @@ class SheetParser:
             add_text(match.group(0))
         add_text(text[position:])
         return runs
+
+    def _tooltip_sheets(self, formatted: etree._Element, marks: Marks) -> None:
+        """工具提示文字中的工作表（Viz in Tooltip）：記下名稱、大小與篩選的欄位，所有工作表解析完後
+        才對應到目標工作表。工具提示的其他文字不影響數字，檢視器顯示標記的欄位與值。"""
+        text = "".join(str(part) for run in children(formatted, "run") for part in run.itertext())
+        for match in SHEET_TAG.finditer(text):
+            attrs = dict(SHEET_ATTR.findall(match.group(1)))
+            self.ctx.tooltip_refs.append(
+                TooltipRef(
+                    sheet=self.name,
+                    marks=marks,
+                    element=formatted,
+                    name=attrs.get("name", ""),
+                    width=_pixels(attrs.get("maxwidth")),
+                    height=_pixels(attrs.get("maxheight")),
+                    filter=attrs.get("filter"),
+                )
+            )
 
     def _check_label_text(self, uses: list[FieldUse], cards: list[Marks]) -> None:
         """自訂標籤中的欄位必須在標記卡或欄列架上（查詢結果才有它的值）。"""
@@ -1864,12 +1895,6 @@ class SheetParser:
             name = attr(root, "ui-action-filter") if root is not None else None
             action = self.ctx.action_ids.get(name or "")
             stale = action is None
-        elif kind == "vit" and "vit" not in self.ctx.notes:
-            self.ctx.notes.add("vit")
-            self.ctx.ignore(
-                element,
-                "工具提示中的工作表（Viz in Tooltip）：以一般工作表呈現，工具提示不顯示圖表",
-            )
         caption = element.get("column", "")
         found = TupleFilter(
             kind="tuple",
@@ -1879,6 +1904,8 @@ class SheetParser:
             mode=mode,  # type: ignore[arg-type]
             tuples=tuples,
             action=action,
+            # 工具提示中的工作表的篩選：在來源工作表的工具提示中改以滑過的標記篩選
+            tooltip=kind == "vit",
             source_ref=xpath(element),
         )
         if stale:
@@ -2211,3 +2238,12 @@ def _field_ids(uses: list[FieldUse]) -> list[str]:
 
 def _order(direction: str | None) -> Literal["asc", "desc"]:
     return "desc" if (direction or "").upper() == "DESC" else "asc"
+
+
+def _pixels(value: str | None, default: int = 300) -> int:
+    """工具提示中工作表的最大寬、高（像素）；沒寫或不是正數時為 Tableau 的預設 300。"""
+    try:
+        number = int(float(value)) if value else default
+    except ValueError:
+        return default
+    return number if number > 0 else default

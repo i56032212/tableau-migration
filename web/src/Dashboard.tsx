@@ -17,6 +17,7 @@ import {
   setDrill,
   sourceActions,
   stateFor,
+  tooltipStateFor,
   type ViewState,
 } from "./state";
 import type {
@@ -422,6 +423,7 @@ function ZoneContent({
           selected={onMarks ? view.selections[zone.worksheet!] : undefined}
           highlighted={highlightsFor(ir, zone.worksheet!, view)}
           onDrill={(key, delta) => onView(setDrill(view, zone.worksheet!, key, delta))}
+          tooltipState={(target, mark) => tooltipStateFor(ir, zone.worksheet!, target, view, mark)}
         />
       );
     case "filter":

@@ -2815,6 +2815,14 @@
           "title": "Tooltip",
           "type": "array"
         },
+        "tooltip_sheets": {
+          "description": "工具提示中的工作表（Viz in Tooltip）",
+          "items": {
+            "$ref": "#/$defs/TooltipSheet"
+          },
+          "title": "Tooltip Sheets",
+          "type": "array"
+        },
         "shape": {
           "anyOf": [
             {
@@ -5090,6 +5098,53 @@
       "title": "TextStyle",
       "type": "object"
     },
+    "TooltipSheet": {
+      "additionalProperties": false,
+      "description": "工具提示中的工作表（Viz in Tooltip）：滑過標記時，工具提示中顯示另一張工作表，以標記的值篩選。\n\n.twb 的工具提示文字中的 <Sheet name=\"…\" maxwidth=\"300\" maxheight=\"300\" filter=\"<All Fields>\">。",
+      "properties": {
+        "worksheet": {
+          "description": "工具提示中顯示的工作表",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Worksheet",
+          "type": "string"
+        },
+        "max_width": {
+          "default": 300,
+          "description": "最大寬度（像素）",
+          "exclusiveMinimum": 0,
+          "title": "Max Width",
+          "type": "integer"
+        },
+        "max_height": {
+          "default": 300,
+          "description": "最大高度（像素）",
+          "exclusiveMinimum": 0,
+          "title": "Max Height",
+          "type": "integer"
+        },
+        "fields": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/FieldUse"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "以標記的哪些欄位篩選（這張工作表上的維度）；None 為所有欄位（<All Fields>），空的清單不篩選",
+          "title": "Fields"
+        }
+      },
+      "required": [
+        "worksheet"
+      ],
+      "title": "TooltipSheet",
+      "type": "object"
+    },
     "TopNFilter": {
       "additionalProperties": false,
       "description": "依某個彙總運算式取前 N 或後 N；mode、values 為排名前先選取的成員（篩選對話框的「一般」頁）。",
@@ -5421,6 +5476,12 @@
           "default": null,
           "description": "篩選群組（見 CategoricalFilter.group）",
           "title": "Group"
+        },
+        "tooltip": {
+          "default": false,
+          "description": "工具提示中的工作表（Viz in Tooltip）自動產生的篩選：直接檢視時依存檔的狀態；在來源工作表的工具提示中改以滑過的標記篩選",
+          "title": "Tooltip",
+          "type": "boolean"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

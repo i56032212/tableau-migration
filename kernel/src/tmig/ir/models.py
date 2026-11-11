@@ -626,6 +626,11 @@ class TupleFilter(IRModel):
         "None 表示來源與目標是同一個資料源",
     )
     group: str | None = Field(default=None, description="篩選群組（見 CategoricalFilter.group）")
+    tooltip: bool = Field(
+        default=False,
+        description="工具提示中的工作表（Viz in Tooltip）自動產生的篩選：直接檢視時依存檔的狀態；"
+        "在來源工作表的工具提示中改以滑過的標記篩選",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -931,6 +936,21 @@ class ColorPalette(IRModel):
     )
 
 
+class TooltipSheet(IRModel):
+    """工具提示中的工作表（Viz in Tooltip）：滑過標記時，工具提示中顯示另一張工作表，以標記的值篩選。
+
+    .twb 的工具提示文字中的 <Sheet name="…" maxwidth="300" maxheight="300" filter="<All Fields>">。"""
+
+    worksheet: Id = Field(description="工具提示中顯示的工作表")
+    max_width: int = Field(default=300, gt=0, description="最大寬度（像素）")
+    max_height: int = Field(default=300, gt=0, description="最大高度（像素）")
+    fields: list[FieldUse] | None = Field(
+        default=None,
+        description="以標記的哪些欄位篩選（這張工作表上的維度）；None 為所有欄位（<All Fields>），"
+        "空的清單不篩選",
+    )
+
+
 class Marks(IRModel):
     type: MarkType
     color: FieldUse | None = None
@@ -973,6 +993,9 @@ class Marks(IRModel):
     )
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
+    tooltip_sheets: list[TooltipSheet] = Field(
+        default_factory=list, description="工具提示中的工作表（Viz in Tooltip）"
+    )
     shape: FieldUse | None = None
     angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
     path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")
