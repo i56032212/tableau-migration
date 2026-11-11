@@ -16,10 +16,17 @@ export interface CatalogField {
   hidden: boolean;
 }
 
+/** 階層（Tableau 的 drill-path）：由上到下的維度 */
+export interface CatalogHierarchy {
+  name: string;
+  fields: string[];
+}
+
 export interface CatalogDatasource {
   id: string;
   caption: string;
   fields: CatalogField[];
+  hierarchies?: CatalogHierarchy[];
 }
 
 export interface CatalogParameter {
@@ -616,3 +623,88 @@ const AGG_FUNCTIONS: Record<string, string> = {
   varp: "VARP",
   attr: "ATTR",
 };
+
+// ---------------------------------------------------------------- 階層的切入
+
+const DATE_LEVELS = ["year", "quarter", "month", "day"];
+const TIME_LEVELS = ["hour", "minute", "second"];
+
+const plainUse = (field: string): FieldUse => ({ field, agg: null, date: null, continuous: false, table_calc: null });
+
+/**
+ * 膠囊所在的階層（由上到下的各層）與它的位置（與 tmig.planner.drill 相同）：工作表資料源的階層，或日期的
+ * 年 → 季 → 月 → 日（日期時間再到時、分、秒）。彙總、Table Calculation 與週、星期等不在階層中。
+ */
+export function hierarchyOf(
+  use: FieldUse,
+  catalog: Catalog,
+  datasource: string,
+  fields: Map<string, CatalogField>,
+): { levels: FieldUse[]; position: number } | null {
+  if (use.agg !== null || use.table_calc !== null || isSpecial(use)) return null;
+  if (use.date) {
+    const { kind } = use.date;
+    const units = [...DATE_LEVELS, ...(fields.get(use.field)?.datatype === "datetime" ? TIME_LEVELS : [])];
+    const position = units.indexOf(use.date.unit);
+    if (position < 0) return null;
+    return { levels: units.map((unit) => ({ ...use, date: { kind, unit } })), position };
+  }
+  const ds = catalog.datasources.find((d) => d.id === datasource);
+  for (const hierarchy of ds?.hierarchies ?? []) {
+    const position = hierarchy.fields.indexOf(use.field);
+    if (position >= 0) return { levels: hierarchy.fields.map(plainUse), position };
+  }
+  return null;
+}
+
+/** 欄、列架上膠囊的切入按鈕（Tableau 的 ⊞／⊟）：下一層緊接在後面時可以收合，否則可以向下切入。 */
+export interface DrillToggle {
+  kind: "down" | "up";
+  /** 向下切入時加入的下一層；收合時移除的第一層 */
+  next: FieldUse;
+}
+
+const sameLevel = (a: FieldUse | undefined, b: FieldUse | undefined) => a !== undefined && b !== undefined && useKey(a) === useKey(b);
+
+export function drillToggle(
+  sheet: SheetIR,
+  shelf: "rows" | "columns",
+  index: number,
+  catalog: Catalog,
+  fields: Map<string, CatalogField>,
+): DrillToggle | null {
+  const uses = usesOn(sheet, shelf);
+  const use = uses[index];
+  const found = use ? hierarchyOf(use, catalog, sheet.datasource, fields) : null;
+  if (!use || !found) return null;
+  const next = found.levels[found.position + 1];
+  if (!next) return null;
+  // 日期值（截斷）只有一個膠囊：向下切入改成下一層的截斷
+  if (use.date?.kind === "trunc") return { kind: "down", next };
+  if (sameLevel(uses[index + 1], next)) return { kind: "up", next };
+  // 下一層已經在欄、列架的其他位置：不重複加入
+  if ([...sheet.rows, ...sheet.columns].some((u) => sameLevel(u, next))) return null;
+  return { kind: "down", next };
+}
+
+/** 按下膠囊的切入按鈕：向下切入時在後面加入下一層（日期值改成下一層）；收合時移除後面緊接著的各個下層。 */
+export function drillPill(
+  sheet: SheetIR,
+  shelf: "rows" | "columns",
+  index: number,
+  catalog: Catalog,
+  fields: Map<string, CatalogField>,
+): SheetIR {
+  const toggle = drillToggle(sheet, shelf, index, catalog, fields);
+  const uses = usesOn(sheet, shelf);
+  const use = uses[index];
+  const found = use ? hierarchyOf(use, catalog, sheet.datasource, fields) : null;
+  if (!toggle || !use || !found) return sheet;
+  if (toggle.kind === "down") {
+    if (use.date?.kind === "trunc") return changeUse(sheet, shelf, index, toggle.next);
+    return insertUse(sheet, shelf, toggle.next, index + 1);
+  }
+  let end = index + 1;
+  while (end < uses.length && sameLevel(uses[end], found.levels[found.position + 1 + (end - index - 1)])) end += 1;
+  return setUses(sheet, shelf, [...uses.slice(0, index + 1), ...uses.slice(end)]);
+}

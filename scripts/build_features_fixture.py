@@ -39,6 +39,7 @@
 - Story「銷售故事」：三個故事點——「篩選動作」dashboard 的預設狀態；同一個 dashboard 在 Region Picker
   選取 East（兩個篩選動作的篩選與選取）；Sales by Segment 工作表只看 Consumer（擷取時是 Corporate，
   之後改成 Consumer 沒有更新故事點，開啟時顯示改過的狀態）
+- 階層 Product：Category → Sub-Category → Product Name；Category Detail 等工作表上的 Category 可以向下切入
 """
 
 from __future__ import annotations
@@ -325,6 +326,15 @@ ZERO_COLUMN = f"""      <column caption='Zero' datatype='integer' name='{ZERO_CA
 """甜甜圈的欄架：兩個 MIN(0) 疊成雙軸。"""
 
 # 群組與數值分組（計算欄位的 categorical-bin、bin 類型）
+DRILL_PATHS = """      <drill-paths>
+        <drill-path name='Product'>
+          <field>[Category]</field>
+          <field>[Sub-Category]</field>
+          <field>[Product Name]</field>
+        </drill-path>
+      </drill-paths>"""
+"""階層 Product：Category → Sub-Category → Product Name（檢視器上可以向下切入、向上收合）。"""
+
 REGION_GROUP = """      <column caption='Region (group)' datatype='string' name='[Region (group)]' role='dimension' type='nominal'>
         <calculation class='categorical-bin' column='[Region]' new-bin='true'>
           <bin default-name='false' value='&quot;Coasts&quot;'>
@@ -1938,7 +1948,7 @@ def twb(rows: int) -> str:
   </preferences>
   <datasources>
 {PARAMETERS}
-{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, KEY_SALES_COLUMN, AVG_CUSTOMER_COLUMN, TOP_ORDER_COLUMN, DATASOURCE_GROUPS, SET_TOP, SET_KEY, SET_PROFITABLE]))}
+{demo.datasource(rows, "\n".join([MEASURE_NAMES, REGION_GROUP, SHIP_SPEED, QUANTITY_BIN, SELECTED_COLUMN, ZERO_COLUMN, KEY_SALES_COLUMN, AVG_CUSTOMER_COLUMN, TOP_ORDER_COLUMN, DATASOURCE_GROUPS, SET_TOP, SET_KEY, SET_PROFITABLE, DRILL_PATHS]))}
   </datasources>
 {shared_views()}
 {actions()}

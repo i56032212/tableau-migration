@@ -480,6 +480,7 @@ def connections_ir(tmp_path: Path) -> Path:
                 "connection": c,
                 "fields": [column.model_copy(update={"id": f"f_col_{i}", "name": f"[col {i}]"})],
                 "filters": [],
+                "hierarchies": [],
             }
         )
         for i, c in enumerate(variants)

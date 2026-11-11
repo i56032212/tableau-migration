@@ -20,6 +20,7 @@ from tmig.edit import (
     remove_action,
     remove_calc,
     remove_dashboard,
+    remove_hierarchy,
     remove_parameter,
     remove_story,
     remove_worksheet,
@@ -28,6 +29,7 @@ from tmig.edit import (
     replace_worksheet,
     upsert_action,
     upsert_calc,
+    upsert_hierarchy,
     upsert_parameter,
 )
 from tmig.ir import IR, FieldUse, load_ir
@@ -280,3 +282,62 @@ def test_filter_action_keeps_target_filters_in_sync(ir: IR) -> None:
     other = next(w for w in ir.worksheets if w.id == "ws_sub_category_profit")
     assert not [f for f in other.filters if getattr(f, "action", None) == action.id]
     assert ir.actions == []
+
+
+def test_hierarchies(ir: IR) -> None:
+    """建立、改名、改變欄位與刪除階層；一個欄位只能在一個階層中，只能加入維度。"""
+    ir, created = upsert_hierarchy(ir, "ds_orders", " Product ", ["f_category", "f_sub_category"])
+    assert created is not None and created.name == "Product"
+    ir, _ = upsert_hierarchy(ir, "ds_orders", "Location", ["f_region", "f_state_province"])
+    hierarchies = catalog(ir)["datasources"][0]["hierarchies"]
+    assert hierarchies == [
+        {"name": "Product", "fields": ["f_category", "f_sub_category"]},
+        {"name": "Location", "fields": ["f_region", "f_state_province"]},
+    ]
+    # 改名並加入 Product Name；Region 移到 Product（從 Location 移除），順序依傳入的欄位
+    ir, changed = upsert_hierarchy(
+        ir,
+        "ds_orders",
+        "Products",
+        ["f_category", "f_sub_category", "f_product_name", "f_region"],
+        original="Product",
+    )
+    assert changed is not None and changed.name == "Products"
+    ds = ir.datasources[0]
+    assert [(h.name, h.fields) for h in ds.hierarchies] == [
+        ("Products", ["f_category", "f_sub_category", "f_product_name", "f_region"]),
+        ("Location", ["f_state_province"]),
+    ]
+    with pytest.raises(EditError, match="已經有名為「Location」的階層"):
+        upsert_hierarchy(ir, "ds_orders", "Location", ["f_city"], original="Products")
+    with pytest.raises(EditError, match="不是維度"):
+        upsert_hierarchy(ir, "ds_orders", "Bad", ["f_sales"])
+    with pytest.raises(EditError, match="找不到欄位"):
+        upsert_hierarchy(ir, "ds_orders", "Bad", ["f_nope"])
+    with pytest.raises(EditError, match="請輸入階層的名稱"):
+        upsert_hierarchy(ir, "ds_orders", "  ", ["f_city"])
+    # 移走最後一個欄位的階層一起刪除；沒有欄位時刪除階層
+    ir, _ = upsert_hierarchy(ir, "ds_orders", "Products", ["f_state_province"], original="Products")
+    assert [(h.name, h.fields) for h in ir.datasources[0].hierarchies] == [
+        ("Products", ["f_state_province"])
+    ]
+    ir, removed = upsert_hierarchy(ir, "ds_orders", "Products", [], original="Products")
+    assert removed is None and ir.datasources[0].hierarchies == []
+    ir, _ = upsert_hierarchy(ir, "ds_orders", "Location", ["f_region"])
+    ir = remove_hierarchy(ir, "ds_orders", "Location")
+    assert ir.datasources[0].hierarchies == []
+    with pytest.raises(EditError, match="找不到階層"):
+        remove_hierarchy(ir, "ds_orders", "Location")
+
+
+def test_removed_calc_leaves_its_hierarchy(ir: IR) -> None:
+    ir, field = upsert_calc(ir, "ds_orders", "Region Upper", "UPPER([Region])")
+    assert field.role == "dimension"
+    ir, _ = upsert_hierarchy(ir, "ds_orders", "Geo", [field.id, "f_city"])
+    ir = remove_calc(ir, "ds_orders", field.id)
+    assert [(h.name, h.fields) for h in ir.datasources[0].hierarchies] == [("Geo", ["f_city"])]
+    # 改成彙總的公式（量值）時也從階層移除
+    ir, field = upsert_calc(ir, "ds_orders", "Flag", "IF [Region] = 'East' THEN 'E' END")
+    ir, _ = upsert_hierarchy(ir, "ds_orders", "Geo", ["f_city", field.id], original="Geo")
+    ir, field = upsert_calc(ir, "ds_orders", "Flag", "SUM([Sales])", field.id)
+    assert [(h.name, h.fields) for h in ir.datasources[0].hierarchies] == [("Geo", ["f_city"])]

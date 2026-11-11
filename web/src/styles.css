@@ -155,6 +155,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .worksheet[data-interactive="true"] .chart svg path,
 .worksheet[data-interactive="true"] .chart svg text { cursor: pointer; }
 .worksheet-meta .selection { color: var(--accent); font-weight: 600; }
+/* 階層的切入：⊟ 收合目前最下層、⊞ 向下切入到下一層 */
+.worksheet-meta .drill { display: inline-flex; gap: 6px; }
+.worksheet-meta .drill .link { font-size: 12px; }
 .action-menu { position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 2px; min-width: 160px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12); }
 .action-menu [role="menuitem"] { border: 0; background: none; text-align: left; padding: 4px 6px; cursor: pointer; color: var(--accent); font: inherit; }
 .action-menu [role="menuitem"]:hover { background: var(--page); }
@@ -264,6 +267,20 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .field.special .field-name { font-style: italic; }
 .field-actions { display: none; gap: 2px; }
 .field:hover .field-actions { display: inline-flex; }
+/* 階層：名稱（拖曳維度到名稱上即加入）與縮排的欄位 */
+.hierarchy { list-style: none; }
+.hierarchy-name { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 3px; white-space: nowrap; }
+.hierarchy-name.over { background: var(--accent-soft, #e8f0fb); outline: 1px dashed var(--accent); }
+.hierarchy-name:hover .field-actions { display: inline-flex; }
+.hierarchy-name .toggle { width: 12px; color: var(--muted); }
+.hierarchy > .fields { padding-left: 16px; }
+.hierarchy-dialog { display: flex; flex-direction: column; gap: 8px; min-width: 320px; }
+.hierarchy-levels { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
+.hierarchy-levels li { display: flex; align-items: center; gap: 6px; }
+.hierarchy-levels .level-name { flex: 1; }
+/* 膠囊上的切入按鈕 */
+.pill-drill { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--muted); font-size: 13px; line-height: 1; }
+.pill-drill:hover { color: var(--accent); }
 
 .cards-pane { grid-row: 2; overflow-y: auto; border-right: 1px solid var(--line); padding: 6px; display: flex; flex-direction: column; gap: 8px; background: #fbfbfc; }
 .card { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
@@ -287,7 +304,7 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .shelf-label { flex: none; width: 28px; color: var(--muted); font-size: 12px; }
 .shelf-drop { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 26px; padding: 1px 2px; border-radius: 3px; }
 .shelf-hint { color: #a0a6ae; font-size: 12px; }
-.pill-slot { display: inline-flex; max-width: 100%; }
+.pill-slot { display: inline-flex; align-items: center; max-width: 100%; }
 .pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border-radius: 12px; border: none; color: #fff; font: inherit; font-size: 12px; line-height: 18px; cursor: grab; user-select: none; text-align: left; }
 .pill.discrete { background: #4996b2; }
 .pill.continuous { background: #3fa45b; }

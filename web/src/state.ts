@@ -31,6 +31,8 @@ export interface ViewState {
   highlights?: Record<string, { sheet: string; marks: Mark[] }>;
   /** 醒目提示控制項：工作表 id → 欄位鍵 → 醒目提示的值 */
   highlighters?: Record<string, Record<string, Scalar[]>>;
+  /** 階層的切入：工作表 id → 一組階層最上層的欄位鍵 → 切入的層數 */
+  drills?: Record<string, Record<string, number>>;
 }
 
 /** 篩選狀態的欄位鍵，與查詢服務相同：f_region、year(f_order_date)、trunc_month(f_order_date)。 */
@@ -92,12 +94,25 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
   const state: QueryState = { filters: view.sheetFilters[worksheet] ?? {}, parameters: view.parameters, actions };
   if (view.today) state.today = view.today;
   if (view.pages && worksheet in view.pages) state.pages = { [worksheet]: view.pages[worksheet] };
+  const drill = view.drills?.[worksheet];
+  if (drill && Object.keys(drill).length > 0) state.drill = drill;
   // 集合動作：只帶這張工作表的資料源中的集合（其他資料源的集合不影響它）
   const sheet = ir.worksheets.find((w) => w.id === worksheet);
   const fields = new Set(ir.datasources.find((d) => d.id === sheet?.datasource)?.fields.map((f) => f.id) ?? []);
   const sets = Object.entries(view.sets ?? {}).filter(([id]) => fields.has(id));
   if (sets.length > 0) state.sets = Object.fromEntries(sets);
   return state;
+}
+
+/** 階層的切入：工作表上一組階層（以最上層的欄位鍵）切入 delta 層後的狀態；0 為存檔時的層數。 */
+export function setDrill(view: ViewState, worksheet: string, key: string, delta: number): ViewState {
+  const sheet = { ...(view.drills?.[worksheet] ?? {}) };
+  if (delta === 0) delete sheet[key];
+  else sheet[key] = delta;
+  const drills = { ...(view.drills ?? {}) };
+  if (Object.keys(sheet).length > 0) drills[worksheet] = sheet;
+  else delete drills[worksheet];
+  return { ...view, drills };
 }
 
 function setFieldOf(ir: IR, id: string): DataField | undefined {

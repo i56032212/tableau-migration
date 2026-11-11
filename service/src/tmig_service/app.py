@@ -50,6 +50,7 @@ from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
 from tmig.ir import IR, iter_zones, save_ir
 from tmig.package import read_report_file
+from tmig.planner.drill import apply_drill, drill_info
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
@@ -696,6 +697,9 @@ def create_app(
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
         target = next((w for w in ir.worksheets if w.id == ws), None)
+        # 階層的切入：以切入後的欄、列架查詢與繪製；切入的控制項依存檔的工作表
+        drill = drill_info(ir, target, state.drill) if target is not None else []
+        ir = apply_drill(ir, ws, state.drill)
         empty = {
             "worksheet": ws,
             "name": target.name if target else ws,
@@ -849,6 +853,7 @@ def create_app(
             "notes": rendered.notes,
             "applied": query.state.applied,
             "skipped": query.state.skipped,
+            "drill": drill,
             "table": {
                 "keys": [c.key for c in shown],
                 "headers": [caption(fields[c.use.field], c.use, sheet) for c in shown if c.use],
@@ -882,10 +887,10 @@ def create_app(
         limit: int,
     ) -> tuple[list[str], list[list[Any]], bool]:
         """工作表的完整資料：前 limit 列與是否還有更多。"""
-        ir = loaded.ir
         state = state or QueryState()
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
+        ir = apply_drill(loaded.ir, ws, state.drill)
         try:
             query = underlying_query(worksheet_sql(ir, ws, state, user), limit + 1)
         except StateError as exc:

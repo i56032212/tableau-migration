@@ -15,6 +15,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     FitMode,
+    Hierarchy,
     Parameter,
     PublishedSource,
     Unsupported,
@@ -65,6 +66,8 @@ class DsState:
     """Tableau 的使用者篩選轉成的布林計算欄位 id；工作表以「在集合中」篩選（P1）。"""
     set_fields: set[str] = field(default_factory=set)
     """集合（含使用者篩選）的欄位 id：篩選架上沒有條件的篩選表示「在集合中」。"""
+    hierarchies: list[Hierarchy] = field(default_factory=list)
+    """階層（<drill-paths>）。"""
 
     def add_field(self, data_field: DataField) -> None:
         self.fields.append(data_field)

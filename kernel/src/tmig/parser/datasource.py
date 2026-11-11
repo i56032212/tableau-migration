@@ -29,6 +29,7 @@ from tmig.ir.models import (
     FileColumn,
     FileConnection,
     FileTable,
+    Hierarchy,
     JoinRelation,
     LiveConnection,
     LogicalTable,
@@ -290,6 +291,7 @@ class DatasourceParser:
             published=None if published else self._published(),
         )
         self._fields(state, conn, data_conn, via_extract)
+        self._hierarchies(state)
         if not state.fields:
             ctx.flag(el, f"資料源「{self.caption}」沒有可用的欄位")
             return None
@@ -584,7 +586,43 @@ class DatasourceParser:
         options = child(self.el, "date-options")
         value = (options.get("start-of-week") if options is not None else None) or "sunday"
         value = value.lower()
+        self._check_fiscal_year(options)
         return value if value in WEEK_DAYS else "sunday"  # type: ignore[return-value]
+
+    def _hierarchies(self, state: DsState) -> None:
+        """階層：<drill-paths><drill-path name='Product'><field>[Category]</field>…；找不到的欄位略過
+        （例如隱藏後刪除的欄位），一個欄位只算在第一個階層。"""
+        used: set[str] = set()
+        for path in children(child(self.el, "drill-paths"), "drill-path"):
+            name = path.get("name") or ""
+            ids: list[str] = []
+            for item in children(path, "field"):
+                found = state.by_name.get(text_of(item))
+                if found is not None and found.id not in used and found.id not in ids:
+                    ids.append(found.id)
+            if name and ids and all(h.name != name for h in state.hierarchies):
+                state.hierarchies.append(Hierarchy(name=name, fields=ids))
+                used.update(ids)
+
+    def _check_fiscal_year(self, options: etree._Element | None) -> None:
+        """會計年度起始月（資料源的 <date-options fiscal-year-start='april'>、日期欄位的 fiscal-year-start）
+        改變日期的年、季與週數：還沒支援，列為不支援，不能默默以日曆年計算。欄位上的 0 表示沿用資料源的設定。"""
+        start = (
+            (options.get("fiscal-year-start") or "january") if options is not None else "january"
+        )
+        if options is not None and start.lower() != "january":
+            self.ctx.flag(
+                options,
+                f"資料源「{self.caption}」的會計年度從 {start} 開始：年、季與週數依會計年度計算，尚不支援",
+            )
+        for column in children(self.el, "column"):
+            value = column.get("fiscal-year-start")
+            if value not in (None, "", "0"):
+                caption = column.get("caption") or strip_brackets(column.get("name", ""))
+                self.ctx.flag(
+                    column,
+                    f"欄位「{caption}」自訂的會計年度起始月（{value}）：年、季與週數依會計年度計算，尚不支援",
+                )
 
     # ------------------------------------------------------------ 欄位
 

@@ -14,6 +14,7 @@ import {
   nextSelection,
   parameterValue,
   runActions,
+  setDrill,
   sourceActions,
   stateFor,
   type ViewState,
@@ -420,6 +421,7 @@ function ZoneContent({
           onMarks={onMarks}
           selected={onMarks ? view.selections[zone.worksheet!] : undefined}
           highlighted={highlightsFor(ir, zone.worksheet!, view)}
+          onDrill={(key, delta) => onView(setDrill(view, zone.worksheet!, key, delta))}
         />
       );
     case "filter":

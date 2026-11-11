@@ -662,6 +662,13 @@ class PublishedSource(IRModel):
     revision: str | None = None
 
 
+class Hierarchy(IRModel):
+    """階層（Tableau 的 drill-path）：由上到下的維度；檢視上可以向下切入到下一層、向上收合。"""
+
+    name: str = Field(min_length=1)
+    fields: list[Id] = Field(min_length=1, description="由上到下的欄位 id")
+
+
 class Datasource(IRModel):
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱")
@@ -670,6 +677,9 @@ class Datasource(IRModel):
     settings: DatasourceSettings
     fields: list[DataField] = Field(min_length=1)
     filters: list[Filter] = Field(default_factory=list, description="萃取篩選與資料源篩選")
+    hierarchies: list[Hierarchy] = Field(
+        default_factory=list, description="階層；每個欄位最多屬於一個階層"
+    )
     published: PublishedSource | None = Field(
         default=None, description="來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
     )
@@ -680,6 +690,19 @@ class Datasource(IRModel):
         for flt in self.filters:
             if flt.stage not in ("extract", "datasource"):
                 raise ValueError(f"資料源上的篩選 {flt.id} 只能屬於 extract 或 datasource 階段")
+        known = {f.id for f in self.fields}
+        seen: set[str] = set()
+        names: set[str] = set()
+        for hierarchy in self.hierarchies:
+            if hierarchy.name in names:
+                raise ValueError(f"階層「{hierarchy.name}」重複")
+            names.add(hierarchy.name)
+            for field_id in hierarchy.fields:
+                if field_id not in known:
+                    raise ValueError(f"階層「{hierarchy.name}」的欄位 {field_id} 不在資料源中")
+                if field_id in seen:
+                    raise ValueError(f"欄位 {field_id} 屬於兩個階層")
+                seen.add(field_id)
         return self
 
 

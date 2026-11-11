@@ -32,6 +32,8 @@ interface Props {
   highlighted?: Mark[] | null;
   /** 編輯器：工作表的定義改變後遞增，重新查詢 */
   revision?: number;
+  /** 階層的切入（檢視器）：一組階層（最上層的欄位鍵）改成切入 delta 層；沒有傳入時不顯示切入的按鈕 */
+  onDrill?: (key: string, delta: number) => void;
 }
 
 type Spec = Record<string, any>;
@@ -238,6 +240,7 @@ export function WorksheetView({
   selected,
   highlighted,
   revision = 0,
+  onDrill,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
   // 事件處理以 ref 取最新的回呼，圖表不必因父元件重繪而重建
@@ -385,6 +388,34 @@ export function WorksheetView({
           已選取 {count} 個標記 ✕
         </button>
       )}
+      {onDrill &&
+        !response?.unsupported &&
+        (response?.drill ?? []).map((d) => (
+          <span key={`${d.shelf}:${d.key}`} className="drill" data-drill={d.key}>
+            {d.can_up && (
+              <button
+                type="button"
+                className="link"
+                title={`向上收合：${d.label}`}
+                aria-label={`向上收合 ${d.label}`}
+                onClick={() => onDrill(d.key, d.delta - 1)}
+              >
+                ⊟ {d.label}
+              </button>
+            )}
+            {d.can_down && d.next && (
+              <button
+                type="button"
+                className="link"
+                title={`向下切入：${d.label} → ${d.next}`}
+                aria-label={`向下切入到 ${d.next}`}
+                onClick={() => onDrill(d.key, d.delta + 1)}
+              >
+                ⊞ {d.next}
+              </button>
+            )}
+          </span>
+        ))}
       {response && !response.unsupported && <span>{response.rows} 列</span>}
       {response?.table && (
         <button type="button" className="link" onClick={() => setShowTable(!showTable)}>

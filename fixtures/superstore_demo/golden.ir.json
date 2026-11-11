@@ -631,6 +631,7 @@
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
+      "hierarchies": [],
       "published": null,
       "source_ref": "/workbook/datasources/datasource[2]"
     }

@@ -1,4 +1,4 @@
-// 編輯器的對話框：計算欄位、計算方向（指定維度）、數字格式、標題、座標軸、參考線、趨勢線、參數與色彩。
+// 編輯器的對話框：計算欄位、計算方向（指定維度）、數字格式、標題、座標軸、參考線、趨勢線、參數、階層與色彩。
 
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../Server";
@@ -852,6 +852,148 @@ export function ParameterDialog({ parameter, onClose, onSaved }: { parameter: st
           {existing && (
             <button type="button" className="danger" onClick={() => void remove()}>
               刪除
+            </button>
+          )}
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 階層
+
+/** 可以放進階層的欄位：維度（不含集合、彙總與 Table Calculation 的計算欄位）。 */
+export function hierarchyCandidates(fields: CatalogField[]): CatalogField[] {
+  return fields.filter(
+    (f) => f.role === "dimension" && f.kind !== "set" && f.level !== "aggregate" && f.level !== "table_calc",
+  );
+}
+
+/**
+ * 建立或改變階層（Tableau 資料窗格的「階層」）：名稱與由上到下的欄位。加入的欄位從其他階層移除
+ * （一個欄位只能在一個階層中）；移除所有欄位即刪除階層。
+ */
+export function HierarchyDialog({
+  datasource,
+  name,
+  field,
+  onClose,
+  onSaved,
+}: {
+  datasource: string;
+  name: string | null;
+  field?: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const editor = useEditor();
+  const ds = editor.catalog.datasources.find((d) => d.id === datasource);
+  const existing = ds?.hierarchies?.find((h) => h.name === name) ?? null;
+  const candidates = hierarchyCandidates(ds?.fields ?? []);
+  const caption = (id: string) => ds?.fields.find((f) => f.id === id)?.caption ?? id;
+  const taken = new Set(ds?.hierarchies?.map((h) => h.name) ?? []);
+  const suggested = (() => {
+    if (existing) return existing.name;
+    const base = field ? `${caption(field)} 階層` : "階層";
+    let text = base;
+    for (let n = 2; taken.has(text); n += 1) text = `${base} ${n}`;
+    return text;
+  })();
+  const [title, setTitle] = useState(suggested);
+  const [levels, setLevels] = useState<string[]>(existing?.fields ?? (field ? [field] : []));
+  const [adding, setAdding] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const available = candidates.filter((f) => !levels.includes(f.id));
+  const owner = (id: string) => ds?.hierarchies?.find((h) => h.name !== existing?.name && h.fields.includes(id))?.name;
+  const move = (index: number, by: number) => {
+    const next = [...levels];
+    const [item] = next.splice(index, 1);
+    next.splice(index + by, 0, item);
+    setLevels(next);
+  };
+  const save = async () => {
+    setError(null);
+    try {
+      await editApi.saveHierarchy(editor.workbook, datasource, title, levels, existing?.name ?? null);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const remove = async () => {
+    if (!existing) return;
+    try {
+      await editApi.removeHierarchy(editor.workbook, datasource, existing.name);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <Modal title={existing ? `編輯階層：${existing.name}` : "建立階層"} onClose={onClose}>
+      <div className="hierarchy-dialog">
+        <label className="inline">
+          名稱
+          <input aria-label="階層名稱" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <ol className="hierarchy-levels" aria-label="階層的欄位（由上到下）">
+          {levels.map((id, i) => (
+            <li key={id} data-level={id}>
+              <span className="level-name">{caption(id)}</span>
+              <button type="button" className="link" aria-label={`上移 ${caption(id)}`} disabled={i === 0} onClick={() => move(i, -1)}>
+                ↑
+              </button>
+              <button
+                type="button"
+                className="link"
+                aria-label={`下移 ${caption(id)}`}
+                disabled={i === levels.length - 1}
+                onClick={() => move(i, 1)}
+              >
+                ↓
+              </button>
+              <button type="button" className="link" aria-label={`從階層移除 ${caption(id)}`} onClick={() => setLevels(levels.filter((l) => l !== id))}>
+                ✕
+              </button>
+            </li>
+          ))}
+          {levels.length === 0 && <li className="hint">沒有欄位：確定後刪除階層</li>}
+        </ol>
+        <div className="row">
+          <select aria-label="加入階層的欄位" value={adding} onChange={(e) => setAdding(e.target.value)}>
+            <option value="">選擇維度…</option>
+            {available.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.caption}
+                {owner(f.id) ? `（目前在「${owner(f.id)}」）` : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={!adding}
+            onClick={() => {
+              setLevels([...levels, adding]);
+              setAdding("");
+            }}
+          >
+            加入
+          </button>
+        </div>
+        <p className="hint">檢視上的階層欄位可以向下切入到下一層、向上收合；一個欄位只能在一個階層中。</p>
+        {error && <p className="error">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="primary" disabled={!existing && levels.length === 0} onClick={() => void save()}>
+            確定
+          </button>
+          {existing && (
+            <button type="button" className="danger" onClick={() => void remove()}>
+              刪除階層
             </button>
           )}
           <button type="button" onClick={onClose}>

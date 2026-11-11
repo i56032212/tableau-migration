@@ -384,6 +384,25 @@ export interface QueryState {
   today?: string | null;
   /** 頁面架目前的頁：工作表 id → 頁面欄位的值 */
   pages?: Record<string, Scalar>;
+  /** 階層的切入：欄、列架上一組階層欄位最上層的欄位鍵 → 向下多顯示的層數（負數收合存檔時的下層） */
+  drill?: Record<string, number>;
+}
+
+/** 檢視器的切入控制項：工作表欄、列架上可以向下切入或向上收合的一組階層 */
+export interface DrillControl {
+  /** 這組階層最上層的欄位鍵（QueryState.drill 的鍵） */
+  key: string;
+  shelf: "rows" | "columns";
+  /** 目前顯示的最下層，例如 Sub-Category、QUARTER(Order Date) */
+  label: string;
+  /** 最上層 */
+  head: string;
+  /** 向下切入時加入（或日期值改成）的下一層 */
+  next: string | null;
+  /** 目前切入的層數 */
+  delta: number;
+  can_down: boolean;
+  can_up: boolean;
 }
 
 export interface WorkbookSummary {
@@ -425,6 +444,8 @@ export interface RenderResponse {
   notes: string[];
   applied?: string[];
   skipped?: string[];
+  /** 階層的切入控制項（依存檔的工作表） */
+  drill?: DrillControl[];
   table?: { keys: string[]; headers: string[]; rows: string[][]; raw: string[][] };
 }
 

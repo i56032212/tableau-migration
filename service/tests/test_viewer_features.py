@@ -17,6 +17,7 @@ import pytest
 
 from tmig.data.executor import execute, format_value
 from tmig.ir import load_ir
+from tmig.planner.drill import apply_drill
 from tmig.planner.state import QueryState
 from tmig.sqlgen.query import worksheet_sql
 from tmig.verify.run import ensure_data
@@ -305,6 +306,67 @@ def test_filter_actions(server: str) -> None:
         click("South")
         latest = click("South")
         assert latest["ws_segment_detail"][1]["rows"] == 0
+        assert errors == []
+        browser.close()
+
+
+def test_drill_down_in_dashboard(server: str) -> None:
+    """階層 Product：Category Detail 的 Category 向下切入到 Sub-Category，與篩選動作一起作用；
+    數字與存檔時就把 Sub-Category 放在架上的工作表相同；收合回到存檔時的樣子。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    sheet = "ws_category_detail"
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        view = page.locator(f"[data-worksheet='{sheet}']")
+        # 沒有階層的工作表沒有切入的按鈕（Region Picker 的 Region 不在階層中）
+        assert page.locator("[data-worksheet='ws_region_picker'] .drill").count() == 0
+
+        def latest(start: int) -> tuple[dict[str, Any], dict[str, Any]]:
+            renders.wait_for(page, {sheet}, start)
+            page.wait_for_timeout(300)
+            body, data = next((b, d) for w, b, d in reversed(renders.items[start:]) if w == sheet)
+            return body, data
+
+        start = len(renders.items)
+        view.get_by_role("button", name="向下切入到 Sub-Category").click()
+        body, data = latest(start)
+        assert body["drill"] == {"f_category": 1}
+        assert data["rows"] == 17
+        assert data["table"]["headers"][:2] == ["Category", "Sub-Category"]
+        check_numbers(apply_drill(ir, sheet, body["drill"]), sheet, body, data)
+        expect(view.get_by_role("button", name="向下切入到 Product Name")).to_be_visible()
+
+        # 篩選動作的選取與切入一起作用
+        start = len(renders.items)
+        page.locator(
+            "[data-worksheet='ws_region_picker'] svg path[aria-roledescription='bar']"
+            "[aria-label$='Region: East']"
+        ).click()
+        body, data = latest(start)
+        assert body["drill"] == {"f_category": 1}
+        assert body["actions"] == {"act_filter_category_detail": [{"f_region": "East"}]}
+        check_numbers(apply_drill(ir, sheet, body["drill"]), sheet, body, data)
+
+        start = len(renders.items)
+        view.get_by_role("button", name="向上收合 Sub-Category").click()
+        body, data = latest(start)
+        assert "drill" not in body
+        assert data["rows"] == 3
+        check_numbers(ir, sheet, body, data)
+        assert view.get_by_role("button", name="向上收合 Sub-Category").count() == 0
         assert errors == []
         browser.close()
 

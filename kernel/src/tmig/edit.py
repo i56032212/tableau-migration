@@ -29,6 +29,7 @@ from tmig.ir import (
     DataField,
     Datasource,
     FieldUse,
+    Hierarchy,
     Marks,
     Parameter,
     Size,
@@ -63,7 +64,7 @@ class FormulaCheck:
 
 
 def catalog(ir: IR) -> dict[str, Any]:
-    """編輯器的資料窗格：各資料源的欄位（維度、量值、計算欄位、集合）與參數；另附色盤（色彩對話框）。"""
+    """編輯器的資料窗格：各資料源的欄位（維度、量值、計算欄位、集合）、階層與參數；另附色盤（色彩對話框）。"""
     return {
         "palettes": [
             {"name": name, "kind": palette.kind, "colors": list(palette.colors)}
@@ -74,6 +75,7 @@ def catalog(ir: IR) -> dict[str, Any]:
                 "id": ds.id,
                 "caption": ds.caption,
                 "fields": [_field_entry(f) for f in ds.fields],
+                "hierarchies": [h.model_dump(mode="json") for h in ds.hierarchies],
             }
             for ds in ir.datasources
         ],
@@ -192,7 +194,12 @@ def upsert_calc(
     fields = [field if f.id == field.id else f for f in ds.fields]
     if existing is None:
         fields.append(field)
-    updated = _replace_datasource(ir, ds.model_copy(update={"fields": fields}))
+    hierarchies = ds.hierarchies
+    if field.role == "measure":
+        hierarchies = _without_fields(hierarchies, {field.id})  # 階層只能有維度
+    updated = _replace_datasource(
+        ir, ds.model_copy(update={"fields": fields, "hierarchies": hierarchies})
+    )
     if existing is not None and existing.calc is not None and existing.calc.level != check.level:
         # 與 Tableau 相同：改成彙總的公式後膠囊變成 AGG(…)，改回列層級後量值的膠囊加上 SUM
         updated = _adapt_worksheets(updated, field, existing.calc.level, check.level)
@@ -301,9 +308,88 @@ def remove_calc(ir: IR, datasource: str, field_id: str) -> IR:
     if field is None or field.calc is None:
         raise EditError(f"找不到計算欄位 {field_id}")
     updated = _replace_datasource(
-        ir, ds.model_copy(update={"fields": [f for f in ds.fields if f.id != field_id]})
+        ir,
+        ds.model_copy(
+            update={
+                "fields": [f for f in ds.fields if f.id != field_id],
+                # 與 Tableau 相同，刪除的欄位從階層中移除（階層沒有欄位時一起刪除）
+                "hierarchies": _without_fields(ds.hierarchies, {field_id}),
+            }
+        ),
     )
     return _validated(updated, f"「{field.caption}」還在使用中，不能刪除")
+
+
+def upsert_hierarchy(
+    ir: IR, datasource: str, name: str, fields: list[str], original: str | None = None
+) -> tuple[IR, Hierarchy | None]:
+    """建立階層，或改變階層（original 為原本的名稱）的名稱與由上到下的欄位。
+
+    與 Tableau 相同：階層只能有維度，一個欄位只能在一個階層中（加入這個階層的欄位從其他階層移除）；
+    沒有欄位時刪除階層（回傳 None）。工作表不受影響，檢視器依新的階層切入。"""
+    ds = _datasource(ir, datasource)
+    name = name.strip()
+    if not name:
+        raise EditError("請輸入階層的名稱")
+    if original is not None and all(h.name != original for h in ds.hierarchies):
+        raise EditError(f"找不到階層「{original}」")
+    if any(h.name == name and h.name != original for h in ds.hierarchies):
+        raise EditError(f"已經有名為「{name}」的階層")
+    known = {f.id: f for f in ds.fields}
+    ids: list[str] = []
+    for field_id in fields:
+        field = known.get(field_id)
+        if field is None:
+            raise EditError(f"找不到欄位 {field_id}")
+        level = field.calc.level if field.calc is not None else None
+        if (
+            field.role != "dimension"
+            or field.set is not None
+            or level in ("aggregate", "table_calc")
+        ):
+            raise EditError(f"「{field.caption}」不是維度，不能加入階層")
+        if field_id not in ids:
+            ids.append(field_id)
+    created = Hierarchy(name=name, fields=ids) if ids else None
+    hierarchies: list[Hierarchy] = []
+    for hierarchy in _without_fields(ds.hierarchies, set(ids), keep=original):
+        if hierarchy.name == original:
+            if created is not None:
+                hierarchies.append(created)  # 原本的位置
+        else:
+            hierarchies.append(hierarchy)
+    if original is None and created is not None:
+        hierarchies.append(created)
+    updated = _replace_datasource(ir, ds.model_copy(update={"hierarchies": hierarchies}))
+    return _validated(updated, f"階層「{name}」不正確"), created
+
+
+def remove_hierarchy(ir: IR, datasource: str, name: str) -> IR:
+    """刪除階層：欄位留在資料源中，工作表不受影響。"""
+    ds = _datasource(ir, datasource)
+    if all(h.name != name for h in ds.hierarchies):
+        raise EditError(f"找不到階層「{name}」")
+    hierarchies = [h for h in ds.hierarchies if h.name != name]
+    return _replace_datasource(ir, ds.model_copy(update={"hierarchies": hierarchies}))
+
+
+def _without_fields(
+    hierarchies: list[Hierarchy], removed: set[str], keep: str | None = None
+) -> list[Hierarchy]:
+    """從各階層移除這些欄位；沒有欄位的階層一起移除（keep 為名稱的階層保留，由呼叫者換掉）。"""
+    result: list[Hierarchy] = []
+    for hierarchy in hierarchies:
+        if hierarchy.name == keep:
+            result.append(hierarchy)
+            continue
+        rest = [f for f in hierarchy.fields if f not in removed]
+        if rest:
+            result.append(
+                hierarchy
+                if rest == hierarchy.fields
+                else Hierarchy(name=hierarchy.name, fields=rest)
+            )
+    return result
 
 
 def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR, Worksheet]:
@@ -1051,6 +1137,7 @@ __all__ = [
     "remove_action",
     "remove_calc",
     "remove_dashboard",
+    "remove_hierarchy",
     "remove_parameter",
     "remove_story",
     "remove_worksheet",
@@ -1059,5 +1146,6 @@ __all__ = [
     "replace_worksheet",
     "upsert_action",
     "upsert_calc",
+    "upsert_hierarchy",
     "upsert_parameter",
 ]

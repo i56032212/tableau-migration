@@ -2,6 +2,7 @@
 
 只在桌面版（本機引擎）啟用：變更寫回開啟中報表的 golden.ir.json（工作區中的複本，存檔時才寫成報表套件），
 檢視器的查詢立即使用新的 IR。每次修改工作表都送整張工作表（編輯器自己做復原、重做），引擎檢查後換掉。
+資料源的階層（drill-path）在資料窗格中建立、改名、改變欄位與刪除。
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from tmig.edit import (
     remove_action,
     remove_calc,
     remove_dashboard,
+    remove_hierarchy,
     remove_parameter,
     remove_story,
     remove_worksheet,
@@ -39,6 +41,7 @@ from tmig.edit import (
     replace_worksheet,
     upsert_action,
     upsert_calc,
+    upsert_hierarchy,
     upsert_parameter,
 )
 from tmig.ir import FieldUse
@@ -83,6 +86,15 @@ class DomainBody(BaseModel):
     kind: Literal["values", "range"] | None = None
     worksheet: str | None = None
     exclude_filter: str | None = None
+
+
+class HierarchyBody(BaseModel):
+    """階層：名稱與由上到下的欄位 id；original 為原本的名稱（改變既有的階層）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    fields: list[str]
+    original: str | None = None
 
 
 class ParameterBody(BaseModel):
@@ -280,6 +292,25 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         workbook: str, datasource: str, field: str, request: Request
     ) -> dict[str, bool]:
         edit(request, workbook, lambda ir: remove_calc(ir, datasource, field))
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/hierarchies")
+    def put_hierarchy(
+        workbook: str, datasource: str, body: HierarchyBody, request: Request
+    ) -> dict[str, Any]:
+        hierarchy = edit(
+            request,
+            workbook,
+            lambda ir: upsert_hierarchy(ir, datasource, body.name, body.fields, body.original),
+        )
+        return {"hierarchy": hierarchy.model_dump(mode="json") if hierarchy is not None else None}
+
+    @router.delete("/{workbook}/datasources/{datasource}/hierarchies")
+    def delete_hierarchy(
+        workbook: str, datasource: str, name: str, request: Request
+    ) -> dict[str, bool]:
+        """刪除名為 name（查詢參數；名稱可能含斜線）的階層。"""
+        edit(request, workbook, lambda ir: remove_hierarchy(ir, datasource, name))
         return {"ok": True}
 
     @router.post("/{workbook}/parameters")

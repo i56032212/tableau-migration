@@ -167,6 +167,38 @@ def test_calculated_fields(client: TestClient) -> None:
     assert refused.status_code == 422
 
 
+def test_hierarchies_api(client: TestClient) -> None:
+    """資料窗格建立、改變與刪除階層；檢視器依新的階層切入。"""
+    url = "/api/edit/demo/datasources/ds_orders/hierarchies"
+    response = client.put(url, json={"name": "Geo", "fields": ["f_region", "f_state_province"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["hierarchy"] == {
+        "name": "Geo",
+        "fields": ["f_region", "f_state_province"],
+    }
+    catalog = client.get("/api/edit/demo/catalog").json()
+    assert catalog["datasources"][0]["hierarchies"] == [
+        {"name": "Geo", "fields": ["f_region", "f_state_province"]}
+    ]
+    # Sales by Region 的 Region 可以向下切入到 State/Province
+    data = render(client, "ws_sales_by_region")
+    assert [(d["key"], d["next"]) for d in data["drill"]] == [("f_region", "State/Province")]
+    url_render = "/api/workbooks/demo/worksheets/ws_sales_by_region/render"
+    drilled = client.post(url_render, json={"drill": {"f_region": 1}}).json()
+    assert "State/Province" in drilled["table"]["headers"]
+    assert drilled["rows"] > data["rows"]
+    bad = client.put(url, json={"name": "Bad", "fields": ["f_sales"]})
+    assert bad.status_code == 422 and "不是維度" in bad.json()["detail"]
+    renamed = client.put(
+        url, json={"name": "Location", "fields": ["f_region", "f_city"], "original": "Geo"}
+    )
+    assert renamed.json()["hierarchy"]["name"] == "Location"
+    assert client.delete(url, params={"name": "Location"}).json() == {"ok": True}
+    assert client.get("/api/edit/demo/catalog").json()["datasources"][0]["hierarchies"] == []
+    assert client.delete(url, params={"name": "Location"}).status_code == 422
+    assert render(client, "ws_sales_by_region")["drill"] == []
+
+
 def test_domain_for_editor_filters(client: TestClient) -> None:
     values = client.post("/api/edit/demo/domain", json={"use": {"field": "f_segment"}}).json()
     assert values == {"kind": "values", "values": ["Consumer", "Corporate", "Home Office"]}

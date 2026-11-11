@@ -1279,6 +1279,16 @@
           "source_ref": "/workbook/datasources/datasource[2]/filter"
         }
       ],
+      "hierarchies": [
+        {
+          "name": "Product",
+          "fields": [
+            "f_category",
+            "f_sub_category",
+            "f_product_name"
+          ]
+        }
+      ],
       "published": null,
       "source_ref": "/workbook/datasources/datasource[2]"
     }

@@ -454,3 +454,103 @@ def test_pages_and_disaggregation(engine: str) -> None:
         assert body["pages"] == {"ws_sales_by_region": int(years[0])}
         assert errors == []
         browser.close()
+
+
+def test_hierarchies_and_drill(engine: str) -> None:
+    """資料窗格建立階層（Region → State/Province → City）；欄、列架上的膠囊以 ⊞ 向下切入、⊟ 收合；
+    檢視器以工作表標題旁的按鈕切入，數字與存檔時就把下一層放在架上的工作表相同。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
+
+    def rows() -> list[str]:
+        return [u["field"] for u in sheet()["rows"]]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        pane = page.locator(".data-pane")
+        # Region 不在階層中：膠囊沒有切入按鈕
+        assert page.locator('[data-shelf="rows"] .pill-drill').count() == 0
+        region = pane.locator('[data-field="f_region"]')
+        region.hover()
+        region.get_by_role("button", name="以「Region」建立階層").click()
+        dialog = page.locator(".hierarchy-dialog")
+        expect(dialog.get_by_label("階層名稱")).to_have_value("Region 階層")
+        dialog.get_by_label("階層名稱").fill("Location")
+        dialog.get_by_label("加入階層的欄位").select_option(label="City")
+        dialog.get_by_role("button", name="加入").click()
+        dialog.get_by_label("加入階層的欄位").select_option(label="State/Province")
+        dialog.get_by_role("button", name="加入").click()
+        dialog.get_by_role("button", name="上移 State/Province").click()
+        dialog.get_by_role("button", name="確定").click()
+        group = pane.locator('[data-hierarchy="Location"]')
+        group.wait_for()
+        assert group.locator(".field .field-name").all_inner_texts() == [
+            "Region",
+            "State/Province",
+            "City",
+        ]
+        catalog = call(engine, "/api/edit/demo/catalog")
+        assert catalog["datasources"][0]["hierarchies"] == [
+            {"name": "Location", "fields": ["f_region", "f_state_province", "f_city"]}
+        ]
+
+        # 膠囊的 ⊞：加入下一層；下一層膠囊再 ⊞ 加入 City；Region 的 ⊟ 收合兩層
+        drill = page.locator('[data-shelf="rows"] .pill-drill')
+        drill.first.wait_for()
+        expect(drill.first).to_have_attribute("aria-label", "向下切入到 State/Province")
+        drill.first.click()
+        settle(page)
+        assert rows() == ["f_region", "f_state_province"]
+        expect(drill.first).to_have_attribute("aria-label", "收合 State/Province")
+        drill.nth(1).click()
+        settle(page)
+        assert rows() == ["f_region", "f_state_province", "f_city"]
+        drill.first.click()
+        settle(page)
+        assert rows() == ["f_region"]
+
+        # 檢視器：標題旁的「向下切入到 State/Province」
+        page.goto(f"{engine}/w/demo/s/ws_sales_by_region")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        viewer = page.locator(".single-sheet .worksheet")
+        with page.expect_response(lambda r: r.url.endswith("/render")) as response:
+            viewer.get_by_role("button", name="向下切入到 State/Province").click()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert body["drill"] == {"f_region": 1}
+        data = response.value.json()
+        assert data["table"]["headers"][:2] == ["Region", "State/Province"]
+        expect(viewer.get_by_role("button", name="向上收合 State/Province")).to_be_visible()
+        expect(viewer.get_by_role("button", name="向下切入到 City")).to_be_visible()
+        with page.expect_response(lambda r: r.url.endswith("/render")) as response:
+            viewer.get_by_role("button", name="向上收合 State/Province").click()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert "drill" not in body
+        assert response.value.json()["table"]["headers"][0] == "Region"
+
+        # 資料窗格：從階層移除、刪除階層
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        city = group.locator('[data-field="f_city"]')
+        city.hover()
+        city.get_by_role("button", name="從階層移除「City」").click()
+        expect(group.locator(".field")).to_have_count(2)
+        name = group.locator(".hierarchy-name")
+        name.hover()
+        name.get_by_role("button", name="刪除階層 Location").click()
+        expect(group).to_have_count(0)
+        assert call(engine, "/api/edit/demo/catalog")["datasources"][0]["hierarchies"] == []
+        assert page.locator('[data-shelf="rows"] .pill-drill').count() == 0
+        assert errors == []
+        browser.close()

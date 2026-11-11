@@ -28,6 +28,8 @@ export interface EditorContextValue {
   openCalc: (field: CatalogField | null, datasource?: string) => void;
   openDialog: (dialog: EditorDialog) => void;
   notify: (message: string, kind?: "info" | "error") => void;
+  /** 資料窗格的內容改變後（計算欄位、階層）重新讀取 */
+  reloadCatalog: () => void;
 }
 
 export type EditorDialog =
@@ -39,6 +41,8 @@ export type EditorDialog =
   | { kind: "reference"; index: number | null; axis: FieldUse | null }
   | { kind: "trend"; card: Card }
   | { kind: "parameter"; parameter: string | null }
+  /** 建立階層（name 為 null，field 為第一個欄位）或改變既有的階層 */
+  | { kind: "hierarchy"; datasource: string; name: string | null; field?: string }
   | { kind: "colors"; card: Card };
 
 export const EditorContext = createContext<EditorContextValue | null>(null);

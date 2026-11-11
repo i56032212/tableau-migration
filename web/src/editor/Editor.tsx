@@ -13,6 +13,7 @@ import {
   ColorsDialog,
   DirectionDialog,
   FormatDialog,
+  HierarchyDialog,
   ParameterDialog,
   ReferenceDialog,
   SheetFormatDialog,
@@ -338,6 +339,7 @@ export function Editor({
     openCalc: (field, datasource) => setCalc({ field, datasource }),
     openDialog: setDialog,
     notify,
+    reloadCatalog: () => void reloadCatalog(),
   };
   const shown = stored ?? sheet;
   const empty = shown.rows.length === 0 && shown.columns.length === 0 && markUses(shown.marks).length === 0;
@@ -532,6 +534,18 @@ export function Editor({
       {dialog?.kind === "reference" && <ReferenceDialog index={dialog.index} axis={dialog.axis} onClose={() => setDialog(null)} />}
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "colors" && <ColorsDialog card={dialog.card} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "hierarchy" && (
+        <HierarchyDialog
+          datasource={dialog.datasource}
+          name={dialog.name}
+          field={dialog.field}
+          onClose={() => setDialog(null)}
+          onSaved={() => {
+            void reloadCatalog();
+            onChanged();
+          }}
+        />
+      )}
       {dialog?.kind === "parameter" && (
         <ParameterDialog
           parameter={dialog.parameter}

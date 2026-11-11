@@ -224,6 +224,22 @@ def test_week_start_option(tmp_path: Path) -> None:
     assert parse(tmp_path, b.workbook(ds)).datasources[0].settings.week_start == "monday"
 
 
+def test_fiscal_year_start_is_flagged(tmp_path: Path) -> None:
+    """會計年度從一月以外的月份開始時，年、季與週數不同：列為不支援，不能默默以日曆年計算。"""
+    calendar = b.extract_datasource(
+        extra="<date-options fiscal-year-start='january' start-of-week='sunday' />",
+        columns="<column datatype='date' fiscal-year-start='0' name='[Order Date]' role='dimension' type='ordinal' />",
+    )
+    assert reasons(parse(tmp_path, b.workbook(calendar))) == []
+    fiscal = b.extract_datasource(
+        extra="<date-options fiscal-year-start='april' start-of-week='sunday' />",
+        columns="<column datatype='date' fiscal-year-start='7' name='[Order Date]' role='dimension' type='ordinal' />",
+    )
+    found = reasons(parse(tmp_path, b.workbook(fiscal)))
+    assert any("會計年度從 april 開始" in r for r in found)
+    assert any("欄位「Order Date」自訂的會計年度起始月（7）" in r for r in found)
+
+
 def test_unknown_datasource_element(tmp_path: Path) -> None:
     ds = b.extract_datasource(extra="<mystery-thing />")
     assert any("未知元素 <mystery-thing>" in r for r in reasons(parse(tmp_path, b.workbook(ds))))

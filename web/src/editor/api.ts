@@ -2,7 +2,7 @@
 
 import { request } from "../api";
 import type { Action, Dashboard, Domain, FieldUse, Story } from "../types";
-import type { Catalog, CatalogField, SheetIR } from "./model";
+import type { Catalog, CatalogField, CatalogHierarchy, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
 const part = encodeURIComponent;
@@ -112,6 +112,17 @@ export const editApi = {
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/calcs/${part(field)}`, {
       method: "DELETE",
     }),
+  /** 建立階層，或改變 original 這個階層的名稱與欄位（沒有欄位時刪除，回傳 null） */
+  saveHierarchy: (workbook: string, datasource: string, name: string, fields: string[], original?: string | null) =>
+    request<{ hierarchy: CatalogHierarchy | null }>(`${edit(workbook)}/datasources/${part(datasource)}/hierarchies`, {
+      method: "PUT",
+      body: JSON.stringify({ name, fields, original: original ?? null }),
+    }).then((r) => r.hierarchy),
+  removeHierarchy: (workbook: string, datasource: string, name: string) =>
+    request<{ ok: boolean }>(
+      `${edit(workbook)}/datasources/${part(datasource)}/hierarchies?name=${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
   saveParameter: (workbook: string, parameter: Record<string, unknown>) =>
     request<{ parameter: Record<string, unknown> }>(`${edit(workbook)}/parameters`, {
       method: "POST",

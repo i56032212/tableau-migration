@@ -92,6 +92,11 @@ class QueryState(BaseModel):
         default_factory=dict,
         description="頁面架目前的頁：工作表 id → 頁面欄位的值；沒有列出的工作表為存檔時的頁",
     )
+    drill: dict[str, int] = Field(
+        default_factory=dict,
+        description="階層的切入（見 tmig.planner.drill）：欄、列架上一組階層欄位最上層的欄位鍵 → "
+        "向下多顯示的層數；負數收合存檔時原本顯示的下層",
+    )
 
 
 def use_key(use: FieldUse) -> str:

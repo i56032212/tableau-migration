@@ -1565,6 +1565,14 @@
           "title": "Filters",
           "type": "array"
         },
+        "hierarchies": {
+          "description": "階層；每個欄位最多屬於一個階層",
+          "items": {
+            "$ref": "#/$defs/Hierarchy"
+          },
+          "title": "Hierarchies",
+          "type": "array"
+        },
         "published": {
           "anyOf": [
             {
@@ -2171,6 +2179,34 @@
         }
       },
       "title": "FontStyle",
+      "type": "object"
+    },
+    "Hierarchy": {
+      "additionalProperties": false,
+      "description": "階層（Tableau 的 drill-path）：由上到下的維度；檢視上可以向下切入到下一層、向上收合。",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "fields": {
+          "description": "由上到下的欄位 id",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "fields"
+      ],
+      "title": "Hierarchy",
       "type": "object"
     },
     "HighlightAction": {

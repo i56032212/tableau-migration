@@ -77,6 +77,52 @@ def test_render_with_filter_action_selection(client: TestClient) -> None:
     assert client.post(url, json=bad).status_code == 422
 
 
+def test_render_with_drill(client: TestClient) -> None:
+    """階層的切入：Category Detail 的 Category 向下切入到 Sub-Category；Sub-Category Sales 收合到 Category。
+    數字與存檔時就那樣放在架上的工作表相同（合計不變）。"""
+    features = "/api/workbooks/superstore_features"
+    url = f"{features}/worksheets/ws_category_detail/render"
+    saved = client.post(url).json()
+    assert saved["drill"] == [
+        {
+            "key": "f_category",
+            "shelf": "rows",
+            "label": "Category",
+            "head": "Category",
+            "next": "Sub-Category",
+            "delta": 0,
+            "can_down": True,
+            "can_up": False,
+        }
+    ]
+    drilled = client.post(url, json={"drill": {"f_category": 1}}).json()
+    assert drilled["table"]["headers"][:2] == ["Category", "Sub-Category"]
+    assert drilled["rows"] == 17
+    assert drilled["drill"][0]["label"] == "Sub-Category"
+    assert drilled["drill"][0]["next"] == "Product Name"
+    assert drilled["drill"][0]["can_up"] is True
+
+    def total(table: dict, column: int) -> float:
+        return sum(float(row[column]) for row in table["raw"])
+
+    sales = saved["table"]["headers"].index("Sales")
+    assert total(drilled["table"], sales + 1) == pytest.approx(total(saved["table"], sales))
+    # 下載的交叉資料表也是切入後的
+    download = client.post(
+        f"{features}/worksheets/ws_category_detail/download",
+        json={"kind": "crosstab", "format": "csv", "state": {"drill": {"f_category": 1}}},
+    )
+    assert download.status_code == 200
+    assert download.content.decode("utf-8-sig").splitlines()[0].startswith("Category,Sub-Category")
+
+    url = f"{features}/worksheets/ws_sub_category_sales/render"
+    collapsed = client.post(url, json={"drill": {"f_category": -1}}).json()
+    assert "Sub-Category" not in collapsed["table"]["headers"]
+    assert collapsed["rows"] == 3
+    assert collapsed["drill"][0]["can_up"] is False
+    assert client.post(url, json={"drill": {"f_category": "down"}}).status_code == 422
+
+
 def test_relative_date_defaults_to_cases_today(client: TestClient) -> None:
     """相對日期篩選的基準日：沒有指定時用 cases.yaml 的 today（與計算比對相同）。"""
     url = "/api/workbooks/superstore_features/worksheets/ws_recent_sales_by_category/render"
@@ -170,6 +216,7 @@ def test_cases(client: TestClient) -> None:
         "sets": {},
         "today": None,
         "pages": {},
+        "drill": {},
     }
 
 

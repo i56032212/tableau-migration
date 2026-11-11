@@ -14,6 +14,8 @@ import {
   changeUse,
   type CatalogField,
   defaultUse,
+  drillPill,
+  drillToggle,
   firstMeasure,
   type FilterIR,
   insertUse,
@@ -168,6 +170,26 @@ export function Pill({
       </button>
       {anchor && <PopupMenu anchor={anchor} items={menu()} onClose={() => setAnchor(null)} />}
     </>
+  );
+}
+
+/** 欄、列架上階層膠囊的切入按鈕（Tableau 膠囊上的 ⊞／⊟）：向下切入加入下一層，收合移除後面的下層。 */
+function DrillButton({ shelf, index }: { shelf: "rows" | "columns"; index: number }) {
+  const editor = useEditor();
+  const toggle = drillToggle(editor.sheet, shelf, index, editor.catalog, editor.fields);
+  if (!toggle) return null;
+  const label = pillLabel(toggle.next, editor.fields, editor.sheet.table_calcs);
+  const text = toggle.kind === "down" ? `向下切入到 ${label}` : `收合 ${label}`;
+  return (
+    <button
+      type="button"
+      className="pill-drill"
+      title={text}
+      aria-label={text}
+      onClick={() => editor.apply((sheet) => drillPill(sheet, shelf, index, editor.catalog, editor.fields))}
+    >
+      {toggle.kind === "down" ? "⊞" : "⊟"}
+    </button>
   );
 }
 
@@ -484,6 +506,7 @@ export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: Sh
       <div className={`shelf-drop${over ? " over" : ""}`} {...handlers} data-drop={shelf}>
         {uses.map((use, i) => (
           <span key={`${i}:${use.field}`} className="pill-slot" onDragOver={handlers.onDragOver} onDrop={(e) => dropAt(e, i)}>
+            {(shelf === "rows" || shelf === "columns") && <DrillButton shelf={shelf} index={i} />}
             <Pill use={use} shelf={shelf} index={i} card={card} menu={() => menu(shelf, i, card)} />
           </span>
         ))}
