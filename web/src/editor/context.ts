@@ -40,6 +40,8 @@ export type EditorDialog =
   | { kind: "axis"; use: FieldUse; shelf: "rows" | "columns" }
   | { kind: "reference"; index: number | null; axis: FieldUse | null }
   | { kind: "trend"; card: Card }
+  | { kind: "forecast" }
+  | { kind: "cluster" }
   | { kind: "parameter"; parameter: string | null }
   /** 建立階層（name 為 null，field 為第一個欄位）或改變既有的階層 */
   | { kind: "hierarchy"; datasource: string; name: string | null; field?: string }

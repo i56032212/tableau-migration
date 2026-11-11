@@ -8,6 +8,7 @@ import pytest
 
 from tmig.edit import (
     EditError,
+    add_analytics_field,
     add_dashboard,
     add_story,
     add_worksheet,
@@ -87,6 +88,50 @@ def test_upsert_calc_creates_and_updates(ir: IR) -> None:
     ir, _ = replace_worksheet(ir, sheet)
     sql = worksheet_sql(ir, "ws_sales_by_region").sql
     assert "f_profit" in sql
+
+
+def test_analytics_fields(ir: IR) -> None:
+    """叢集欄位每次新增一個（Cluster N 的別名）；Forecast Indicator 一個資料源只有一個。放到工作表上查詢後
+    才填值：叢集依量值分組，預測加上估計的列。"""
+    from tmig.data.executor import execute_query
+    from tmig.ir.models import ClusterSpec, Forecast
+    from tmig.verify.run import ensure_data
+
+    ir, cluster = add_analytics_field(ir, "ds_orders", "cluster")
+    assert (cluster.caption, cluster.datatype, cluster.role) == ("Clusters", "integer", "dimension")
+    assert cluster.aliases[0].label == "Not Clustered" and cluster.aliases[3].label == "Cluster 3"
+    ir, second = add_analytics_field(ir, "ds_orders", "cluster")
+    assert second.id != cluster.id and second.caption == "Clusters 2"
+    ir, indicator = add_analytics_field(ir, "ds_orders", "forecast_indicator")
+    again, same = add_analytics_field(ir, "ds_orders", "forecast_indicator")
+    assert same.id == indicator.id and again is ir
+
+    sheet = next(w for w in ir.worksheets if w.id == "ws_sub_category_profit")
+    profit = sheet.columns[0]
+    marks = sheet.marks.model_copy(update={"color": FieldUse(field=cluster.id)})
+    sheet = sheet.model_copy(
+        update={
+            "marks": marks,
+            "cluster": ClusterSpec(field=cluster.id, measures=[profit], count=2),
+        }
+    )
+    ir, _ = replace_worksheet(ir, sheet)
+    ensure_data(DEMO.parent, ir)
+    database = DEMO.parent / "data" / "ds_orders.duckdb"
+    rows = execute_query(database, worksheet_sql(ir, sheet.id)).records()
+    assert {r[next(k for k in r if "clusters" in k)] for r in rows} == {1, 2}
+
+    trend = next(w for w in ir.worksheets if w.id == "ws_monthly_profit")
+    measure = trend.rows[0]
+    trend = trend.model_copy(
+        update={
+            "forecast": Forecast(measures=[measure], indicator=indicator.id, length="next", size=3)
+        }
+    )
+    plain = execute_query(database, worksheet_sql(ir, "ws_monthly_profit")).rows
+    ir, _ = replace_worksheet(ir, trend)
+    result = execute_query(database, worksheet_sql(ir, "ws_monthly_profit"))
+    assert len(result.rows) == len(plain) + 3  # 最後一期改以估計值呈現，另外估計之後的 3 期
 
 
 def test_calc_in_use_cannot_be_removed_or_broken(ir: IR) -> None:

@@ -167,6 +167,31 @@ def test_calculated_fields(client: TestClient) -> None:
     assert refused.status_code == 422
 
 
+def test_analytics_fields_api(client: TestClient) -> None:
+    """分析的欄位：新的叢集欄位放到色彩上依量值分組（以 Cluster N 顯示）；Forecast Indicator 只有一個。"""
+    url = "/api/edit/demo/analytics-fields"
+    cluster = client.post(url, json={"datasource": "ds_orders", "kind": "cluster"}).json()["field"]
+    first = client.post(url, json={"datasource": "ds_orders", "kind": "forecast_indicator"})
+    again = client.post(url, json={"datasource": "ds_orders", "kind": "forecast_indicator"})
+    assert first.json()["field"]["id"] == again.json()["field"]["id"]
+    bad = client.post(url, json={"datasource": "ds_orders", "kind": "outlier"})
+    assert bad.status_code == 422
+    ws = sheet(client, "ws_sub_category_profit")
+    ws["marks"]["color"] = {
+        "field": cluster["id"],
+        "agg": None,
+        "date": None,
+        "continuous": False,
+        "table_calc": None,
+    }
+    ws["cluster"] = {"field": cluster["id"], "measures": [ws["columns"][0]], "count": 2}
+    saved = client.put(f"/api/edit/demo/worksheets/{ws['id']}", json={"worksheet": ws})
+    assert saved.status_code == 200, saved.text
+    spec = render(client, ws["id"])["spec"]
+    shown = {v for r in spec["data"]["values"] for v in r.values() if isinstance(v, str)}
+    assert {"Cluster 1", "Cluster 2"} <= shown
+
+
 def test_hierarchies_api(client: TestClient) -> None:
     """資料窗格建立、改變與刪除階層；檢視器依新的階層切入。"""
     url = "/api/edit/demo/datasources/ds_orders/hierarchies"

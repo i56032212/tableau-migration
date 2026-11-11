@@ -6,10 +6,13 @@ import type { FieldUse, Scalar } from "../types";
 import { editApi, type FormulaCheck, type Outline } from "./api";
 import { useEditor } from "./context";
 import {
+  axisMeasures,
   type Card,
   cardMarks,
   type CatalogField,
+  type ClusterIR,
   EDITOR_REF,
+  type ForecastIR,
   isMeasure,
   isSpecial,
   type MarksIR,
@@ -20,6 +23,7 @@ import {
   type TooltipSheetIR,
   updateCard,
   useKey,
+  viewMeasures,
 } from "./model";
 
 const LEVELS: Record<string, string> = { row: "列層級", aggregate: "彙總", lod: "LOD 運算式", table_calc: "Table Calculation" };
@@ -730,6 +734,256 @@ export function TrendDialog({ card, onClose }: { card: Card; onClose: () => void
           {trend && (
             <button type="button" className="danger" onClick={() => save(true)}>
               移除趨勢線
+            </button>
+          )}
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 預測
+
+const FORECAST_UNITS: [string, string][] = [
+  ["year", "年"],
+  ["quarter", "季"],
+  ["month", "月"],
+  ["week", "週"],
+  ["day", "日"],
+  ["hour", "小時"],
+];
+const COMPONENTS: [ForecastIR["trend"] & string, string][] = [
+  ["none", "無"],
+  ["additive", "加法"],
+  ["multiplicative", "乘法"],
+];
+
+/** 預測（分析＞預測＞預測選項）：預測的長度、來源資料（忽略最後幾期、以 0 填補缺少的值）、模型與預測區間。
+ * 預測欄列架上的量值；時間是檢視中唯一的日期。開啟時資料源加上 Forecast Indicator（可以放到色彩上）。 */
+export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const editor = useEditor();
+  const { sheet, fields } = editor;
+  const current = sheet.forecast as ForecastIR | null | undefined;
+  const measures = axisMeasures(sheet, fields);
+  const dates = [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks)].filter((u) => u.date);
+  const viewUnit = dates[0]?.date?.unit;
+  const [length, setLength] = useState<ForecastIR["length"]>(current?.length ?? "auto");
+  const [size, setSize] = useState(current?.size ?? 1);
+  const [unit, setUnit] = useState(current?.unit ?? (FORECAST_UNITS.some(([u]) => u === viewUnit) ? viewUnit! : "year"));
+  const [model, setModel] = useState<ForecastIR["model"]>(current?.model ?? "auto");
+  const [trend, setTrend] = useState<NonNullable<ForecastIR["trend"]>>(current?.trend ?? "additive");
+  const [season, setSeason] = useState<NonNullable<ForecastIR["season"]>>(current?.season ?? "none");
+  const [ignore, setIgnore] = useState(current?.ignore_last ?? 1);
+  const [zeros, setZeros] = useState(current?.fill_zeros ?? false);
+  const [bands, setBands] = useState(current ? current.bands : true);
+  const [confidence, setConfidence] = useState(current?.confidence ?? 0.95);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (remove: boolean) => {
+    if (remove) {
+      editor.apply((s: SheetIR) => ({ ...s, forecast: null }));
+      onClose();
+      return;
+    }
+    try {
+      const indicator = await editApi.addAnalyticsField(editor.workbook, sheet.datasource, "forecast_indicator");
+      onSaved();
+      const settings: ForecastIR = {
+        measures,
+        indicator: indicator.id,
+        model,
+        trend: model === "custom" ? trend : null,
+        season: model === "custom" ? season : null,
+        length,
+        size: length === "auto" ? null : size,
+        unit: length === "auto" ? null : unit,
+        ignore_last: ignore,
+        fill_zeros: zeros,
+        confidence,
+        bands,
+      };
+      editor.apply((s: SheetIR) => ({ ...s, forecast: settings }));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const ready = measures.length > 0 && dates.length === 1;
+  return (
+    <Modal title="預測選項" onClose={onClose}>
+      <div className="forecast-dialog">
+        <fieldset>
+          <legend>預測長度</legend>
+          <div className="row" role="radiogroup" aria-label="預測長度">
+            {(
+              [
+                ["auto", "自動"],
+                ["next", "正好"],
+                ["until", "直到"],
+              ] as const
+            ).map(([value, text]) => (
+              <label key={value}>
+                <input type="radio" name="forecast-length" checked={length === value} onChange={() => setLength(value)} /> {text}
+              </label>
+            ))}
+          </div>
+          {length !== "auto" && (
+            <div className="row">
+              <input type="number" min={1} max={1000} aria-label="預測的期數" value={size} onChange={(e) => setSize(Math.max(1, Number(e.target.value) || 1))} />
+              <select aria-label="預測的期間單位" value={unit} onChange={(e) => setUnit(e.target.value)}>
+                {FORECAST_UNITS.map(([value, text]) => (
+                  <option key={value} value={value}>
+                    {text}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </fieldset>
+        <fieldset>
+          <legend>來源資料</legend>
+          <label className="inline">
+            忽略最後
+            <input type="number" min={0} max={100} aria-label="忽略最後幾期" value={ignore} onChange={(e) => setIgnore(Math.max(0, Number(e.target.value) || 0))} />
+            期
+          </label>
+          <label className="inline">
+            <input type="checkbox" checked={zeros} onChange={(e) => setZeros(e.target.checked)} /> 以 0 填補缺少的值
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>預測模型</legend>
+          <select aria-label="預測模型" value={model} onChange={(e) => setModel(e.target.value as ForecastIR["model"])}>
+            <option value="auto">自動</option>
+            <option value="auto_no_season">自動（不含季節性）</option>
+            <option value="custom">自訂</option>
+          </select>
+          {model === "custom" && (
+            <div className="row">
+              <label className="inline">
+                趨勢
+                <select aria-label="趨勢" value={trend} onChange={(e) => setTrend(e.target.value as NonNullable<ForecastIR["trend"]>)}>
+                  {COMPONENTS.map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inline">
+                季節
+                <select aria-label="季節" value={season} onChange={(e) => setSeason(e.target.value as NonNullable<ForecastIR["season"]>)}>
+                  {COMPONENTS.map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </fieldset>
+        <label className="inline">
+          <input type="checkbox" checked={bands} onChange={(e) => setBands(e.target.checked)} /> 顯示預測區間
+          <select aria-label="預測區間" value={confidence} disabled={!bands} onChange={(e) => setConfidence(Number(e.target.value))}>
+            {[0.9, 0.95, 0.99].map((value) => (
+              <option key={value} value={value}>
+                {Math.round(value * 100)}%
+              </option>
+            ))}
+          </select>
+        </label>
+        {!ready && <p className="hint">預測需要欄或列上有量值，檢視中只有一個日期。</p>}
+        {error && <p className="error">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="primary" disabled={!ready} onClick={() => void save(false)}>
+            確定
+          </button>
+          {current && (
+            <button type="button" className="danger" onClick={() => void save(true)}>
+              移除預測
+            </button>
+          )}
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 叢集
+
+/** 叢集（分析窗格的「叢集」）：依檢視中的量值以 k-means 分組，叢集欄位放在色彩上（與 Tableau 相同）。
+ * 叢集數自動時以 Calinski-Harabasz 指標決定。 */
+export function ClusterDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const editor = useEditor();
+  const { sheet, fields } = editor;
+  const current = sheet.cluster as ClusterIR | null | undefined;
+  const candidates = viewMeasures(sheet, fields);
+  const [chosen, setChosen] = useState<string[]>(
+    (current ? current.measures : candidates).map((u) => useKey(u)),
+  );
+  const [auto, setAuto] = useState(!current?.count);
+  const [count, setCount] = useState(current?.count ?? 3);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = (key: string, on: boolean) => setChosen((list) => (on ? [...list, key] : list.filter((k) => k !== key)));
+  const save = async (remove: boolean) => {
+    if (remove && current) {
+      editor.apply((s: SheetIR) =>
+        updateCard({ ...s, cluster: null }, "all", (m) => (m.color?.field === current.field ? { ...m, color: null } : m)),
+      );
+      onClose();
+      return;
+    }
+    try {
+      let field = current?.field;
+      if (!field) {
+        field = (await editApi.addAnalyticsField(editor.workbook, sheet.datasource, "cluster")).id;
+        onSaved();
+      }
+      const measures = candidates.filter((u) => chosen.includes(useKey(u)));
+      const cluster: ClusterIR = { field, measures, count: auto ? null : count };
+      const color: FieldUse = { field, agg: null, date: null, continuous: false, table_calc: null };
+      editor.apply((s: SheetIR) => updateCard({ ...s, cluster }, "all", (m) => ({ ...m, color })));
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <Modal title="叢集" onClose={onClose}>
+      <div className="cluster-dialog">
+        <fieldset>
+          <legend>變數</legend>
+          {candidates.map((use) => (
+            <label key={useKey(use)} className="inline">
+              <input type="checkbox" checked={chosen.includes(useKey(use))} onChange={(e) => toggle(useKey(use), e.target.checked)} />{" "}
+              {pillLabel(use, fields, sheet.table_calcs)}
+            </label>
+          ))}
+          {candidates.length === 0 && <p className="hint">檢視中沒有量值。</p>}
+        </fieldset>
+        <label className="inline">
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 自動決定叢集數
+        </label>
+        {!auto && (
+          <label className="inline">
+            叢集數
+            <input type="number" min={2} max={50} aria-label="叢集數" value={count} onChange={(e) => setCount(Math.max(2, Math.min(50, Number(e.target.value) || 2)))} />
+          </label>
+        )}
+        {error && <p className="error">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="primary" disabled={chosen.length === 0} onClick={() => void save(false)}>
+            確定
+          </button>
+          {current && (
+            <button type="button" className="danger" onClick={() => void save(true)}>
+              移除叢集
             </button>
           )}
           <button type="button" onClick={onClose}>

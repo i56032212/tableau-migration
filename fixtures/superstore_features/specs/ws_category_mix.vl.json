@@ -29,6 +29,7 @@
     "values": "3 列",
     "fields": [
       "__row",
+      "__text0",
       "c0",
       "c0_label",
       "c1",
@@ -167,7 +168,7 @@
       },
       "transform": [
         {
-          "calculate": "datum['c0_label'] + '\\n' + datum['c2_label']",
+          "calculate": "datum['__text0']",
           "as": "__pie_label"
         }
       ]

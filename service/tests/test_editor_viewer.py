@@ -456,6 +456,80 @@ def test_pages_and_disaggregation(engine: str) -> None:
         browser.close()
 
 
+def test_forecast_and_clusters_in_editor(engine: str) -> None:
+    """分析：預測（預測選項：正好 6 個月、預測區間）在折線之後加上估計的月份與預測區間；叢集依量值分組並放到
+    色彩上（叢集欄位以 Cluster N 顯示）。移除時一併移除色彩上的叢集欄位。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def sheet(worksheet: str) -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{worksheet}")["worksheet"]
+
+    def render(worksheet: str) -> dict[str, Any]:
+        return call(engine, f"/api/workbooks/demo/worksheets/{worksheet}/render", {})
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        before = render("ws_monthly_profit")["rows"]
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+        page.get_by_role("button", name="＋ 預測…").click()
+        dialog = page.locator(".forecast-dialog")
+        dialog.get_by_label("正好").check()
+        dialog.get_by_label("預測的期數").fill("6")
+        dialog.get_by_label("預測的期間單位").select_option("month")
+        dialog.get_by_role("button", name="確定").click()
+        settle(page)
+        saved = sheet("ws_monthly_profit")
+        forecast = saved["forecast"]
+        assert (forecast["length"], forecast["size"], forecast["unit"]) == ("next", 6, "month")
+        assert [m["field"] for m in forecast["measures"]] == ["f_profit"]
+        assert forecast["indicator"]
+        rendered = render("ws_monthly_profit")
+        # 最後一個月改以估計值呈現，另外估計之後的 6 個月
+        assert rendered["rows"] == before + 6
+        assert any("指數平滑" in n for n in rendered["notes"])
+        assert rendered["spec"]["layer"][0]["name"].startswith("__deco_forecast")
+        page.get_by_role("button", name="預測 ✓").click()
+        page.locator(".forecast-dialog").get_by_role("button", name="移除預測").click()
+        settle(page)
+        assert sheet("ws_monthly_profit")["forecast"] is None
+
+        # 叢集：Sub-Category 依檢視中的量值（SUM(Profit) 等）分成 3 群
+        page.goto(f"{engine}/w/demo/edit/ws_sub_category_profit")
+        settle(page)
+        page.get_by_role("button", name="＋ 叢集…").click()
+        dialog = page.locator(".cluster-dialog")
+        dialog.get_by_label("自動決定叢集數").uncheck()
+        dialog.get_by_label("叢集數", exact=True).fill("3")
+        dialog.get_by_role("button", name="確定").click()
+        settle(page)
+        saved = sheet("ws_sub_category_profit")
+        cluster = saved["cluster"]
+        # 變數預設為檢視中的量值（與 Tableau 相同）
+        assert cluster["count"] == 3 and cluster["measures"][0]["field"] == "f_profit"
+        assert saved["marks"]["color"]["field"] == cluster["field"]
+        spec = render("ws_sub_category_profit")["spec"]
+        shown = {
+            v for record in spec["data"]["values"] for v in record.values() if isinstance(v, str)
+        }
+        assert {"Cluster 1", "Cluster 2", "Cluster 3"} <= shown
+        page.get_by_role("button", name="叢集 ✓").click()
+        page.locator(".cluster-dialog").get_by_role("button", name="移除叢集").click()
+        settle(page)
+        saved = sheet("ws_sub_category_profit")
+        assert saved["cluster"] is None and saved["marks"]["color"] is None
+        assert errors == []
+        browser.close()
+
+
 def test_hierarchies_and_drill(engine: str) -> None:
     """資料窗格建立階層（Region → State/Province → City）；欄、列架上的膠囊以 ⊞ 向下切入、⊟ 收合；
     檢視器以工作表標題旁的按鈕切入，數字與存檔時就把下一層放在架上的工作表相同。"""

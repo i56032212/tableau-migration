@@ -20,6 +20,7 @@ from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
 from tmig.edit import (
     EditError,
+    add_analytics_field,
     add_dashboard,
     add_story,
     add_worksheet,
@@ -76,6 +77,12 @@ class CalcBody(BaseModel):
     caption: str
     formula: str
     field: str | None = None
+
+
+class AnalyticsFieldBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    datasource: str
+    kind: Literal["cluster", "forecast_indicator"]
 
 
 class DomainBody(BaseModel):
@@ -315,6 +322,16 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
             request,
             workbook,
             lambda ir: upsert_calc(ir, body.datasource, body.caption, body.formula, body.field),
+        )
+        return {"field": field.model_dump(mode="json")}
+
+    @router.post("/{workbook}/analytics-fields")
+    def post_analytics_field(
+        workbook: str, body: AnalyticsFieldBody, request: Request
+    ) -> dict[str, Any]:
+        """分析的欄位：新的叢集欄位，或資料源的 Forecast Indicator（見 tmig.edit.add_analytics_field）。"""
+        field = edit(
+            request, workbook, lambda ir: add_analytics_field(ir, body.datasource, body.kind)
         )
         return {"field": field.model_dump(mode="json")}
 

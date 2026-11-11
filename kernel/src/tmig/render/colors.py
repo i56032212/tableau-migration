@@ -49,8 +49,13 @@ def discrete_scale(
     setting: ColorPalette | None,
     pairs: Iterable[tuple[Any, Any]],
     keys: dict[Scalar, Any] | None = None,
+    members_first: bool = False,
 ) -> dict[str, Any] | None:
-    """離散色彩的比例尺：domain 為資料中的顯示值（依出現順序），range 為各值的顏色。
+    """離散色彩的比例尺：domain 為資料中的顯示值，range 為各值的顏色。
+
+    與 Tableau 相同，顏色屬於欄位的成員、不隨工作表的排序改變：成員依原值排序（數字由小到大、文字不分大小寫、
+    Null 在最後），圖例也依這個順序；沒有指定顏色的成員依序取色盤的顏色。Measure Names（keys）依量值在檢視中的
+    順序（出現的順序）。集合（members_first）的「內」（True）在「外」之前。
 
     pairs：（顯示值、原值）；keys：指定的值換成原值（Measure Names 時量值的欄位鍵 → 顯示名稱）。
     沒有設定時回傳 None（Vega-Lite 的預設即 Tableau 10）。"""
@@ -68,6 +73,8 @@ def discrete_scale(
             labels.append(label)
     if not labels:
         return None
+    if keys is None:
+        labels.sort(key=lambda label: _member_order(raw[label], members_first))
     chosen = palette(setting.palette)
     if chosen is None or not chosen.colors:
         chosen = PALETTES[DEFAULT_REGULAR]
@@ -78,6 +85,20 @@ def discrete_scale(
     )
     colors = [assigned.get(value_key(raw[label]), fallback[i]) for i, label in enumerate(labels)]
     return {"domain": labels, "range": colors}
+
+
+def _member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str]:
+    """成員的排序（與 Tableau 的預設相同）：數字（含布林）由小到大、文字不分大小寫，Null 在最後；
+    集合（members_first）的 True（內）在前。"""
+    if value is None:
+        return (3, 0, "")
+    if members_first and isinstance(value, bool):
+        return (0, 0 if value else 1, "")
+    if isinstance(value, bool | int | float):
+        return (0, float(value), "")
+    if isinstance(value, str):
+        return (1, value.casefold(), value)
+    return (2, str(value), "")
 
 
 def continuous_scale(setting: ColorPalette | None, numbers: list[float]) -> dict[str, Any]:

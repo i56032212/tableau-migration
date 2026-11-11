@@ -108,6 +108,12 @@ export const editApi = {
       method: "POST",
       body: JSON.stringify({ datasource, caption, formula, field: field ?? null }),
     }).then((r) => r.field),
+  /** 分析的欄位：新的叢集欄位，或資料源的 Forecast Indicator（已經有時回傳既有的） */
+  addAnalyticsField: (workbook: string, datasource: string, kind: "cluster" | "forecast_indicator") =>
+    request<{ field: CatalogField }>(`${edit(workbook)}/analytics-fields`, {
+      method: "POST",
+      body: JSON.stringify({ datasource, kind }),
+    }).then((r) => r.field),
   removeCalc: (workbook: string, datasource: string, field: string) =>
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/calcs/${part(field)}`, {
       method: "DELETE",

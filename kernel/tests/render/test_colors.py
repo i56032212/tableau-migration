@@ -14,8 +14,9 @@ from typing import Any
 import pytest
 
 from tmig.ir import IR, ColorAssignment, ColorPalette
+from tmig.ir.models import Scalar
 from tmig.render.colors import continuous_scale, discrete_scale
-from tmig.render.palettes import PALETTES, interpolate, sample
+from tmig.render.palettes import DEFAULT_REGULAR, PALETTES, interpolate, sample
 
 from ..parser.builder import DS, instance, ref, worksheet
 from .test_text import CATEGORY, PROFIT, REGION, SALES, db, parse, render
@@ -223,6 +224,28 @@ def test_discrete_fallback_from_sequential_palette() -> None:
         "range": [blue[0], interpolate(blue, 0.5), blue[-1]],
     }
     assert discrete_scale(None, [("a", "a")]) is None
+
+
+def test_discrete_colors_follow_member_order_not_view_order() -> None:
+    """與 Tableau 相同，顏色屬於成員、不隨工作表的排序改變：依原值排序後依序取色（數字由小到大、文字不分
+    大小寫、Null 在最後），圖例也依這個順序；集合的「內」在「外」之前；Measure Names 依量值的順序。"""
+    automatic = ColorPalette(kind="discrete", palette=DEFAULT_REGULAR)
+    colors = PALETTES[DEFAULT_REGULAR].colors
+    # 依銷售排序的長條：West、East、Central（資料的順序）
+    scale = discrete_scale(automatic, [("West", "West"), ("east", "east"), ("Central", "Central")])
+    assert scale == {"domain": ["Central", "east", "West"], "range": list(colors[:3])}
+    # 叢集編號（別名 Cluster N）依編號，不依別名的字母順序
+    clusters = [("Cluster 3", 3), ("Cluster 10", 10), ("Cluster 1", 1), ("Not Clustered", 0)]
+    scale = discrete_scale(automatic, clusters)
+    assert scale is not None
+    assert scale["domain"] == ["Not Clustered", "Cluster 1", "Cluster 3", "Cluster 10"]
+    scale = discrete_scale(
+        automatic, [("Out", False), ("In", True), ("Null", None)], members_first=True
+    )
+    assert scale is not None and scale["domain"] == ["In", "Out", "Null"]
+    keys: dict[Scalar, Any] = {"sum(f_sales)": "Sales", "sum(f_profit)": "Profit"}
+    scale = discrete_scale(automatic, [("Sales", "Sales"), ("Profit", "Profit")], keys)
+    assert scale is not None and scale["domain"] == ["Sales", "Profit"]
 
 
 # ---------------------------------------------------------------- 連續

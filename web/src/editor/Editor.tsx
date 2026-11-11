@@ -10,8 +10,10 @@ import { DataPane } from "./DataPane";
 import {
   AxisDialog,
   CalcDialog,
+  ClusterDialog,
   ColorsDialog,
   DirectionDialog,
+  ForecastDialog,
   FormatDialog,
   HierarchyDialog,
   ParameterDialog,
@@ -107,6 +109,12 @@ function AnalyticsCard() {
         </button>
         <button type="button" onClick={() => editor.openDialog({ kind: "trend", card })}>
           {trend ? "趨勢線 ✓" : "＋ 趨勢線…"}
+        </button>
+        <button type="button" onClick={() => editor.openDialog({ kind: "forecast" })}>
+          {sheet.forecast ? "預測 ✓" : "＋ 預測…"}
+        </button>
+        <button type="button" onClick={() => editor.openDialog({ kind: "cluster" })}>
+          {sheet.cluster ? "叢集 ✓" : "＋ 叢集…"}
         </button>
       </div>
       <label className="hint aggregate-toggle" title="關閉時量值不彙總，每一列資料是一個標記（Tableau 的「分析＞彙總量值」）">
@@ -540,6 +548,8 @@ export function Editor({
       {dialog?.kind === "axis" && <AxisDialog use={dialog.use} shelf={dialog.shelf} onClose={() => setDialog(null)} />}
       {dialog?.kind === "reference" && <ReferenceDialog index={dialog.index} axis={dialog.axis} onClose={() => setDialog(null)} />}
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "forecast" && <ForecastDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
+      {dialog?.kind === "cluster" && <ClusterDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "colors" && <ColorsDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "tooltip" && <TooltipDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "hierarchy" && (

@@ -65,8 +65,10 @@ from tmig.ir.models import (
     TrendLine,
     Worksheet,
     ZeroLine,
+    Zone,
 )
 from tmig.planner.state import use_key
+from tmig.render import packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
 from tmig.render.colors import continuous_scale, discrete_scale
 from tmig.render.fonts import (
@@ -172,6 +174,22 @@ POINT_DIAMETER = 10
 畫面量測：大小 1.637 的圓點直徑 16 像素）。"""
 LINE_WIDTH = 3
 """折線的寬度（像素）：Tableau 大小 1（預設）時的線寬，大小 s 時為 s 倍（線寬的倍數依圓點推定）。"""
+TREEMAP = ("__tm_x", "__tm_x2", "__tm_y", "__tm_y2")
+"""樹狀圖的長方形（0–1 的座標，y 向下）。"""
+BUBBLE = ("__pb_x", "__pb_y", "__pb_r", "__pb_size")
+"""泡泡圖的中心與半徑（排列的單位），與畫出的大小（像素，外框的面積）。"""
+CLOUD = ("__wc_x", "__wc_y", "__wc_fs", "__wc_size")
+"""文字雲的中心與字級（像素），與畫出的字級（放不下時縮小）。"""
+LABEL_W, LABEL_H = "__label_w", "__label_h"
+"""標籤的寬高估計（像素）：放不下的標籤不顯示。"""
+MAX_CLOUD = 400
+"""文字雲最多的字數：更多時照常畫成一格。"""
+DARK_LUMINANCE = 0.3
+"""標記的顏色比這個亮度（WCAG 的相對亮度）暗時，上面的文字為白色。"""
+DEFAULT_EXTENT = (960.0, 600.0)
+"""不在 dashboard 上的工作表假設的大小（像素）。"""
+WRAPPED = "__label_wrapped"
+"""依標記的大小換行的標籤（樹狀圖、泡泡圖）。"""
 BAND = "__band_"
 """色帶的資料欄（__band_rows、__band_columns）。"""
 DECO = "__deco"
@@ -195,6 +213,8 @@ class Channel:
     format: str | None = None
     aliases: dict[Any, str] = field(default_factory=dict)
     """成員別名（原始值的比對鍵 → 顯示名稱）；只有離散維度的原始成員有。"""
+    is_set: bool = False
+    """集合（成員依「內」、「外」的順序）。"""
 
 
 @dataclass
@@ -250,6 +270,8 @@ class _Builder:
         """工作表的資料列（色彩的範圍與各值的顏色依它決定）。"""
         self.measure_names: dict[Scalar, Any] = {}
         """Measure Names：量值的欄位鍵 → 顯示名稱（指定給量值的顏色依它對應）。"""
+        self.extent = DEFAULT_EXTENT
+        """圖的大小（像素，工作表在 dashboard 上的區塊）：樹狀圖依它的寬高比排列，標籤依它換行。"""
 
     def label_field(self, marks: Marks) -> str | None:
         """標記的標籤欄：自訂的標籤文字，或標籤上第一個欄位的顯示文字。"""
@@ -548,14 +570,21 @@ class _Builder:
                 return found
             self.notes.append("甘特條有多個連續座標軸或在窗格中，尚未支援，以長條呈現")
             mark = "bar"
+        if not (rows_dims or cols_dims or rows_meas or cols_meas):
+            packed = self.packed(marks, mark)
+            if packed is not None:
+                return packed
         encoding: dict[str, Any] = {}
         vl_mark: dict[str, Any]
         label_field: str | None = None
         label_type = ""
         if mark == "text" or not (rows_meas or cols_meas):
+            # 只有離散欄位的圓點與形狀：每格一個標記（與 Tableau 相同，不是文字）
+            dots = mark in ("circle", "shape") and bool(rows_dims or cols_dims)
             # 方塊標記、只有維度並以顏色區分：醒目提示表（色塊加上文字）
             highlight = mark == "square" and marks.color is not None
-            mark = "square" if highlight else "text"
+            if not dots:
+                mark = "square" if highlight else "text"
             y = self.axis_dim(rows_dims, "rows_dim")
             x = self.axis_dim(cols_dims, "cols_dim", multiline=True)
             if y is not None:
@@ -577,17 +606,26 @@ class _Builder:
                     axis["labelPadding"] = 2 + HEADER_LINE_HEIGHT * (levels - 1)
                 encoding["x"] = {**x, "axis": axis}
             text_field = self.label_field(marks)
-            if text_field is None:
+            if text_field is None and not dots:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
                 text_field = measures[0].label if measures else None
-            vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
-            vl_mark.update(self.font("cell", marks.label_font).mark())
-            if marks.color is None and marks.mark_color is None:
-                vl_mark["color"] = self.text_color(marks, cell=True)
-            if text_field is not None:
-                encoding["text"] = {"field": text_field, "type": "nominal"}
+            if dots:
+                vl_mark = {"type": VL_MARKS[mark], "tooltip": True}
+                if mark == "shape":
+                    vl_mark["filled"] = True
+                if text_field is not None:
+                    label_field, label_type = text_field, "cell"
+                text_field = None
             else:
-                encoding["text"] = {"value": "Abc"}
+                vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
+            if not dots:
+                vl_mark.update(self.font("cell", marks.label_font).mark())
+                if marks.color is None and marks.mark_color is None:
+                    vl_mark["color"] = self.text_color(marks, cell=True)
+                if text_field is not None:
+                    encoding["text"] = {"field": text_field, "type": "nominal"}
+                else:
+                    encoding["text"] = {"value": "Abc"}
             if mark == "text":
                 self.align_cells(vl_mark, encoding, marks, text_field)
         else:
@@ -672,6 +710,286 @@ class _Builder:
                 ],
             }, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    # ------------------------------------------------------------ 沒有座標軸的排列
+
+    def packed(self, marks: Marks, mark: str) -> tuple[dict[str, Any], str] | None:
+        """欄列架上都沒有欄位時的多個標記（與 Tableau 相同）：方塊為樹狀圖、圓形為泡泡圖、文字為文字雲
+        （排列見 tmig.render.packing）。只有一個方塊或文字時照常畫成一格，標記太多的文字雲也是。"""
+        records = [r for r in self.records_of(marks) if not r.get(TOTAL)]
+        minimum = 1 if mark == "circle" else 2
+        if mark not in ("square", "circle", "text") or len(records) < minimum:
+            return None
+        if mark == "text" and len(records) > MAX_CLOUD:
+            return None
+        encoding: dict[str, Any] = {}
+        self.common(encoding, marks)
+        encoding.pop("size", None)  # 大小決定排列：以算好的位置與大小畫出
+        sizes = self.size_values(marks, records)
+        color = encoding.get("color")
+        groups = (
+            [r.get(color["field"]) for r in records]
+            if isinstance(color, dict) and color.get("type") == "nominal"
+            else None
+        )
+        font = self.font("cell", marks.label_font)
+        label = self.label_field(marks)
+        if mark == "text":
+            if label is None:
+                measures = [c for c in self.channels.values() if c.role == "measure"]
+                label = measures[0].label if measures else None
+            if label is None:
+                return None
+            return self.word_cloud(marks, encoding, records, sizes, label, font), mark
+        if mark == "square":
+            return self.treemap(marks, encoding, records, sizes, groups, label, font), mark
+        return self.bubbles(marks, encoding, records, sizes, groups, label, font), mark
+
+    def size_values(self, marks: Marks, records: list[dict[str, Any]]) -> list[float | None]:
+        """各標記的大小：大小上的量值（不是數字的為 None），離散的欄位依值出現的順序，沒有欄位時都相同。"""
+        if marks.size is None:
+            return [1.0] * len(records)
+        ch = self.ch(marks.size)
+        if ch.role == "measure" and ch.datatype not in ("string", "boolean"):
+            return [float(r[ch.name]) if _is_number(r.get(ch.name)) else None for r in records]
+        order = {v: n + 1 for n, v in enumerate(dict.fromkeys(r.get(ch.name) for r in records))}
+        return [float(order[r.get(ch.name)]) for r in records]
+
+    def contrast(self, marks: Marks, encoding: dict[str, Any]) -> dict[str, Any]:
+        """標記上的文字顏色：設定了標籤顏色時用它，否則依標記的顏色自動取白色或深色（與 Tableau 相同）。"""
+        if marks.label_color is not None:
+            return {"value": _css_color(marks.label_color)}
+        color = encoding.get("color")
+        if isinstance(color, dict) and isinstance(color.get("field"), str):
+            field = json.dumps(color["field"])
+            test = f"luminance(scale('color', datum[{field}])) < {DARK_LUMINANCE}"
+            return {"condition": {"test": test, "value": "#ffffff"}, "value": TEXT_COLOR}
+        fill = marks.mark_color or DEFAULT_MARK_COLOR
+        return {"value": "#ffffff" if _luminance(fill) < DARK_LUMINANCE else TEXT_COLOR}
+
+    def treemap(
+        self,
+        marks: Marks,
+        encoding: dict[str, Any],
+        records: list[dict[str, Any]],
+        sizes: list[float | None],
+        groups: list[Any] | None,
+        label: str | None,
+        font: Font,
+    ) -> dict[str, Any]:
+        """樹狀圖：0–1 的座標（y 向下）填滿整張圖，長方形依工作表在 dashboard 上的長寬比排列。"""
+        width, height = self.extent
+        rects = packing.treemap(sizes, groups, width / height)
+        for record, rect in zip(records, rects, strict=True):
+            if rect is None:
+                continue
+            x, y, w, h = rect
+            record[TREEMAP[0]], record[TREEMAP[1]] = round(x, 6), round(x + w, 6)
+            record[TREEMAP[2]], record[TREEMAP[3]] = round(y, 6), round(y + h, 6)
+            if label is not None:
+                # 依預期的大小換行（與 Tableau 相同，放不下的標籤不顯示）
+                record[WRAPPED] = _wrap(record.get(label), 0.9 * w * width - 8, font.size)
+                record[LABEL_W], record[LABEL_H] = _text_extent(record[WRAPPED], font.size)
+        unit = {"domain": [0, 1], "nice": False, "zero": False}
+        x = {"field": TREEMAP[0], "type": "quantitative", "axis": None, "scale": unit}
+        y = {
+            "field": TREEMAP[2],
+            "type": "quantitative",
+            "axis": None,
+            "scale": {**unit, "reverse": True},
+        }
+        rect = _mark_style({"type": "rect", "tooltip": True}, marks)
+        if marks.stroke is None:
+            rect.update(stroke="#ffffff", strokeWidth=1)  # 方塊之間的白色分隔線
+        layers: list[dict[str, Any]] = [
+            {
+                "mark": rect,
+                "encoding": {
+                    "x": x,
+                    "x2": {"field": TREEMAP[1]},
+                    "y": y,
+                    "y2": {"field": TREEMAP[3]},
+                },
+            }
+        ]
+        if label is not None:
+            x0, x1, y0, y1 = (f"datum[{json.dumps(n)}]" for n in TREEMAP)
+            fits = (
+                f"({x1} - {x0}) * width >= datum[{json.dumps(LABEL_W)}] + 8 && "
+                f"({y1} - {y0}) * height >= datum[{json.dumps(LABEL_H)}] + 6"
+            )
+            text = {
+                "type": "text",
+                "align": "left",
+                "baseline": "top",
+                "dx": 4,
+                "dy": 3,
+                "lineBreak": "\n",
+                **font.mark(),
+            }
+            layers.append(
+                {
+                    "mark": text,
+                    "encoding": {
+                        "x": x,
+                        "y": y,
+                        # 放不下的標籤不顯示（與 Tableau 相同）
+                        "text": {"condition": {"test": fits, "field": WRAPPED}, "value": ""},
+                        "color": self.contrast(marks, encoding),
+                    },
+                }
+            )
+        return {"encoding": encoding, "layer": layers}
+
+    def bubbles(
+        self,
+        marks: Marks,
+        encoding: dict[str, Any],
+        records: list[dict[str, Any]],
+        sizes: list[float | None],
+        groups: list[Any] | None,
+        label: str | None,
+        font: Font,
+    ) -> dict[str, Any]:
+        """泡泡圖：面積與大小成比例；排好的泡泡依圖的寬高等比例縮放到填滿（圓維持圓形）。"""
+        radii = [math.sqrt(v) if v is not None and v > 0 else 0.0 for v in sizes]
+        shown = [r for r in radii if r > 0]
+        padding = (sum(shown) / len(shown)) * 0.08 if shown else 0.0
+        centers = packing.pack(radii, groups, padding)
+        box: list[float] = []
+        for record, radius, center in zip(records, radii, centers, strict=True):
+            if center is None:
+                continue
+            record[BUBBLE[0]], record[BUBBLE[1]] = round(center[0], 6), round(center[1], 6)
+            record[BUBBLE[2]] = round(radius, 6)
+            box = _extend(
+                box, center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius
+            )
+        if not box:
+            box = [-1.0, -1.0, 1.0, 1.0]
+        span = (max(box[2] - box[0], 1e-9), max(box[3] - box[1], 1e-9))
+        if label is not None:
+            # 依預期的大小換行：泡泡直徑的四分之三
+            pixels = min(self.extent[0] / span[0], self.extent[1] / span[1])
+            for record, radius in zip(records, radii, strict=True):
+                if radius > 0:
+                    record[WRAPPED] = _wrap(record.get(label), 1.5 * radius * pixels, font.size)
+                    record[LABEL_W], record[LABEL_H] = _text_extent(record[WRAPPED], font.size)
+        k = f"min(width / {_num(span[0])}, height / {_num(span[1])})"
+        transform = [
+            {"calculate": f"pow(2 * datum[{json.dumps(BUBBLE[2])}] * {k}, 2)", "as": BUBBLE[3]}
+        ]
+        x, y = _fitted_axes(BUBBLE[0], BUBBLE[1], box, k)
+        circle = _mark_style({"type": "circle", "tooltip": True, "opacity": 1}, marks)
+        layers: list[dict[str, Any]] = [
+            {
+                "mark": circle,
+                "encoding": {
+                    "x": x,
+                    "y": y,
+                    "size": {"field": BUBBLE[3], "type": "quantitative", "scale": None},
+                },
+            }
+        ]
+        if label is not None:
+            diameter = f"2 * datum[{json.dumps(BUBBLE[2])}] * {k}"
+            # 標籤的外框在圓內（對角線不超過直徑）
+            fits = (
+                f"pow(datum[{json.dumps(LABEL_W)}] + 4, 2) + pow(datum[{json.dumps(LABEL_H)}], 2)"
+                f" <= pow({diameter}, 2)"
+            )
+            text = {
+                "type": "text",
+                "align": "center",
+                "baseline": "middle",
+                "lineBreak": "\n",
+                **font.mark(),
+            }
+            layers.append(
+                {
+                    "mark": text,
+                    "encoding": {
+                        "x": x,
+                        "y": y,
+                        "text": {"condition": {"test": fits, "field": WRAPPED}, "value": ""},
+                        "color": self.contrast(marks, encoding),
+                    },
+                }
+            )
+        return {"transform": transform, "encoding": encoding, "layer": layers}
+
+    def word_cloud(
+        self,
+        marks: Marks,
+        encoding: dict[str, Any],
+        records: list[dict[str, Any]],
+        sizes: list[float | None],
+        label: str,
+        font: Font,
+    ) -> dict[str, Any]:
+        """文字雲：字級依大小（最小到最大約 1 到 3 倍）；放不下時整體等比例縮小。"""
+        scale = marks.mark_size if marks.mark_size else 1.0
+        valid = [v for v in sizes if v is not None]
+        low, high = (min(valid), max(valid)) if valid else (0.0, 0.0)
+        order: list[tuple[int, float]] = []
+        for n, value in enumerate(sizes):
+            if value is None or records[n].get(label) in (None, ""):
+                continue
+            share = (
+                (value - low) / (high - low) if high > low else (0.0 if marks.size is None else 0.5)
+            )
+            order.append((n, font.size * scale * (1 + 2 * share)))
+        order.sort(key=lambda item: -item[1])  # 大的字先放（同樣大時依資料的順序）
+        boxes = []
+        for n, size in order:
+            width, height = _text_extent(records[n].get(label), size)
+            boxes.append((width + 4, height))
+        box: list[float] = []
+        for (n, size), center, (width, height) in zip(
+            order, packing.word_cloud(boxes), boxes, strict=True
+        ):
+            record = records[n]
+            record[CLOUD[0]], record[CLOUD[1]], record[CLOUD[2]] = (
+                round(center[0], 3),
+                round(center[1], 3),
+                round(size, 3),
+            )
+            box = _extend(
+                box,
+                center[0] - width / 2,
+                center[1] - height / 2,
+                center[0] + width / 2,
+                center[1] + height / 2,
+            )
+        if not box:
+            box = [-1.0, -1.0, 1.0, 1.0]
+        k = f"min(1, width / {_num(box[2] - box[0])}, height / {_num(box[3] - box[1])})"
+        transform = [{"calculate": f"datum[{json.dumps(CLOUD[2])}] * {k}", "as": CLOUD[3]}]
+        x, y = _fitted_axes(CLOUD[0], CLOUD[1], box, k)
+        text: dict[str, Any] = {
+            "type": "text",
+            "tooltip": True,
+            "align": "center",
+            "baseline": "middle",
+            "lineBreak": "\n",
+            **font.mark(),
+        }
+        text.pop("fontSize", None)
+        if marks.color is None:
+            text["color"] = (
+                _css_color(marks.mark_color)
+                if marks.mark_color is not None
+                else self.text_color(marks, cell=True)
+            )
+        if marks.opacity is not None:
+            text["opacity"] = marks.opacity
+        encoding.update(
+            x=x,
+            y=y,
+            text={"field": label, "type": "nominal"},
+            size={"field": CLOUD[3], "type": "quantitative", "scale": None},
+        )
+        return {"transform": transform, "mark": text, "encoding": encoding}
 
     def gantt(
         self,
@@ -825,6 +1143,7 @@ class _Builder:
                     setting,
                     ((r.get(ch.label), r.get(ch.name)) for r in records),
                     self.measure_names if ch.use.field == MEASURE_NAMES else None,
+                    members_first=ch.is_set,
                 )
                 if scale is not None:
                     encoding["color"]["scale"] = scale
@@ -951,15 +1270,14 @@ class _Builder:
                 )
                 setting = self.axis_of(use, axis)
                 synchronized = setting is not None and setting.synchronized
-                charts.append(
-                    {
-                        "layer": [*layers, body],
-                        # 同步的雙軸共用刻度，否則兩個軸各自的刻度
-                        "resolve": {
-                            "scale": {channel: "shared" if synchronized else "independent"}
-                        },
-                    }
-                )
+                # 同步的雙軸共用刻度，否則兩個軸各自的刻度
+                scales = {channel: "shared" if synchronized else "independent"}
+                for name in ("color", "size"):
+                    # 兩個軸的標記卡以不同的欄位著色（或決定大小）：各自的比例尺與圖例（與 Tableau 相同）
+                    fields = {_channel_field(layer, name) for layer in [*layers, body]}
+                    if len(fields - {None}) > 1:
+                        scales[name] = "independent"
+                charts.append({"layer": [*layers, body], "resolve": {"scale": scales}})
             else:
                 charts.append(body)
         if len(charts) == 1:
@@ -1135,11 +1453,13 @@ def build_spec(
             use=column.use,
             format=value_format(ws, data_field, column.use),
             aliases=member_aliases(data_field, column.use) if column.role == "dimension" else {},
+            is_set=data_field.set is not None,
         )
     uses = [*ws.rows, *ws.columns, *ws.marks.uses()]
     uses += [u for pane in ws.panes for u in pane.marks.uses()]
     long = bool(ws.measure_values) and any(u.field in SPECIAL_FIELDS for u in uses)
     builder = _Builder(ws, channels)
+    builder.extent = _sheet_extent(ir, ws)
 
     # ---------------------------------------------------------- 資料
     values = _records(channels, result)
@@ -1199,7 +1519,8 @@ def build_spec(
     params = {p.id: p.value for p in ir.parameters} | (parameters or {})
     cards = [(None, ws.marks), *enumerate(p.marks for p in ws.panes)]
     for n, (index, marks) in enumerate(cards):
-        if not marks.label_text:
+        labelled = [channels[use_key(u)] for u in marks.label if use_key(u) in channels]
+        if not marks.label_text and len(labelled) < 2:
             continue
         name = f"__text{n}"
         builder.label_fields[id(marks)] = name
@@ -1208,7 +1529,14 @@ def build_spec(
             targets = [pane_values[index]]
         for records in targets:
             for record in records:
-                record[name] = compose_text(marks.label_text, ir, params, channels, record)
+                if marks.label_text:
+                    record[name] = compose_text(marks.label_text, ir, params, channels, record)
+                else:
+                    # 沒有自訂的標籤文字：標籤上的欄位各占一行（與 Tableau 的預設相同）
+                    record[name] = "\n".join(
+                        "" if record.get(ch.label) is None else str(record.get(ch.label))
+                        for ch in labelled
+                    )
 
     # Measure Names 沒有對應的量值（Measure Values 卡是空的）時不畫：Tableau 只顯示空白的欄標題
     builder.rows = [u for u in ws.rows if builder.shown(u)]
@@ -1258,7 +1586,12 @@ def build_spec(
     else:
         if mark == "automatic":
             mark = _infer_mark(
-                rows_dims, cols_dims, rows_meas, cols_meas, builder.is_continuous_date
+                rows_dims,
+                cols_dims,
+                rows_meas,
+                cols_meas,
+                builder.is_continuous_date,
+                sized=ws.marks.size is not None,
             )
         if mark in UNSUPPORTED_MARKS:
             return RenderResult(None, len(result.rows), mark, f"標記類型 {mark} 尚未支援")
@@ -1379,10 +1712,18 @@ def build_spec(
         }
         y_type = encoding.get("y", {}).get("type") if isinstance(encoding.get("y"), dict) else None
         sizing: dict[str, dict[str, Any]] = spec["usermeta"]["sizing"]
-        if mark == "text" and "x" not in encoding and y_type in ("ordinal", "nominal"):
+        # 只有離散欄位的圓點與形狀（每格一個標記）與文字表相同排成表格
+        dots = mark in ("circle", "shape") and not rows_meas and not cols_meas
+        if dots:
+            label = builder.label_field(ws.marks)
+            labels = [str(v.get(label, "")) for v in values] if label is not None else []
+            width = POINT_DIAMETER + 16 + (_column_width(labels) if labels else 0)
+        else:
+            width = _column_width(texts)
+        if (mark == "text" or dots) and "x" not in encoding and y_type in ("ordinal", "nominal"):
             # 只有列標題的文字表是一欄：寬度依內容（與離散的欄相同），不填滿
-            sizing["columns"] = {"size": ws.column_style.cell or _column_width(texts)}
-        elif mark == "text" and "step" in sizing["columns"]:
+            sizing["columns"] = {"size": ws.column_style.cell or width}
+        elif (mark == "text" or dots) and "step" in sizing["columns"]:
             # 文字表的欄與 Tableau 相同依內容的寬度，標準大小時不拉寬填滿區塊
             sizing["columns"]["fixed"] = True
         shelves: list[tuple[Literal["rows", "columns"], str, list[FieldUse], ShelfStyle]] = [
@@ -1853,6 +2194,15 @@ def main_encoding(node: dict[str, Any]) -> dict[str, Any] | None:
         if found is not None:
             return found
     return encoding if isinstance(encoding, dict) else None
+
+
+def _channel_field(node: dict[str, Any], channel: str) -> str | None:
+    """圖的主要 encoding 上某個通道的欄位（沒有或是固定值時為 None）。"""
+    encoding = main_encoding(node)
+    found = encoding.get(channel) if isinstance(encoding, dict) else None
+    if not isinstance(found, dict) and isinstance(node.get("encoding"), dict):
+        found = node["encoding"].get(channel)
+    return found.get("field") if isinstance(found, dict) else None
 
 
 def _column_width(texts: Sequence[Any], size: float = 12) -> int:
@@ -3785,13 +4135,16 @@ def _label_layer(
     font: Font | None = None,
     match: bool = False,
 ) -> dict[str, Any]:
-    """標籤：長條在尾端（堆疊時在各段內側），其他標記在點的上方。match 時文字的顏色與標記相同
-    （依欄位著色時沿用同一個色彩的 encoding）。"""
+    """標籤：長條在尾端（堆疊時在各段內側），表格中的圓點與形狀（cell）在右邊，其他標記在點的上方。
+    match 時文字的顏色與標記相同（依欄位著色時沿用同一個色彩的 encoding）。"""
     stacked = vl_type == "bar" and colored
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
     mark: dict[str, Any] = {"type": "text", **(font or resolve()).mark(), "lineBreak": "\n"}
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
-    if vl_type == "bar" and horizontal:
+    if vl_type == "cell":
+        # 表格中的圓點與形狀：標籤在標記的右邊（列很密，放在上方會疊到上一列）
+        mark.update(align="left", baseline="middle", dx=POINT_DIAMETER / 2 + 4)
+    elif vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
         if stacked:
             layer["x"] = {**encoding["x"], "stack": "zero"}
@@ -3840,16 +4193,130 @@ def _infer_mark(
     rows_meas: list[FieldUse],
     cols_meas: list[FieldUse],
     is_continuous_date: Callable[[FieldUse], bool] = lambda use: False,
+    sized: bool = False,
 ) -> str:
-    """Tableau 的「自動」標記：沒有量值在欄列架上為文字表；連續日期為折線；其餘為長條。"""
+    """Tableau 的「自動」標記：欄列架上都沒有欄位、大小上有欄位時為方塊（樹狀圖）；沒有量值在欄列架上
+    為文字表；連續日期為折線；其餘為長條。"""
     if not rows_meas and not cols_meas:
-        return "text"
+        return "square" if sized and not rows_dims and not cols_dims else "text"
     if rows_meas and cols_meas:
         return "circle"
     for use in rows_dims + cols_dims:
         if (use.date is not None and use.continuous) or is_continuous_date(use):
             return "line"
     return "bar"
+
+
+def _sheet_extent(ir: IR, ws: Worksheet) -> tuple[float, float]:
+    """工作表在 dashboard 上的區塊（第一個顯示它的區塊）的大小；不在 dashboard 上時為 DEFAULT_EXTENT。"""
+
+    def walk(zones: list[Zone]) -> tuple[float, float] | None:
+        for zone in zones:
+            if zone.kind == "worksheet" and zone.worksheet == ws.id and zone.w > 0 and zone.h > 0:
+                return float(zone.w), float(zone.h)
+            found = walk(zone.children)
+            if found is not None:
+                return found
+        return None
+
+    for dashboard in ir.dashboards:
+        found = walk(dashboard.zones)
+        if found is not None:
+            return found
+    return DEFAULT_EXTENT
+
+
+BREAK_AFTER = frozenset(",;:/-)")
+"""換行時可以斷開的標點（斷在標點之後）。"""
+
+
+def _wrap(text: Any, width: float, size: float) -> str:
+    """每一行在 width 像素內換行（與 Tableau 的標籤相同）：英文在空白與標點處，全形字之間都可以；
+    放不下的單字不拆開。"""
+    out: list[str] = []
+    for line in str(text if text is not None else "").split("\n"):
+        words: list[str] = []
+        current = ""
+        for c in line:
+            if c == " " or unicodedata.east_asian_width(c) in ("W", "F"):
+                if current:
+                    words.append(current)
+                    current = ""
+                words.append(c)
+            elif c in BREAK_AFTER:
+                words.append(current + c)  # 標點之後也可以換行
+                current = ""
+            else:
+                current += c
+        if current:
+            words.append(current)
+        buffer = ""
+        lines: list[str] = []
+        for word in words:
+            if buffer.strip() and _text_extent((buffer + word).rstrip(), size)[0] > width:
+                lines.append(buffer.rstrip())
+                buffer = "" if word == " " else word
+            else:
+                buffer += word
+        lines.append(buffer.rstrip())
+        out.extend(lines)
+    return "\n".join(out)
+
+
+def _text_extent(text: Any, size: float) -> tuple[float, float]:
+    """文字的寬高估計（像素）：全形字約一個字高、其餘約 0.55 個字高，行高為字高的 1.2 倍。"""
+    lines = str(text if text is not None else "").split("\n")
+    width = max(
+        sum(size if unicodedata.east_asian_width(c) in ("W", "F") else size * 0.55 for c in line)
+        for line in lines
+    )
+    return round(width, 2), round(len(lines) * size * 1.2, 2)
+
+
+def _luminance(color: str) -> float:
+    """顏色的相對亮度（WCAG，與 Vega 的 luminance() 相同）。"""
+    digits = _css_color(color).lstrip("#")[:6]
+    if len(digits) != 6:
+        return 1.0
+    linear = []
+    for i in (0, 2, 4):
+        c = int(digits[i : i + 2], 16) / 255
+        linear.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _extend(box: list[float], x0: float, y0: float, x1: float, y1: float) -> list[float]:
+    """外框（左、上、右、下）加上一個範圍。"""
+    if not box:
+        return [x0, y0, x1, y1]
+    return [min(box[0], x0), min(box[1], y0), max(box[2], x1), max(box[3], y1)]
+
+
+def _num(value: float) -> str:
+    return f"{value:.6g}"
+
+
+def _fitted_axes(
+    x_field: str, y_field: str, box: list[float], k: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """排好的標記的位置：box（排列的範圍）的中心在圖的中間，k（運算式）為每單位的像素，兩軸相同
+    （圖形不變形）；沒有座標軸。"""
+
+    def axis(field: str, center: float, extent: str, reverse: bool) -> dict[str, Any]:
+        scale: dict[str, Any] = {
+            "domainMin": {"expr": f"{_num(center)} - {extent} / 2 / ({k})"},
+            "domainMax": {"expr": f"{_num(center)} + {extent} / 2 / ({k})"},
+            "nice": False,
+            "zero": False,
+        }
+        if reverse:
+            scale["reverse"] = True
+        return {"field": field, "type": "quantitative", "axis": None, "scale": scale}
+
+    return (
+        axis(x_field, (box[0] + box[2]) / 2, "width", False),
+        axis(y_field, (box[1] + box[3]) / 2, "height", True),
+    )
 
 
 def _json_value(value: Any) -> Any:

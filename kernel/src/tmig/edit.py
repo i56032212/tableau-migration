@@ -31,6 +31,7 @@ from tmig.ir import (
     FieldUse,
     Hierarchy,
     Marks,
+    MemberAlias,
     Parameter,
     Size,
     Story,
@@ -206,6 +207,55 @@ def upsert_calc(
         # 與 Tableau 相同：改成彙總的公式後膠囊變成 AGG(…)，改回列層級後量值的膠囊加上 SUM
         updated = _adapt_worksheets(updated, field, existing.calc.level, check.level)
     return _validated(updated, f"「{caption}」的變更與使用它的工作表不相容"), field
+
+
+CLUSTER_NAMES = 25
+"""叢集欄位的別名：0 為 Not Clustered，1 到 25 為 Cluster N（自動決定的叢集數最多 25 個）。"""
+
+
+def add_analytics_field(
+    ir: IR, datasource: str, kind: Literal["cluster", "forecast_indicator"]
+) -> tuple[IR, DataField]:
+    """分析的欄位（查詢之後才填值，見 tmig.planner.analytics）：叢集每次新增一個（公式為 0 的整數維度，
+    別名為 Cluster N，與 Tableau 拖到檢視上的叢集相同）；Forecast Indicator 一個資料源只有一個
+    （公式為 "Actual" 的字串維度，估計的列為 Estimate），已經有時直接回傳。"""
+    ds = _datasource(ir, datasource)
+    if kind == "forecast_indicator":
+        found = next((f for f in ds.fields if f.name == "[Forecast Indicator]"), None)
+        if found is not None:
+            return ir, found
+        name, caption, formula, aliases = (
+            "[Forecast Indicator]",
+            "Forecast Indicator",
+            '"Actual"',
+            [],
+        )
+    else:
+        n = 1
+        while any(f.name == f"[AdhocCluster:{n}]" for f in ds.fields):
+            n += 1
+        captions = {f.caption for f in ds.fields}
+        caption = "Clusters" if "Clusters" not in captions else f"Clusters {n}"
+        while caption in captions:
+            n += 1
+            caption = f"Clusters {n}"
+        name, formula = f"[AdhocCluster:{n}]", "0"
+        aliases = [MemberAlias(value=0, label="Not Clustered")] + [
+            MemberAlias(value=i, label=f"Cluster {i}") for i in range(1, CLUSTER_NAMES + 1)
+        ]
+    check = check_formula(ir, datasource, formula)
+    field = DataField(
+        id=_unique_id(ir, "f_" + _slug(caption)),
+        name=name,
+        caption=caption,
+        role="dimension",
+        datatype=check.datatype,  # type: ignore[arg-type]
+        calc=check.calc,
+        aliases=aliases,
+        source_ref=EDITOR_REF,
+    )
+    updated = _replace_datasource(ir, ds.model_copy(update={"fields": [*ds.fields, field]}))
+    return _validated(updated, f"無法加入「{caption}」"), field
 
 
 USE_KEYS = frozenset({"field", "agg", "date", "continuous", "table_calc"})

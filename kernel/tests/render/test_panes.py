@@ -165,3 +165,27 @@ def test_measure_values_with_own_card_and_dual_axis(tmp_path: Path, db: Path) ->
     assert lines["mark"]["type"] == "line" and lines["encoding"]["color"]["field"] == "__mn"
     assert dots["mark"]["type"] == "circle"
     assert {"filter": "!(datum.__mn_i > 0)"} in dots["transform"]
+
+
+def test_dual_axis_colored_by_different_measures(tmp_path: Path, db: Path) -> None:
+    """雙軸的兩張標記卡以不同的量值著色：各自的色階與圖例（共用時兩個色階會合併，顏色就錯了）。"""
+    sheet = worksheet(
+        "Dual",
+        [CATEGORY, SALES, PROFIT],
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("none:Category:nk"),
+        panes_extra=measure_pane(
+            2, ref("sum:Sales:qk"), "Bar", f"<color column='{ref('sum:Sales:qk')}' />"
+        )
+        + measure_pane(
+            3,
+            ref("sum:Profit:qk"),
+            "Bar",
+            f"<color column='{ref('sum:Profit:qk')}' />",
+            " y-index='1'",
+        ),
+    )
+    spec = render(parse(tmp_path, sheet), db).spec
+    assert spec["resolve"]["scale"]["color"] == "independent"
+    sales, profit = spec["layer"]
+    assert sales["encoding"]["color"]["field"] != profit["encoding"]["color"]["field"]

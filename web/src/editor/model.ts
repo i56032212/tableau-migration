@@ -451,11 +451,61 @@ export function newTableCalc(id: string, type: string, options: Record<string, S
   };
 }
 
-/** 移除不再使用的排序與 Table Calculation（膠囊被移走之後）。 */
+/** 叢集（分析＞叢集）：叢集欄位與分析的量值（都在檢視中）。 */
+export interface ClusterIR {
+  field: string;
+  measures: FieldUse[];
+  count: number | null;
+}
+
+/** 預測（分析＞預測）的設定；measures 為欄列架上的量值。 */
+export interface ForecastIR {
+  measures: FieldUse[];
+  indicator: string | null;
+  model: "auto" | "auto_no_season" | "custom";
+  trend: "none" | "additive" | "multiplicative" | null;
+  season: "none" | "additive" | "multiplicative" | null;
+  length: "auto" | "next" | "until";
+  size: number | null;
+  unit: string | null;
+  ignore_last: number;
+  fill_zeros: boolean;
+  confidence: number;
+  bands: boolean;
+}
+
+/** 欄列架上的量值（預測的對象）。 */
+export function axisMeasures(sheet: SheetIR, fields: Map<string, CatalogField>): FieldUse[] {
+  return [...sheet.rows, ...sheet.columns].filter((u) => !isSpecial(u) && isMeasure(u, fields));
+}
+
+/** 檢視中的量值（叢集的變數），相同的膠囊只列一次。 */
+export function viewMeasures(sheet: SheetIR, fields: Map<string, CatalogField>): FieldUse[] {
+  const found: FieldUse[] = [];
+  for (const use of [...sheet.columns, ...sheet.rows, ...markUses(sheet.marks)]) {
+    if (!isSpecial(use) && isMeasure(use, fields) && !found.some((u) => sameUse(u, use))) found.push(use);
+  }
+  return found;
+}
+
+/** 移除不再使用的排序與 Table Calculation（膠囊被移走之後）；叢集與預測跟著檢視調整（叢集欄位不在檢視中
+ * 時移除叢集；預測的量值為欄列架上目前的量值，沒有量值時移除預測）。 */
 export function tidy(sheet: SheetIR, fields: Map<string, CatalogField>): SheetIR {
-  const present = new Set(allUses(sheet).map((u) => u.field));
+  const uses = allUses(sheet);
+  const present = new Set(uses.map((u) => u.field));
   const sorts = sheet.sorts.filter((s) => present.has(s.field));
-  return refreshTableCalcs({ ...sheet, sorts }, fields);
+  const changes: Partial<SheetIR> = { sorts };
+  const cluster = sheet.cluster as ClusterIR | null | undefined;
+  if (cluster) {
+    const measures = cluster.measures.filter((u) => uses.some((v) => sameUse(u, v)));
+    changes.cluster = present.has(cluster.field) && measures.length ? { ...cluster, measures } : null;
+  }
+  const forecast = sheet.forecast as ForecastIR | null | undefined;
+  if (forecast) {
+    const measures = axisMeasures(sheet, fields);
+    changes.forecast = measures.length ? { ...forecast, measures } : null;
+  }
+  return refreshTableCalcs({ ...sheet, ...changes }, fields);
 }
 
 // ---------------------------------------------------------------- 架上的變更
