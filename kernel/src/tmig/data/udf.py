@@ -3,7 +3,8 @@
 - Tableau 的正規表示式：Tableau 以 ICU 執行，DuckDB 以 RE2 執行。RE2 不支援、ICU 支援的語法
   （前後查看、反向參照、原子群組、佔有量詞）改以 Python 的 re 計算（這些語法的寫法與 ICU 相同），
   公式編譯時只有樣式用到這些語法才呼叫（見 tmig.sqlgen.expr）
-- 空間函式（MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA 與彙總 COLLECT）：空間資料是 WKT 文字，
+- 空間函式（MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA、彙總 COLLECT 與空間 join 的 Intersects）：
+  空間資料是 WKT 文字，
   計算見 tmig.geo.spatial（WGS84 橢球的大地測量）與 tmig.geo.projection（MAKEPOINT 的 SRID）
 
 同一個 DuckDB 檔的連線共用一個資料庫實體：函式不能重複加入，加入函式的連線關閉後其他連線再用會當掉。
@@ -22,11 +23,16 @@ from typing import Any
 import duckdb
 
 try:
-    from duckdb.func import SPECIAL as HANDLES_NULLS  # DuckDB 2
+    from duckdb.func import ARROW  # DuckDB 2
+    from duckdb.func import SPECIAL as HANDLES_NULLS
 except ImportError:  # pragma: no cover - DuckDB 1.x
-    from duckdb.functional import FunctionNullHandling  # type: ignore[import-not-found]
+    from duckdb.functional import (  # type: ignore[import-not-found]
+        FunctionNullHandling,
+        PythonUDFType,
+    )
 
     HANDLES_NULLS = FunctionNullHandling.SPECIAL
+    ARROW = PythonUDFType.ARROW
 
 MATCH = "tmig_regexp_match"
 EXTRACT = "tmig_regexp_extract"
@@ -39,6 +45,8 @@ GEO_LINE = "tmig_geo_makeline"
 GEO_DISTANCE = "tmig_geo_distance"
 GEO_BUFFER = "tmig_geo_buffer"
 GEO_AREA = "tmig_geo_area"
+GEO_INTERSECTS = "tmig_geo_intersects"
+GEO_BOUNDS = "tmig_geo_bounds"
 SPATIAL_FUNCTIONS = (
     GEO_COLLECT,
     GEO_POINT,
@@ -47,6 +55,8 @@ SPATIAL_FUNCTIONS = (
     GEO_DISTANCE,
     GEO_BUFFER,
     GEO_AREA,
+    GEO_INTERSECTS,
+    GEO_BOUNDS,
 )
 FUNCTIONS = REGEX_FUNCTIONS + SPATIAL_FUNCTIONS
 
@@ -135,6 +145,27 @@ def _point_srid(x: float, y: float, srid: int) -> str | None:
     return make_point_srid(x, y, srid)
 
 
+def _intersects_arrow(left: Any, right: Any) -> Any:
+    """空間 join 的 Intersects（DuckDB 一次傳入一批配對的 Arrow 陣列）：形狀先去重，點依另一邊的形狀
+    分組一次算完（tmig.geo.spatial.intersects_pairs）。"""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    from tmig.geo import spatial
+
+    def encode(values: Any) -> tuple[list[str | None], Any]:
+        if isinstance(values, pa.ChunkedArray):
+            values = values.combine_chunks()
+        encoded = values.dictionary_encode()
+        index = pc.fill_null(encoded.indices, -1).to_numpy(zero_copy_only=False)
+        return encoded.dictionary.to_pylist(), index
+
+    a, a_index = encode(left)
+    b, b_index = encode(right)
+    result, null = spatial.intersects_pairs(a, a_index, b, b_index)
+    return pa.array(result, type=pa.bool_(), mask=null)
+
+
 def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
     """在連線上加入正規表示式與空間函式（Null 的參數得 Null）。"""
     from tmig.geo import spatial
@@ -158,9 +189,19 @@ def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
         (GEO_DISTANCE, spatial.distance, ["VARCHAR", "VARCHAR", "VARCHAR"], "DOUBLE"),
         (GEO_BUFFER, spatial.buffer, ["VARCHAR", "DOUBLE", "VARCHAR"], "VARCHAR"),
         (GEO_AREA, spatial.area, ["VARCHAR", "VARCHAR"], "DOUBLE"),
+        # 空間 join 先以範圍過濾（DuckDB 以不等式的 join 處理），再判斷是否相交（見下）
+        (GEO_BOUNDS, spatial.bounds_list, ["VARCHAR"], "DOUBLE[]"),
     ]
     for name, func, parameters, result in spatial_functions:
         con.create_function(name, _safe(func), parameters, result, null_handling=HANDLES_NULLS)
+    con.create_function(
+        GEO_INTERSECTS,
+        _intersects_arrow,
+        ["VARCHAR", "VARCHAR"],
+        "BOOLEAN",
+        type=ARROW,
+        null_handling=HANDLES_NULLS,
+    )
     return con
 
 
@@ -191,9 +232,11 @@ __all__ = [
     "EXTRACT",
     "FUNCTIONS",
     "GEO_AREA",
+    "GEO_BOUNDS",
     "GEO_BUFFER",
     "GEO_COLLECT",
     "GEO_DISTANCE",
+    "GEO_INTERSECTS",
     "GEO_LINE",
     "GEO_POINT",
     "GEO_POINT_SRID",

@@ -203,6 +203,8 @@ KNOWN = frozenset(
         "column-instance",
         "table-calc",
         "order",
+        # 篩選動作的值組合中各欄位的順序（<groupfilter function='reorder-dimensionality'><order>）
+        "hierarchy",
         "calculation",
         "range",
         "members",
@@ -840,6 +842,35 @@ class SheetParser:
                     return item
         raise KeyError(field_id)
 
+    def _shape(
+        self, shapes: list[tuple[str, FieldUse, etree._Element]], layer: str | None
+    ) -> FieldUse | None:
+        """標記的形狀：geometry 編碼的欄位，沒有時依地圖圖層的名稱、再依順序取詳細資料上的空間欄位。
+        卡上其他的空間欄位不畫（與 Tableau 相同，一個圖層一種形狀；不影響詳細程度與數字）。"""
+        if not shapes:
+            return None
+        explicit = [use for tag, use, _ in shapes if tag == "geometry"]
+        named = [
+            use
+            for _, use, _ in shapes
+            if layer is not None and self._caption_of(use) in (layer, layer.strip())
+        ]
+        chosen = (explicit or named or [shapes[0][1]])[0]
+        for _, use, enc in shapes:
+            if use != chosen:
+                self.ctx.ignore(
+                    enc,
+                    f"工作表「{self.name}」的標記卡上有多個空間欄位：形狀是「{self._caption_of(chosen)}」，"
+                    f"「{self._caption_of(use)}」不畫出",
+                )
+        return chosen
+
+    def _caption_of(self, use: FieldUse) -> str:
+        try:
+            return self._field(use.field).caption
+        except KeyError:
+            return use.field
+
     def _spatial(self, use: FieldUse) -> bool:
         """空間資料的欄位（Shapefile 的 Geometry、MAKEPOINT 等計算欄位）。"""
         if use.field in SPECIAL_FIELDS:
@@ -1259,15 +1290,19 @@ class SheetParser:
             shown.append(element)
         if not shown:
             shown = layers[:1]
-        cards = [self._card(element) for element in shown]
+        cards = [
+            self._card(element, element.get("title") or element.get("generated-title"))
+            for element in shown
+        ]
         result = [
             Pane(measure=latitude, axis="rows", dual=i > 0, marks=card)
             for i, (card, _) in enumerate(cards)
         ]
         return Marks(type=cards[0][0].type), result, cards[0][1]
 
-    def _card(self, pane: etree._Element) -> tuple[Marks, list[FieldUse]]:
-        """一張標記卡：標記類型與編碼；回傳標記卡與其中的維度。"""
+    def _card(self, pane: etree._Element, layer: str | None = None) -> tuple[Marks, list[FieldUse]]:
+        """一張標記卡：標記類型與編碼；回傳標記卡與其中的維度。layer：地圖圖層的名稱（空間欄位的名稱，
+        卡上有多個空間欄位時以它為標記的形狀）。"""
         mark_el = child(pane, "mark")
         mark_class = mark_el.get("class", "Automatic") if mark_el is not None else "Automatic"
         mark_type = MARKS.get(mark_class)
@@ -1280,6 +1315,7 @@ class SheetParser:
         dims: list[FieldUse] = []
         singles = {"color": "color", "size": "size", "shape": "shape", "wedge-size": "angle"}
         color_ref: str | None = None
+        shapes: list[tuple[str, FieldUse, etree._Element]] = []
         for enc in children(child(pane, "encodings")):
             tag = local_name(enc)
             if tag not in ENCODINGS:
@@ -1310,15 +1346,13 @@ class SheetParser:
                     color_ref = enc.get("column")
             elif tag == "path":
                 marks.path = use
-            elif tag == "geometry" or (tag == "lod" and self._spatial(use)):
-                # 空間欄位的 COLLECT 同時寫在詳細資料與 geometry：一律當作標記的形狀
+            elif tag == "geometry" or (tag in ("lod", "text", "tooltip") and self._spatial(use)):
+                # 空間欄位的 COLLECT 同時寫在詳細資料與 geometry：一律當作標記的形狀（卡上有多個時
+                # 之後依序決定）
                 if use.field != GEOMETRY_GENERATED and not self._spatial(use):
                     self.ctx.flag(enc, f"標記編碼 geometry：欄位不是空間資料（{use.field}）")
                     continue
-                if marks.geometry is not None and marks.geometry != use:
-                    self.ctx.flag(enc, "標記卡上有多個空間欄位，v0 只畫第一個")
-                    continue
-                marks.geometry = use
+                shapes.append((tag, use, enc))
                 continue
             elif tag == "text":
                 marks.label.append(use)
@@ -1328,6 +1362,7 @@ class SheetParser:
                 marks.tooltip.append(use)
             if use.field not in SPECIAL_FIELDS and not self._is_measure(use):
                 dims.append(use)
+        marks.geometry = self._shape(shapes, layer)
         label = child(child(pane, "customized-label"), "formatted-text")
         if label is not None:
             marks.label_text = self._text_runs(label, f"工作表「{self.name}」的自訂標籤")
@@ -2623,6 +2658,14 @@ def _tuple_tree(node: etree._Element) -> TupleTree | None:
         return "include", [node.get("member") or node.get("level", "")], []
     if function == "member":
         return "include", [node.get("level", "")], [[node.get("member")]]
+    if function == "reorder-dimensionality" and parts:
+        # 篩選動作的值組合：內層的樹加上各欄位的順序（<order><hierarchy name=…>），依順序排列
+        sub = _tuple_tree(parts[0])
+        names = [h.get("name", "") for h in children(child(node, "order"), "hierarchy")]
+        if sub is None or sorted(names) != sorted(sub[1]):
+            return sub
+        positions = [sub[1].index(name) for name in names]
+        return sub[0], names, [[row[i] for i in positions] for row in sub[2]]
     if function == "crossjoin" and parts:
         kinds = {p.get("function") for p in parts}
         levels = [p.get("level", "") for p in parts]
@@ -2631,16 +2674,20 @@ def _tuple_tree(node: etree._Element) -> TupleTree | None:
         if kinds == {"empty-level"}:
             # 清除選取時排除所有值的篩選動作：層級寫在 member 屬性
             return "include", [p.get("member") or p.get("level", "") for p in parts], []
-        # 各層級的成員（單一成員或多個成員的 union）：值組合為各層級成員的所有組合
-        columns: list[list[str | None]] = []
+        # 各部分的成員（單一成員、多個成員的 union，或巢狀的 crossjoin）：值組合為各部分的所有組合
+        groups: list[list[list[str | None]]] = []
         levels = []
         for part in parts:
             sub = _tuple_tree(part)
-            if sub is None or sub[0] != "include" or len(sub[1]) != 1:
+            if sub is None or sub[0] != "include":
                 return None
-            levels.append(sub[1][0])
-            columns.append([row[0] for row in sub[2]])
-        return "include", levels, [list(combo) for combo in itertools.product(*columns)]
+            levels += sub[1]
+            groups.append(sub[2])
+        return (
+            "include",
+            levels,
+            [[v for row in combo for v in row] for combo in itertools.product(*groups)],
+        )
     if function == "union" and parts:
         found_levels: list[str] | None = None
         rows: list[list[str | None]] = []

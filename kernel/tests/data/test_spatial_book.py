@@ -3,6 +3,7 @@
 - 萃取中的 GEOGRAPHY 欄位以 WKT 文字匯入；沒有萃取的 Shapefile 壓縮檔、CSV 匯入時讀進資料庫
 - 工作表上的 COLLECT(Geometry) 是標記的形狀：查詢每個標記一個形狀，地圖畫成多邊形、點或線
 - 計算欄位的 DISTANCE、AREA(BUFFER(…)) 與 Hyper（Tableau 的引擎）計算的結果相同
+- 空間 join（Intersects）：CSV 的地點以 MAKEPOINT 對到 GeoJSON 中所在的縣市（left join，沒有對到的為 Null）
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from tmig.render.datasource import datasource_summary
 from tmig.render.vegalite import build_spec
 from tmig.sqlgen.query import worksheet_sql
 
-from .spatial_book import CITIES, STORES, write_spatial_twbx
+from .spatial_book import CITIES, PLACES, STORES, write_spatial_twbx
 
 pytest.importorskip("tableauhyperapi")
 
@@ -60,7 +61,7 @@ def run(ir: IR, data: Path, name: str) -> tuple[Any, Any]:
 def test_parse(ir: IR) -> None:
     assert ir.unsupported == [], [u.reason for u in ir.unsupported]
     assert check_references(ir) == []
-    counties, stores, cities = ir.datasources
+    counties, stores, cities, _ = ir.datasources
     assert isinstance(counties.connection, ExtractConnection)
     geometry = next(f for f in counties.fields if f.caption == "Geometry")
     assert (geometry.datatype, geometry.role, geometry.default_agg) == (
@@ -110,6 +111,51 @@ def test_queries(ir: IR, data: Path) -> None:
     assert {row[0]: row[-1] for row in routes.rows}["Kaohsiung"] == (
         "LINESTRING(121.5645000 25.0339000, 120.3014000 22.6273000)"
     )
+
+
+def test_spatial_join(ir: IR, data: Path) -> None:
+    """CSV 與 GeoJSON 的空間 join：條件是 MAKEPOINT(緯度, 經度) 與縣市的形狀相交。"""
+    places = ir.datasources[3]
+    assert isinstance(places.connection, FileConnection)
+    assert [t.format for t in places.connection.tables] == ["text", "spatial"]
+    relation = places.connection.relation
+    assert relation is not None and relation.kind == "join"
+    (condition,) = relation.on
+    assert condition.op == "intersects"
+    assert condition.left.formula == "MAKEPOINT([places.csv].[Lat],[places.csv].[Lon])"
+    query, result = run(ir, data, "Places per County")
+    counts = {row[0]: row[1] for row in result.rows}
+    expected: dict[str | None, int] = {}
+    for *_, county in PLACES:
+        expected[county] = expected.get(county, 0) + 1
+    assert counts == expected
+    # 形狀與範圍在資料表的子查詢中先算好，join 條件只比較這些欄
+    assert query.sql.count("tmig_geo_point(") == 1
+
+
+def test_map_layers_with_spatial_fields(ir: IR, data: Path) -> None:
+    """2021.2 的地圖圖層（元素與屬性帶功能旗標的前綴）：每個圖層一種形狀；卡上有兩個空間欄位、
+    沒有 geometry 編碼時，以圖層的名稱（空間欄位的名稱）決定形狀，另一個記為略過。"""
+    ws = sheet(ir, "Place Layers")
+    first, second = ws.panes
+    assert first.marks.geometry is not None and second.marks.geometry is not None
+    fields = {f.id: f.caption for f in ir.datasources[3].fields}
+    assert [fields[p.marks.geometry.field] for p in ws.panes] == ["Geometry", "Place Point"]
+    assert (second.dual, [u.field for u in second.marks.detail]) == (True, ["f_place"])
+    assert any("形狀是「Place Point」，「Geometry」不畫出" in i.reason for i in ir.ignored)
+    query = worksheet_sql(ir, ws.id)
+    from tmig.sqlgen.query import pane_sql
+
+    db = data / f"{ws.datasource}.duckdb"
+    panes = {i: (q.columns, execute_query(db, q)) for i, q in pane_sql(ir, ws.id, query).items()}
+    rendered = build_spec(ir, ws.id, query.columns, execute_query(db, query), None, panes or None)
+    assert rendered.spec is not None
+    drawn = [
+        layer["mark"]["type"]
+        for layer in rendered.spec["layer"]
+        if not str(layer.get("name", "")).startswith("__deco")
+    ]
+    assert drawn == ["geoshape", "circle"]
 
 
 def test_distances_match_hyper(ir: IR, data: Path, tmp_path: Path) -> None:

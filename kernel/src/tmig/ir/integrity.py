@@ -146,6 +146,7 @@ def check_references(ir: IR) -> list[str]:
         GENERATED_FIELDS,
         GEOMETRY_GENERATED,
         LATITUDE_GENERATED,
+        LONGITUDE_GENERATED,
         MEASURE_VALUES,
         SPECIAL_FIELDS,
         FieldUse,
@@ -365,8 +366,16 @@ def check_references(ir: IR) -> list[str]:
                 if not ws.measure_values:
                     errors.append(f"{where}：Measure Values 的標記卡，工作表卻沒有 Measure Values")
             elif pane.measure.field in GENERATED_FIELDS:
-                if pane.measure.field != LATITUDE_GENERATED or pane.axis != "rows":
-                    errors.append(f"{where}：地圖的標記圖層必須對應列架上的 Latitude (generated)")
+                # 地圖的標記圖層（2020.4 起）與雙軸地圖：列架上的 Latitude (generated)，或欄架上重複的
+                # Longitude (generated)（較早的雙軸地圖）
+                if (pane.measure.field, pane.axis) not in (
+                    (LATITUDE_GENERATED, "rows"),
+                    (LONGITUDE_GENERATED, "columns"),
+                ):
+                    errors.append(
+                        f"{where}：地圖的標記圖層必須對應列架上的 Latitude (generated) "
+                        "或欄架上的 Longitude (generated)"
+                    )
             else:
                 check_use(pane.measure, ws.datasource, where, tcs, extra=blended)
             if pane.measure not in (ws.rows if pane.axis == "rows" else ws.columns):

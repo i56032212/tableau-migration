@@ -107,6 +107,8 @@ NO_AUTH = frozenset({"auth-none", "none", "noauth", "no-auth", "anonymous"})
 
 JOIN_KINDS = {"inner": "inner", "left": "left", "right": "right", "full": "full"}
 COMPARISONS = frozenset({"=", "!=", "<", "<=", ">", ">="})
+OPERATORS = {"<>": "!="}
+"""Tableau 的比較運算子的其他寫法（不等於寫成 <>）。"""
 NUMBER = re.compile(r"-?\d+(\.\d+)?")
 
 
@@ -252,11 +254,6 @@ def parse_relation(ctx: ParseContext, element: etree._Element, caption: str) -> 
             return None
         clause = child(element, "clause")
         condition = child(clause, "expression")
-        if condition is not None and "intersects" in {
-            (e.get("op") or "").lower() for e in condition.iter() if isinstance(e.tag, str)
-        }:
-            ctx.flag(condition, f"資料源「{caption}」的空間 join（Intersects）尚未支援")
-            return None
         on = _conditions(condition) if condition is not None else None
         if not on:
             ctx.flag(
@@ -281,7 +278,11 @@ def _conditions(expression: etree._Element) -> list[JoinCondition] | None:
                 return None
             result.extend(found)
         return result
-    if op not in COMPARISONS or len(operands) != 2:
+    op = OPERATORS.get(op, op)
+    if op.lower() == "intersects":
+        # 空間 join：兩邊的形狀（空間欄位或 MAKEPOINT 等 join 計算）在空間上相交
+        op = "intersects"
+    if (op not in COMPARISONS and op != "intersects") or len(operands) != 2:
         return None
     left, right = _term(operands[0]), _term(operands[1])
     if left is None or right is None or (_constant(left) and _constant(right)):

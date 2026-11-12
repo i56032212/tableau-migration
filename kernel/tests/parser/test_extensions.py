@@ -872,6 +872,29 @@ def test_filter_action_multi_field_exclude_all(tmp_path: Path) -> None:
     )
 
 
+def test_filter_action_reordered_tuples(tmp_path: Path) -> None:
+    """較新的版本把值組合寫成巢狀的 crossjoin，外面再以 reorder-dimensionality 標明各欄位的順序。"""
+    flt = f"""<filter class='categorical' column='{ref("Action (Region,Category)")}'>
+      <groupfilter function='reorder-dimensionality' user:ui-action-filter='[Action1]'>
+        <groupfilter function='crossjoin'>
+          <groupfilter function='member' level='[Category]' member='&quot;Technology&quot;' />
+          <groupfilter function='crossjoin'>
+            <groupfilter function='member' level='[Region]' member='&quot;East&quot;' />
+          </groupfilter>
+        </groupfilter>
+        <order><hierarchy name='[Region]' /><hierarchy name='[Category]' /></order>
+      </groupfilter>
+    </filter>"""
+    ir = parse(tmp_path, action_workbook(flt, on_empty="assign"))
+    assert reasons(ir) == []
+    (tuple_filter,) = ir.worksheets[1].filters
+    assert tuple_filter.kind == "tuple"
+    assert ([u.field for u in tuple_filter.fields], tuple_filter.tuples) == (
+        ["f_region", "f_category"],
+        [["East", "Technology"]],
+    )
+
+
 def test_filter_action_saved_selection(tmp_path: Path) -> None:
     # 存檔時有選取：多個標記以 union 列出各自的值組合
     flt = f"""<filter class='categorical' column='{ref("Action (Region,Category)")}'>

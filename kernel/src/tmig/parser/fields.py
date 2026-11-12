@@ -694,11 +694,12 @@ def _xpath(element: etree._Element) -> str:
 
 
 def bucket_values(dictionary: etree._Element | None, datatype: str) -> list[Scalar]:
-    """手動排序的 <bucket>；%all% 代表「其餘值」，略過。"""
+    """手動排序的 <bucket>；%all% 代表「其餘值」，%many-values% 是 ATTR 有多個值時的「*」，都略過
+    （排在列出的值之後）。"""
     values: list[Scalar] = []
     for bucket in children(dictionary, "bucket"):
         text = text_of(bucket)
-        if text == "%all%":
+        if text in ("%all%", "%many-values%"):
             continue
         values.append(parse_literal(text, datatype))
     return values

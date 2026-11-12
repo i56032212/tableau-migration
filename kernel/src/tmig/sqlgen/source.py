@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tmig.data import udf
 from tmig.formula.analyze import Target
 from tmig.ir.models import (
     DataField,
     Datasource,
     ExtractConnection,
     FileConnection,
+    JoinCondition,
     JoinRelation,
     JoinTerm,
     LiveConnection,
@@ -164,26 +166,129 @@ def model_custom_sql(model: ModelRelation) -> list[str]:
     return [t.relation.sql for t in model.tables if isinstance(t.relation, SqlRelation)]
 
 
+SPATIAL_KEY_PREFIX = "__tmig_geo_"
+"""空間 join 的形狀與範圍：在資料表的子查詢中先算好（每列一次），join 條件只比較這些欄。"""
+
+
 def _relation_sql(
     relation: Relation, custom: list[str], columns: dict[tuple[str, str], str] | None = None
 ) -> str:
     """關聯樹 → FROM 子句。columns：各資料表的實體欄位的型別（join 計算的欄位參照用）。"""
-    if isinstance(relation, TableRelation):
-        table = ".".join(ident(p) for p in relation.table)
-        return f"{table} AS {ident(relation.name)}"
-    if isinstance(relation, SqlRelation):
-        custom.append(relation.sql)
-        return f"{ident(CUSTOM_SQL_PREFIX + str(len(custom) - 1))} AS {ident(relation.name)}"
-    assert isinstance(relation, JoinRelation)
-    keyword = {"inner": "INNER", "left": "LEFT", "right": "RIGHT", "full": "FULL"}[relation.join]
-    left = _relation_sql(relation.left, custom, columns)
-    right = _relation_sql(relation.right, custom, columns)
-    if isinstance(relation.right, JoinRelation):
-        right = f"({right})"
-    conditions = " AND ".join(
-        f"{_term(c.left, columns)} {c.op} {_term(c.right, columns)}" for c in relation.on
+    return _FromBuilder(relation, custom, columns or {}).sql(relation)
+
+
+class _FromBuilder:
+    """關聯樹的 FROM 子句。空間 join（Intersects）的兩邊若只用到一張資料表的欄位，形狀與它的範圍在
+    那張資料表的子查詢中先算好（SELECT *, 形狀, 範圍）：DuckDB 會在每個候選的配對上重算 join 條件中的
+    運算式，在 join 之前算好時，MAKEPOINT 與範圍每列只算一次。"""
+
+    def __init__(
+        self, relation: Relation, custom: list[str], columns: dict[tuple[str, str], str]
+    ) -> None:
+        self.custom = custom
+        self.columns = columns
+        self.leaves = set(_relation_names(relation))
+        self.keys: dict[str, list[tuple[str, str]]] = {}
+        """資料表 → 先算好的形狀（欄名、運算式）；範圍是欄名加上 _box。"""
+        self.replaced: dict[int, tuple[str, str]] = {}
+        """join 條件中的一邊（id(JoinTerm)）→ 先算好的形狀與範圍的參照。"""
+        self._collect(relation)
+
+    def _collect(self, relation: Relation) -> None:
+        if not isinstance(relation, JoinRelation):
+            return
+        self._collect(relation.left)
+        self._collect(relation.right)
+        for condition in relation.on:
+            if condition.op != "intersects":
+                continue
+            for term in (condition.left, condition.right):
+                leaf = self._leaf(term)
+                if leaf is None:
+                    continue
+                shape = f"{SPATIAL_KEY_PREFIX}{len(self.replaced)}"
+                self.keys.setdefault(leaf, []).append((shape, _term(term, self.columns)))
+                self.replaced[id(term)] = (
+                    f"{ident(leaf)}.{ident(shape)}",
+                    f"{ident(leaf)}.{ident(shape + '_box')}",
+                )
+
+    def _leaf(self, term: JoinTerm) -> str | None:
+        """join 條件的一邊只用到的那張資料表（欄位或只參照一張資料表的 join 計算）。"""
+        if term.table is not None:
+            return term.table if term.table in self.leaves else None
+        if term.formula is None:
+            return None
+        from tmig.formula.ast import FieldRef, walk
+        from tmig.formula.lexer import FormulaSyntaxError
+        from tmig.formula.parser import parse_formula
+
+        try:
+            node = parse_formula(term.formula)
+        except FormulaSyntaxError:
+            return None
+        tables = {n.parts[0] for n in walk(node) if isinstance(n, FieldRef) and len(n.parts) == 2}
+        if len(tables) != 1:
+            return None
+        (table,) = tables
+        return table if table in self.leaves else None
+
+    def sql(self, relation: Relation) -> str:
+        if isinstance(relation, TableRelation):
+            table = ".".join(ident(p) for p in relation.table)
+            return self._keyed(f"{table} AS {ident(relation.name)}", relation.name)
+        if isinstance(relation, SqlRelation):
+            self.custom.append(relation.sql)
+            placeholder = ident(CUSTOM_SQL_PREFIX + str(len(self.custom) - 1))
+            return self._keyed(f"{placeholder} AS {ident(relation.name)}", relation.name)
+        assert isinstance(relation, JoinRelation)
+        keyword = {"inner": "INNER", "left": "LEFT", "right": "RIGHT", "full": "FULL"}[
+            relation.join
+        ]
+        left = self.sql(relation.left)
+        right = self.sql(relation.right)
+        if isinstance(relation.right, JoinRelation):
+            right = f"({right})"
+        conditions = " AND ".join(self._condition(c) for c in relation.on)
+        return f"{left} {keyword} JOIN {right} ON {conditions}"
+
+    def _keyed(self, from_sql: str, name: str) -> str:
+        keys = self.keys.get(name)
+        if not keys:
+            return from_sql
+        shapes = ", ".join(f"{expression} AS {ident(alias)}" for alias, expression in keys)
+        boxes = ", ".join(
+            f"{udf.GEO_BOUNDS}({ident(alias)}) AS {ident(alias + '_box')}" for alias, _ in keys
+        )
+        inner = f"(SELECT *, {shapes} FROM {from_sql}) AS {ident(name)}"
+        return f"(SELECT *, {boxes} FROM {inner}) AS {ident(name)}"
+
+    def _condition(self, condition: JoinCondition) -> str:
+        if condition.op != "intersects":
+            left, right = _term(condition.left, self.columns), _term(condition.right, self.columns)
+            return f"{left} {condition.op} {right}"
+        sides: list[tuple[str, str]] = []
+        for term in (condition.left, condition.right):
+            found = self.replaced.get(id(term))
+            if found is None:
+                expression = _term(term, self.columns)
+                found = (expression, f"{udf.GEO_BOUNDS}({expression})")
+            sides.append(found)
+        (left, left_box), (right, right_box) = sides
+        return spatial_join(left, right, left_box, right_box)
+
+
+def spatial_join(
+    left: str, right: str, left_box: str | None = None, right_box: str | None = None
+) -> str:
+    """空間 join（Intersects）：兩邊的範圍（[west, south, east, north]）重疊且形狀相交
+    （tmig.geo.spatial.intersects）。範圍的不等式讓 DuckDB 以範圍 join 縮小配對。"""
+    a = left_box or f"{udf.GEO_BOUNDS}({left})"
+    b = right_box or f"{udf.GEO_BOUNDS}({right})"
+    return (
+        f"({a}[1] <= {b}[3] AND {b}[1] <= {a}[3] AND {a}[2] <= {b}[4] AND {b}[2] <= {a}[4] "
+        f"AND {udf.GEO_INTERSECTS}({left}, {right}))"
     )
-    return f"{left} {keyword} JOIN {right} ON {conditions}"
 
 
 def _term(term: JoinTerm, columns: dict[tuple[str, str], str] | None = None) -> str:

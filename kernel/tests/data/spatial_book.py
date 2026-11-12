@@ -4,6 +4,7 @@ COLLECT 的欄位實例、標記卡上的 geometry 編碼）。
 - Counties：萃取（.hyper 的 GEOGRAPHY 欄位），臺灣各縣市的形狀（平台的 Natural Earth 資料）與人口
 - Stores：沒有萃取的 Shapefile（壓縮成 .zip），點的座標是 TWD97 二度分帶（EPSG:3826，.prj），屬性的文字是 UTF-8
 - Cities：沒有萃取的 CSV，以 MAKEPOINT、DISTANCE、BUFFER、MAKELINE、AREA 的計算欄位畫成地圖
+- Place Counties：CSV 與 GeoJSON 的空間 join（Intersects，left join）：地點以 MAKEPOINT 對到所在的縣市
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from xml.sax.saxutils import quoteattr
 from tmig.data.spatial_files import read_topojson
 from tmig.geo import SHAPES
 from tmig.geo.projection import crs_from_epsg
+from tmig.geo.spatial import parse_wkt
 
 POPULATION = {
     "Taipei City": 2_490_000,
@@ -39,6 +41,15 @@ CITIES = [
     ("Taichung", 24.1477, 120.6736),
     ("Tainan", 22.9997, 120.2270),
     ("Kaohsiung", 22.6273, 120.3014),
+]
+PLACES = [
+    ("Taipei 101", 25.0339, 121.5645, "Taipei City"),
+    ("Sun Moon Lake", 23.8650, 120.9150, "Nantou"),
+    ("Magong", 23.5654, 119.5793, "Penghu"),
+    ("Hualien Station", 23.9929, 121.6011, "Hualien"),
+    ("Keelung Port", 25.1276, 121.7392, "Keelung City"),
+    # 臺灣海峽：沒有對到任何縣市（left join 的縣市為 Null）
+    ("Taiwan Strait", 24.5, 119.5, None),
 ]
 TWD97_PRJ = (
     'PROJCS["TWD_1997_TM_Taiwan",GEOGCS["GCS_TWD_1997",DATUM["D_TWD_1997",'
@@ -63,6 +74,15 @@ def county_rows() -> list[tuple[str, int | None, str | None]]:
         )
         for row in table.rows
     ]
+
+
+def counties_geojson() -> bytes:
+    """縣市的 GeoJSON（空間 join 的右側）。"""
+    features = [
+        {"type": "Feature", "properties": {"Name": name}, "geometry": parse_wkt(wkt)}
+        for name, _, wkt in county_rows()
+    ]
+    return json.dumps({"type": "FeatureCollection", "features": features}).encode("utf-8")
 
 
 # ---------------------------------------------------------------- Shapefile
@@ -258,6 +278,9 @@ CALCS = [
 ]
 
 
+PLACE_POINT = ("Calculation_place_point", "Place Point", "MAKEPOINT([Lat], [Lon])", "spatial")
+
+
 def datasources_xml() -> str:
     counties = f"""
     <datasource caption='Counties' inline='true' name='federated.counties' version='18.1'>
@@ -333,7 +356,51 @@ def datasources_xml() -> str:
       <aliases enabled='yes' />
       {calcs}
     </datasource>"""
-    return counties + stores + cities
+    places = f"""
+    <datasource caption='Place Counties' inline='true' name='federated.places' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='places' name='textscan.places'>
+            <connection class='textscan' directory='C:/data' filename='places.csv' password='' server='' />
+          </named-connection>
+          <named-connection caption='counties' name='ogrdirect.geojson'>
+            <connection class='ogrdirect' directory='C:/gis' filename='counties.geojson' ogr-grid-shift-folder='PROJ4' password='' server='' tablename='' />
+          </named-connection>
+        </named-connections>
+        <relation join='left' type='join'>
+          <clause type='join'>
+            <expression op='Intersects'>
+              <expression op='MAKEPOINT([places.csv].[Lat],[places.csv].[Lon])' />
+              <expression op='[counties.geojson].[Geometry]' />
+            </expression>
+          </clause>
+          <relation connection='textscan.places' name='places.csv' table='[places#csv]' type='table'>
+            <columns character-set='UTF-8' header='yes' locale='en_US' separator=','>
+              <column datatype='string' name='Place' ordinal='0' />
+              <column datatype='real' name='Lat' ordinal='1' />
+              <column datatype='real' name='Lon' ordinal='2' />
+            </columns>
+          </relation>
+          <relation connection='ogrdirect.geojson' name='counties.geojson' table='[counties.geojson]' type='table'>
+            <columns>
+              <column datatype='string' name='Name' ordinal='0' />
+              <column datatype='spatial' name='Geometry' ordinal='1' />
+            </columns>
+          </relation>
+        </relation>
+        <metadata-records>
+          {_record("Place", "string", 129, "places.csv", 0, "Count")}
+          {_record("Lat", "real", 5, "places.csv", 1, "Sum")}
+          {_record("Lon", "real", 5, "places.csv", 2, "Sum")}
+          {_record("Name", "string", 129, "counties.geojson", 3, "Count")}
+          {_record("Geometry", "spatial", 8, "counties.geojson", 4, "Collect")}
+        </metadata-records>
+      </connection>
+      <aliases enabled='yes' />
+      {SPATIAL_COLUMN}
+      {_calc(*PLACE_POINT)}
+    </datasource>"""
+    return counties + stores + cities + places
 
 
 def _instance(column: str, derivation: str, name: str, kind: str = "nominal") -> str:
@@ -434,7 +501,68 @@ def worksheets_xml() -> str:
         <cols>[{t}].[sum:Calculation_distance:qk]</cols>
       </table>
     </worksheet>"""
-    return county + stores + buffers + routes + distances
+    p = "federated.places"
+    places = f"""
+    <worksheet name='Places per County'>
+      <table>
+        <view>
+          <datasources><datasource name='{p}' /></datasources>
+          <datasource-dependencies datasource='{p}'>
+            {_instance("Name", "None", "none:Name:nk")}
+            {_instance("Place", "Count", "cnt:Place:qk", "quantitative")}
+          </datasource-dependencies>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes><pane><view><breakdown value='auto' /></view><mark class='Automatic' />
+          <encodings><text column='[{p}].[cnt:Place:qk]' /></encodings>
+        </pane></panes>
+        <rows>[{p}].[none:Name:nk]</rows>
+        <cols />
+      </table>
+    </worksheet>"""
+    # 2021.2 的地圖圖層：圖層的元素與屬性帶功能旗標的前綴，第二個圖層的卡上有兩個空間欄位
+    # （沒有 geometry 編碼，依圖層的名稱決定形狀）
+    clct = _instance("Geometry", "Collect", "clct:Geometry:nk")
+    point = _instance("Calculation_place_point", "Collect", "clct:Calculation_place_point:nk")
+    layers = f"""
+    <worksheet name='Place Layers'>
+      <table>
+        <view>
+          <datasources><datasource name='{p}' /></datasources>
+          <mapsources><mapsource name='Tableau' /></mapsources>
+          <datasource-dependencies datasource='{p}'>
+            {SPATIAL_COLUMN}{_calc(*PLACE_POINT)}{clct}{point}
+            {_instance("Place", "Count", "cnt:Place:qk", "quantitative")}
+            {_instance("Place", "None", "none:Place:nk")}
+          </datasource-dependencies>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes _.fcp.Layers.true...customization-axis='layer'>
+          <_.fcp.Layers.true...pane id='1'><view><breakdown value='auto' /></view><mark class='Automatic' /></_.fcp.Layers.true...pane>
+          <pane _.fcp.Layers.true...generated-title='Geometry' id='0'>
+            <view><breakdown value='auto' /></view><mark class='Automatic' />
+            <encodings>
+              <color column='[{p}].[cnt:Place:qk]' />
+              <lod column='[{p}].[clct:Geometry:nk]' />
+              <geometry column='[{p}].[clct:Geometry:nk]' />
+            </encodings>
+          </pane>
+          <_.fcp.Layers.true...pane generated-title='Place Point' id='2'>
+            <view><breakdown value='auto' /></view><mark class='Automatic' />
+            <encodings>
+              <lod column='[{p}].[none:Place:nk]' />
+              <lod column='[{p}].[clct:Geometry:nk]' />
+              <lod column='[{p}].[clct:Calculation_place_point:nk]' />
+            </encodings>
+          </_.fcp.Layers.true...pane>
+        </panes>
+        <rows>[{p}].[Latitude (generated)]</rows>
+        <cols>[{p}].[Longitude (generated)]</cols>
+      </table>
+    </worksheet>"""
+    return county + stores + buffers + routes + distances + places + layers
 
 
 def workbook_xml() -> str:
@@ -454,10 +582,13 @@ def write_spatial_twbx(folder: Path) -> Path:
     hyper = folder / "counties.hyper"
     counties_hyper(hyper, folder / "hyper-log")
     csv = "City,Lat,Lon\r\n" + "".join(f"{c},{lat},{lon}\r\n" for c, lat, lon in CITIES)
+    places = "Place,Lat,Lon\r\n" + "".join(f"{n},{lat},{lon}\r\n" for n, lat, lon, _ in PLACES)
     path = folder / "spatial.twbx"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("spatial.twb", workbook_xml().encode("utf-8"))
         archive.write(hyper, "Data/Extracts/counties.hyper")
         archive.writestr("Data/gis/stores.zip", stores_zip())
         archive.writestr("Data/data/cities.csv", csv.encode("utf-8"))
+        archive.writestr("Data/data/places.csv", places.encode("utf-8"))
+        archive.writestr("Data/gis/counties.geojson", counties_geojson())
     return path

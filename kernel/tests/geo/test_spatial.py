@@ -224,3 +224,125 @@ def test_normalize_closes_and_orients_rings() -> None:
     ring = geom["coordinates"][0]
     assert ring[0] == ring[-1] and spatial._signed_area(ring) > 0
     assert len(ring) == 3 * 16 + 1
+
+
+SQUARE_WITH_HOLE = "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (4 4, 6 4, 6 6, 4 6, 4 4))"
+INTERSECTS_CASES = [
+    # 點與多邊形：內部、邊上、頂點上、外面、內環（洞）中、內環的邊上
+    ("POINT(5 2)", SQUARE_WITH_HOLE, True),
+    ("POINT(10 5)", SQUARE_WITH_HOLE, True),
+    ("POINT(0 0)", SQUARE_WITH_HOLE, True),
+    ("POINT(10.0001 5)", SQUARE_WITH_HOLE, False),
+    ("POINT(5 5)", SQUARE_WITH_HOLE, False),
+    ("POINT(4 5)", SQUARE_WITH_HOLE, True),
+    # 多點：任一點相交即相交
+    ("MULTIPOINT(20 20, 5 5)", SQUARE_WITH_HOLE, False),
+    ("MULTIPOINT(20 20, 1 1)", SQUARE_WITH_HOLE, True),
+    # 線與多邊形：穿過（沒有頂點在多邊形中）、完全在洞中、在外面但範圍重疊
+    ("LINESTRING(-1 5, 11 5)", SQUARE_WITH_HOLE, True),
+    ("LINESTRING(4.5 4.5, 5.5 5.5)", SQUARE_WITH_HOLE, False),
+    ("LINESTRING(-1 11, 11 11)", "POLYGON((0 0, 10 0, 0 10, 0 0))", False),
+    # 多邊形與多邊形：包含、十字交叉（沒有頂點在對方中）、在洞中、相接於一個頂點、分開
+    ("POLYGON((1 1, 2 1, 2 2, 1 2, 1 1))", SQUARE_WITH_HOLE, True),
+    ("POLYGON((-1 4, 11 4, 11 6, -1 6, -1 4))", "POLYGON((4 -1, 6 -1, 6 11, 4 11, 4 -1))", True),
+    ("POLYGON((4.5 4.5, 5.5 4.5, 5.5 5.5, 4.5 5.5, 4.5 4.5))", SQUARE_WITH_HOLE, False),
+    ("POLYGON((10 10, 12 10, 12 12, 10 10))", SQUARE_WITH_HOLE, True),
+    ("POLYGON((0 0, 1 0, 0 1, 0 0))", "POLYGON((0.6 0.6, 2 0.6, 2 2, 0.6 0.6))", False),
+    # 線與線：交叉、端點相接、平行、共線重疊
+    ("LINESTRING(0 0, 2 2)", "LINESTRING(0 2, 2 0)", True),
+    ("LINESTRING(0 0, 1 1)", "LINESTRING(1 1, 2 0)", True),
+    ("LINESTRING(0 0, 2 0)", "LINESTRING(0 1, 2 1)", False),
+    ("LINESTRING(0 0, 2 0)", "LINESTRING(1 0, 3 0)", True),
+    # 點與點、點與線
+    ("POINT(1 2)", "POINT(1 2)", True),
+    ("POINT(1 2)", "POINT(1 2.0001)", False),
+    ("POINT(1 1)", "LINESTRING(0 0, 2 2)", True),
+    ("POINT(1 1.1)", "LINESTRING(0 0, 2 2)", False),
+    # 形狀集合
+    ("GEOMETRYCOLLECTION(POINT(50 50), LINESTRING(-1 5, 1 5))", SQUARE_WITH_HOLE, True),
+]
+
+
+@pytest.mark.parametrize(("a", "b", "expected"), INTERSECTS_CASES)
+def test_intersects(a: str, b: str, expected: bool) -> None:
+    """空間 join 的 Intersects：邊界也算相交（點在邊上、形狀相接）；內環（洞）中不算。"""
+    assert spatial.intersects(a, b) is expected
+    assert spatial.intersects(b, a) is expected
+
+
+def test_intersects_nulls_and_invalid() -> None:
+    assert spatial.intersects(None, SQUARE_WITH_HOLE) is None
+    assert spatial.intersects("POINT(1 1)", "not a shape") is None
+    assert spatial.intersects("POINT EMPTY", SQUARE_WITH_HOLE) is None
+    assert spatial.bounds_list("POINT(121.5 25)") == [121.5, 25, 121.5, 25]
+    assert spatial.bounds_list(SQUARE_WITH_HOLE) == [0, 0, 10, 10]
+    assert spatial.bounds_list(None) is None
+
+
+def test_intersects_pairs_matches_one_by_one() -> None:
+    """一批配對（DuckDB 的 Arrow 函式）：點依另一邊的形狀分組計算，結果與逐一計算相同。"""
+    rng = np.random.default_rng(7)
+    shapes = [case[1] for case in INTERSECTS_CASES] + [case[0] for case in INTERSECTS_CASES]
+    points = [f"POINT({x:.7f} {y:.7f})" for x, y in rng.uniform(-2, 12, size=(300, 2))]
+    points += ["POINT(10 5)", "POINT(4 5)", "POINT(0 0)"]
+    left = sorted(set(points + shapes[:6]))
+    right = [*sorted(set(shapes)), "broken"]
+    left_index = rng.integers(-1, len(left), size=4000)
+    right_index = rng.integers(-1, len(right), size=4000)
+    result, null = spatial.intersects_pairs(left, left_index, right, right_index)
+    for row in range(len(left_index)):
+        i, j = int(left_index[row]), int(right_index[row])
+        expected = spatial.intersects(left[i] if i >= 0 else None, right[j] if j >= 0 else None)
+        if expected is None:
+            assert null[row]
+        else:
+            assert not null[row] and bool(result[row]) is expected, (left[i], right[j])
+
+
+def test_intersects_in_duckdb() -> None:
+    """DuckDB 中的空間 join：範圍的不等式縮小配對、形狀先在資料表的子查詢中算好。"""
+    import duckdb
+
+    from tmig.data import udf
+    from tmig.ir.models import JoinCondition, JoinRelation, JoinTerm, TableRelation
+    from tmig.sqlgen.source import _relation_sql
+
+    con = udf.register(duckdb.connect())
+    con.execute("CREATE TABLE zones(zone VARCHAR, shape VARCHAR)")
+    con.execute(
+        "INSERT INTO zones VALUES ('square', ?), ('far', 'POLYGON((50 50, 51 50, 51 51, 50 50))')",
+        [SQUARE_WITH_HOLE],
+    )
+    con.execute("CREATE TABLE sites(site VARCHAR, lat DOUBLE, lon DOUBLE)")
+    con.execute(
+        "INSERT INTO sites VALUES ('in', 2, 5), ('hole', 5, 5), ('edge', 5, 10), "
+        "('away', 30, 30), ('missing', NULL, 1)"
+    )
+    relation = JoinRelation(
+        kind="join",
+        join="left",
+        left=TableRelation(kind="table", name="sites", table=["sites"]),
+        right=TableRelation(kind="table", name="zones", table=["zones"]),
+        on=[
+            JoinCondition(
+                left=JoinTerm(formula="MAKEPOINT([sites].[lat], [sites].[lon])"),
+                op="intersects",
+                right=JoinTerm(table="zones", column="shape"),
+            )
+        ],
+    )
+    columns = {("sites", "lat"): "real", ("sites", "lon"): "real", ("zones", "shape"): "spatial"}
+    from_sql = _relation_sql(relation, [], columns)
+    # 形狀與範圍在 join 之前算好（每列一次）
+    assert from_sql.count(udf.GEO_POINT) == 1
+    rows = con.execute(
+        f'SELECT "sites"."site", "zones"."zone" FROM {from_sql} ORDER BY 1'
+    ).fetchall()
+    assert rows == [
+        ("away", None),
+        ("edge", "square"),
+        ("hole", None),
+        ("in", "square"),
+        ("missing", None),
+    ]
+    con.close()

@@ -33,6 +33,7 @@ from tmig.parser.twbx import (
     children,
     load_workbook_package,
     local_name,
+    normalize_flag_attributes,
     text_of,
 )
 
@@ -122,13 +123,16 @@ def _read_tds(path: Path, *, data: bool) -> _Tds:
     parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
     try:
         if path.suffix.lower() == ".tds":
-            return _Tds(path, etree.fromstring(path.read_bytes(), parser), {})
+            root = etree.fromstring(path.read_bytes(), parser)
+            normalize_flag_attributes(root)
+            return _Tds(path, root, {})
         with zipfile.ZipFile(path) as archive:
             names = [n for n in archive.namelist() if not n.endswith("/")]
             tds = [n for n in names if n.lower().endswith(".tds") and not n.startswith("__MACOSX")]
             if len(tds) != 1:
                 raise PublishedError(f"{path.name} 內應剛好有一個 .tds（有 {len(tds)} 個）")
             root = etree.fromstring(archive.read(tds[0]), parser)
+            normalize_flag_attributes(root)
             hypers = {
                 n: (archive.read(n) if data else None)
                 for n in names

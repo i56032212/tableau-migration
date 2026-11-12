@@ -313,10 +313,10 @@ class JoinTerm(IRModel):
 
 
 class JoinCondition(IRModel):
-    """join 條件：左右兩邊以 op 比較。"""
+    """join 條件：左右兩邊以 op 比較；intersects 是空間 join（兩邊的形狀在空間上相交，Tableau 2018.2 起）。"""
 
     left: JoinTerm
-    op: Literal["=", "!=", "<", "<=", ">", ">="] = "="
+    op: Literal["=", "!=", "<", "<=", ">", ">=", "intersects"] = "="
     right: JoinTerm
 
 

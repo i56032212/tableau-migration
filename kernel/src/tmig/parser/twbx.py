@@ -6,6 +6,9 @@
   ``true`` 版本是目前生效的寫法，``false`` 版本是給舊版讀的替代內容，走訪時一律略過。
 - 命名空間屬性：``user:ui-enumeration`` 這類屬性在新版帶命名空間、舊版沒有，
   一律以不含命名空間的名稱讀取。
+- 功能旗標屬性：屬性也可能寫成 ``_.fcp.<功能>.<true|false>...<屬性>``（例如 2021.2 的地圖圖層
+  ``_.fcp.Layers.true...customization-axis``、2024.2 起不等式關聯的 ``op``）。讀入時 ``true`` 版本改成
+  一般的屬性（沒有同名的一般屬性時），``false`` 版本去掉，之後一律以一般的名稱讀取。
 """
 
 from __future__ import annotations
@@ -90,7 +93,25 @@ def _parse(data: bytes, name: str) -> etree._Element:
         raise WorkbookFormatError(f"{name} 不是有效的 XML：{exc}") from exc
     if local_name(root) != "workbook":
         raise WorkbookFormatError(f"{name} 的根元素不是 <workbook>")
+    normalize_flag_attributes(root)
     return root
+
+
+def normalize_flag_attributes(root: etree._Element) -> None:
+    """功能旗標屬性：true 版本改成一般的屬性（沒有同名的一般屬性時），false 版本去掉。"""
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+        flagged = [key for key in element.attrib if "_.fcp." in str(key)]
+        for key in flagged:
+            bare = str(key).rsplit("}", 1)[-1]
+            match = _FCP.match(bare)
+            if match is None:
+                continue
+            value = element.attrib.pop(key)
+            name = match.group("name")
+            if match.group("state") == "true" and name not in element.attrib:
+                element.set(name, value)
 
 
 def _strip(name: str) -> str:

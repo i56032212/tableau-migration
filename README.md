@@ -98,7 +98,7 @@ INCLUDE／EXCLUDE LOD（相對於排序或篩選的維度）、開啟報表時�
 美國的郡）、密度圖、標記圖層與雙軸地圖、背景地圖的樣式與圖層、「編輯位置」與存檔時固定的範圍、地圖上的參考線與
 分格的地圖，以及空間資料：Shapefile、GeoJSON、KML、TopoJSON 等空間檔案（含 .prj 的投影座標）與萃取中的形狀，
 MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA 與 COLLECT 等空間函式（與 Tableau 的 Hyper 引擎逐一比對，數字的差距
-在 1e-6 以內）。前面 113 份公開報表中的 18 份地圖報表（含 2 份附有作者截圖）全部解析通過、都能畫出；
+在 1e-6 以內），以及空間 join（Intersects，例如 CSV 的地點以 MAKEPOINT 對到所在的行政區）。前面 113 份公開報表中的 18 份地圖報表（含 2 份附有作者截圖）全部解析通過、都能畫出；
 Superstore 銷售績效的填色地圖與截圖相同（中部各州、Blue-Teal 的自動色盤與州名、銷售標籤）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
@@ -257,6 +257,9 @@ Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表
   套用篩選、在檢視的層級彙總，再依維度合併（完整外部連接）：任一張表有的維度值都列出，
   沒有該表的列時它的量值為 Null（COUNTD 與筆數也是 Null）；每個彙總只以所屬量值表的列計算，
   例如 FIXED LOD 只以 LOD 中量值所在的資料表計算、檢視的標記只來自檢視的彙總所屬的資料表
+- 關聯條件是欄位之間的比較：等號或不等式（=、<>、<、<=、>、>=，以 AND 連接）。較新的版本以功能旗標的屬性
+  （`_.fcp.InequalityRelationships.true...op`）寫出不等式、舊版讀到的是等號與一個計算，讀入時取 true 的版本；
+  有不等式的關聯不以關聯欄位是否唯一判斷一對多，在比檢視粗的層級彙總時一律列為不支援
 
 尚不支援（查詢時列為不支援）：同一個彙總用到多張資料表的欄位（例如 `SUM(IF [客戶].[區域] = 'East' THEN [訂單].[金額] END)`）、
 同時用到量值表與其他資料表（或兩個分支）欄位的篩選；
@@ -715,7 +718,10 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
 - **標記**：自動（有 Geometry 時填色，否則圓點）、地圖（填色）、圓形、方形、形狀、文字、線與密度；填色地圖依量值
   著色且沒有設定色盤時與 Tableau 相同為 Blue-Teal。地圖上的標籤：區域在中央、點在右側，互相重疊的不顯示
 - **密度圖**：各標記以高斯核疊加（大小決定核的半徑），依密度與 Tableau 的配色（藍色、多色等）與強度上色
-- **標記圖層**（Tableau 2020.4 起）與雙軸地圖：每個圖層一張標記卡，依序由下往上畫；詳細程度較粗的圖層各自查詢
+- **標記圖層**（Tableau 2020.4 起）與雙軸地圖：每個圖層一張標記卡，依序由下往上畫；詳細程度較粗的圖層各自查詢。
+  2021.2 起圖層的元素與屬性帶功能旗標的前綴（`_.fcp.Layers.true...`），讀入時一律換成一般的名稱；空間欄位的圖層
+  以 geometry 編碼為形狀，沒有時依圖層的名稱（空間欄位的名稱），卡上其他的空間欄位不畫（記為略過）。
+  較早的雙軸地圖在欄架上重複 Longitude (generated)，與列架上重複 Latitude 相同畫成兩個圖層
 - **分格的地圖**：欄列架上有離散的維度時與 Tableau 相同每一格一張地圖（範圍相同），標籤的重疊依每一格的大小判斷
 - **參考線**：緯度、經度座標軸上的參考線（平均、中位數、最小、最大、常數、參數等）畫成橫跨地圖的緯線、經線，
   以標記的位置計算；參考區間、分布與盒鬚圖尚未畫出
@@ -731,6 +737,10 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
     相同）、AREA（大地線多邊形的面積）與彙總 COLLECT（同種形狀合成 MULTI*，不同種合成 GEOMETRYCOLLECTION）。
     與 Hyper 的 `tableau.geo_*` 函式逐一比對：DISTANCE、AREA 的相對差距在 1e-6 以內（Hyper 內部的座標精度約
     6e-8 度），MAKEPOINT、MAKELINE、COLLECT 的文字相同，BUFFER 的頂點相差在 3e-7 度以內
+  - 空間 join（Tableau 2019.2 起的 Intersects，常與 join 計算的 MAKEPOINT 一起用）：兩邊的形狀相交即連接，
+    邊界也算（點在邊上、形狀相接），落在內環（洞）中不算，以經緯度平面計算（Hyper 讀入時已切分長的邊）。
+    沒有萃取時在 DuckDB 中執行：形狀與它的範圍在資料表的子查詢中先算好、以範圍的不等式縮小配對，點依另一邊的
+    形狀分組一次算完（20 萬個點對 21 個縣市約 3 秒）；inner、left、right、full 都支援
   - 地圖：標記卡上的 COLLECT 是每個標記的形狀，多邊形填色（與填色地圖相同的框線與 Blue-Teal 色盤）、線依顏色
     畫線（粗細依大小，兩點之間畫成大地線）、點畫成圓點（大小依欄位）；形狀依畫面的像素簡化，WKT 不放進規格；
     工具提示不列出形狀
@@ -916,8 +926,8 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   自訂的 WMS、Mapbox 背景地圖尚不支援（以內建的底圖呈現）；密度圖依色彩分組、地圖上的趨勢線與參考區間尚未畫出。
   標籤重疊的判斷依工作表在 dashboard 上的大小估計。空間資料：基準面之間的轉換（例如 TWD67、OSGB 1936 到 WGS84）
   尚未計算（TWD97、NAD83 等與 WGS84 的差距在 1 公尺左右）；BUFFER 只支援點（Tableau 2021.2 的範圍）；
-  空間 join（Intersects）、Esri File Geodatabase、MapInfo 與 Live 連線（PostGIS、SQL Server 等）的空間資料
-  尚不支援；MAKEPOINT 的 SRID 只支援常用的代碼
+  Esri File Geodatabase、MapInfo 與 Live 連線（PostGIS、SQL Server 等）的空間資料尚不支援；MAKEPOINT 的 SRID
+  只支援常用的代碼。空間 join 的 Intersects 以經緯度平面判斷，跨越 180 度經線的形狀可能不同
 - **TOTAL()**：以量值篩選後仍在檢視中的標記所對應的底層資料重新彙總
 - **週起始日**：.twb 沒寫時視為星期日
 - **預期 CSV 的格式**：Tableau 匯出的欄名與數值格式依版本與語系而異；欄名用 mapping.yaml 對照，
@@ -1111,7 +1121,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
-合併集合（XML 的寫法尚未在公開報表中看到）、空間 join（Intersects）、Esri File Geodatabase 與 MapInfo、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
+合併集合（XML 的寫法尚未在公開報表中看到）、Esri File Geodatabase 與 MapInfo、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
 Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、

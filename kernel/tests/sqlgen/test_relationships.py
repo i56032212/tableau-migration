@@ -343,6 +343,31 @@ def test_live_logical_table_with_join_unsupported(tmp_path: Path) -> None:
     assert any("「Products」內含 join（實體層），Live 連線尚不支援" in r for r in reasons)
 
 
+def test_inequality_relationship(tmp_path: Path) -> None:
+    """不等式的關聯：較新的版本以功能旗標的屬性寫出（舊版讀到等號與一個計算），運算子是 <>。"""
+    plain = "<expression op='='><expression op='[Region ID]' /><expression op='[Region ID (Regions)]' /></expression>"
+    flag = "_.fcp.InequalityRelationships"
+    flagged = (
+        f"<expression {flag}.false...op='=' {flag}.true...op='&lt;&gt;'>"
+        f"<expression {flag}.false...op='[Region ID &lt;&gt; Region ID (Regions)]' "
+        f"{flag}.true...op='[Region ID]' />"
+        f"<expression {flag}.false...op='[]' {flag}.true...op='[Region ID (Regions)]' />"
+        "</expression>"
+    )
+    xml = datasource()
+    assert xml.count(plain) == 1
+    ir = parse_workbook(
+        b.write_twb(
+            tmp_path, b.workbook(datasource=xml.replace(plain, flagged), worksheets=base_sheet())
+        )
+    )
+    assert ir.unsupported == []
+    connection = ir.datasources[0].connection
+    assert isinstance(connection, LiveConnection) and isinstance(connection.relation, ModelRelation)
+    ops = [r.on[0].op for r in connection.relation.relationships]
+    assert ops == ["=", "=", "!="]
+
+
 def test_calculated_relationship_unsupported(tmp_path: Path) -> None:
     plain = "<expression op='[Cust ID]' />"
     calculated = "<expression op='UPPER'><expression op='[Cust ID]' /></expression>"

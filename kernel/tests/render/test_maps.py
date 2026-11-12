@@ -279,6 +279,44 @@ def test_map_layers_and_style(tmp_path: Path, db: Path) -> None:
     assert spec["view"]["fill"] == "#929292"  # 深色的水域（#262626）淡化 50%
 
 
+def test_dual_axis_map_on_columns(tmp_path: Path, db: Path) -> None:
+    """較早的雙軸地圖寫法：欄架上重複 Longitude (generated)，兩張標記卡各自對應一個經度的座標軸
+    （x-index），與列架上重複 Latitude 時相同，畫成兩個圖層。"""
+    state_lod = f"<lod column='{b.ref('none:State:nk')}' />"
+    panes = f"""
+      <pane><view><breakdown value='auto' /></view><mark class='Automatic' /></pane>
+      <pane id='1' x-axis-name='{GEN_LON}'><view><breakdown value='auto' /></view><mark class='Multipolygon' />
+        <encodings><color column='{b.ref("sum:Sales:qk")}' />{state_lod}{GEOMETRY}</encodings></pane>
+      <pane id='2' x-axis-name='{GEN_LON}' x-index='1'><view><breakdown value='auto' /></view>
+        <mark class='Circle' />
+        <encodings><lod column='{b.ref("none:City:nk")}' />{state_lod}</encodings></pane>"""
+    sheet = f"""
+    <worksheet name='Dual'>
+      <table>
+        <view>
+          <datasources><datasource caption='Orders' name='{b.DS}' /></datasources>
+          <mapsources><mapsource name='Tableau' /></mapsources>
+          <datasource-dependencies datasource='{b.DS}'>{STATE}{CITY}{SALES}</datasource-dependencies>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes>{panes}</panes>
+        <rows>{GEN_LAT}</rows>
+        <cols>({GEN_LON} + {GEN_LON})</cols>
+      </table>
+    </worksheet>"""
+    ir = parse(tmp_path, sheet)
+    from tmig.ir.integrity import check_references
+
+    assert check_references(ir) == []
+    ws = ir.worksheets[0]
+    assert [p.marks.type for p in ws.panes] == ["map", "circle"]
+    rendered = render(ir, db)
+    assert rendered.spec is not None
+    drawn = [layer["mark"]["type"] for layer in data_layers(rendered.spec)]
+    assert drawn == ["geoshape", "circle"]
+
+
 def test_density_map(tmp_path: Path, db: Path) -> None:
     sheet = map_sheet(
         "Density",

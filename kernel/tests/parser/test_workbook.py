@@ -605,6 +605,8 @@ def test_sorts(tmp_path: Path) -> None:
         f"<computed-sort column='{ref('none:Region:nk')}' direction='DESC' using='{ref('sum:Sales:qk')}' />"
         f"<manual-sort column='{ref('none:Category:nk')}' direction='ASC'><dictionary>"
         "<bucket>&quot;Technology&quot;</bucket><bucket>&quot;Furniture&quot;</bucket><bucket>%all%</bucket>"
+        # ATTR 有多個值時的「*」排在列出的值之後
+        "<bucket>%many-values%</bucket>"
         "</dictionary></manual-sort>"
         f"<sort class='alphabetic' column='{ref('none:Region:nk')}' direction='ASC' />"
         "<shelf-sorts>"
@@ -1002,3 +1004,29 @@ def test_ids_are_unique_for_duplicate_names(tmp_path: Path) -> None:
     sheets = basic_sheet() + basic_sheet().replace("Sheet A", "Sheet-A")
     ir = parse(tmp_path, b.workbook(worksheets=sheets))
     assert [w.id for w in ir.worksheets] == ["ws_sheet_a", "ws_sheet_a_2"]
+
+
+# ---------------------------------------------------------------- 功能旗標的屬性
+
+
+def test_flag_attributes_are_normalized() -> None:
+    """功能旗標屬性：true 版本改成一般的屬性（已有一般屬性時保留一般的），false 版本去掉；
+    元素標籤的旗標前綴由 local_name 處理。"""
+    from lxml import etree
+
+    from tmig.parser.twbx import local_name, normalize_flag_attributes
+
+    root = etree.fromstring(
+        "<workbook><panes _.fcp.Layers.true...customization-axis='layer'>"
+        "<_.fcp.Layers.true...pane _.fcp.Layers.true...generated-title='Geometry' id='2' />"
+        "</panes><expression _.fcp.Inequality.false...op='=' _.fcp.Inequality.true...op='&lt;&gt;' />"
+        "<e op='=' _.fcp.X.true...op='&gt;' /></workbook>"
+    )
+    normalize_flag_attributes(root)
+    panes, expression, plain = root
+    assert dict(panes.attrib) == {"customization-axis": "layer"}
+    (pane,) = panes
+    assert local_name(pane) == "pane"
+    assert dict(pane.attrib) == {"generated-title": "Geometry", "id": "2"}
+    assert dict(expression.attrib) == {"op": "<>"}
+    assert dict(plain.attrib) == {"op": "="}

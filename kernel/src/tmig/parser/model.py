@@ -22,7 +22,7 @@ from tmig.ir.models import (
     RelationshipCondition,
     TableRelation,
 )
-from tmig.parser.connections import COMPARISONS, parse_relation
+from tmig.parser.connections import COMPARISONS, OPERATORS, parse_relation
 from tmig.parser.context import DsState, ParseContext
 from tmig.parser.ids import strip_brackets
 from tmig.parser.refs import qualified_parts
@@ -148,6 +148,7 @@ def _conditions(
                 return None
             result.extend(found)
         return result
+    op = OPERATORS.get(op, op)
     if op not in COMPARISONS or len(operands) != 2:
         return None
     fields = []
