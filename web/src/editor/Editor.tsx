@@ -45,6 +45,7 @@ import {
   tidySheet,
 } from "./model";
 import { FiltersShelf, MarksCard, MeasureValuesCard, Shelf } from "./Shelves";
+import { ShowMePanel } from "./ShowMe";
 import { PageControl } from "../PageControl";
 
 const EMPTY_STATE = { filters: {}, parameters: {} };
@@ -282,6 +283,7 @@ export function Editor({
   const [revision, setRevision] = useState(0);
   // 檢視上選取的標記（只保留、排除、群組與集合）；工作表或它的定義改變時清除
   const [selected, setSelected] = useState<Mark[]>([]);
+  const [showMe, setShowMe] = useState(false);
   const [card, setCard] = useState<Card>("all");
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
@@ -519,6 +521,15 @@ export function Editor({
           <button type="button" onClick={() => setDialog({ kind: "sheet-format" })}>
             格式…
           </button>
+          <button
+            type="button"
+            className={showMe ? "active" : undefined}
+            aria-pressed={showMe}
+            title="依檢視中的欄位建議圖表類型（Tableau 的 Show Me）"
+            onClick={() => setShowMe((v) => !v)}
+          >
+            智慧顯示
+          </button>
           <span className="sep" />
           <label className="inline">
             工作表
@@ -618,6 +629,7 @@ export function Editor({
               }}
             />
           )}
+          {showMe && <ShowMePanel onClose={() => setShowMe(false)} />}
           <div className="editor-canvas">
             {empty ? (
               <div className="placeholder">將欄位從資料窗格拖曳到欄、列或標記卡</div>

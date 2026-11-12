@@ -571,3 +571,18 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; margin-bottom: 6px; background: #f3f6fb; border: 1px solid var(--line); border-radius: 4px; }
 .selection-bar button:not(.link) { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; font: inherit; font-size: 13px; }
 .selection-bar button:disabled { opacity: 0.5; cursor: default; }
+/* 智慧顯示（Show Me） */
+.view-pane { position: relative; }
+.show-me { position: absolute; right: 8px; top: 74px; z-index: 40; width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 16%); padding: 8px; }
+.show-me-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.show-me-head .close { font-size: 18px; line-height: 1; color: var(--muted); }
+.show-me-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.show-me-chart { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; font: inherit; font-size: 11px; line-height: 1.2; min-height: 54px; }
+.show-me-chart:hover:not(:disabled) { border-color: var(--accent); background: #f3f6fb; }
+.show-me-chart:disabled { opacity: 0.35; cursor: default; }
+.show-me-chart.recommended { border: 2px solid #e8762d; }
+.show-me-icon { font-size: 18px; }
+.show-me-label { text-align: center; }
+.show-me-hint { margin: 6px 0 0; min-height: 2.6em; }
+.toolbar button.active, .editor-toolbar button.active { background: #e3ebf7; border-color: var(--accent); }
+@media (max-width: 720px) { .show-me { position: fixed; left: 16px; right: 16px; width: auto; } }
