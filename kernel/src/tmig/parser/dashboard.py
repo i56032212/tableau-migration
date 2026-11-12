@@ -30,7 +30,7 @@ from tmig.ir.models import (
 )
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.fields import instance_key
-from tmig.parser.formats import dashboard_background, zone_style
+from tmig.parser.formats import dashboard_background, run_style, zone_style
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 
@@ -521,25 +521,6 @@ def _size(size: etree._Element | None) -> Sizing:
 
 TEXT_TOKEN = re.compile(r"<([^<>]+)>")
 """文字物件中的參照：<[Parameters].[參數]>、<Sheet Name>。"""
-ALIGN: dict[str, Literal["left", "center", "right"]] = {"0": "left", "1": "center", "2": "right"}
-
-
-def _style(run: etree._Element) -> TextStyle | None:
-    size = run.get("fontsize")
-    style = TextStyle(
-        bold=True if run.get("bold") == "true" else None,
-        italic=True if run.get("italic") == "true" else None,
-        underline=True if run.get("underline") == "true" else None,
-        size=float(size)
-        if size and re.fullmatch(r"\d+(\.\d+)?", size) and float(size) > 0
-        else None,
-        color=run.get("fontcolor")
-        if re.fullmatch(r"#[0-9A-Fa-f]{6}", run.get("fontcolor") or "")
-        else None,
-        font=run.get("fontname") or None,
-        align=ALIGN.get(run.get("fontalignment") or ""),
-    )
-    return style if style.model_dump(exclude_none=True) else None
 
 
 def _runs(element: etree._Element) -> str | None:
@@ -573,7 +554,7 @@ def formatted_content(
 
     for run in descendants(child(element, "formatted-text"), "run"):
         raw = (run.text or "").replace("Æ\n", "\n").replace("Æ", "")
-        style = _style(run)
+        style = run_style(run)
         position = 0
         for match in TEXT_TOKEN.finditer(raw):
             add(raw[position : match.start()], style)

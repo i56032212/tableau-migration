@@ -3315,6 +3315,94 @@
       "title": "MapViewport",
       "type": "object"
     },
+    "MarkLabels": {
+      "additionalProperties": false,
+      "description": "標記卡「標籤」的設定（.twb 中標記的 mark-labels-* 格式）。",
+      "properties": {
+        "show": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "顯示標記標籤；None 依預設（標籤上有欄位時顯示）。顯示但標籤上沒有欄位時，與 Tableau 相同標示座標軸上的量值（圓餅為角度的量值、地圖為地名）",
+          "title": "Show"
+        },
+        "marks": {
+          "default": "all",
+          "description": "加上標籤的標記：全部、最小值／最大值、線條的兩端、選取的、醒目提示的",
+          "enum": [
+            "all",
+            "min_max",
+            "line_ends",
+            "selected",
+            "highlighted"
+          ],
+          "title": "Marks",
+          "type": "string"
+        },
+        "scope": {
+          "default": "pane",
+          "description": "最小值／最大值的範圍：窗格、儲存格、整個表格、每條線",
+          "enum": [
+            "pane",
+            "cell",
+            "table",
+            "line"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "最小值／最大值依據的量值；None 為座標軸上的量值（沒有時為標籤上的量值）"
+        },
+        "minimum": {
+          "default": true,
+          "description": "標示最小值",
+          "title": "Minimum",
+          "type": "boolean"
+        },
+        "maximum": {
+          "default": true,
+          "description": "標示最大值",
+          "title": "Maximum",
+          "type": "boolean"
+        },
+        "first": {
+          "default": true,
+          "description": "標示線條的起點",
+          "title": "First",
+          "type": "boolean"
+        },
+        "last": {
+          "default": true,
+          "description": "標示線條的終點",
+          "title": "Last",
+          "type": "boolean"
+        },
+        "overlap": {
+          "default": false,
+          "description": "允許標籤與其他標記重疊；否則與 Tableau 相同，互相重疊的標籤只顯示先畫的",
+          "title": "Overlap",
+          "type": "boolean"
+        }
+      },
+      "title": "MarkLabels",
+      "type": "object"
+    },
     "Marks": {
       "additionalProperties": false,
       "properties": {
@@ -3585,6 +3673,18 @@
           ],
           "default": null,
           "description": "密度標記的配色與強度"
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MarkLabels"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標記標籤的顯示設定（標籤卡）；None 為預設"
         }
       },
       "required": [
@@ -6693,6 +6793,23 @@
           "default": null,
           "description": "文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color",
           "title": "Cell Color"
+        },
+        "field_fonts": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FontStyle"
+          },
+          "description": "個別欄位在標記上（文字表、標籤）的字型（欄位鍵 → 字型；Format > 欄位的窗格字型），例如 KPI 的大數字",
+          "title": "Field Fonts",
+          "type": "object"
+        },
+        "field_colors": {
+          "additionalProperties": {
+            "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+            "type": "string"
+          },
+          "description": "個別欄位在標記上的文字顏色（欄位鍵 → 顏色）",
+          "title": "Field Colors",
+          "type": "object"
         },
         "cell_align": {
           "anyOf": [

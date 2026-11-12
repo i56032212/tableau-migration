@@ -26,7 +26,10 @@
     field 的 width（列的標題、座標軸寬度）與 height（欄的標題、座標軸高度）
   - 色帶：element='table' 的 band-size（每段的列數，0 為不上色），element='pane'／'header' 的
     band-color，以 scope（rows／cols）區分列與欄
-  - 標記卡（<pane>）的 <style-rule element='mark'> 的 size：「大小」滑桿的值（沒有寫時為預設）
+  - 標記卡（<pane>）的 <style-rule element='mark'> 的 size：「大小」滑桿的值（沒有寫時為預設）；
+    mark-labels-*：顯示標記標籤（show）、加上標籤的標記（mode：all、range 為最小值／最大值、line-ends 為
+    線條兩端、selection、highlight）、range-scope（pane、cell、table、multi-mark 為每條線）與 range-field、
+    range-min／max、line-first／last，cull='false' 為允許標籤重疊
   - 字型（Format > Font）：font-family、font-size（pt）、font-weight、font-style，元素為 worksheet（整張
     工作表）、label（標題成員與刻度；有 field 時為這個欄位）、cell（文字表）、field-labels、title、legend、
     legend-title、tooltip；活頁簿 <style> 的設定（all 為預設字型）在前；標記標籤為標記卡的 datalabel
@@ -57,6 +60,7 @@ from tmig.ir.models import (
     FontStyle,
     Scalar,
     ShelfStyle,
+    TextStyle,
     TrendLine,
     ZeroLine,
     ZoneStyle,
@@ -87,6 +91,8 @@ class SheetFormats:
     field_label_background: str | None = None
     label_valign: Literal["top", "center", "bottom"] | None = None
     fonts: dict[FontElement, FontStyle] = field(default_factory=dict)
+    field_fonts: dict[str, FontStyle] = field(default_factory=dict)
+    field_colors: dict[str, str] = field(default_factory=dict)
 
 
 def worksheet_formats(
@@ -120,6 +126,14 @@ def worksheet_formats(
                 axes[key] = Axis(use=use, shelf=shelf)  # type: ignore[arg-type]
             found.append(axes[key])
         return found
+
+    def field_key(ref: str) -> str | None:
+        """依欄位設定的格式的欄位鍵（欄位已不在工作表上時為 None）。"""
+        parts = qualified_parts(ref)
+        if not parts or parts[0] == "Parameters":
+            return None
+        use = resolve(ref)
+        return None if isinstance(use, str) else use_key(use)
 
     def turn(scope: str | None, name: str, on: bool | None) -> None:
         if on is None:
@@ -190,6 +204,11 @@ def worksheet_formats(
                 if element == "label" and ref is not None:
                     for target in targets(ref, scope):
                         target.font = font_attr(target.font, name or "", value)
+                elif element == "cell" and ref is not None and (key := field_key(ref)):
+                    # 欄位在標記上（文字表、標籤）的字型
+                    result.field_fonts[key] = font_attr(
+                        result.field_fonts.get(key), name or "", value
+                    )
             elif tag == "format" and name == "background-color" and element == "table":
                 result.background = hex_color(value) or result.background
             elif tag == "format" and name == "background-color" and element == "field-labels":
@@ -208,6 +227,8 @@ def worksheet_formats(
                 elif element == "label" and ref is not None:
                     for target in targets(ref, scope):
                         target.label_color = color
+                elif element == "cell" and ref is not None and (key := field_key(ref)):
+                    result.field_colors[key] = color
             elif tag == "format" and element == "label" and name == "display" and ref is not None:
                 # 離散欄位的「顯示標題」
                 for target in targets(ref, scope):
@@ -462,6 +483,104 @@ def pane_mark_size(pane: etree._Element) -> float | None:
                     continue
                 found = value if value > 0 and math.isfinite(value) else found
     return found
+
+
+RUN_ALIGN: dict[str, Literal["left", "center", "right"]] = {
+    "0": "left",
+    "1": "center",
+    "2": "right",
+}
+"""格式化文字中 run 的 fontalignment → 段落的對齊。"""
+
+
+def run_style(run: etree._Element) -> TextStyle | None:
+    """格式化文字中一段（<run>）的格式：bold、italic、underline、fontsize（pt）、fontcolor、fontname、
+    fontalignment；都沒有寫時為 None。"""
+    size = run.get("fontsize")
+    style = TextStyle(
+        bold=True if run.get("bold") == "true" else None,
+        italic=True if run.get("italic") == "true" else None,
+        underline=True if run.get("underline") == "true" else None,
+        size=float(size)
+        if size and re.fullmatch(r"\d+(\.\d+)?", size) and float(size) > 0
+        else None,
+        color=run.get("fontcolor")
+        if re.fullmatch(r"#[0-9A-Fa-f]{6}", run.get("fontcolor") or "")
+        else None,
+        font=run.get("fontname") or None,
+        align=RUN_ALIGN.get(run.get("fontalignment") or ""),
+    )
+    return style if style.model_dump(exclude_none=True) else None
+
+
+LABEL_MODES: dict[str, str] = {
+    "all": "all",
+    "range": "min_max",
+    "line-ends": "line_ends",
+    "selection": "selected",
+    "highlight": "highlighted",
+}
+"""mark-labels-mode → 加上標籤的標記（MarkLabels.marks）。"""
+LABEL_SCOPES: dict[str, str] = {
+    "pane": "pane",
+    "cell": "cell",
+    "table": "table",
+    "multi-mark": "line",
+}
+"""mark-labels-range-scope → 最小值／最大值的範圍（multi-mark 是每條線）。"""
+
+
+@dataclass
+class PaneLabels:
+    """標記卡（<pane>）的標籤設定：MarkLabels 的欄位（field 另以 field_ref 解析），與認不得的設定。"""
+
+    settings: dict[str, object]
+    field_ref: str | None
+    unknown: list[str]
+
+
+def pane_labels(pane: etree._Element) -> PaneLabels | None:
+    """標記卡（<pane>）的 <style-rule element='mark'> 中的 mark-labels-*：show（顯示標記標籤）、mode（all、
+    range 為最小值／最大值、line-ends 為線條兩端、selection、highlight）、range-scope、range-field、
+    range-min／max、line-first／last、cull（false 為允許標籤重疊）。都沒有寫時為 None。"""
+    raw: dict[str, str] = {}
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "mark":
+            continue
+        for item in children(rule, "format"):
+            name = item.get("attr") or ""
+            if name.startswith("mark-labels-") and item.get("field") is None:
+                raw[name.removeprefix("mark-labels-")] = item.get("value") or ""
+    if not raw:
+        return None
+    settings: dict[str, object] = {}
+    unknown: list[str] = []
+    if "show" in raw:
+        settings["show"] = raw["show"] != "false"
+    mode = raw.get("mode")
+    if mode is not None:
+        if mode in LABEL_MODES:
+            settings["marks"] = LABEL_MODES[mode]
+        else:
+            unknown.append(f"mark-labels-mode={mode}")
+    scope = raw.get("range-scope")
+    if scope is not None and settings.get("marks") == "min_max":
+        if scope in LABEL_SCOPES:
+            settings["scope"] = LABEL_SCOPES[scope]
+        else:
+            unknown.append(f"mark-labels-range-scope={scope}")
+    for attr, key in (
+        ("range-min", "minimum"),
+        ("range-max", "maximum"),
+        ("line-first", "first"),
+        ("line-last", "last"),
+    ):
+        if attr in raw:
+            settings[key] = raw[attr] != "false"
+    if raw.get("cull") == "false":
+        settings["overlap"] = True
+    ref = raw.get("range-field") or None
+    return PaneLabels(settings, ref if settings.get("marks") == "min_max" else None, unknown)
 
 
 def pane_cell_align(pane: etree._Element) -> Literal["left", "center", "right"] | None:

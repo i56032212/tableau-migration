@@ -29,6 +29,7 @@
   "data": {
     "values": "3 列",
     "fields": [
+      "__lid",
       "__row",
       "c0",
       "c0_label",
@@ -177,6 +178,7 @@
       }
     },
     {
+      "name": "__label_c1",
       "mark": {
         "type": "text",
         "font": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
@@ -187,12 +189,22 @@
       },
       "encoding": {
         "text": {
+          "condition": {
+            "test": "indexof(__label_hidden, datum.__lid) >= 0",
+            "value": ""
+          },
           "field": "c1_label"
         },
         "color": {
           "value": "#1f2328"
         }
       }
+    }
+  ],
+  "params": [
+    {
+      "name": "__label_hidden",
+      "value": []
     }
   ]
 }

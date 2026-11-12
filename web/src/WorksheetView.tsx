@@ -137,9 +137,96 @@ const isReferenceLayer = (node: Spec) =>
 function highlight(spec: Spec, rows: number[]) {
   const test = `indexof([${rows.join(",")}], datum.__row) >= 0`;
   visitSpecs(spec, (node) => {
+    // 只標示選取（醒目提示）標記的標籤（後端以 __label_s 為名稱前綴、預設不顯示）
+    if (typeof node.name === "string" && node.name.startsWith("__label_s")) node.transform = [{ filter: test }];
     if (node.mark && !isReferenceLayer(node))
       node.encoding = { ...(node.encoding ?? {}), opacity: { condition: { test, value: 1 }, value: 0.25 } };
   });
+}
+
+/** 重疊時隱藏的標記標籤（後端以 __label_c 為名稱前綴的圖層，每個標籤有 id：datum.__lid）的參數。 */
+const LABEL_HIDDEN = "__label_hidden";
+
+type Box = [number, number, number, number];
+
+/**
+ * 互相重疊的標記標籤（與 Tableau 相同，只顯示先畫的）：依畫好的位置，在每個群組（分面的每一格）中依資料
+ * 的順序保留不與已保留的標籤重疊的標籤，回傳其餘標籤的 id。
+ */
+export function overlappingLabels(root: any): number[] {
+  const hidden: number[] = [];
+  const overlaps = (a: Box, b: Box) => a[0] < b[2] - 0.5 && b[0] < a[2] - 0.5 && a[1] < b[3] - 0.5 && b[1] < a[3] - 0.5;
+  // 標籤在長條的長度方向（橫的長條為寬、直的為高）放得下
+  const inside = (a: Box, b: Box, along: "x" | "y") =>
+    along === "x" ? a[0] >= b[0] - 1 && a[2] <= b[2] + 1 : a[1] >= b[1] - 1 && a[3] <= b[3] + 1;
+  const visit = (group: any) => {
+    const labels: { id: number; box: Box; row: unknown; fit: "x" | "y" | null }[] = [];
+    // 長條（堆疊的各段）：資料列號 → 畫好的範圍
+    const bars = new Map<unknown, Box>();
+    for (const mark of group?.items ?? []) {
+      if (mark.marktype === "group") {
+        for (const item of mark.items ?? []) visit(item);
+        continue;
+      }
+      const name = String(mark.name ?? "");
+      if (mark.marktype === "rect" && !name.startsWith("__")) {
+        for (const item of mark.items ?? []) {
+          const b = item.bounds;
+          if (b && item.datum?.__row !== undefined) bars.set(item.datum.__row, [b.x1, b.y1, b.x2, b.y2]);
+        }
+        continue;
+      }
+      if (mark.marktype !== "text" || !(name.startsWith("__label_c") || name.startsWith("__label_i"))) continue;
+      for (const item of mark.items ?? []) {
+        const id = item.datum?.__lid;
+        const b = item.bounds;
+        const text = Array.isArray(item.text) ? item.text.join("") : item.text;
+        if (typeof id !== "number" || !b || text === undefined || text === null || text === "" || b.x2 <= b.x1) continue;
+        const fit = name.startsWith("__label_ix") ? "x" : name.startsWith("__label_iy") ? "y" : null;
+        labels.push({ id, box: [b.x1, b.y1, b.x2, b.y2], row: item.datum?.__row, fit });
+      }
+    }
+    // 堆疊等轉換會改變項目的順序：依資料的順序（標籤 id）決定先後
+    labels.sort((a, b) => a.id - b.id);
+    const kept: Box[] = [];
+    for (const { id, box, row, fit } of labels) {
+      // 堆疊長條各段內的標籤：放不下這一段時不顯示
+      const bar = fit ? bars.get(row) : undefined;
+      if ((fit && bar && !inside(box, bar, fit)) || kept.some((other) => overlaps(box, other))) hidden.push(id);
+      else kept.push(box);
+    }
+  };
+  for (const item of root?.items ?? []) visit(item);
+  return hidden;
+}
+
+/** 隱藏重疊的標記標籤；圖的大小改變時（例如區塊縮放）重新計算。 */
+function cullLabels(result: Result) {
+  const view = result.view;
+  let timer: number | undefined;
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      view.signal(LABEL_HIDDEN, []);
+      await view.runAsync();
+      const hidden = overlappingLabels((view.scenegraph() as unknown as { root: unknown }).root);
+      if (hidden.length) {
+        view.signal(LABEL_HIDDEN, hidden);
+        await view.runAsync();
+      }
+    } catch {
+      // 圖已經移除（finalize）或沒有這個參數：略過
+    } finally {
+      running = false;
+    }
+  };
+  view.addResizeListener(() => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(run, 100);
+  });
+  return run();
 }
 
 /** 資料列 → 標記（維度欄位鍵 → 原始值）。 */
@@ -149,22 +236,29 @@ function markOf(record: Record<string, unknown>, dimensions: Record<string, stri
   return mark;
 }
 
-/** 分面（欄列架上的維度把圓餅分成多個小圖）：容器寬高不適用於分面，依小圖的數量平分區塊的寬高。 */
+/**
+ * 分面（欄列架上的維度把圓餅分成多個小圖，encoding 的 row／column 或 facet）：容器寬高不適用於分面，
+ * 依小圖的數量平分區塊的寬高（facet 時設定在內層的 spec）。
+ */
 function sizeFacets(spec: Record<string, any>, width: number, height: number) {
-  const column = spec.encoding?.column?.field;
-  const row = spec.encoding?.row?.field;
+  const facet = spec.facet ?? spec.encoding ?? {};
+  const column = facet.column?.field;
+  const row = facet.row?.field;
   if (!column && !row) return;
   const values = (spec.data?.values ?? []) as Record<string, unknown>[];
   const count = (field?: string) => (field ? new Set(values.map((v) => v[field])).size || 1 : 1);
   const HEADER = 24; // 分面標題的高度
   const GAP = 16;
-  spec.width = Math.max(Math.floor((width - 16) / count(column)) - GAP, 40);
-  spec.height = Math.max(Math.floor((height - HEADER) / count(row)) - HEADER - GAP, 40);
+  const target = spec.facet && spec.spec ? spec.spec : spec;
+  target.width = Math.max(Math.floor((width - 16) / count(column)) - GAP, 40);
+  target.height = Math.max(Math.floor((height - HEADER) / count(row)) - HEADER - GAP, 40);
   spec.autosize = { type: "pad" };
-  // 甜甜圈的洞以容器寬高計算，分面的小圖中改用固定的大小
-  const hole = Math.floor(Math.min(spec.width, spec.height) * 0.3);
+  // 甜甜圈的洞以整張圖的寬高計算時（舊的規格），分面的小圖中改用固定的大小；以每一格的寬高
+  // （child_width、child_height）計算的不變
+  const hole = Math.floor(Math.min(target.width, target.height) * 0.3);
   visitSpecs(spec, (node) => {
-    if (node.mark?.innerRadius?.expr) node.mark = { ...node.mark, innerRadius: hole };
+    const expr = node.mark?.innerRadius?.expr;
+    if (typeof expr === "string" && !expr.includes("child_")) node.mark = { ...node.mark, innerRadius: hole };
   });
 }
 
@@ -431,7 +525,9 @@ export function WorksheetView({
     // 畫好之前（例如地圖的形狀還在下載）標記為未完成：匯出、訂閱的截圖等它完成
     element.dataset.drawn = "false";
     embed(element, spec as any, { actions: false, renderer: "svg", ...(vizTooltips ? { tooltip } : {}) })
-      .then((result) => {
+      .then(async (result) => {
+        // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
+        if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
         element.dataset.drawn = "true";
         if (disposed) {
           result.finalize();

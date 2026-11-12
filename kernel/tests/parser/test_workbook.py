@@ -640,22 +640,23 @@ def tc_sheet(table_calc: str, encodings: str | None = None, extra: list[str] | N
     )
 
 
+# 標記卡上的維度（色彩上的 Category）是分割：每個類別各自累計（與 Tableau 相同）
 @pytest.mark.parametrize(
     ("table_calc", "preset", "addressing", "inferred"),
     [
         (
             "<table-calc ordering-type='Columns' type='CumTotal' />",
             "table_down",
-            ["f_region", "f_category"],
+            ["f_region"],
             False,
         ),
         (
             "<table-calc ordering-type='Rows' type='CumTotal' />",
             "table_across",
-            ["f_order_date", "f_category"],
+            ["f_order_date"],
             False,
         ),
-        ("<table-calc type='CumTotal' />", "table_across", ["f_order_date", "f_category"], True),
+        ("<table-calc type='CumTotal' />", "table_across", ["f_order_date"], True),
         (
             f"<table-calc ordering-field='[{DS}].[Region]' ordering-type='Field' type='CumTotal' />",
             "specific",
@@ -683,6 +684,16 @@ def test_table_calc_addressing(
     )
     assert tc.options == {"aggregation": "sum"}
     assert ws.marks.label[0].table_calc == tc.id
+
+
+def test_table_calc_on_pie_addresses_marks_dimensions(tmp_path: Path) -> None:
+    """圓餅（甜甜圈）標記卡上的 Table Calculation 一併定址標記卡上的維度（與 Tableau 的畫面相同：各個
+    甜甜圈、各塊的百分比合計 100%）；其他標記的是分割。"""
+    pct = "<table-calc ordering-type='Rows' type='PctTotal' />"
+    pie = sheet(parse(tmp_path, b.workbook(worksheets=tc_sheet(pct).replace("'Bar'", "'Pie'"))))
+    assert pie.table_calcs[0].addressing == ["f_order_date", "f_category"]
+    bars = sheet(parse(tmp_path, b.workbook(worksheets=tc_sheet(pct))))
+    assert bars.table_calcs[0].addressing == ["f_order_date"]
 
 
 def test_rank_and_percent_of_total(tmp_path: Path) -> None:

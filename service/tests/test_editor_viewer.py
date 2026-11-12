@@ -885,3 +885,61 @@ def test_maps_in_editor(engine: str) -> None:
         assert page.locator('.data-pane li[data-field="latitude_generated"]').count() == 1
         assert errors == []
         browser.close()
+
+
+def test_overlapping_labels_are_hidden(engine: str) -> None:
+    """標記標籤互相重疊時與 Tableau 相同只顯示先畫的：檢視器依畫好的位置隱藏其餘的標籤（清空文字），
+    留下的標籤不重疊；允許重疊時全部顯示。"""
+    from playwright.sync_api import sync_playwright
+
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "Labels"})["worksheet"]
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {"field": field, "agg": agg, "date": None, "continuous": agg is not None}
+
+    sheet = {
+        **created,
+        "rows": [use("f_profit", "sum")],
+        "columns": [use("f_sales", "sum")],
+        "marks": {
+            **created["marks"],
+            "type": "circle",
+            "detail": [use("f_city")],
+            "label": [use("f_city")],
+        },
+    }
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/{created['id']}",
+        data=json.dumps({"worksheet": sheet}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        assert response.status == 200
+
+    script = """() => {
+        const texts = [...document.querySelectorAll('.worksheet g[class*="__label_"] text')];
+        const shown = texts.filter((t) => t.textContent);
+        const boxes = shown.map((t) => t.getBoundingClientRect());
+        let overlaps = 0;
+        for (let i = 0; i < boxes.length; i++)
+          for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i], b = boxes[j];
+            if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1)
+              overlaps++;
+          }
+        return { total: texts.length, shown: shown.length, overlaps };
+    }"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1200, "height": 800})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{created['id']}")
+        page.wait_for_selector('.editor .worksheet [data-drawn="true"]', timeout=30000)
+        found = page.evaluate(script)
+        assert found["total"] > 100 and 0 < found["shown"] < found["total"]
+        assert found["overlaps"] == 0
+        assert errors == []
+        browser.close()

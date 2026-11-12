@@ -95,7 +95,9 @@
     "tooltip": true,
     "point": "transparent",
     "color": "#4e79a7",
-    "strokeWidth": 3
+    "strokeWidth": 2,
+    "strokeCap": "round",
+    "strokeJoin": "round"
   },
   "encoding": {
     "y": {

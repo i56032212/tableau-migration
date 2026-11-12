@@ -115,6 +115,8 @@ class Layer:
     places: dict[int, Place] = field(default_factory=dict)
     """各資料列（以 id() 為鍵）找到的地點。"""
     unknown: int = 0
+    place_label: str | None = None
+    """最細的地理角色欄位的顯示文字欄：開啟標記標籤、標籤上沒有欄位時標示地名（與 Tableau 相同）。"""
 
     def name(self, base: str) -> str:
         return f"{base}{self.index}"
@@ -175,6 +177,7 @@ def locate(
             _place_coordinates(layer, channels[coordinates[0]].name, channels[coordinates[1]].name)
             continue
         keys: dict[str, str] = {}
+        labels: dict[str, str] = {}
         aliases: dict[str, dict[str, str]] = {}
         for use in [*ws.rows, *ws.columns, *marks.uses()]:
             ch = channels.get(use_key(use))
@@ -184,8 +187,10 @@ def locate(
             role = data_field.geo_role
             if role in ROLES and role not in keys and use.date is None:
                 keys[role] = ch.name
+                labels[role] = ch.label
                 aliases[role] = {a.value: a.location for a in data_field.geo_aliases}
         layer.role = finest(list(keys))
+        layer.place_label = labels.get(layer.role) if layer.role is not None else None
         layer.kind = _kind(marks, layer.role)
         filled = marks.type == "map" or (marks.type == "automatic" and marks.geometry is not None)
         if filled and layer.role is not None and layer.kind != "polygon":
@@ -611,7 +616,7 @@ def _data_layer(
                 }
             )
     elif layer.kind == "text":
-        text_field = builder.label_field(marks)
+        text_field = builder.text_field(marks)
         if text_field is None:
             measures = [c for c in builder.channels.values() if c.role == "measure"]
             text_field = measures[0].label if measures else None
@@ -695,7 +700,7 @@ def _label_layer(
     """標記的標籤：填色的區域在標籤點的中央，點在右側；互相重疊的標籤與 Tableau 相同不顯示
     （依工作表在 dashboard 上的大小估計，較大的區域、標記優先）。"""
     marks = layer.marks
-    source = builder.label_field(marks)
+    source = builder.label_field(marks, layer.place_label)
     if source is None:
         return []
     font = builder.font("cell", marks.label_font)

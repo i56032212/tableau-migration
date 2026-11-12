@@ -55,6 +55,8 @@ from tmig.ir.models import (
     FieldUse,
     FontElement,
     FontStyle,
+    LabelScope,
+    MarkLabels,
     Marks,
     Pane,
     ParamRef,
@@ -62,6 +64,7 @@ from tmig.ir.models import (
     Scalar,
     ShelfStyle,
     TextRun,
+    TextStyle,
     TrendLine,
     Worksheet,
     ZeroLine,
@@ -172,8 +175,9 @@ BAR_BAND = 0.75
 POINT_DIAMETER = 10
 """圓點、形狀與方塊的直徑（像素）：Tableau 大小 1（預設）時的直徑，大小 s 時為 s 倍（同樣以 Tableau 的
 畫面量測：大小 1.637 的圓點直徑 16 像素）。"""
-LINE_WIDTH = 3
-"""折線的寬度（像素）：Tableau 大小 1（預設）時的線寬，大小 s 時為 s 倍（線寬的倍數依圓點推定）。"""
+LINE_WIDTH = 2
+"""折線的寬度（像素）：Tableau 大小 1（預設）時的線寬，大小 s 時為 s 倍（以 Tableau 的畫面量測：預設的
+線約 2 像素，大小 14.55 的線約 30 像素，見 HR Dashboards 的啞鈴圖）。"""
 TREEMAP = ("__tm_x", "__tm_x2", "__tm_y", "__tm_y2")
 """樹狀圖的長方形（0–1 的座標，y 向下）。"""
 BUBBLE = ("__pb_x", "__pb_y", "__pb_r", "__pb_size")
@@ -193,6 +197,14 @@ WRAPPED = "__label_wrapped"
 BAND = "__band_"
 """色帶的資料欄（__band_rows、__band_columns）。"""
 DECO = "__deco"
+LABEL_HIDDEN = "__label_hidden"
+"""參數：重疊而隱藏的標記標籤（標籤 id 的清單），由檢視器依畫好的位置算出（見 _Builder.named_label）。"""
+LABEL_ID = "__lid"
+HOLE = "__hole"
+PIE_ONE = "__pie_one"
+"""角度上沒有欄位的圓餅：每一塊的大小（都是 1）。"""
+"""分面的甜甜圈中間的文字（每一格的第一列資料）。"""
+"""標記標籤的 id（資料中每一列，含較粗的標記卡的資料）：重疊時隱藏的標籤依它找出。"""
 """色帶、多層列標題等裝飾圖層的名稱前綴：檢視器的選取與醒目提示略過這些圖層（與參考線的 __ref 相同）。"""
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
@@ -264,6 +276,14 @@ class _Builder:
         """畫出的欄列架（見 build_spec：沒有對應量值的 Measure Names 不畫）。"""
         self.label_fields: dict[int, str] = {}
         """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
+        self.label_count = 0
+        """標記標籤圖層的編號（圖層名稱與旗標欄各自不同）。"""
+        self.text_styles: dict[int, TextStyle] = {}
+        """自訂標籤文字的格式（標記卡的 id → 各行相同的格式，或第一行的格式）。"""
+        self.text_lines: dict[int, list[tuple[str, TextStyle | None]]] = {}
+        """各行格式不同的自訂標籤文字（例如 KPI 的小標題與大數字）：每一行的資料欄與格式。"""
+        self.culled = False
+        """有重疊時隱藏的標記標籤（規格加上 __label_hidden 參數與標籤 id）。"""
         self.pie_extent = "min(width, height)"
         """圓餅的大小所依據的區塊邊長（分面時為每一格的）。"""
         self.values: list[dict[str, Any]] = []
@@ -273,11 +293,39 @@ class _Builder:
         self.extent = DEFAULT_EXTENT
         """圖的大小（像素，工作表在 dashboard 上的區塊）：樹狀圖依它的寬高比排列，標籤依它換行。"""
 
-    def label_field(self, marks: Marks) -> str | None:
-        """標記的標籤欄：自訂的標籤文字，或標籤上第一個欄位的顯示文字。"""
+    def text_field(self, marks: Marks) -> str | None:
+        """標籤（文字）上的欄：自訂的標籤文字，或標籤上第一個欄位的顯示文字。文字表的文字用它（不受
+        「顯示標記標籤」影響）。"""
         if id(marks) in self.label_fields:
             return self.label_fields[id(marks)]
         return self.ch(marks.label[0]).label if marks.label else None
+
+    def label_field(self, marks: Marks, default: str | None = None) -> str | None:
+        """標記標籤的欄：關閉了標記標籤時為 None；否則為標籤上的文字（text_field），標籤上沒有欄位但開啟了
+        標記標籤時為 default（與 Tableau 相同標示座標軸上的量值等）。"""
+        setting = marks.labels
+        if setting is not None and setting.show is False:
+            return None
+        found = self.text_field(marks)
+        if found is None and setting is not None and setting.show:
+            return default
+        return found
+
+    def text_font(self, marks: Marks, style: TextStyle | None = None) -> Font:
+        """標記上文字（文字表、標記標籤）的字型：工作表與標記卡（datalabel）的設定，再套用自訂標籤文字的
+        格式（style；省略時為各行相同的格式或第一行的）。"""
+        style = style if style is not None else self.text_styles.get(id(marks))
+        extra = (
+            FontStyle(family=style.font, size=style.size, bold=style.bold, italic=style.italic)
+            if style is not None
+            else None
+        )
+        return self.font("cell", marks.label_font, extra)
+
+    def text_fill(self, marks: Marks, default: str, style: TextStyle | None = None) -> str:
+        """自訂標籤文字的顏色（格式中的 fontcolor），沒有時為 default。"""
+        style = style if style is not None else self.text_styles.get(id(marks))
+        return _css_color(style.color) if style is not None and style.color else default
 
     def shown(self, use: FieldUse) -> bool:
         return use.field not in SPECIAL_FIELDS or use.field in self.channels
@@ -578,13 +626,16 @@ class _Builder:
         vl_mark: dict[str, Any]
         label_field: str | None = None
         label_type = ""
+        highlight_table = False
         if mark == "text" or not (rows_meas or cols_meas):
-            # 只有離散欄位的圓點與形狀：每格一個標記（與 Tableau 相同，不是文字）
-            dots = mark in ("circle", "shape") and bool(rows_dims or cols_dims)
-            # 方塊標記、只有維度並以顏色區分：醒目提示表（色塊加上文字）
-            highlight = mark == "square" and marks.color is not None
+            # 只有離散欄位的圓點與形狀（大小上有欄位的方塊也是）：每格一個標記（與 Tableau 相同，不是文字）
+            sized_squares = mark == "square" and marks.size is not None
+            dots = (mark in ("circle", "shape") or sized_squares) and bool(rows_dims or cols_dims)
+            # 方塊標記、只有維度：醒目提示表（填滿每一格的色塊加上文字）
+            highlight = mark == "square" and not sized_squares
             if not dots:
                 mark = "square" if highlight else "text"
+                highlight_table = highlight
             y = self.axis_dim(rows_dims, "rows_dim")
             x = self.axis_dim(cols_dims, "cols_dim", multiline=True)
             if y is not None:
@@ -605,7 +656,7 @@ class _Builder:
                     axis["labelLineHeight"] = HEADER_LINE_HEIGHT
                     axis["labelPadding"] = 2 + HEADER_LINE_HEIGHT * (levels - 1)
                 encoding["x"] = {**x, "axis": axis}
-            text_field = self.label_field(marks)
+            text_field = self.label_field(marks) if dots else self.text_field(marks)
             if text_field is None and not dots:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
                 text_field = measures[0].label if measures else None
@@ -619,9 +670,9 @@ class _Builder:
             else:
                 vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
             if not dots:
-                vl_mark.update(self.font("cell", marks.label_font).mark())
+                vl_mark.update(self.text_font(marks).mark())
                 if marks.color is None and marks.mark_color is None:
-                    vl_mark["color"] = self.text_color(marks, cell=True)
+                    vl_mark["color"] = self.text_fill(marks, self.text_color(marks, cell=True))
                 if text_field is not None:
                     encoding["text"] = {"field": text_field, "type": "nominal"}
                 else:
@@ -645,7 +696,7 @@ class _Builder:
                 y = self.axis_dim(rows_dims, "rows_dim")
                 if y is not None:
                     encoding["y"] = y
-                for use in cols_dims:
+                for use in cols_dims + self.line_breaks(vl_type, marks, rows_dims):
                     encoding.setdefault("detail", []).append(
                         {"field": self.ch(use).name, "type": "nominal"}
                     )
@@ -654,7 +705,7 @@ class _Builder:
                 x = self.axis_dim(cols_dims, "cols_dim")
                 if x is not None:
                     encoding["x"] = x
-                for use in rows_dims:
+                for use in rows_dims + self.line_breaks(vl_type, marks, cols_dims):
                     encoding.setdefault("detail", []).append(
                         {"field": self.ch(use).name, "type": "nominal"}
                     )
@@ -669,14 +720,18 @@ class _Builder:
                 vl_mark["filled"] = True
             if any(_fixed_range(encoding.get(c)) for c in ("x", "y")):
                 vl_mark["clip"] = True  # 與 Tableau 相同，固定範圍之外的標記不畫
-            if mark == "polygon" and (marks.label or id(marks) in self.label_fields):
+            # 開啟標記標籤、標籤上沒有欄位時標示數值座標軸上的量值（與 Tableau 相同）
+            value_axis = rows_meas if not cols_meas else cols_meas if not rows_meas else []
+            default = self.ch(value_axis[0]).label if value_axis else None
+            found = self.label_field(marks, default)
+            if mark == "polygon" and found is not None:
                 self.notes.append("多邊形的標籤尚未畫出")
-            elif marks.label or id(marks) in self.label_fields:
-                label_field = self.label_field(marks)
+            elif found is not None:
+                label_field = found
                 label_type = vl_type
 
         self.common(encoding, marks)
-        if mark == "square":
+        if highlight_table:
             vl_mark.pop("color", None)
             text = {
                 "mark": vl_mark,
@@ -694,22 +749,238 @@ class _Builder:
         elif mark == "polygon":
             vl_mark["order"] = None  # 沒有路徑時依資料的順序連接（而不是依 x 排序）
         if label_field is not None:
-            return {
-                "encoding": encoding,
-                "layer": [
-                    {"mark": vl_mark},
-                    _label_layer(
-                        encoding,
-                        label_type,
-                        label_field,
-                        marks.color is not None,
-                        self.label_color(marks, vl_mark),
-                        self.font("cell", marks.label_font),
-                        marks.label_match,
-                    ),
-                ],
-            }, mark
+            labels = self.label_layers(
+                marks, encoding, vl_mark, label_type, label_field, rows_meas, cols_meas
+            )
+            if labels:
+                return {"encoding": encoding, "layer": [{"mark": vl_mark}, *labels]}, mark
+        if mark == "text":
+            lines = self.line_layers(marks, vl_mark, encoding)
+            if lines is not None:
+                return lines, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    def line_layers(
+        self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """各行格式不同的自訂文字（例如 KPI 的小標題與大數字）：每一行一個文字圖層，依各行的字級由上而下
+        排列、整段垂直置中；不是時為 None。"""
+        lines = self.text_lines.get(id(marks))
+        text = encoding.get("text")
+        if (
+            not lines
+            or not isinstance(text, dict)
+            or text.get("field") != self.label_fields.get(id(marks))
+        ):
+            return None
+        fonts = [self.text_font(marks, style) for _, style in lines]
+        heights = [font.size * 1.2 for font in fonts]
+        offset = -sum(heights) / 2
+        layers: list[dict[str, Any]] = []
+        for (field_name, style), font, height in zip(lines, fonts, heights, strict=True):
+            mark = {
+                **vl_mark,
+                **font.mark(),
+                "baseline": "middle",
+                "dy": round(offset + height / 2, 2),
+            }
+            mark.pop("lineBreak", None)
+            if "color" in vl_mark:
+                mark["color"] = self.text_fill(marks, vl_mark["color"], style)
+            layers.append(
+                {"mark": mark, "encoding": {"text": {"field": field_name, "type": "nominal"}}}
+            )
+            offset += height
+        return {"encoding": {k: v for k, v in encoding.items() if k != "text"}, "layer": layers}
+
+    def line_breaks(self, vl_type: str, marks: Marks, dims: list[FieldUse]) -> list[FieldUse]:
+        """折線與區域依沿著線的那一架上的離散維度分開各條線（與 Tableau 相同，線不跨窗格）：沒有路徑時
+        沿著最內層的維度連接、外層的維度分開；有路徑時依路徑連接，架上的維度都分開（例如啞鈴圖）。"""
+        if vl_type not in ("line", "area"):
+            return []
+        discrete = [u for u in dims if not u.continuous]
+        if marks.path is not None:
+            return discrete
+        return [u for u in discrete if u is not dims[-1]]
+
+    # ------------------------------------------------------------ 標記標籤
+
+    def label_layers(
+        self,
+        marks: Marks,
+        encoding: dict[str, Any],
+        vl_mark: dict[str, Any],
+        vl_type: str,
+        field_name: str,
+        rows_meas: list[FieldUse],
+        cols_meas: list[FieldUse],
+    ) -> list[dict[str, Any]]:
+        """標記標籤的圖層：只標示部分標記時依資料中算好的旗標篩選（label_flags），折線與區域的最小值寫在
+        點的下方；與 Tableau 相同，互相重疊的標籤由檢視器隱藏（允許重疊時不隱藏）。"""
+        setting = marks.labels or MarkLabels()
+        stacked = vl_type == "bar" and (
+            encoding.get("color", {}).get("type") == "nominal"
+            or any(self.ch(u).role == "dimension" for u in marks.detail)
+        )
+        size = marks.mark_size if marks.mark_size is not None else 1
+
+        def layer(extreme: Literal["max", "min"] | None = None) -> dict[str, Any]:
+            return _label_layer(
+                encoding,
+                vl_type,
+                field_name,
+                self.text_fill(marks, self.label_color(marks, vl_mark)),
+                self.text_font(marks),
+                marks.label_match,
+                marks.cell_align,
+                POINT_DIAMETER * size / 2,
+                extreme,
+                stacked,
+            )
+
+        layers: list[dict[str, Any]]
+        if setting.marks in ("selected", "highlighted"):
+            # 只標示選取（醒目提示）的標記：檢視器依選取的列改寫篩選
+            found = layer()
+            found["transform"] = [{"filter": "false"}]
+            return [self.named_label(found, "s")]
+        flag = self.label_flags(marks, setting, rows_meas, cols_meas)
+        if flag is None:
+            layers = [layer()]
+        else:
+            test = f"datum[{json.dumps(flag)}]"
+            if setting.marks == "min_max" and vl_type in ("line", "area"):
+                layers = []
+                for kind, wanted in (("max", setting.maximum), ("min", setting.minimum)):
+                    if wanted:
+                        found = layer("max" if kind == "max" else "min")
+                        found["transform"] = [{"filter": f"{test} === '{kind}'"}]
+                        layers.append(found)
+            else:
+                layers = [layer()]
+                layers[0]["transform"] = [{"filter": test}]
+        # 堆疊長條各段內的標籤放不下時與 Tableau 相同不顯示（檢視器依畫好的長條判斷：橫的長條看寬度，
+        # 直的看高度）
+        horizontal = encoding.get("x", {}).get("type") == "quantitative"
+        kind = "k" if setting.overlap else ("ix" if horizontal else "iy") if stacked else "c"
+        return [self.named_label(found, kind) for found in layers]
+
+    def named_label(self, layer: dict[str, Any], kind: str) -> dict[str, Any]:
+        """標籤圖層的名稱：__label_c（重疊時隱藏）、__label_ix／__label_iy（堆疊長條各段內的標籤：重疊或
+        寬度／高度放不下時隱藏）、__label_k（允許重疊）、__label_s（只標示選取的）。隱藏的標籤依參數
+        __label_hidden（檢視器算出的標籤 id）清空文字。"""
+        self.label_count += 1
+        if kind in ("c", "ix", "iy"):
+            text = layer["encoding"]["text"]
+            layer["encoding"]["text"] = {
+                "condition": {
+                    "test": f"indexof({LABEL_HIDDEN}, datum.{LABEL_ID}) >= 0",
+                    "value": "",
+                },
+                **text,
+            }
+            if not self.culled:
+                # 每一列的標籤 id（在分面等複製資料之前加上）
+                records = itertools.chain(self.values, *self.pane_values.values())
+                for n, record in enumerate(records):
+                    record[LABEL_ID] = n
+                self.culled = True
+        return {"name": f"__label_{kind}{self.label_count}", **layer}
+
+    def label_flags(
+        self,
+        marks: Marks,
+        setting: MarkLabels,
+        rows_meas: list[FieldUse],
+        cols_meas: list[FieldUse],
+    ) -> str | None:
+        """最小值／最大值、線條兩端：在資料中標記要加上標籤的列（'min'、'max'、'first'、'last'）；回傳
+        欄名（每張標記卡一欄）。全部的標記都加上標籤時為 None。"""
+        if setting.marks not in ("min_max", "line_ends"):
+            return None
+        records = [r for r in self.records_of(marks) if not r.get(TOTAL)]
+        name = f"__lab{self.label_count + 1}"
+        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        scope: LabelScope = setting.scope if setting.marks == "min_max" else "line"
+        parts = self.label_parts(marks, scope)
+        for record in records:
+            key = tuple(_hashable(record.get(f)) for f in parts)
+            groups.setdefault(key, []).append(record)
+        if setting.marks == "min_max":
+            value = self.label_value(marks, setting, rows_meas, cols_meas)
+            if value is None:
+                self.notes.append("找不到標示最小值／最大值的量值，標籤未畫出")
+                return name
+            for members in groups.values():
+                numbers = [r for r in members if _is_number(r.get(value))]
+                if not numbers:
+                    continue
+                if setting.minimum:
+                    min(numbers, key=lambda r: float(r[value]))[name] = "min"
+                if setting.maximum:
+                    # 同樣大時標示第一個
+                    best = max(float(r[value]) for r in numbers)
+                    next(r for r in numbers if float(r[value]) == best)[name] = "max"
+            return name
+        along = self.label_along(marks, rows_meas, cols_meas)
+        for members in groups.values():
+            ordered = (
+                sorted(members, key=lambda r: _sort_key(r.get(along)))
+                if along is not None
+                else members
+            )
+            if setting.first and ordered:
+                ordered[0][name] = "first"
+            if setting.last and ordered:
+                ordered[-1][name] = "last"
+        return name
+
+    def label_parts(self, marks: Marks, scope: LabelScope) -> list[str]:
+        """最小值／最大值的範圍（線條兩端的每條線）的分組欄：窗格為欄列架上外層的離散欄位（架上最後是離散
+        欄位時它切出儲存格，不分組），儲存格為所有離散欄位，每條線另加標記卡上的維度（路徑除外）。"""
+        if scope == "table":
+            return []
+        uses: list[FieldUse] = []
+        for shelf in (self.rows, self.columns):
+            discrete = [u for u in shelf if not self.is_axis(u) and not u.continuous]
+            ends = bool(shelf) and not self.is_axis(shelf[-1]) and not shelf[-1].continuous
+            uses += discrete[:-1] if scope != "cell" and ends else discrete
+        if scope == "line":
+            on_card = [marks.color, marks.size, marks.shape, *marks.detail, *marks.label]
+            uses += [u for u in on_card + marks.tooltip if u is not None and not self.is_measure(u)]
+        names: list[str] = []
+        for use in uses:
+            name = self.ch(use).name
+            if name not in names:
+                names.append(name)
+        return names
+
+    def label_value(
+        self,
+        marks: Marks,
+        setting: MarkLabels,
+        rows_meas: list[FieldUse],
+        cols_meas: list[FieldUse],
+    ) -> str | None:
+        """最小值／最大值依據的量值（原始值欄）：指定的欄位，其次是數值座標軸上的量值、標籤上的量值、大小上
+        的量值。"""
+        if setting.field is not None and use_key(setting.field) in self.channels:
+            return self.ch(setting.field).name
+        axis = rows_meas or cols_meas  # 兩個座標軸都是量值時（散佈圖）為列上的量值
+        candidates = [*axis, *marks.label, *([marks.size] if marks.size is not None else [])]
+        found = next((u for u in candidates if self.is_measure(u)), None)
+        return self.ch(found).name if found is not None else None
+
+    def label_along(
+        self, marks: Marks, rows_meas: list[FieldUse], cols_meas: list[FieldUse]
+    ) -> str | None:
+        """線條兩端的順序：路徑，其次是沿著線的連續維度（例如日期的座標軸）；都沒有時依資料的順序（離散
+        的座標依資料的順序排列）。"""
+        if marks.path is not None:
+            return self.ch(marks.path).name
+        shelf = self.rows if cols_meas and not rows_meas else self.columns
+        along = [u for u in shelf if u.continuous and not self.is_axis(u)]
+        return self.ch(along[-1]).name if along else None
 
     # ------------------------------------------------------------ 沒有座標軸的排列
 
@@ -732,8 +1003,9 @@ class _Builder:
             if isinstance(color, dict) and color.get("type") == "nominal"
             else None
         )
-        font = self.font("cell", marks.label_font)
-        label = self.label_field(marks)
+        font = self.text_font(marks)
+        # 文字雲的文字不受「顯示標記標籤」影響；樹狀圖、泡泡圖的是標記標籤
+        label = self.text_field(marks) if mark == "text" else self.label_field(marks)
         if mark == "text":
             if label is None:
                 measures = [c for c in self.channels.values() if c.role == "measure"]
@@ -1068,7 +1340,7 @@ class _Builder:
         encoding.pop("size", None)  # 「大小」是甘特條的長度
         _mark_style(vl_mark, marks)
         self.size_mark(vl_mark, encoding, marks)
-        if marks.label or id(marks) in self.label_fields:
+        if self.label_field(marks) is not None:
             self.notes.append("甘特條的標籤尚未畫出")
         body: dict[str, Any] = {"mark": vl_mark, "encoding": encoding}
         if transform:
@@ -1103,6 +1375,8 @@ class _Builder:
             vl_mark["size"] = round(diameter**2, 2)  # Vega 的 size 是外框的面積
         elif kind == "line" and not vl_mark.get("filled"):
             vl_mark["strokeWidth"] = round(LINE_WIDTH * (size if size is not None else 1), 2)
+            # 與 Tableau 相同，線的兩端與轉折是圓的（粗的線最明顯，例如啞鈴圖）
+            vl_mark.update(strokeCap="round", strokeJoin="round")
 
     def common(self, encoding: dict[str, Any], marks: Marks) -> None:
         """顏色、大小、形狀、詳細資料與工具提示。"""
@@ -1289,7 +1563,8 @@ class _Builder:
     def pie(
         self, marks: Marks, rows_dims: list[FieldUse], cols_dims: list[FieldUse]
     ) -> dict[str, Any]:
-        """圓餅：角度為 wedge-size，顏色為顏色欄位；欄列架上的維度以分面呈現。"""
+        """圓餅：角度為 wedge-size，顏色為顏色欄位；欄列架上的維度以分面呈現（Vega-Lite 的 facet，每一格
+        一個圓餅與它的標籤）。"""
         encoding: dict[str, Any] = {}
         if marks.angle is not None:
             encoding["theta"] = {
@@ -1298,44 +1573,56 @@ class _Builder:
                 "stack": True,
             }
         else:
-            encoding["theta"] = {"value": 1}
+            # 角度上沒有欄位：各塊一樣大（與 Tableau 相同），以每列都是 1 的欄堆疊
+            for record in self.records_of(marks):
+                record[PIE_ONE] = 1
+            encoding["theta"] = {"field": PIE_ONE, "type": "quantitative", "stack": True}
         self.common(encoding, marks)
         if marks.color is not None and encoding["color"]["type"] == "nominal":
             encoding["order"] = {"field": ROW}
+        facet: dict[str, Any] = {}
         if rows_dims:
-            encoding["row"] = self._facet(rows_dims, "rows_dim")
+            facet["row"] = self._facet(rows_dims, "rows_dim")
         if cols_dims:
-            encoding["column"] = self._facet(cols_dims, "cols_dim")
+            facet["column"] = self._facet(cols_dims, "cols_dim")
         mark = _mark_style({"type": "arc", "tooltip": True}, marks)
         # 分面時每一格的大小是 child_width、child_height（width、height 是整張圖的）
-        self.pie_extent = (
-            "min(child_width, child_height)" if rows_dims or cols_dims else "min(width, height)"
-        )
+        self.pie_extent = "min(child_width, child_height)" if facet else "min(width, height)"
         mark["outerRadius"] = {"expr": f"{self.pie_extent} * {_pie_fraction(marks) / 2}"}
-        has_label = bool(marks.label) or id(marks) in self.label_fields
-        if not has_label or rows_dims or cols_dims:
-            return {"mark": mark, "encoding": encoding}
-        if id(marks) in self.label_fields:
-            text = "{" + self.label_fields[id(marks)] + "}"
-        else:
-            text = "\n".join("{" + self.ch(u).label + "}" for u in marks.label)
-        label = {
-            "mark": {
-                "type": "text",
-                **self.font("cell", marks.label_font).mark(),
-                "lineBreak": "\n",
-                # 與 Tableau 相同寫在圓餅外側
-                "radius": {"expr": f"{self.pie_extent} * {_pie_fraction(marks) / 2} + 24"},
-            },
-            "encoding": {
-                "text": {"field": "__pie_label"},
-                "color": {"value": self.text_color(marks)},
-                "theta": encoding["theta"],
-                **({"order": encoding["order"]} if "order" in encoding else {}),
-            },
-            "transform": [{"calculate": _template(text), "as": "__pie_label"}],
-        }
-        return {"encoding": encoding, "layer": [{"mark": mark}, label]}
+        layers: list[dict[str, Any]] = [{"mark": mark, "encoding": encoding}]
+        # 開啟標記標籤、標籤上沒有欄位時標示角度的量值
+        found = self.label_field(
+            marks, self.ch(marks.angle).label if marks.angle is not None else None
+        )
+        if found is not None:
+            if id(marks) in self.label_fields or not marks.label:
+                text = "{" + found + "}"
+            else:
+                text = "\n".join("{" + self.ch(u).label + "}" for u in marks.label)
+            label = {
+                "mark": {
+                    "type": "text",
+                    **self.text_font(marks).mark(),
+                    "lineBreak": "\n",
+                    # 與 Tableau 相同寫在圓餅外側
+                    "radius": {"expr": f"{self.pie_extent} * {_pie_fraction(marks) / 2} + 24"},
+                },
+                "encoding": {
+                    "text": {"field": "__pie_label"},
+                    "color": {"value": self.text_fill(marks, self.text_color(marks))},
+                    "theta": encoding["theta"],
+                    **({"order": encoding["order"]} if "order" in encoding else {}),
+                },
+                "transform": [{"calculate": _template(text), "as": "__pie_label"}],
+            }
+            setting = marks.labels or MarkLabels()
+            layers.append(self.named_label(label, "k" if setting.overlap else "c"))
+        if facet:
+            # 分面中的各圖層各自的 encoding（中間的文字等圖層不能沿用角度）
+            return {"facet": facet, "spec": {"layer": layers}}
+        if len(layers) == 1:
+            return layers[0]
+        return {"encoding": encoding, "layer": [{"mark": mark}, *layers[1:]]}
 
     def donut(
         self,
@@ -1346,7 +1633,7 @@ class _Builder:
     ) -> dict[str, Any]:
         """甜甜圈（J3）與多層圓餅：圓餅與疊在上面（雙軸）的標記卡。有角度與顏色的標記卡畫成另一層圓餅
         （依自己的詳細程度與大小，例如內圈依類別、外圈依子類別），其他的畫成中間的洞，它的標籤（通常是
-        合計）寫在中間。"""
+        合計）寫在中間；分面時每一格各自的洞與標籤。"""
         dual = [(i, p) for i, p in enumerate(self.ws.panes) if i > 0 and p.dual]
         rings = [(i, p) for i, p in dual if _is_ring(p.marks)]
         holes = [(i, p) for i, p in dual if not _is_ring(p.marks)]
@@ -1372,11 +1659,12 @@ class _Builder:
         inner = min(_pie_fraction(hole), outer) if hole.mark_size is not None else outer * 0.6
         for mark in _arc_marks(body):
             mark["innerRadius"] = {"expr": f"{self.pie_extent} * {round(inner / 2, 4)}"}
-        if rows_dims or cols_dims:
-            self.notes.append("分面的甜甜圈圖中間的標籤尚未畫出（不影響數字）")
-            return body
-        lines: list[str] = []
+        facet = body.get("facet")
+        keys = [f["field"] for f in facet.values()] if isinstance(facet, dict) else []
+        centers: dict[tuple[Any, ...], list[str]] = {}
         for index, pane in holes:
+            if pane.marks.labels is not None and pane.marks.labels.show is False:
+                continue  # 關閉了標記標籤
             records = self.pane_values.get(index, values)
             fields = (
                 [self.label_fields[id(pane.marks)]]
@@ -1386,9 +1674,34 @@ class _Builder:
             for name in fields:
                 for record in records:
                     text = record.get(name)
+                    lines = centers.setdefault(tuple(record.get(k) for k in keys), [])
                     if text not in (None, "") and str(text) not in lines:
                         lines.append(str(text))
-        if not lines:
+        if not any(centers.values()):
+            return body
+        font = self.text_font(hole).mark()
+        color = self.text_fill(hole, self.text_color(hole))
+        if isinstance(facet, dict):
+            # 分面：每一格的文字放在這一格的第一列資料上（分面的各圖層共用資料）
+            seen: set[tuple[Any, ...]] = set()
+            for record in values:
+                key = tuple(record.get(k) for k in keys)
+                record[HOLE] = "\n".join(centers.get(key, [])) if key not in seen else ""
+                seen.add(key)
+            body["spec"]["layer"].append(
+                {
+                    "transform": [{"filter": f"datum.{HOLE}"}],
+                    "mark": {
+                        "type": "text",
+                        "x": {"expr": "child_width / 2"},
+                        "y": {"expr": "child_height / 2"},
+                        "lineBreak": "\n",
+                        **font,
+                        "color": color,
+                    },
+                    "encoding": {"text": {"field": HOLE}},
+                }
+            )
             return body
         center = {
             "data": {"values": [{}]},
@@ -1397,10 +1710,10 @@ class _Builder:
                 "x": {"expr": "width / 2"},
                 "y": {"expr": "height / 2"},
                 "lineBreak": "\n",
-                **self.font("cell", holes[0][1].marks.label_font).mark(),
-                "color": self.text_color(holes[0][1].marks),
+                **font,
+                "color": color,
             },
-            "encoding": {"text": {"value": "\n".join(lines)}},
+            "encoding": {"text": {"value": "\n".join(centers.get((), []))}},
         }
         return {"layer": [body, center]}
 
@@ -1518,12 +1831,40 @@ def build_spec(
 
     params = {p.id: p.value for p in ir.parameters} | (parameters or {})
     cards = [(None, ws.marks), *enumerate(p.marks for p in ws.panes)]
+
+    def field_style(use: FieldUse) -> TextStyle | None:
+        """欄位在標記上的字型與顏色（Format > 欄位的窗格字型，例如 KPI 的大數字）。"""
+        font, color = ws.field_fonts.get(use_key(use)), ws.field_colors.get(use_key(use))
+        if font is None and color is None:
+            return None
+        return TextStyle(
+            size=font.size if font else None,
+            bold=font.bold if font else None,
+            italic=font.italic if font else None,
+            font=font.family if font else None,
+            color=color,
+        )
+
     for n, (index, marks) in enumerate(cards):
         labelled = [channels[use_key(u)] for u in marks.label if use_key(u) in channels]
+        if not marks.label_text and len(marks.label) == 1:
+            style = field_style(marks.label[0])
+            if style is not None:
+                builder.text_styles[id(marks)] = style
         if not marks.label_text and len(labelled) < 2:
             continue
         name = f"__text{n}"
         builder.label_fields[id(marks)] = name
+        lines = _text_lines(marks.label_text, field_style)
+        styles = [style for _, style in lines]
+        first = next((style for style in styles if style is not None), None)
+        if first is not None:
+            builder.text_styles[id(marks)] = first
+        if len(lines) > 1 and any(style != styles[0] for style in styles):
+            # 各行的格式不同（例如 KPI 的小標題與大數字）：每一行另外組成一欄，分行畫出
+            builder.text_lines[id(marks)] = [
+                (f"{name}_{i}", style) for i, (_, style) in enumerate(lines)
+            ]
         targets = [values]
         if index is not None and index in pane_values:
             targets = [pane_values[index]]
@@ -1531,6 +1872,9 @@ def build_spec(
             for record in records:
                 if marks.label_text:
                     record[name] = compose_text(marks.label_text, ir, params, channels, record)
+                    if id(marks) in builder.text_lines:
+                        for i, (runs, _) in enumerate(lines):
+                            record[f"{name}_{i}"] = compose_text(runs, ir, params, channels, record)
                 else:
                     # 沒有自訂的標籤文字：標籤上的欄位各占一行（與 Tableau 的預設相同）
                     record[name] = "\n".join(
@@ -1623,7 +1967,7 @@ def build_spec(
         column_order = _column_order(values, column_field, [builder.ch(u) for u in cols_dims])
     for channel in ("row", "column"):
         # 分面依資料的順序（查詢已依排序設定排好）；Vega-Lite 的分面不指定時會依字母排序
-        facet = body.get("encoding", {}).get(channel)
+        facet = (body.get("facet") or body.get("encoding", {})).get(channel)
         if isinstance(facet, dict) and facet.get("sort") is None:
             if channel == "column" and facet.get("field") == column_field:
                 facet["sort"] = column_order
@@ -1706,11 +2050,13 @@ def build_spec(
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
     spec["usermeta"]["title_color"] = title_color or _title_color(ws)
     spec["usermeta"]["title_font"] = _title_font(ws)
-    if "vconcat" in body or "hconcat" in body:
-        # 多張圖無法自動填滿容器，由檢視器依區塊大小設定每張圖的寬高
+    if "vconcat" in body or "hconcat" in body or "facet" in body:
+        # 多張圖（分面）無法自動填滿容器，由檢視器依區塊大小設定每張圖的寬高
         del spec["width"], spec["height"]
         spec["autosize"] = {"type": "pad"}
     spec.update(body)
+    if builder.culled:
+        spec["params"] = [*spec.get("params", []), {"name": LABEL_HIDDEN, "value": []}]
     if column_field is not None:
         _sort_headers(spec, column_field, column_order)
     for record in values:
@@ -1721,7 +2067,7 @@ def build_spec(
     sized = (
         map_plan is None
         and encoding is not None
-        and not any(k in spec for k in ("vconcat", "hconcat"))
+        and not any(k in spec for k in ("vconcat", "hconcat", "facet"))
         and not any(k in encoding for k in ("row", "column"))
     )
     if sized and encoding is not None:
@@ -2651,6 +2997,36 @@ def value_format(ws: Worksheet, data_field: DataField, use: FieldUse) -> str | N
     return found
 
 
+def _text_lines(
+    runs: list[TextRun], field_style: Callable[[FieldUse], TextStyle | None] | None = None
+) -> list[tuple[list[TextRun], TextStyle | None]]:
+    """自訂文字依換行分成各行：每一行的各段，與這一行的格式（第一段有內容的格式，字級取這一行最大的）。
+    欄位的值以欄位在標記上的字型（field_style）為底，再套用這一段的格式。"""
+    lines: list[list[TextRun]] = [[]]
+    for run in runs:
+        base = field_style(run.use) if field_style is not None and run.use is not None else None
+        if base is not None:
+            own = run.style.model_dump(exclude_none=True) if run.style is not None else {}
+            run = run.model_copy(update={"style": base.model_copy(update=own)})
+        if run.text is not None and "\n" in run.text:
+            for k, part in enumerate(run.text.split("\n")):
+                if k:
+                    lines.append([])
+                if part:
+                    lines[-1].append(run.model_copy(update={"text": part}))
+        else:
+            lines[-1].append(run)
+    result: list[tuple[list[TextRun], TextStyle | None]] = []
+    for line in lines:
+        visible = [r for r in line if r.text is None or r.text.strip()]
+        style = next((r.style for r in visible if r.style is not None), None)
+        sizes = [r.style.size for r in visible if r.style is not None and r.style.size]
+        if style is not None and sizes:
+            style = style.model_copy(update={"size": max(sizes)})
+        result.append((line, style))
+    return result
+
+
 def compose_text(
     runs: list[TextRun],
     ir: IR,
@@ -3538,6 +3914,24 @@ def _is_number(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _hashable(value: Any) -> Any:
+    """分組的鍵：清單等不能雜湊的值轉成文字。"""
+    try:
+        hash(value)
+    except TypeError:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    return value
+
+
+def _sort_key(value: Any) -> tuple[int, Any]:
+    """依值排序（數字、日期字串）：Null 在最後，不同型別的值依文字比較。"""
+    if value is None:
+        return (2, "")
+    if _is_number(value):
+        return (0, float(value))
+    return (1, str(value))
+
+
 def _reference_source(
     line: ReferenceLine, channels: dict[str, Channel], params: dict[str, Scalar], temporal: bool
 ) -> str | _Constant | None:
@@ -3855,13 +4249,15 @@ def _is_ring(marks: Marks) -> bool:
 
 
 def _arc_marks(node: dict[str, Any]) -> list[dict[str, Any]]:
-    """規格中所有圓餅（arc）的 mark。"""
+    """規格中所有圓餅（arc）的 mark（含分面中的）。"""
     found: list[dict[str, Any]] = []
     mark = node.get("mark")
     if isinstance(mark, dict) and mark.get("type") == "arc":
         found.append(mark)
     for child_node in node.get("layer", []):
         found += _arc_marks(child_node)
+    if isinstance(node.get("spec"), dict):
+        found += _arc_marks(node["spec"])
     return found
 
 
@@ -4155,20 +4551,32 @@ def _label_layer(
     encoding: dict[str, Any],
     vl_type: str,
     field_name: str,
-    colored: bool,
     color: str = TEXT_COLOR,
     font: Font | None = None,
     match: bool = False,
+    align: Literal["left", "center", "right"] | None = None,
+    radius: float = POINT_DIAMETER / 2,
+    extreme: Literal["max", "min"] | None = None,
+    stacked: bool = False,
 ) -> dict[str, Any]:
-    """標籤：長條在尾端（堆疊時在各段內側），表格中的圓點與形狀（cell）在右邊，其他標記在點的上方。
-    match 時文字的顏色與標記相同（依欄位著色時沿用同一個色彩的 encoding）。"""
-    stacked = vl_type == "bar" and colored
+    """標籤：長條在尾端（stacked：依標記卡上的維度堆疊時在各段內側），圓點、形狀與方塊在右邊（對齊設為
+    置中時在標記中央、靠左時在左邊；與 Tableau 相同），折線與區域在點的上方；折線的最大值（extreme）
+    寫在點的右上、最小值在右下（與 Tableau 的畫面相同）。match 時文字的顏色與標記相同（依欄位著色時沿用
+    同一個色彩的 encoding）。"""
+    stacked = stacked and vl_type == "bar"
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
-    mark: dict[str, Any] = {"type": "text", **(font or resolve()).mark(), "lineBreak": "\n"}
+    font = font or resolve()
+    mark: dict[str, Any] = {"type": "text", **font.mark(), "lineBreak": "\n"}
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
-    if vl_type == "cell":
-        # 表格中的圓點與形狀：標籤在標記的右邊（列很密，放在上方會疊到上一列）
-        mark.update(align="left", baseline="middle", dx=POINT_DIAMETER / 2 + 4)
+    if "size" in encoding:
+        layer["size"] = {"value": font.size}  # 大小上的欄位決定標記的大小，不是標籤的字級
+    if vl_type in ("cell", "circle", "square", "point"):
+        if align == "center":
+            mark.update(align="center", baseline="middle")
+        elif align == "left":
+            mark.update(align="right", baseline="middle", dx=-(radius + 4))
+        else:
+            mark.update(align="left", baseline="middle", dx=radius + 4)
     elif vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
         if stacked:
@@ -4177,14 +4585,22 @@ def _label_layer(
         mark.update(baseline="top", dy=3) if stacked else mark.update(baseline="bottom", dy=-3)
         if stacked:
             layer["y"] = {**encoding["y"], "stack": "zero"}
+    elif extreme == "max":
+        mark.update(align="left", baseline="bottom", dx=3, dy=-2)
+    elif extreme == "min":
+        mark.update(align="left", baseline="top", dx=3, dy=2)
     else:
         mark.update(baseline="bottom", dy=-4)
     if match and "field" in encoding.get("color", {}):
         layer["color"] = encoding["color"]
-    elif stacked and "color" in encoding:
-        # 文字改成白色，但仍以顏色欄位分組，才能與長條同樣堆疊
+    elif stacked:
+        # 文字改成白色，但仍以顏色（詳細資料）的欄位分組，才能與長條同樣堆疊
         layer["color"] = {"value": "#ffffff"}
-        layer["detail"] = {"field": encoding["color"]["field"], "type": encoding["color"]["type"]}
+        if "field" in encoding.get("color", {}):
+            layer["detail"] = {
+                "field": encoding["color"]["field"],
+                "type": encoding["color"]["type"],
+            }
     return {"mark": mark, "encoding": layer}
 
 

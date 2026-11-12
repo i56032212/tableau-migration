@@ -396,7 +396,8 @@ def _adapt_sheet(
 
 
 def _across(ir: IR, ws: Worksheet) -> list[str]:
-    """表格（橫向）的定址：欄架上的維度，再來是標記卡上的維度（與解析時相同）。"""
+    """表格（橫向）的定址：欄架上的維度；欄架上沒有維度時為標記卡上的維度，圓餅一併定址標記卡上的維度
+    （與解析時相同）。"""
     ds = next(d for d in ir.datasources if d.id == ws.datasource)
     levels = {f.id: f.calc.level for f in ds.fields if f.calc is not None}
 
@@ -410,9 +411,13 @@ def _across(ir: IR, ws: Worksheet) -> list[str]:
         )
 
     ids: list[str] = []
-    for use in [*ws.columns, *ws.marks.uses()]:
+    for use in ws.columns:
         if dim(use) and use.field not in ids:
             ids.append(use.field)
+    if not ids or ws.marks.type == "pie":
+        for use in ws.marks.uses():
+            if dim(use) and use.field not in ids:
+                ids.append(use.field)
     return ids
 
 

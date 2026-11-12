@@ -95,7 +95,9 @@
     "type": "line",
     "tooltip": true,
     "point": "transparent",
-    "strokeWidth": 3
+    "strokeWidth": 2,
+    "strokeCap": "round",
+    "strokeJoin": "round"
   },
   "encoding": {
     "y": {

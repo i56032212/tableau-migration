@@ -474,7 +474,8 @@ def test_bar_thickness(tmp_path: Path, db: Path) -> None:
 
 
 def test_point_and_line_sizes(tmp_path: Path, db: Path) -> None:
-    """圓點的直徑：預設 10 像素，大小 s 時為 s 倍（Vega 的 size 是外框的面積）；折線預設 3 像素寬。"""
+    """圓點的直徑：預設 10 像素，大小 s 時為 s 倍（Vega 的 size 是外框的面積）；折線預設 2 像素寬，
+    兩端與轉折是圓的。"""
     scatter = {"rows": ref("sum:Profit:qk"), "cols": ref("sum:Sales:qk")}
     spec = render(parse(tmp_path, sized_mark("Circle", **scatter)), db).spec
     assert spec["mark"]["size"] == 100
@@ -482,9 +483,10 @@ def test_point_and_line_sizes(tmp_path: Path, db: Path) -> None:
     assert spec["mark"]["size"] == pytest.approx(16.37**2, abs=0.01)
     timeline = {"rows": ref("sum:Sales:qk"), "cols": ref("tmn:Order Date:qk")}
     spec = render(parse(tmp_path, sized_mark("Line", **timeline)), db).spec
-    assert spec["mark"]["strokeWidth"] == 3
+    assert spec["mark"]["strokeWidth"] == 2
+    assert spec["mark"]["strokeCap"] == spec["mark"]["strokeJoin"] == "round"
     spec = render(parse(tmp_path, sized_mark("Line", "2", **timeline)), db).spec
-    assert spec["mark"]["strokeWidth"] == 6
+    assert spec["mark"]["strokeWidth"] == 4
 
 
 def test_pie_size(tmp_path: Path, db: Path) -> None:

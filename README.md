@@ -821,7 +821,10 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
 
 - **Table Calculation 的計算方向**：`ordering-type='Columns'` 視為 Table (down)、`'Rows'` 視為 Table (across)、
   `Table`／`TableCol` 為表格（橫向再縱向／縱向再橫向）、`RowInPane`／`ColumnInPane` 為窗格（橫向／縱向）、
-  `Pane`／`PaneCol` 為窗格（橫向再縱向／縱向再橫向）、`CellInPane` 為儲存格，標記卡上的維度一律列入定址；
+  `Pane`／`PaneCol` 為窗格（橫向再縱向／縱向再橫向）、`CellInPane` 為儲存格；標記卡上的維度是分割，
+  計算方向的架上沒有維度時才定址它們（100% 堆疊長條的 Table (down)），圓餅（甜甜圈）標記卡上的計算則
+  一併定址標記卡上的維度（已與公開報表的 Tableau 畫面比對：HR Dashboards 的 Departments 中 INDEX() 依部門
+  編號、色彩上的狀態各自從 1 開始；HR Analytics 的甜甜圈各塊的百分比合計 100%）；
   窗格的方向只定址窗格內變化的維度（架上最後是離散維度時為它，最後是連續的座標軸時為結尾連續的維度），
   儲存格只定址標記卡上的維度；未寫計算方向時依預設 Table (across)，IR 標記為推定（`inferred`）。
   指定維度時，寫欄位名稱的定址這個欄位在檢視中的所有實例，寫欄位實例（例如 `[yr:Order Date:ok]`）的只定址

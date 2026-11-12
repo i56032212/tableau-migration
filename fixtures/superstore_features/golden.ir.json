@@ -1472,7 +1472,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -1600,6 +1601,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -1657,7 +1660,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -1785,6 +1789,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -1842,7 +1848,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -1949,6 +1956,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -2014,7 +2023,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [
@@ -2122,6 +2132,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -2188,7 +2200,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [
@@ -2289,6 +2302,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -2356,7 +2371,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [
         {
@@ -2400,7 +2416,8 @@
             "angle": null,
             "path": null,
             "geometry": null,
-            "density": null
+            "density": null,
+            "labels": null
           }
         },
         {
@@ -2436,7 +2453,8 @@
             "angle": null,
             "path": null,
             "geometry": null,
-            "density": null
+            "density": null,
+            "labels": null
           }
         }
       ],
@@ -2505,6 +2523,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -2573,7 +2593,8 @@
         },
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -2679,6 +2700,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -2744,7 +2767,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -2851,6 +2875,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -2916,7 +2942,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3006,6 +3033,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3071,7 +3100,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3161,6 +3191,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3226,7 +3258,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3332,6 +3365,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3397,7 +3432,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3465,6 +3501,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3530,7 +3568,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3598,6 +3637,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3655,7 +3696,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3723,6 +3765,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3788,7 +3832,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -3877,6 +3922,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -3942,7 +3989,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -4028,6 +4076,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -4093,7 +4143,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -4179,6 +4230,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -4244,7 +4297,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -4334,6 +4388,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -4410,7 +4466,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -4513,6 +4570,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -4578,7 +4637,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -4646,6 +4706,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -4710,7 +4772,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -4859,6 +4922,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -4916,7 +4981,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -5074,6 +5140,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -5149,7 +5217,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -5258,6 +5327,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -5314,7 +5385,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [
         {
@@ -5370,7 +5442,8 @@
             },
             "path": null,
             "geometry": null,
-            "density": null
+            "density": null,
+            "labels": null
           }
         },
         {
@@ -5414,7 +5487,8 @@
             "angle": null,
             "path": null,
             "geometry": null,
-            "density": null
+            "density": null,
+            "labels": null
           }
         }
       ],
@@ -5483,6 +5557,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -5547,7 +5623,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [
         {
@@ -5591,7 +5668,8 @@
             "angle": null,
             "path": null,
             "geometry": null,
-            "density": null
+            "density": null,
+            "labels": null
           }
         },
         {
@@ -5633,7 +5711,8 @@
             "angle": null,
             "path": null,
             "geometry": null,
-            "density": null
+            "density": null,
+            "labels": null
           }
         }
       ],
@@ -5702,6 +5781,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -5767,7 +5848,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -5874,6 +5956,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -5937,7 +6021,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -6005,6 +6090,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -6070,7 +6157,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -6159,6 +6247,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -6224,7 +6314,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -6292,6 +6383,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -6357,7 +6450,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -6464,6 +6558,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},
@@ -6528,7 +6624,8 @@
         "angle": null,
         "path": null,
         "geometry": null,
-        "density": null
+        "density": null,
+        "labels": null
       },
       "panes": [],
       "measure_values": [],
@@ -6635,6 +6732,8 @@
       "background": null,
       "text_color": null,
       "cell_color": null,
+      "field_fonts": {},
+      "field_colors": {},
       "cell_align": null,
       "label_valign": null,
       "fonts": {},

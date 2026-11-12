@@ -295,6 +295,47 @@ def test_donut_spec() -> None:
     assert len(spec["data"]["values"]) == 3
 
 
+def test_faceted_donut_has_labels_and_centers() -> None:
+    """欄列架上有維度的甜甜圈（分面）：每一格的圓餅、外側的標籤與中間各自的合計。"""
+    from tmig.ir import FieldUse
+
+    worksheet_id = "ws_category_donut"
+    ir = features()
+    region = next(f.id for ds in ir.datasources for f in ds.fields if f.caption == "Region")
+    ir = ir.model_copy(
+        update={
+            "worksheets": [
+                w.model_copy(update={"rows": [FieldUse(field=region), *w.rows]})
+                if w.id == worksheet_id
+                else w
+                for w in ir.worksheets
+            ]
+        }
+    )
+    database = FEATURES / "data" / "ds_orders.duckdb"
+    query = worksheet_sql(ir, worksheet_id)
+    queries = pane_sql(ir, worksheet_id, query)
+    panes = {i: (q.columns, execute(database, q.sql)) for i, q in queries.items()}
+    rendered = build_spec(
+        ir, worksheet_id, query.columns, execute(database, query.sql), None, panes
+    )
+    spec = rendered.spec
+    assert spec is not None
+    assert [e.message for e in validator().iter_errors(spec)] == []
+    assert "row" in spec["facet"] and "width" not in spec
+    ring, label, center = spec["spec"]["layer"]
+    assert ring["mark"]["innerRadius"]["expr"].startswith("min(child_width, child_height)")
+    assert label["name"].startswith("__label_")
+    region_label = spec["facet"]["row"]["field"]
+    sales = next(n for n, key in spec["usermeta"]["measures"].items() if key == "sum(f_sales)")
+    centers = {v[region_label]: v["__hole"] for v in spec["data"]["values"] if v.get("__hole")}
+    totals: dict[str, float] = {}
+    for record in spec["data"]["values"]:
+        totals[record[region_label]] = totals.get(record[region_label], 0) + record[sales]
+    assert centers == {name: f"{total:,.0f}" for name, total in totals.items()}
+    assert center["encoding"]["text"] == {"field": "__hole"}
+
+
 def test_multi_level_pie() -> None:
     """多層圓餅：疊在上面的標記卡有角度與顏色時畫成另一層圓餅，各自依自己的詳細程度（內圈依類別、
     外圈依類別與子類別）與大小。"""

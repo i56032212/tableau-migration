@@ -1026,6 +1026,39 @@ class DensityStyle(IRModel):
     )
 
 
+LabelMarks = Literal["all", "min_max", "line_ends", "selected", "highlighted"]
+LabelScope = Literal["pane", "cell", "table", "line"]
+
+
+class MarkLabels(IRModel):
+    """標記卡「標籤」的設定（.twb 中標記的 mark-labels-* 格式）。"""
+
+    show: bool | None = Field(
+        default=None,
+        description="顯示標記標籤；None 依預設（標籤上有欄位時顯示）。顯示但標籤上沒有欄位時，"
+        "與 Tableau 相同標示座標軸上的量值（圓餅為角度的量值、地圖為地名）",
+    )
+    marks: LabelMarks = Field(
+        default="all",
+        description="加上標籤的標記：全部、最小值／最大值、線條的兩端、選取的、醒目提示的",
+    )
+    scope: LabelScope = Field(
+        default="pane", description="最小值／最大值的範圍：窗格、儲存格、整個表格、每條線"
+    )
+    field: FieldUse | None = Field(
+        default=None,
+        description="最小值／最大值依據的量值；None 為座標軸上的量值（沒有時為標籤上的量值）",
+    )
+    minimum: bool = Field(default=True, description="標示最小值")
+    maximum: bool = Field(default=True, description="標示最大值")
+    first: bool = Field(default=True, description="標示線條的起點")
+    last: bool = Field(default=True, description="標示線條的終點")
+    overlap: bool = Field(
+        default=False,
+        description="允許標籤與其他標記重疊；否則與 Tableau 相同，互相重疊的標籤只顯示先畫的",
+    )
+
+
 class Marks(IRModel):
     type: MarkType
     color: FieldUse | None = None
@@ -1078,10 +1111,15 @@ class Marks(IRModel):
         default=None, description="地圖上標記的形狀（Geometry (generated)）：有時畫成填色的區域"
     )
     density: DensityStyle | None = Field(default=None, description="密度標記的配色與強度")
+    labels: MarkLabels | None = Field(
+        default=None, description="標記標籤的顯示設定（標籤卡）；None 為預設"
+    )
 
     def uses(self) -> list[FieldUse]:
         """標記卡上的所有欄位使用。"""
         singles = [self.color, self.size, self.shape, self.angle, self.path, self.geometry]
+        if self.labels is not None:
+            singles.append(self.labels.field)
         return [u for u in singles if u is not None] + [*self.label, *self.detail, *self.tooltip]
 
 
@@ -1537,6 +1575,14 @@ class Worksheet(IRModel):
     )
     cell_color: HexColor | None = Field(
         default=None, description="文字表儲存格中文字的顏色（「窗格」字型）；None 依 text_color"
+    )
+    field_fonts: dict[str, FontStyle] = Field(
+        default_factory=dict,
+        description="個別欄位在標記上（文字表、標籤）的字型（欄位鍵 → 字型；Format > 欄位的窗格字型），"
+        "例如 KPI 的大數字",
+    )
+    field_colors: dict[str, HexColor] = Field(
+        default_factory=dict, description="個別欄位在標記上的文字顏色（欄位鍵 → 顏色）"
     )
     cell_align: Literal["left", "center", "right"] | None = Field(
         default=None,

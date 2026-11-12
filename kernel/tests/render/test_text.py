@@ -12,7 +12,7 @@ import duckdb
 import pytest
 
 from tmig.data.executor import execute
-from tmig.ir import IR, TextRun
+from tmig.ir import IR, TextRun, TextStyle
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import build_spec, main_encoding, worksheet_title
 from tmig.sqlgen.query import GRAND_TOTAL, totals_sql, worksheet_sql
@@ -121,9 +121,10 @@ def test_sheet_formats_labels_and_title_are_parsed(tmp_path: Path) -> None:
     ws = ir.worksheets[0]
     assert ws.formats == {"sum(f_profit)": "p0.0%", "sum(f_sales)": 'c"$"#,##0,.0K'}
     sales, profit = ws.marks.label
+    # 各段的格式保留（KPI 的大數字）
     assert ws.marks.label_text == [
         TextRun(text="Total Sales\n"),
-        TextRun(use=sales),
+        TextRun(use=sales, style=TextStyle(size=20)),
         TextRun(text=" | Profit "),
         TextRun(use=profit),
         TextRun(text="\non KPI <Unknown>"),
@@ -305,7 +306,13 @@ def test_label_on_bars_and_sheet_format_overrides_field_format(tmp_path: Path, d
     calc = "<column caption='Sales' datatype='real' default-format='n#,##0.00' name='[Sales]' role='measure' type='quantitative' />"
     spec = render(parse(tmp_path, sheet, calcs=calc), db).spec
     _bars, text = spec["layer"]
-    assert text["encoding"]["text"] == {"field": "__text0"}
+    # 互相重疊的標籤由檢視器隱藏（清空文字）
+    assert text["name"].startswith("__label_c")
+    assert text["encoding"]["text"] == {
+        "condition": {"test": "indexof(__label_hidden, datum.__lid) >= 0", "value": ""},
+        "field": "__text0",
+    }
+    assert {"name": "__label_hidden", "value": []} in spec["params"]
     assert text["mark"]["lineBreak"] == "\n"
     west = next(v for v in spec["data"]["values"] if v["c0"] == "West")
     assert west["c1_label"] == "$0.8K" and west["__text0"] == "West: $0.8K"

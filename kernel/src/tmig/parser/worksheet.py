@@ -2,8 +2,14 @@
 
 Table Calculation 的計算方向（Tableau 的 Compute Using）依真實 .twb 歸納：
 
-- ``ordering-type='Columns'`` 為 Table (down)：沿著欄往下算，定址為列架上的維度與標記卡上的維度
-- ``ordering-type='Rows'`` 為 Table (across)：沿著列往右算，定址為欄架上的維度與標記卡上的維度
+- ``ordering-type='Columns'`` 為 Table (down)：沿著欄往下算，定址為列架上的維度
+- ``ordering-type='Rows'`` 為 Table (across)：沿著列往右算，定址為欄架上的維度
+- 標記卡上的維度為分割；計算方向的架上沒有維度時改為定址標記卡上的維度（圓餅的百分比、100% 堆疊長條的
+  Table (down)），與 Tableau 的畫面相同（HR Dashboards 的 Departments：列架上的 INDEX() 依部門編號，
+  色彩上的狀態各自從 1 開始，同一個部門的兩種狀態在同一列；TabMon 的 Logins Per Hour：每個 instance
+  各自與前一小時的差異）
+- 圓餅（甜甜圈）的標記卡上的 Table Calculation 例外：標記卡上的維度與架上的維度一起定址（HR Analytics 的
+  甜甜圈：各年齡層、性別的百分比合計 100%；HR Dashboards 的 Gender：甜甜圈各塊的比例）
 - ``ordering-type='Field'`` 為指定維度：``ordering-field`` 或 ``<order field>`` 列出定址欄位
 - 未寫 ``ordering-type`` 時依 Tableau 預設 Table (across)，並標記為推定（``inferred``）
 
@@ -46,6 +52,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     Forecast,
+    MarkLabels,
     Marks,
     MarkType,
     MeasureAlias,
@@ -59,6 +66,7 @@ from tmig.ir.models import (
     TableCalc,
     TableCalcPreset,
     TextRun,
+    TextStyle,
     TupleFilter,
     VisualTotal,
     Worksheet,
@@ -94,9 +102,11 @@ from tmig.parser.formats import (
     pane_cell_align,
     pane_label_font,
     pane_label_match,
+    pane_labels,
     pane_mark_size,
     pane_trend_line,
     reference_styles,
+    run_style,
     worksheet_formats,
 )
 from tmig.parser.maps import density_style, map_options
@@ -390,6 +400,8 @@ class SheetParser:
         self.el = element
         self.name = element.get("name", "")
         self.instances: dict[str, etree._Element] = {}
+        self._pie = False
+        """目前處理的 Table Calculation 用在圓餅的標記卡上（定址標記卡上的維度，見 _direction）。"""
         self.uses: dict[str, FieldUse] = {}
         self.ds: DsState | None = None
         self.secondaries: dict[str, DsState] = {}
@@ -476,7 +488,7 @@ class SheetParser:
         if blends is None:
             return None
         sheet_id = ctx.ids.make("ws", self.name)
-        table_calcs = self._table_calcs(rows, cols, mark_dims)
+        table_calcs = self._table_calcs(rows, cols, mark_dims, _pie_keys(child(table, "panes")))
         filters, kinds = self._filters(view)
         self._shared_filters(view, main[0], filters, kinds)
         sorts = self._sorts(view)
@@ -522,6 +534,8 @@ class SheetParser:
             background=sheet_formats.background,
             text_color=sheet_formats.text_color,
             cell_color=sheet_formats.cell_color,
+            field_fonts=sheet_formats.field_fonts,
+            field_colors=sheet_formats.field_colors,
             cell_align=sheet_formats.cell_align,
             field_label_background=sheet_formats.field_label_background,
             fonts=sheet_formats.fonts,
@@ -1315,7 +1329,25 @@ class SheetParser:
                 if use is not None:
                     marks.trend.excluded.append(use)
         marks.mark_size = pane_mark_size(pane)
+        marks.labels = self._labels(pane)
         return marks, dims
+
+    def _labels(self, pane: etree._Element) -> MarkLabels | None:
+        """標記卡「標籤」的設定（顯示與否、最小值／最大值、線條兩端、重疊）；都是預設時為 None。"""
+        found = pane_labels(pane)
+        if found is None:
+            return None
+        for item in found.unknown:
+            self.ctx.ignore(pane, f"標記標籤的設定 {item} 尚不支援，依預設呈現（不影響數字）")
+        settings = dict(found.settings)
+        if found.field_ref is not None:
+            use = self._use(found.field_ref, pane, "標記標籤的最小值／最大值欄位")
+            if use is not None and self._is_measure(use):
+                settings["field"] = use
+            elif use is not None:
+                self.ctx.ignore(pane, "標記標籤的最小值／最大值欄位不是量值，改依座標軸上的量值")
+        labels = MarkLabels.model_validate(settings)
+        return None if labels == MarkLabels() else labels
 
     def _color_palette(self, ref: str, use: FieldUse) -> ColorPalette | None:
         """顏色欄位的色彩設定：工作表的 <style> 優先，其次是資料源的 <style>（同一個欄位實例）。"""
@@ -1340,30 +1372,51 @@ class SheetParser:
     # ------------------------------------------------------------ 自訂文字、數字格式與標題
 
     def _text_runs(self, formatted: etree._Element, what: str) -> list[TextRun]:
-        """格式化文字（<formatted-text> 的各段 <run>）→ 文字與參照依序排列；樣式（字型、顏色）不保留。
+        """格式化文字（<formatted-text> 的各段 <run>）→ 文字與參照依序排列，各段帶著它的格式（字級、粗體、
+        顏色等，例如 KPI 的大數字）。
 
-        參照可能被拆在相鄰的幾段中，所以先串成一段再找；認不得的 <…> 照原文保留。
+        參照可能被拆在相鄰的幾段中，所以先串成一段再找，格式取參照開頭那一段的；認不得的 <…> 照原文保留。
         """
-        text = "".join(str(part) for run in children(formatted, "run") for part in run.itertext())
-        # 單獨的 Æ 是格式化文字的分段記號，畫面上不顯示
-        text = text.replace(LINE_BREAK, "\n").replace("\u00c6", "").rstrip()
+        text = ""
+        styles: list[TextStyle | None] = []
+        for run in children(formatted, "run"):
+            # 單獨的 Æ 是格式化文字的分段記號，畫面上不顯示
+            raw = "".join(str(part) for part in run.itertext())
+            raw = raw.replace(LINE_BREAK, "\n").replace("\u00c6", "")
+            text += raw
+            styles += [run_style(run)] * len(raw)
+        text = text.rstrip()
         runs: list[TextRun] = []
 
-        def add_text(value: str) -> None:
-            if not value:
-                return
-            if runs and runs[-1].text is not None:
-                runs[-1] = TextRun(text=runs[-1].text + value)
+        def style_at(index: int) -> TextStyle | None:
+            return styles[index] if index < len(styles) else None
+
+        def add_text(start: int, end: int) -> None:
+            # 依各字的格式分段；換行沒有格式（不影響下一行）
+            for index in range(start, end):
+                value = text[index]
+                style = None if value == "\n" else style_at(index)
+                last = runs[-1] if runs else None
+                if last is not None and last.text is not None and last.style == style:
+                    runs[-1] = last.model_copy(update={"text": last.text + value})
+                else:
+                    runs.append(TextRun(text=value, style=style))
+
+        def add_name(value: str, index: int) -> None:
+            last = runs[-1] if runs else None
+            style = style_at(index)
+            if last is not None and last.text is not None and last.style == style:
+                runs[-1] = last.model_copy(update={"text": last.text + value})
             else:
-                runs.append(TextRun(text=value))
+                runs.append(TextRun(text=value, style=style))
 
         position = 0
         for match in TEXT_TOKEN.finditer(text):
-            add_text(text[position : match.start()])
+            add_text(position, match.start())
             position = match.end()
             token = match.group(1)
             if token == "Sheet Name":
-                add_text(self.name)
+                add_name(self.name, match.start())
                 continue
             parts = qualified_parts(token)
             if len(parts) == 2 and parts[0] == "Parameters":
@@ -1371,7 +1424,7 @@ class SheetParser:
                 if param is None:
                     self.ctx.flag(formatted, f"{what}：找不到參數 {token}")
                     continue
-                runs.append(TextRun(parameter=param.id))
+                runs.append(TextRun(parameter=param.id, style=style_at(match.start())))
                 continue
             if (
                 len(parts) == 2
@@ -1382,10 +1435,10 @@ class SheetParser:
                 if isinstance(resolved, str):
                     self.ctx.flag(formatted, f"{what}：{resolved}")
                     continue
-                runs.append(TextRun(use=resolved))
+                runs.append(TextRun(use=resolved, style=style_at(match.start())))
                 continue
-            add_text(match.group(0))
-        add_text(text[position:])
+            add_text(match.start(), match.end())
+        add_text(position, len(text))
         return runs
 
     def _annotations(self, element: etree._Element | None) -> list[Annotation]:
@@ -1783,8 +1836,13 @@ class SheetParser:
     # ------------------------------------------------------------ Table Calculation
 
     def _table_calcs(
-        self, rows: list[FieldUse], cols: list[FieldUse], mark_dims: list[FieldUse]
+        self,
+        rows: list[FieldUse],
+        cols: list[FieldUse],
+        mark_dims: list[FieldUse],
+        pie_keys: frozenset[str] = frozenset(),
     ) -> list[TableCalc]:
+        """pie_keys：圓餅的標記卡上的欄位實例（這些 Table Calculation 一併定址標記卡上的維度，見 _direction）。"""
         assert self.ds is not None
         ds = self.ds
         row_dims = [u for u in rows if u.field not in SPECIAL_FIELDS and not self._is_measure(u)]
@@ -1805,6 +1863,7 @@ class SheetParser:
             if isinstance(use, str):
                 self.ctx.flag(inst, f"Table Calculation 的欄位無法解析：{use}")
                 continue
+            self._pie = key in pie_keys
             if calc_el is None:
                 created = self._default_formula_calc(use, row_dims, col_dims, mark_dims, inst)
             else:
@@ -1864,7 +1923,7 @@ class SheetParser:
             id=tc_id,
             type="formula",
             preset="table_across",
-            addressing=_field_ids(col_dims + mark_dims),
+            addressing=_field_ids(col_dims + mark_dims if self._pie or not col_dims else col_dims),
             inferred=True,
             source_ref=xpath(inst) if inst is not None else xpath(self.el),
         )
@@ -2062,7 +2121,8 @@ class SheetParser:
         """計算方向；設定認不得時列為不支援並回傳 None。
 
         表格的方向定址欄（列）架上所有的維度；窗格的方向只定址窗格內變化的維度（見 _inner）；儲存格只定址
-        標記卡上的維度。標記卡上的維度一律在定址的最後（與 Tableau 相同）。"""
+        標記卡上的維度。標記卡上的維度是分割，只有計算方向上沒有維度時才定址它們；圓餅的標記卡上的
+        Table Calculation 例外，一併定址標記卡上的維度（排在最後）。都與 Tableau 的畫面相同（見模組說明）。"""
         ordering = calc_el.get("ordering-type")
         inferred = ordering is None
         preset: TableCalcPreset
@@ -2088,7 +2148,8 @@ class SheetParser:
             "cell": [],
         }
         if preset in shelves:
-            addressed = _unique_uses(shelves[preset] + mark_dims)
+            shelf = shelves[preset]
+            addressed = _unique_uses(shelf + mark_dims if self._pie or not shelf else shelf)
             # 表格的方向定址各欄位所有的實例；窗格與儲存格只定址其中一部分，記下實例
             exact = preset.startswith("pane") or preset == "cell"
             return Direction(
@@ -2621,6 +2682,20 @@ class Direction:
     instances: list[FieldUse]
     inferred: bool
     addressed: list[FieldUse]
+
+
+def _pie_keys(panes: etree._Element | None) -> frozenset[str]:
+    """圓餅標記卡（mark class='Pie'）上的欄位實例（[usr:Calculation1:qk:8] 等）。"""
+    keys: set[str] = set()
+    for pane in children(panes, "pane"):
+        mark_el = child(pane, "mark")
+        if mark_el is None or mark_el.get("class") != "Pie":
+            continue
+        for enc in children(child(pane, "encodings")):
+            column = enc.get("column")
+            if column:
+                keys.add(instance_key(column))
+    return frozenset(keys)
 
 
 def _unique_uses(uses: list[FieldUse]) -> list[FieldUse]:

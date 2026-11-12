@@ -472,6 +472,7 @@ export function refreshTableCalcs(sheet: SheetIR, fields: Map<string, CatalogFie
   const used = new Set(allUses(sheet).map((u) => u.table_calc).filter(Boolean));
   // 標記卡上的維度（與解析時相同：色彩、大小、形狀等單一位置，再來是標籤、詳細資料、工具提示）
   const markDims = dims(markUses(sheet.marks), fields);
+  const cards = [sheet.marks, ...(sheet.panes as PaneIR[]).map((p) => p.marks)];
   const rowDims = dims(sheet.rows, fields);
   const colDims = dims(sheet.columns, fields);
   const innerRows = innerDims(sheet.rows, fields);
@@ -492,7 +493,10 @@ export function refreshTableCalcs(sheet: SheetIR, fields: Map<string, CatalogFie
     .map((tc) => {
       const shelf = shelves[tc.preset];
       if (!shelf) return tc;
-      const addressed = uniqueUses([...shelf, ...markDims]);
+      // 標記卡上的維度是分割；計算方向上沒有維度時才定址它們，圓餅的標記卡上的計算一併定址它們
+      // （與 kernel 的 _direction 相同）
+      const pie = cards.some((m) => m.type === "pie" && markUses(m).some((u) => u.table_calc === tc.id));
+      const addressed = uniqueUses(pie || !shelf.length ? [...shelf, ...markDims] : shelf);
       const exact = tc.preset.startsWith("pane") || tc.preset === "cell";
       return {
         ...tc,
