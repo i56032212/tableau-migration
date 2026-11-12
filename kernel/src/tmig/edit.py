@@ -42,6 +42,7 @@ from tmig.ir import (
     iter_zones,
 )
 from tmig.ir.integrity import check_references
+from tmig.ir.models import GeoAlias, GeoRole, GeoSettings
 from tmig.ir.scope import DatasourceScope
 from tmig.render.palettes import PALETTES
 
@@ -77,6 +78,7 @@ def catalog(ir: IR) -> dict[str, Any]:
                 "caption": ds.caption,
                 "fields": [_field_entry(f) for f in ds.fields],
                 "hierarchies": [h.model_dump(mode="json") for h in ds.hierarchies],
+                "geo": ds.geo.model_dump(mode="json") if ds.geo is not None else None,
             }
             for ds in ir.datasources
         ],
@@ -110,7 +112,68 @@ def _field_entry(f: DataField) -> dict[str, Any]:
         "level": f.calc.level if f.calc is not None else None,
         "default_agg": f.default_agg,
         "hidden": f.hidden,
+        "geo_role": f.geo_role,
+        "geo_aliases": [a.model_dump(mode="json") for a in f.geo_aliases],
     }
+
+
+GEO_ROLES: tuple[GeoRole, ...] = (
+    "country",
+    "state",
+    "county",
+    "city",
+    "zip",
+    "latitude",
+    "longitude",
+)
+COORDINATES = ("latitude", "longitude")
+
+
+def set_geography(
+    ir: IR,
+    datasource: str,
+    field_id: str,
+    role: GeoRole | None,
+    aliases: list[GeoAlias] | None = None,
+) -> IR:
+    """資料窗格的「地理角色」（None 取消）與「編輯位置」中這個欄位的值指定的地名（aliases 為 None 時不變）。
+    國家、州、郡、城市、郵遞區號是文字或整數的維度；緯度、經度是數字的欄位。"""
+    ds = _datasource(ir, datasource)
+    found = next((f for f in ds.fields if f.id == field_id), None)
+    if found is None:
+        raise EditError(f"找不到欄位 {field_id}")
+    if role is not None:
+        if role not in GEO_ROLES:
+            raise EditError(f"不支援的地理角色 {role}")
+        if role in COORDINATES and found.datatype not in ("integer", "real"):
+            raise EditError(f"「{found.caption}」不是數字，不能當作緯度、經度")
+        if role not in COORDINATES and found.datatype not in ("string", "integer"):
+            raise EditError(f"「{found.caption}」不是文字或整數，不能當作地名")
+    kept = list(found.geo_aliases) if aliases is None else list(aliases)
+    seen: set[str] = set()
+    for alias in kept:
+        if not alias.value.strip() or not alias.location.strip():
+            raise EditError("編輯位置的對應需要原始值與地名")
+        if alias.value in seen:
+            raise EditError(f"「{alias.value}」重複指定")
+        seen.add(alias.value)
+    updated = found.model_copy(
+        update={
+            "geo_role": role,
+            "geo_aliases": kept if role is not None and role not in COORDINATES else [],
+        }
+    )
+    fields = [updated if f.id == field_id else f for f in ds.fields]
+    return _replace_datasource(ir, ds.model_copy(update={"fields": fields}))
+
+
+def set_geo_defaults(ir: IR, datasource: str, country: str | None, state: str | None) -> IR:
+    """「編輯位置」的預設國家與州（檢視中沒有國家、州的欄位時比對的範圍）。"""
+    ds = _datasource(ir, datasource)
+    country = (country or "").strip() or None
+    state = (state or "").strip() or None
+    geo = GeoSettings(country=country, state=state) if country or state else None
+    return _replace_datasource(ir, ds.model_copy(update={"geo": geo}))
 
 
 def check_formula(

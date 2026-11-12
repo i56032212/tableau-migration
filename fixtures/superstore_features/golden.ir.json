@@ -37,6 +37,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
         {
@@ -53,6 +55,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
         {
@@ -69,6 +73,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
         {
@@ -85,6 +91,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
         {
@@ -101,6 +109,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
         {
@@ -117,6 +127,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
         {
@@ -133,6 +145,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
         {
@@ -149,6 +163,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
         {
@@ -165,6 +181,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
         {
@@ -181,6 +199,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
         {
@@ -197,6 +217,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": "state",
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
         {
@@ -213,6 +235,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": "zip",
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -229,6 +253,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
         {
@@ -245,6 +271,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
         {
@@ -261,6 +289,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
         {
@@ -277,6 +307,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
         {
@@ -293,6 +325,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
         {
@@ -309,6 +343,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
         {
@@ -325,6 +361,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
         {
@@ -341,6 +379,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
         {
@@ -357,6 +397,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
         {
@@ -410,6 +452,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -459,6 +503,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -512,6 +558,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -552,6 +600,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -607,6 +657,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
@@ -671,6 +723,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[10]"
         },
         {
@@ -736,6 +790,8 @@
               "label": "Standard"
             }
           ],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[11]"
         },
         {
@@ -788,6 +844,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[12]"
         },
         {
@@ -851,6 +909,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[13]"
         },
         {
@@ -881,6 +941,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[14]"
         },
         {
@@ -926,6 +988,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[15]"
         },
         {
@@ -996,6 +1060,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[16]"
         },
         {
@@ -1066,6 +1132,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[17]"
         },
         {
@@ -1109,6 +1177,8 @@
               "label": "Out"
             }
           ],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/group[4]"
         },
         {
@@ -1214,6 +1284,8 @@
               "label": "Out"
             }
           ],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/group[5]"
         },
         {
@@ -1255,6 +1327,8 @@
               "label": "虧損"
             }
           ],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/group[6]"
         }
       ],
@@ -1291,6 +1365,10 @@
         }
       ],
       "published": null,
+      "geo": {
+        "country": "United States",
+        "state": null
+      },
       "source_ref": "/workbook/datasources/datasource[2]"
     }
   ],
@@ -1392,7 +1470,9 @@
         ],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -1529,6 +1609,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -1574,7 +1655,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -1711,6 +1794,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -1756,7 +1840,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -1872,6 +1958,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1925,7 +2012,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [
@@ -2042,6 +2131,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[4]"
     },
     {
@@ -2096,7 +2186,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [
@@ -2206,6 +2298,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[5]"
     },
     {
@@ -2261,7 +2354,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [
         {
@@ -2303,7 +2398,9 @@
             "tooltip_sheets": [],
             "shape": null,
             "angle": null,
-            "path": null
+            "path": null,
+            "geometry": null,
+            "density": null
           }
         },
         {
@@ -2337,7 +2434,9 @@
             "tooltip_sheets": [],
             "shape": null,
             "angle": null,
-            "path": null
+            "path": null,
+            "geometry": null,
+            "density": null
           }
         }
       ],
@@ -2415,6 +2514,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[6]"
     },
     {
@@ -2471,7 +2571,9 @@
           "continuous": true,
           "table_calc": null
         },
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -2586,6 +2688,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[7]"
     },
     {
@@ -2639,7 +2742,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -2755,6 +2860,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[8]"
     },
     {
@@ -2808,7 +2914,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -2907,6 +3015,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[9]"
     },
     {
@@ -2960,7 +3069,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3059,6 +3170,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[10]"
     },
     {
@@ -3112,7 +3224,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3227,6 +3341,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[11]"
     },
     {
@@ -3280,7 +3395,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3357,6 +3474,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[12]"
     },
     {
@@ -3410,7 +3528,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3487,6 +3607,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[13]"
     },
     {
@@ -3532,7 +3653,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3609,6 +3732,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[14]"
     },
     {
@@ -3662,7 +3786,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3760,6 +3886,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[15]"
     },
     {
@@ -3813,7 +3940,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -3908,6 +4037,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[16]"
     },
     {
@@ -3961,7 +4091,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -4056,6 +4188,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[17]"
     },
     {
@@ -4109,7 +4242,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -4208,6 +4343,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[18]"
     },
     {
@@ -4272,7 +4408,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -4384,6 +4522,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[19]"
     },
     {
@@ -4437,7 +4576,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -4514,6 +4655,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[20]"
     },
     {
@@ -4566,7 +4708,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -4724,6 +4868,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[21]"
     },
     {
@@ -4769,7 +4914,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -4936,6 +5083,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[22]"
     },
     {
@@ -4999,7 +5147,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -5117,6 +5267,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[23]"
     },
     {
@@ -5161,7 +5312,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [
         {
@@ -5215,7 +5368,9 @@
               "continuous": true,
               "table_calc": null
             },
-            "path": null
+            "path": null,
+            "geometry": null,
+            "density": null
           }
         },
         {
@@ -5257,7 +5412,9 @@
             "tooltip_sheets": [],
             "shape": null,
             "angle": null,
-            "path": null
+            "path": null,
+            "geometry": null,
+            "density": null
           }
         }
       ],
@@ -5335,6 +5492,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[24]"
     },
     {
@@ -5387,7 +5545,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [
         {
@@ -5429,7 +5589,9 @@
             "tooltip_sheets": [],
             "shape": null,
             "angle": null,
-            "path": null
+            "path": null,
+            "geometry": null,
+            "density": null
           }
         },
         {
@@ -5469,7 +5631,9 @@
             "tooltip_sheets": [],
             "shape": null,
             "angle": null,
-            "path": null
+            "path": null,
+            "geometry": null,
+            "density": null
           }
         }
       ],
@@ -5547,6 +5711,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[25]"
     },
     {
@@ -5600,7 +5765,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -5716,6 +5883,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[26]"
     },
     {
@@ -5767,7 +5935,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -5844,6 +6014,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[27]"
     },
     {
@@ -5897,7 +6068,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -5995,6 +6168,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[28]"
     },
     {
@@ -6048,7 +6222,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -6125,6 +6301,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[29]"
     },
     {
@@ -6178,7 +6355,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -6294,6 +6473,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[30]"
     },
     {
@@ -6346,7 +6526,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -6462,6 +6644,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[31]"
     }
   ],

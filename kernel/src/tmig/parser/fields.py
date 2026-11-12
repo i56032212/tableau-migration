@@ -206,7 +206,18 @@ def value_type(field: DataField, use: FieldUse) -> str:
 
 
 def _literal(text: str | None, datatype: str) -> Scalar:
-    return parse_literal(text, datatype)
+    """篩選成員的常值；日期欄位的「月／年」、「月／日／年」成員以 yyyymm、yyyymmdd 的整數表示
+    （例如 [my:Date:ok] 的 201710），轉成該月（日）第一天的日期。"""
+    value = parse_literal(text, datatype)
+    if datatype in ("date", "datetime") and isinstance(value, int) and not isinstance(value, bool):
+        digits = str(value)
+        if len(digits) in (6, 8) and digits.isdigit():
+            day = digits[6:8] if len(digits) == 8 else "01"
+            try:
+                return parse_literal(f"#{digits[:4]}-{digits[4:6]}-{day}#", datatype)
+            except LiteralError:
+                return value
+    return value
 
 
 RELATIVE_PERIODS = ("year", "quarter", "month", "week", "day")

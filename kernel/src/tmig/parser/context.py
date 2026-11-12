@@ -15,6 +15,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     FitMode,
+    GeoSettings,
     Hierarchy,
     Marks,
     Parameter,
@@ -71,6 +72,8 @@ class DsState:
     """集合（含使用者篩選）的欄位 id：篩選架上沒有條件的篩選表示「在集合中」。"""
     hierarchies: list[Hierarchy] = field(default_factory=list)
     """階層（<drill-paths>）。"""
+    geo: GeoSettings | None = None
+    """地理設定（預設的國家、州）。"""
 
     def add_field(self, data_field: DataField) -> None:
         self.fields.append(data_field)

@@ -833,3 +833,55 @@ def test_device_layouts_in_dashboard_editor(engine: str) -> None:
         expect(page.get_by_label("裝置版面", exact=True)).to_have_value("default")
         assert errors == []
         browser.close()
+
+
+def test_maps_in_editor(engine: str) -> None:
+    """地圖：連按兩下地理角色的欄位建立地圖（Latitude／Longitude (generated) 放到欄列架、州的形狀填色）；
+    地圖卡改變背景地圖；資料窗格指定城市的地理角色。底圖與形狀從 /api/geo/ 取得。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "Map"})["worksheet"]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        shapes: list[int] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on(
+            "response",
+            lambda r: shapes.append(r.status) if "/api/geo/" in r.url else None,
+        )
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{created['id']}")
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.locator('.data-pane li[data-field="f_state_province"]').dblclick()
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+        assert [u["field"] for u in saved["rows"]] == ["latitude_generated"]
+        assert [u["field"] for u in saved["columns"]] == ["longitude_generated"]
+        assert [u["field"] for u in saved["marks"]["detail"]] == ["f_state_province"]
+        assert saved["marks"]["geometry"]["field"] == "geometry_generated"
+        page.wait_for_function(
+            "document.querySelectorAll('.editor .worksheet svg path').length > 40", timeout=30000
+        )
+        assert shapes and all(status == 200 for status in shapes)
+        card = page.locator(".map-card")
+        card.get_by_label("背景地圖").select_option("dark")
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+        assert saved["map"]["style"] == "dark"
+        page.locator('.data-pane li[data-field="f_city"]').hover()
+        page.get_by_role("button", name="「City」的地理角色").click()
+        dialog = page.locator(".geo-dialog")
+        dialog.get_by_label("地理角色").select_option("city")
+        dialog.get_by_role("button", name="確定").click()
+        page.wait_for_selector(".geo-dialog", state="detached")
+        catalog = call(engine, "/api/edit/demo/catalog")["datasources"][0]
+        assert next(f for f in catalog["fields"] if f["id"] == "f_city")["geo_role"] == "city"
+        assert page.locator('.data-pane li[data-field="latitude_generated"]').count() == 1
+        assert errors == []
+        browser.close()

@@ -18,6 +18,7 @@ Table Calculation 的計算方向（Tableau 的 Compute Using）依真實 .twb �
 from __future__ import annotations
 
 import copy
+import itertools
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -27,6 +28,10 @@ from typing import Literal
 from lxml import etree
 
 from tmig.ir.models import (
+    GENERATED_FIELDS,
+    GEOMETRY_GENERATED,
+    LATITUDE_GENERATED,
+    LONGITUDE_GENERATED,
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
@@ -94,6 +99,7 @@ from tmig.parser.formats import (
     reference_styles,
     worksheet_formats,
 )
+from tmig.parser.maps import density_style, map_options
 from tmig.parser.model import graph_objects
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
@@ -120,8 +126,16 @@ MARKS: dict[str, MarkType] = {
     "Pie": "pie",
     "GanttBar": "gantt",
     "Polygon": "polygon",
+    "Multipolygon": "map",
+    "Heatmap": "density",
 }
-SPECIAL_KEYS = {"[:Measure Names]": MEASURE_NAMES, "[Multiple Values]": MEASURE_VALUES}
+SPECIAL_KEYS = {
+    "[:Measure Names]": MEASURE_NAMES,
+    "[Multiple Values]": MEASURE_VALUES,
+    "[Latitude (generated)]": LATITUDE_GENERATED,
+    "[Longitude (generated)]": LONGITUDE_GENERATED,
+    "[Geometry (generated)]": GEOMETRY_GENERATED,
+}
 TUPLE_PREFIXES = {
     "[Action (": "sheet_link",
     "[Tooltip (": "vit",
@@ -129,7 +143,7 @@ TUPLE_PREFIXES = {
     "[Inclusions (": "include",
 }
 """Tableau 自動產生的多欄位篩選欄位（資料源 <group> 沒寫 auto-column 時依名稱判斷）。"""
-ENCODINGS = ("color", "size", "text", "lod", "tooltip", "shape", "wedge-size", "path")
+ENCODINGS = ("color", "size", "text", "lod", "tooltip", "shape", "wedge-size", "path", "geometry")
 ORDERING: dict[str, TableCalcPreset] = {
     "Columns": "table_down",
     "Rows": "table_across",
@@ -214,6 +228,10 @@ KNOWN = frozenset(
         "shape",
         "wedge-size",
         "path",
+        "geometry",
+        # 地圖：背景地圖的來源（活頁簿的 <mapsources> 決定，見 tmig.parser.workbook）
+        "mapsources",
+        "mapsource",
         "rows",
         "cols",
         "pages",
@@ -260,6 +278,7 @@ OPAQUE = frozenset(
 )
 IGNORED_ELEMENTS = {
     "mark-labels": "特定標記的標籤（標記標籤＞一律顯示）：新平台在工具提示與資料表中呈現這些值",
+    "sort-filter-info": "依量值排序時只看特定成員的值（sort-filter-info）：新平台以全部成員的值排序",
     "show-full-range": "顯示缺少的值（沒有資料的分組或日期）：新平台只顯示有資料的標記",
 }
 REFERENCE_FORMULAS = frozenset(
@@ -296,8 +315,6 @@ REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "cust
 KNOWN_UNSUPPORTED = {
     # 類別篩選以外的「開啟活頁簿時篩選到最新的值」（類別篩選的見 CategoricalFilter.latest）
     "preset": "篩選的「開啟報表時篩選到最新的值」（<preset type='last-values'>）",
-    "mapsources": "地圖",
-    "mapsource": "地圖",
     "add-in": "工作表擴充功能",
 }
 
@@ -391,6 +408,8 @@ class SheetParser:
         """叢集：（叢集欄位 id、分析模型的名稱）。"""
         self._keyed: dict[str, Filter] = {}
         """工作表上的單一欄位篩選，以篩選的欄位實例名稱為鍵（跨資料源篩選與同一欄位的篩選合併用）。"""
+        self.hide_unknown = False
+        """地圖篩選掉未知的位置（Latitude／Longitude (generated) 的 non-null 篩選）。"""
 
     # ------------------------------------------------------------ 入口
 
@@ -472,6 +491,8 @@ class SheetParser:
         )
         title = self._title(child(el, "layout-options"))
         self._check_label_text(card_uses, [marks, *(p.marks for p in panes)])
+        on_map = any(u.field in GENERATED_FIELDS for u in [*rows, *cols])
+        options = map_options(child(table, "style"), self.hide_unknown) if on_map else None
         worksheet = Worksheet(
             id=sheet_id,
             name=self.name,
@@ -510,6 +531,7 @@ class SheetParser:
             disaggregated=disaggregated,
             pages=page_use,
             page=page,
+            map=options,
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -616,7 +638,11 @@ class SheetParser:
         if key in self.uses:
             return self.uses[key]
         if key in SPECIAL_KEYS:
-            use = FieldUse(field=SPECIAL_KEYS[key])
+            # Latitude／Longitude (generated) 是連續的座標軸（綠色膠囊）
+            special = SPECIAL_KEYS[key]
+            use = FieldUse(
+                field=special, continuous=special in (LATITUDE_GENERATED, LONGITUDE_GENERATED)
+            )
             self.uses[key] = use
             return use
         inst = self.instances.get(key)
@@ -1140,6 +1166,11 @@ class SheetParser:
         panes = children(panes_el, "pane")
         if not panes:
             return Marks(type="automatic"), [], []
+        latitude = next((u for u in rows if u.field == LATITUDE_GENERATED), None)
+        if panes_el is not None and panes_el.get("customization-axis") == "layer":
+            if latitude is not None:
+                return self._layers(panes, latitude)
+            self.ctx.flag(panes_el, "標記圖層（不在地圖上）v0 不支援")
         main = next((p for p in panes if p.get("id") is None), panes[0])
         marks, dims = self._card(main)
         result: list[Pane] = []
@@ -1156,7 +1187,7 @@ class SheetParser:
             measure = self._use(axis_ref, element, "標記卡的量值")
             if measure is None:
                 continue
-            if measure.field in SPECIAL_FIELDS:
+            if measure.field in (MEASURE_NAMES, MEASURE_VALUES):
                 # Measure Values 的軸的標記卡：與共用的標記卡相同、不是雙軸時（例如 Measure Values 與
                 # 另一個量值各自一個軸）等同共用的標記卡；設定不同或疊成雙軸時是個別的標記卡（例如
                 # 以 Measure Names 上色的折線，疊上標出最大、最小值的圓點）
@@ -1178,6 +1209,29 @@ class SheetParser:
         if result:
             dims = pane_dims[0]
         return marks, result, dims
+
+    def _layers(
+        self, panes: list[etree._Element], latitude: FieldUse
+    ) -> tuple[Marks, list[Pane], list[FieldUse]]:
+        """地圖的標記圖層（Tableau 2020.4 起的「新增標記圖層」）：每個圖層是一張個別的標記卡（ws.panes，
+        依 <pane> 的順序由下往上畫；與雙軸相同，詳細程度較粗的圖層各自查詢），共用的標記卡沒有欄位。
+        沒有圖層名稱（generated-title）的 <pane> 是共用的設定、不是圖層；隱藏的圖層不畫。"""
+        layers = [p for p in panes if p.get("generated-title") or p.get("title")] or panes[:1]
+        shown = []
+        for element in layers:
+            if element.get("hidden") == "true":
+                title = element.get("title") or element.get("generated-title")
+                self.ctx.ignore(element, f"工作表「{self.name}」隱藏的地圖圖層「{title}」：不畫出")
+                continue
+            shown.append(element)
+        if not shown:
+            shown = layers[:1]
+        cards = [self._card(element) for element in shown]
+        result = [
+            Pane(measure=latitude, axis="rows", dual=i > 0, marks=card)
+            for i, (card, _) in enumerate(cards)
+        ]
+        return Marks(type=cards[0][0].type), result, cards[0][1]
 
     def _card(self, pane: etree._Element) -> tuple[Marks, list[FieldUse]]:
         """一張標記卡：標記類型與編碼；回傳標記卡與其中的維度。"""
@@ -1223,6 +1277,11 @@ class SheetParser:
                     color_ref = enc.get("column")
             elif tag == "path":
                 marks.path = use
+            elif tag == "geometry":
+                if use.field != GEOMETRY_GENERATED:
+                    self.ctx.flag(enc, "空間檔案（Shapefile 等）的幾何欄位 v0 不支援")
+                    continue
+                marks.geometry = use
             elif tag == "text":
                 marks.label.append(use)
             elif tag == "lod":
@@ -1240,6 +1299,8 @@ class SheetParser:
         if marks.color is not None and color_ref is not None:
             marks.color_palette = self._color_palette(color_ref, marks.color)
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
+        if mark_type == "density":
+            marks.density = density_style(pane)
         marks.label_color = label_color(pane)
         marks.cell_align = pane_cell_align(pane)
         marks.label_font = pane_label_font(pane)
@@ -2087,6 +2148,15 @@ class SheetParser:
             key = instance_key(column)
             if key == "[:Measure Names]":
                 continue  # 決定 Measure Values 的量值，不是資料篩選
+            if SPECIAL_KEYS.get(key) in GENERATED_FIELDS:
+                # 地圖的「篩選資料」（未知的位置）：查詢之後找出位置時去掉；其他範圍尚不支援
+                if element.get("included-values") == "non-null":
+                    self.hide_unknown = True
+                else:
+                    self.ctx.flag(
+                        element, "依地圖位置（Latitude／Longitude (generated)）的範圍篩選 v0 不支援"
+                    )
+                continue
             parts = qualified_parts(column)
             if len(parts) == 2 and parts[0] not in (self.ds.name, "Parameters"):
                 cross.append(element)  # 其他資料源的欄位：主要資料源自己的篩選都解析後再處理
@@ -2473,12 +2543,19 @@ def _tuple_tree(node: etree._Element) -> TupleTree | None:
         levels = [p.get("level", "") for p in parts]
         if kinds == {"level-members"}:
             return "all", levels, []
-        if kinds == {"member"}:
-            return "include", levels, [[p.get("member") for p in parts]]
         if kinds == {"empty-level"}:
             # 清除選取時排除所有值的篩選動作：層級寫在 member 屬性
             return "include", [p.get("member") or p.get("level", "") for p in parts], []
-        return None
+        # 各層級的成員（單一成員或多個成員的 union）：值組合為各層級成員的所有組合
+        columns: list[list[str | None]] = []
+        levels = []
+        for part in parts:
+            sub = _tuple_tree(part)
+            if sub is None or sub[0] != "include" or len(sub[1]) != 1:
+                return None
+            levels.append(sub[1][0])
+            columns.append([row[0] for row in sub[2]])
+        return "include", levels, [list(combo) for combo in itertools.product(*columns)]
     if function == "union" and parts:
         found_levels: list[str] | None = None
         rows: list[list[str | None]] = []

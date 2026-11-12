@@ -13,6 +13,9 @@ import {
   type ClusterIR,
   EDITOR_REF,
   type ForecastIR,
+  GEO_ROLES,
+  type GeoAlias,
+  type GeoRole,
   isMeasure,
   isSpecial,
   type MarksIR,
@@ -986,6 +989,123 @@ export function ClusterDialog({ onClose, onSaved }: { onClose: () => void; onSav
               移除叢集
             </button>
           )}
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 地理角色
+
+/**
+ * 欄位的地理角色（資料窗格的「地理角色」）與「編輯位置」：資料源的預設國家、州（檢視中沒有國家、州的
+ * 欄位時比對的範圍），與比對不到的值指定的地名。
+ */
+export function GeoDialog({
+  datasource,
+  field,
+  onClose,
+  onSaved,
+}: {
+  datasource: string;
+  field: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const editor = useEditor();
+  const ds = editor.catalog.datasources.find((d) => d.id === datasource);
+  const target = ds?.fields.find((f) => f.id === field);
+  const [role, setRole] = useState<GeoRole | "">(target?.geo_role ?? "");
+  const [country, setCountry] = useState(ds?.geo?.country ?? "");
+  const [state, setState] = useState(ds?.geo?.state ?? "");
+  const [aliases, setAliases] = useState<GeoAlias[]>(target?.geo_aliases ?? []);
+  const [error, setError] = useState<string | null>(null);
+  if (!ds || !target) return null;
+  const numeric = target.datatype === "integer" || target.datatype === "real";
+  const choices = GEO_ROLES.filter(([value]) =>
+    value === "latitude" || value === "longitude" ? numeric : target.datatype !== "real",
+  );
+  const place = role !== "" && role !== "latitude" && role !== "longitude";
+  const setAlias = (i: number, change: Partial<GeoAlias>) =>
+    setAliases((list) => list.map((a, n) => (n === i ? { ...a, ...change } : a)));
+  const save = async () => {
+    try {
+      const kept = aliases.filter((a) => a.value.trim() && a.location.trim());
+      await editApi.saveGeography(editor.workbook, datasource, field, role === "" ? null : role, place ? kept : []);
+      if (place) await editApi.saveGeoDefaults(editor.workbook, datasource, country || null, state || null);
+      onSaved();
+      editor.notify(role === "" ? `已取消「${target.caption}」的地理角色` : `已設定「${target.caption}」的地理角色`);
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <Modal title={`地理角色：${target.caption}`} onClose={onClose}>
+      <div className="geo-dialog">
+        <label>
+          地理角色
+          <select aria-label="地理角色" value={role} onChange={(e) => setRole(e.target.value as GeoRole | "")}>
+            <option value="">（無）</option>
+            {choices.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {place && (
+          <fieldset>
+            <legend>編輯位置</legend>
+            <p className="hint">檢視中沒有國家、州的欄位時，地名在這個範圍內比對（與 Tableau 的「編輯位置」相同）。</p>
+            <label>
+              國家/地區
+              <input aria-label="預設國家" value={country} placeholder="例如 台灣、United States" onChange={(e) => setCountry(e.target.value)} />
+            </label>
+            <label>
+              州/省/縣市
+              <input aria-label="預設州" value={state} placeholder="（不指定）" onChange={(e) => setState(e.target.value)} />
+            </label>
+            <div className="hint">比對不到或比對錯誤的值，指定對應的地名：</div>
+            <table className="geo-aliases">
+              <thead>
+                <tr>
+                  <th>資料中的值</th>
+                  <th>地名</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {aliases.map((alias, i) => (
+                  <tr key={i}>
+                    <td>
+                      <input aria-label="資料中的值" value={alias.value} onChange={(e) => setAlias(i, { value: e.target.value })} />
+                    </td>
+                    <td>
+                      <input aria-label="對應的地名" value={alias.location} onChange={(e) => setAlias(i, { location: e.target.value })} />
+                    </td>
+                    <td>
+                      <button type="button" className="link" title="移除" onClick={() => setAliases((list) => list.filter((_, n) => n !== i))}>
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button type="button" onClick={() => setAliases((list) => [...list, { value: "", location: "" }])}>
+              ＋ 指定地名
+            </button>
+          </fieldset>
+        )}
+        {error && <p className="error">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={() => void save()}>
+            確定
+          </button>
           <button type="button" onClick={onClose}>
             取消
           </button>

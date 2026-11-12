@@ -428,8 +428,11 @@ export function WorksheetView({
       const mark = typeof row === "number" && records[row] ? markOf(records[row], dimensions) : null;
       setTip({ x: event.clientX, y: event.clientY, value, mark });
     };
+    // 畫好之前（例如地圖的形狀還在下載）標記為未完成：匯出、訂閱的截圖等它完成
+    element.dataset.drawn = "false";
     embed(element, spec as any, { actions: false, renderer: "svg", ...(vizTooltips ? { tooltip } : {}) })
       .then((result) => {
+        element.dataset.drawn = "true";
         if (disposed) {
           result.finalize();
           return;
@@ -474,7 +477,10 @@ export function WorksheetView({
           leaveTimer = window.setTimeout(() => emit("leave", event, null), 250);
         });
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        element.dataset.drawn = "true";
+        setError(err instanceof Error ? err.message : String(err));
+      });
     return () => {
       disposed = true;
       window.clearTimeout(leaveTimer);

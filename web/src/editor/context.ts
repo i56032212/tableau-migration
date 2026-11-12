@@ -46,7 +46,9 @@ export type EditorDialog =
   /** 建立階層（name 為 null，field 為第一個欄位）或改變既有的階層 */
   | { kind: "hierarchy"; datasource: string; name: string | null; field?: string }
   | { kind: "colors"; card: Card }
-  | { kind: "tooltip"; card: Card };
+  | { kind: "tooltip"; card: Card }
+  /** 欄位的地理角色與編輯位置 */
+  | { kind: "geo"; datasource: string; field: string };
 
 export const EditorContext = createContext<EditorContextValue | null>(null);
 

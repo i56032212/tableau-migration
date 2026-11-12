@@ -18,6 +18,8 @@ import {
   drillToggle,
   firstMeasure,
   type FilterIR,
+  GENERATED_LABELS,
+  generatedUse,
   insertUse,
   isDate,
   isMeasure,
@@ -121,6 +123,7 @@ export function PopupMenu({ anchor, items, onClose }: { anchor: DOMRect; items: 
 function pillClass(use: FieldUse, fields: Map<string, CatalogField>): string {
   if (use.field === MEASURE_NAMES) return "pill discrete";
   if (use.field === MEASURE_VALUES) return "pill continuous";
+  if (use.field in GENERATED_LABELS) return "pill continuous measure";
   const measure = isMeasure(use, fields);
   return `pill ${use.continuous ? "continuous" : "discrete"}${measure ? " measure" : ""}`;
 }
@@ -128,7 +131,7 @@ function pillClass(use: FieldUse, fields: Map<string, CatalogField>): string {
 function specialLabel(use: FieldUse): string | null {
   if (use.field === MEASURE_NAMES) return "Measure Names";
   if (use.field === MEASURE_VALUES) return "Measure Values";
-  return null;
+  return GENERATED_LABELS[use.field] ?? null;
 }
 
 export function Pill({
@@ -219,6 +222,7 @@ export function useDropTarget(
   const fieldUse = (id: string): FieldUse | null => {
     if (id === MEASURE_NAMES || id === MEASURE_VALUES)
       return { field: id, agg: null, date: null, continuous: id === MEASURE_VALUES, table_calc: null };
+    if (id in GENERATED_LABELS) return generatedUse(id);
     const field = editor.fields.get(id);
     return field ? defaultUse(field) : null;
   };

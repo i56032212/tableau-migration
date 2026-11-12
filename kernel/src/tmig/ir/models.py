@@ -72,8 +72,16 @@ WeekDay = Literal["sunday", "monday", "tuesday", "wednesday", "thursday", "frida
 CalcLevel = Literal["row", "aggregate", "lod", "table_calc"]
 MEASURE_NAMES = "measure_names"
 MEASURE_VALUES = "measure_values"
-SPECIAL_FIELDS = frozenset({MEASURE_NAMES, MEASURE_VALUES})
-"""Measure Names／Values：不是資料源的欄位，只出現在工作表的欄列架與標記卡。"""
+LATITUDE_GENERATED = "latitude_generated"
+LONGITUDE_GENERATED = "longitude_generated"
+GEOMETRY_GENERATED = "geometry_generated"
+GENERATED_FIELDS = frozenset({LATITUDE_GENERATED, LONGITUDE_GENERATED, GEOMETRY_GENERATED})
+"""Tableau 依地理角色產生的 Latitude (generated)、Longitude (generated)、Geometry (generated)：
+不是資料源的欄位，位置與形狀在查詢之後依檢視中的地理欄位找出（tmig.geo）。"""
+SPECIAL_FIELDS = frozenset({MEASURE_NAMES, MEASURE_VALUES, *GENERATED_FIELDS})
+"""Measure Names／Values 與產生的地理欄位：不是資料源的欄位，只出現在工作表的欄列架與標記卡。"""
+GeoRole = Literal["country", "state", "county", "city", "zip", "latitude", "longitude"]
+"""地理角色（Tableau 的 semantic-role）：國家、州／省、郡（美國）、城市、郵遞區號、緯度、經度。"""
 
 FilterStage = Literal[
     "extract", "datasource", "context", "top_n", "dimension", "measure", "table_calc"
@@ -122,6 +130,13 @@ class ParamRef(IRModel):
 
 
 # ---------------------------------------------------------------- 資料源
+
+
+class GeoAlias(IRModel):
+    """「編輯位置」中指定的對應：資料中的值 → 地名。"""
+
+    value: str
+    location: str
 
 
 class MemberAlias(IRModel):
@@ -212,6 +227,14 @@ class DataField(IRModel):
         default_factory=list,
         description="成員別名：只改變維度成員的顯示（標題、標籤、篩選控制項），"
         "篩選、排序與計算仍用原始值",
+    )
+    geo_role: GeoRole | None = Field(
+        default=None,
+        description="地理角色：放到檢視中時以 Latitude／Longitude (generated) 畫成地圖",
+    )
+    geo_aliases: list[GeoAlias] = Field(
+        default_factory=list,
+        description="「編輯位置」中指定的對應（比對不到或比對錯誤的值 → 地名）",
     )
     source_ref: SourceRef
 
@@ -688,6 +711,14 @@ class Hierarchy(IRModel):
     fields: list[Id] = Field(min_length=1, description="由上到下的欄位 id")
 
 
+class GeoSettings(IRModel):
+    """資料源的地理設定（Tableau 的「編輯位置」，.twb 資料源的 semantic-values）：檢視中沒有國家、州時
+    比對的範圍。"""
+
+    country: str | None = Field(default=None, description="預設的國家（地名）")
+    state: str | None = Field(default=None, description="預設的州、省（地名）")
+
+
 class Datasource(IRModel):
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱")
@@ -702,6 +733,7 @@ class Datasource(IRModel):
     published: PublishedSource | None = Field(
         default=None, description="來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
     )
+    geo: GeoSettings | None = Field(default=None, description="地理設定（編輯位置）")
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -814,7 +846,9 @@ MarkType = Literal[
     "gantt",
     "map",
     "polygon",
+    "density",
 ]
+"""map：填色地圖（Tableau 的 Map／Multipolygon）；density：密度圖（Tableau 的 Density／Heatmap）。"""
 
 
 class NestedTableCalc(IRModel):
@@ -981,6 +1015,17 @@ class TooltipSheet(IRModel):
     )
 
 
+class DensityStyle(IRModel):
+    """密度標記的色彩設定（Tableau 的「色彩」卡：配色與強度）。"""
+
+    palette: str | None = Field(
+        default=None, description="Tableau 的密度配色名稱；None 為預設的藍色"
+    )
+    intensity: float | None = Field(
+        default=None, ge=0, le=1, description="強度：越高最高的密度越低、顏色越鮮明；None 為預設"
+    )
+
+
 class Marks(IRModel):
     type: MarkType
     color: FieldUse | None = None
@@ -1029,10 +1074,14 @@ class Marks(IRModel):
     shape: FieldUse | None = None
     angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
     path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")
+    geometry: FieldUse | None = Field(
+        default=None, description="地圖上標記的形狀（Geometry (generated)）：有時畫成填色的區域"
+    )
+    density: DensityStyle | None = Field(default=None, description="密度標記的配色與強度")
 
     def uses(self) -> list[FieldUse]:
         """標記卡上的所有欄位使用。"""
-        singles = [self.color, self.size, self.shape, self.angle, self.path]
+        singles = [self.color, self.size, self.shape, self.angle, self.path, self.geometry]
         return [u for u in singles if u is not None] + [*self.label, *self.detail, *self.tooltip]
 
 
@@ -1369,6 +1418,54 @@ class Blend(IRModel):
     links: list[BlendLink] = Field(min_length=1, description="可用的連結（同名的維度或自訂關聯）")
 
 
+MapStyle = Literal["light", "normal", "dark", "streets", "outdoors", "satellite"]
+MapLayerName = Literal[
+    "base",
+    "water",
+    "country_borders",
+    "country_names",
+    "state_borders",
+    "state_names",
+    "county_borders",
+    "cities",
+]
+"""底圖的圖層：陸地、水域、國界、國名、州界、州名、郡界（美國）、城市名稱。"""
+
+
+class MapViewport(IRModel):
+    """地圖平移、縮放後存檔的顯示範圍（經緯度）；west、east 可以超出 ±180（Tableau 的地圖可以環繞世界）。"""
+
+    west: float
+    south: float = Field(ge=-90, le=90)
+    east: float
+    north: float = Field(ge=-90, le=90)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.east <= self.west or self.north <= self.south:
+            raise ValueError("地圖的顯示範圍是空的")
+        return self
+
+
+class MapOptions(IRModel):
+    """地圖的設定（地圖 → 背景地圖、地圖圖層，與存檔時的顯示範圍）。底圖由平台內建的地理資料畫出
+    （Natural Earth），沒有街道、地形與衛星影像。"""
+
+    style: MapStyle = Field(default="light", description="背景地圖的樣式")
+    washout: float = Field(default=0, ge=0, le=1, description="淡化：0 為原色，1 為全白")
+    layers: dict[MapLayerName, bool] = Field(
+        default_factory=dict, description="與預設不同的底圖圖層（預設不顯示郡界與城市名稱）"
+    )
+    viewport: MapViewport | None = Field(
+        default=None,
+        description="平移、縮放後固定的顯示範圍；None 時與 Tableau 相同，依標記的位置自動縮放",
+    )
+    hide_unknown: bool = Field(
+        default=False,
+        description="篩選掉未知的位置（Tableau 的「篩選資料」：Latitude／Longitude (generated) 不是 Null）",
+    )
+
+
 class Worksheet(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -1472,6 +1569,9 @@ class Worksheet(IRModel):
     blends: list[Blend] = Field(
         default_factory=list,
         description="Data Blending：次要資料源與連結欄位；欄列架與標記卡上可以有這些資料源的量值",
+    )
+    map: MapOptions | None = Field(
+        default=None, description="地圖的底圖設定；None 為預設（Light 樣式）"
     )
     source_ref: SourceRef
 

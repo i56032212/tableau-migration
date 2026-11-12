@@ -461,3 +461,30 @@ def test_device_layouts_are_validated(ir: IR) -> None:
     broken = phone.model_copy(update={"zones": [*phone.zones, missing]})
     with pytest.raises(EditError, match="ws_nope"):
         replace_dashboard(ir, saved.model_copy(update={"layouts": [broken]}))
+
+
+def test_geography(ir: IR) -> None:
+    """資料窗格的地理角色與編輯位置：地名的角色是文字或整數的欄位，緯度、經度是數字；取消角色時一併
+    清除指定的地名。"""
+    from tmig.edit import set_geo_defaults, set_geography
+    from tmig.ir.models import GeoAlias, GeoSettings
+
+    alias = GeoAlias(value="Calif.", location="California")
+    updated = set_geography(ir, "ds_orders", "f_city", "city", [alias])
+    city = next(f for f in updated.datasources[0].fields if f.id == "f_city")
+    assert (city.geo_role, city.geo_aliases) == ("city", [alias])
+    kept = set_geography(updated, "ds_orders", "f_city", "city")
+    assert next(f for f in kept.datasources[0].fields if f.id == "f_city").geo_aliases == [alias]
+    cleared = set_geography(updated, "ds_orders", "f_city", None)
+    city = next(f for f in cleared.datasources[0].fields if f.id == "f_city")
+    assert (city.geo_role, city.geo_aliases) == (None, [])
+    for field, role in (("f_sales", "state"), ("f_city", "latitude"), ("f_nope", "city")):
+        with pytest.raises(EditError):
+            set_geography(ir, "ds_orders", field, role)  # type: ignore[arg-type]
+    with pytest.raises(EditError):
+        set_geography(ir, "ds_orders", "f_city", "city", [alias, alias])
+    lat = set_geography(ir, "ds_orders", "f_discount", "latitude")
+    assert next(f for f in lat.datasources[0].fields if f.id == "f_discount").geo_role == "latitude"
+    taiwan = set_geo_defaults(ir, "ds_orders", " 台灣 ", "")
+    assert taiwan.datasources[0].geo == GeoSettings(country="台灣")
+    assert set_geo_defaults(taiwan, "ds_orders", None, None).datasources[0].geo is None

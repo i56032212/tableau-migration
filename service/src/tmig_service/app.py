@@ -29,6 +29,7 @@ API：
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import logging
 import math
 import mimetypes
@@ -38,6 +39,7 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -281,6 +283,22 @@ def workspace_catalog(workspace: Workspace, site: SiteStore | None) -> Catalog:
             )
     sources = datasource_reports(workspace.datasources) if workspace.datasources is not None else []
     return Catalog(reports, sources)
+
+
+@lru_cache(maxsize=64)
+def shape_file(path: str) -> tuple[bytes, bytes] | None:
+    """地圖形狀檔（tmig.geo.SHAPES 之下的 .json）的內容與 gzip 壓縮後的內容；路徑不合法時為 None。"""
+    from tmig.geo import SHAPES
+
+    target = (SHAPES / path).resolve()
+    if (
+        target.suffix != ".json"
+        or not target.is_relative_to(SHAPES.resolve())
+        or not target.is_file()
+    ):
+        return None
+    raw = target.read_bytes()
+    return raw, gzip.compress(raw, 6)
 
 
 def current_user(request: Request) -> Identity | None:
@@ -623,6 +641,23 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/geo/{version}/{path:path}")
+    def geo_shape(version: str, path: str, request: Request) -> Response:
+        """地圖的形狀與底圖（TopoJSON，平台內建的公開地理資料，不需登入）：網址含資料的版本，
+        瀏覽器可以長期快取；支援 gzip 時回傳壓縮過的內容。"""
+        content = shape_file(path)
+        if content is None:
+            raise HTTPException(404, f"找不到地圖形狀「{path}」")
+        raw, packed = content
+        headers = {
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Vary": "Accept-Encoding",
+        }
+        if "gzip" in request.headers.get("accept-encoding", ""):
+            headers["Content-Encoding"] = "gzip"
+            return Response(packed, media_type="application/json", headers=headers)
+        return Response(raw, media_type="application/json", headers=headers)
 
     @app.post("/api/workbooks/{wb}/views/{view_id}/visit", status_code=204)
     def visit(wb: str, view_id: str, user: User) -> Response:

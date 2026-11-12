@@ -12,7 +12,11 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 ROOT = Path(SPECPATH).resolve().parents[1]  # noqa: F821（PyInstaller 提供 SPECPATH）
 SKIPPED = ("subscriptions", ".tests")
 
-datas = [(str(ROOT / "web" / "dist"), "web/dist")]
+datas = [
+    (str(ROOT / "web" / "dist"), "web/dist"),
+    # 地圖的地名資料與形狀（tmig.geo.DATA）
+    (str(ROOT / "kernel" / "src" / "tmig" / "geo" / "data"), "tmig/geo/data"),
+]
 binaries = []
 hiddenimports = []
 # Hyper API 帶有 hyperd 與原生程式庫，全部帶上（萃取匯入 DuckDB 時用）

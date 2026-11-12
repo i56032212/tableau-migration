@@ -157,6 +157,18 @@ def _url_key(ctx: ParseContext, ds: DsState, text: str) -> str | None:
     return found.id
 
 
+BUILTIN_MAP_SOURCES = frozenset({"Tableau", "OpenStreetMap", "Offline", "None"})
+"""Tableau 內建的背景地圖（以平台內建的底圖呈現，見 tmig.render.maps）。"""
+
+
+def _map_sources(ctx: ParseContext, element: etree._Element) -> None:
+    """活頁簿的背景地圖來源：內建的地圖照常；自訂的 WMS、Mapbox 地圖改以平台內建的底圖呈現。"""
+    for source in children(element, "mapsource"):
+        name = source.get("name", "")
+        if name not in BUILTIN_MAP_SOURCES:
+            ctx.ignore(source, f"自訂的背景地圖「{name}」（WMS、Mapbox）：以平台內建的底圖呈現")
+
+
 def _strings(value: Any) -> Iterator[str]:
     """JSON 結構中所有的字串值。"""
     if isinstance(value, str):
@@ -213,7 +225,7 @@ class WorkbookParser:
         for item in children(root):
             tag = local_name(item)
             if tag == "mapsources":
-                ctx.flag(item, "地圖 v0 不支援")
+                _map_sources(ctx, item)
             elif tag not in WORKBOOK_CHILDREN:
                 ctx.flag(item, f"workbook 中的未知元素 <{tag}>")
 
@@ -327,6 +339,7 @@ class WorkbookParser:
                 filters=state.filters,
                 hierarchies=state.hierarchies,
                 published=state.published,
+                geo=state.geo,
                 source_ref=state.element.getroottree().getpath(state.element),
             )
             for state in ctx.datasources.values()

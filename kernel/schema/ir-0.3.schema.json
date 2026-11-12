@@ -1695,6 +1695,36 @@
           "title": "Aliases",
           "type": "array"
         },
+        "geo_role": {
+          "anyOf": [
+            {
+              "enum": [
+                "country",
+                "state",
+                "county",
+                "city",
+                "zip",
+                "latitude",
+                "longitude"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "地理角色：放到檢視中時以 Latitude／Longitude (generated) 畫成地圖",
+          "title": "Geo Role"
+        },
+        "geo_aliases": {
+          "description": "「編輯位置」中指定的對應（比對不到或比對錯誤的值 → 地名）",
+          "items": {
+            "$ref": "#/$defs/GeoAlias"
+          },
+          "title": "Geo Aliases",
+          "type": "array"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -1824,6 +1854,18 @@
           "default": null,
           "description": "來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
         },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "地理設定（編輯位置）"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -1901,6 +1943,42 @@
         "unit"
       ],
       "title": "DateDerivation",
+      "type": "object"
+    },
+    "DensityStyle": {
+      "additionalProperties": false,
+      "description": "密度標記的色彩設定（Tableau 的「色彩」卡：配色與強度）。",
+      "properties": {
+        "palette": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tableau 的密度配色名稱；None 為預設的藍色",
+          "title": "Palette"
+        },
+        "intensity": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "強度：越高最高的密度越低、顏色越鮮明；None 為預設",
+          "title": "Intensity"
+        }
+      },
+      "title": "DensityStyle",
       "type": "object"
     },
     "DeviceLayout": {
@@ -2637,6 +2715,60 @@
       "title": "Forecast",
       "type": "object"
     },
+    "GeoAlias": {
+      "additionalProperties": false,
+      "description": "「編輯位置」中指定的對應：資料中的值 → 地名。",
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "location": {
+          "title": "Location",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "location"
+      ],
+      "title": "GeoAlias",
+      "type": "object"
+    },
+    "GeoSettings": {
+      "additionalProperties": false,
+      "description": "資料源的地理設定（Tableau 的「編輯位置」，.twb 資料源的 semantic-values）：檢視中沒有國家、州時\n比對的範圍。",
+      "properties": {
+        "country": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預設的國家（地名）",
+          "title": "Country"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預設的州、省（地名）",
+          "title": "State"
+        }
+      },
+      "title": "GeoSettings",
+      "type": "object"
+    },
     "Hierarchy": {
       "additionalProperties": false,
       "description": "階層（Tableau 的 drill-path）：由上到下的維度；檢視上可以向下切入到下一層、向上收合。",
@@ -3081,6 +3213,108 @@
       "title": "LogicalTable",
       "type": "object"
     },
+    "MapOptions": {
+      "additionalProperties": false,
+      "description": "地圖的設定（地圖 → 背景地圖、地圖圖層，與存檔時的顯示範圍）。底圖由平台內建的地理資料畫出\n（Natural Earth），沒有街道、地形與衛星影像。",
+      "properties": {
+        "style": {
+          "default": "light",
+          "description": "背景地圖的樣式",
+          "enum": [
+            "light",
+            "normal",
+            "dark",
+            "streets",
+            "outdoors",
+            "satellite"
+          ],
+          "title": "Style",
+          "type": "string"
+        },
+        "washout": {
+          "default": 0,
+          "description": "淡化：0 為原色，1 為全白",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Washout",
+          "type": "number"
+        },
+        "layers": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "與預設不同的底圖圖層（預設不顯示郡界與城市名稱）",
+          "propertyNames": {
+            "enum": [
+              "base",
+              "water",
+              "country_borders",
+              "country_names",
+              "state_borders",
+              "state_names",
+              "county_borders",
+              "cities"
+            ]
+          },
+          "title": "Layers",
+          "type": "object"
+        },
+        "viewport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapViewport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "平移、縮放後固定的顯示範圍；None 時與 Tableau 相同，依標記的位置自動縮放"
+        },
+        "hide_unknown": {
+          "default": false,
+          "description": "篩選掉未知的位置（Tableau 的「篩選資料」：Latitude／Longitude (generated) 不是 Null）",
+          "title": "Hide Unknown",
+          "type": "boolean"
+        }
+      },
+      "title": "MapOptions",
+      "type": "object"
+    },
+    "MapViewport": {
+      "additionalProperties": false,
+      "description": "地圖平移、縮放後存檔的顯示範圍（經緯度）；west、east 可以超出 ±180（Tableau 的地圖可以環繞世界）。",
+      "properties": {
+        "west": {
+          "title": "West",
+          "type": "number"
+        },
+        "south": {
+          "maximum": 90,
+          "minimum": -90,
+          "title": "South",
+          "type": "number"
+        },
+        "east": {
+          "title": "East",
+          "type": "number"
+        },
+        "north": {
+          "maximum": 90,
+          "minimum": -90,
+          "title": "North",
+          "type": "number"
+        }
+      },
+      "required": [
+        "west",
+        "south",
+        "east",
+        "north"
+      ],
+      "title": "MapViewport",
+      "type": "object"
+    },
     "Marks": {
       "additionalProperties": false,
       "properties": {
@@ -3097,7 +3331,8 @@
             "pie",
             "gantt",
             "map",
-            "polygon"
+            "polygon",
+            "density"
           ],
           "title": "Type",
           "type": "string"
@@ -3326,6 +3561,30 @@
           ],
           "default": null,
           "description": "折線或多邊形的連接順序"
+        },
+        "geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "地圖上標記的形狀（Geometry (generated)）：有時畫成填色的區域"
+        },
+        "density": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DensityStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "密度標記的配色與強度"
         }
       },
       "required": [
@@ -6564,6 +6823,18 @@
           },
           "title": "Blends",
           "type": "array"
+        },
+        "map": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "地圖的底圖設定；None 為預設（Light 樣式）"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

@@ -415,3 +415,65 @@ def test_desktop_export_writes_the_file(client: TestClient, tmp_path: Path) -> N
     assert missing.status_code == 422
     garbage = client.post("/api/desktop/export", json={"path": str(target), "content": "%%%"})
     assert garbage.status_code == 422
+
+
+def test_geography_and_map_api(client: TestClient) -> None:
+    """資料窗格指定地理角色後，Latitude／Longitude (generated) 在欄列架上的工作表畫成地圖；底圖與形狀
+    以 /api/geo/<版本>/ 取得（不需登入，可以長期快取）。"""
+    url = "/api/edit/demo/datasources/ds_orders/fields/f_city/geography"
+    response = client.put(url, json={"role": "city", "aliases": []})
+    assert response.status_code == 200, response.text
+    bad = client.put(
+        "/api/edit/demo/datasources/ds_orders/fields/f_sales/geography", json={"role": "state"}
+    )
+    assert bad.status_code == 422
+    defaults = client.put(
+        "/api/edit/demo/datasources/ds_orders/geography", json={"country": "United States"}
+    )
+    assert defaults.status_code == 200, defaults.text
+    catalog = client.get("/api/edit/demo/catalog").json()["datasources"][0]
+    assert catalog["geo"] == {"country": "United States", "state": None}
+    roles = {f["id"]: f["geo_role"] for f in catalog["fields"] if f["geo_role"]}
+    assert roles == {"f_city": "city", "f_state_province": "state", "f_postal_code": "zip"}
+
+    created = client.post("/api/edit/demo/worksheets", json={"name": "Map"}).json()["worksheet"]
+
+    def use(field: str, continuous: bool = False, agg: str | None = None) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": continuous,
+            "table_calc": None,
+        }
+
+    created["rows"] = [use("latitude_generated", True)]
+    created["columns"] = [use("longitude_generated", True)]
+    created["marks"]["type"] = "map"
+    created["marks"]["detail"] = [use("f_state_province")]
+    created["marks"]["color"] = use("f_sales", True, "sum")
+    created["map"] = {"style": "dark", "washout": 0.2, "layers": {"cities": True}}
+    saved = client.put(f"/api/edit/demo/worksheets/{created['id']}", json={"worksheet": created})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["worksheet"]["map"]["style"] == "dark"
+    data = render(client, created["id"])
+    spec = data["spec"]
+    assert data["mark"] == "map" and spec["projection"]["type"] == "mercator"
+    lookups = [
+        layer["transform"][1]["from"]["data"]["url"]
+        for layer in spec["layer"]
+        if layer.get("mark", {}).get("type") == "geoshape" and "transform" in layer
+    ]
+    assert lookups and lookups[0].endswith("/admin1/USA.json")
+    assert all(r["__lon0"] is not None for r in spec["data"]["values"])
+
+    shape = client.get(lookups[0], headers={"Accept-Encoding": "gzip"})
+    assert shape.status_code == 200
+    assert shape.headers["cache-control"].startswith("public")
+    assert set(shape.json()["objects"]) == {"admin1", "borders"}
+    for path in (
+        "/api/geo/x/../../places.parquet",
+        "/api/geo/x/nothing.json",
+        "/api/geo/x/manifest",
+    ):
+        assert client.get(path).status_code == 404

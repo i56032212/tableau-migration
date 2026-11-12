@@ -40,12 +40,15 @@ from tmig.edit import (
     replace_dashboard,
     replace_story,
     replace_worksheet,
+    set_geo_defaults,
+    set_geography,
     upsert_action,
     upsert_calc,
     upsert_hierarchy,
     upsert_parameter,
 )
 from tmig.ir import FieldUse
+from tmig.ir.models import GeoAlias, GeoRole
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import QueryError, custom_sql_parameters, domain_sql, worksheet_sql
@@ -103,6 +106,22 @@ class HierarchyBody(BaseModel):
     name: str
     fields: list[str]
     original: str | None = None
+
+
+class GeographyBody(BaseModel):
+    """欄位的地理角色（None 取消）與編輯位置中指定的地名（None 時不變）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    role: GeoRole | None = None
+    aliases: list[GeoAlias] | None = None
+
+
+class GeoDefaultsBody(BaseModel):
+    """編輯位置的預設國家、州（空的表示不指定）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    country: str | None = None
+    state: str | None = None
 
 
 class FieldValuesBody(BaseModel):
@@ -359,6 +378,28 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     ) -> dict[str, bool]:
         """刪除名為 name（查詢參數；名稱可能含斜線）的階層。"""
         edit(request, workbook, lambda ir: remove_hierarchy(ir, datasource, name))
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/fields/{field}/geography")
+    def put_geography(
+        workbook: str, datasource: str, field: str, body: GeographyBody, request: Request
+    ) -> dict[str, bool]:
+        """欄位的地理角色與編輯位置中指定的地名。"""
+        edit(
+            request,
+            workbook,
+            lambda ir: set_geography(ir, datasource, field, body.role, body.aliases),
+        )
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/geography")
+    def put_geo_defaults(
+        workbook: str, datasource: str, body: GeoDefaultsBody, request: Request
+    ) -> dict[str, bool]:
+        """編輯位置的預設國家、州。"""
+        edit(
+            request, workbook, lambda ir: set_geo_defaults(ir, datasource, body.country, body.state)
+        )
         return {"ok": True}
 
     @router.post("/{workbook}/parameters")

@@ -68,7 +68,7 @@ from tmig.ir.models import (
     Zone,
 )
 from tmig.planner.state import use_key
-from tmig.render import packing
+from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
 from tmig.render.colors import continuous_scale, discrete_scale
 from tmig.render.fonts import (
@@ -1457,7 +1457,7 @@ def build_spec(
         )
     uses = [*ws.rows, *ws.columns, *ws.marks.uses()]
     uses += [u for pane in ws.panes for u in pane.marks.uses()]
-    long = bool(ws.measure_values) and any(u.field in SPECIAL_FIELDS for u in uses)
+    long = bool(ws.measure_values) and any(u.field in (MEASURE_NAMES, MEASURE_VALUES) for u in uses)
     builder = _Builder(ws, channels)
     builder.extent = _sheet_extent(ir, ws)
 
@@ -1541,7 +1541,7 @@ def build_spec(
     # Measure Names 沒有對應的量值（Measure Values 卡是空的）時不畫：Tableau 只顯示空白的欄標題
     builder.rows = [u for u in ws.rows if builder.shown(u)]
     builder.columns = [u for u in ws.columns if builder.shown(u)]
-    if len(builder.rows) + len(builder.columns) < len(ws.rows) + len(ws.columns):
+    if any(not builder.shown(u) and u.field == MEASURE_NAMES for u in [*ws.rows, *ws.columns]):
         builder.notes.append("Measure Names 沒有對應的量值（Measure Values 卡是空的），不顯示")
     # 欄列架上離散（藍色）的量值是標題、不是座標軸（例如以量值的值排成表格、INDEX() 的排名）
     rows_dims = [u for u in builder.rows if not builder.is_axis(u)]
@@ -1554,6 +1554,11 @@ def build_spec(
     if len(cols_dims) > 1:
         composites["cols_dim"] = cols_dims
     pie_marks = _pie_marks(ws)
+    map_plan: maps.MapPlan | None = None
+    if maps.is_map(ws, fields):
+        # 地圖：查詢之後找出各標記的位置（篩選掉未知的位置時在列號之前）
+        map_plan, values, pane_values = maps.locate(ir, ws, channels, values, pane_values)
+        builder.pane_values = pane_values
     for i, record in enumerate(values):
         # 列號：檢視器選取標記時，以它找回未經 Vega 解析的原始值；圓餅各塊也依它排列；總計不參與選取
         record[ROW] = -1 if record.get(TOTAL) else i
@@ -1576,7 +1581,19 @@ def build_spec(
     builder.values = values
     mark = ws.marks.type
     multiple = len(rows_meas) > 1 or len(cols_meas) > 1
-    if pie_marks is not None:
+    if map_plan is not None:
+        body = maps.body(builder, ir, ws, map_plan)
+        mark = "map"
+        for name, present in (
+            ("參考線", ws.reference_lines),
+            ("趨勢線", any(m.trend for m in [ws.marks, *(p.marks for p in ws.panes)])),
+            ("預測", ws.forecast),
+            ("註解", ws.annotations),
+            ("欄列架上的維度（分格的地圖）", rows_dims or cols_dims),
+        ):
+            if present:
+                builder.notes.append(f"地圖上的{name}尚未支援，未畫出（不影響數字）")
+    elif pie_marks is not None:
         body = builder.pie(pie_marks, rows_dims, cols_dims)
         if len(ws.panes) > 1:
             body = builder.donut(body, values, rows_dims, cols_dims)
@@ -1613,11 +1630,13 @@ def build_spec(
             else:
                 facet["sort"] = list(dict.fromkeys(v.get(facet["field"]) for v in values))
 
-    if ws.reference_lines:
+    if ws.reference_lines and map_plan is None:
         params = {p.id: p.value for p in ir.parameters} | (parameters or {})
         body = _with_reference_lines(builder, body, values, params)
     trend = next((m.trend for m in [ws.marks, *(p.marks for p in ws.panes)] if m.trend), None)
-    if trend is not None and mark == "pie":
+    if map_plan is not None:
+        pass
+    elif trend is not None and mark == "pie":
         builder.notes.append("圓餅沒有座標軸，趨勢線未畫出")
     elif trend is not None and not multiple:
         # 多個量值時每張圖各自畫（見 _Builder.multi）
@@ -1631,20 +1650,25 @@ def build_spec(
         builder.notes.append(
             "預測的估計值以平台的指數平滑計算（與 Tableau 相同的模型），可能與 Tableau 有些微差異"
         )
-        if ws.forecast.bands:
+        if ws.forecast.bands and map_plan is None:
             if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
                 body = _with_forecast_bands(builder, body, values, result)
             else:
                 builder.notes.append("多個量值、圓餅等圖表上的預測區間尚未畫出（不影響數字）")
 
-    if ws.annotations:
+    if ws.annotations and map_plan is None:
         if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
             params = {p.id: p.value for p in ir.parameters} | (parameters or {})
             body = _with_annotations(builder, body, values, ir, params)
         else:
             builder.notes.append("多個量值、圓餅等圖表上的註解尚未畫出（不影響數字）")
 
-    if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
+    if (
+        map_plan is None
+        and pie_marks is None
+        and not multiple
+        and ("mark" in body or "layer" in body)
+    ):
         body = _small_multiples(builder, body, values, rows_dims, cols_dims, rows_meas, cols_meas)
 
     # 列數不含總計（與工作表的查詢、計算比對的筆數相同）
@@ -1695,7 +1719,8 @@ def build_spec(
         _exclude_totals_from_color(spec, mark, builder.text_color(ws.marks, cell=True))
     encoding = main_encoding(spec)
     sized = (
-        encoding is not None
+        map_plan is None
+        and encoding is not None
         and not any(k in spec for k in ("vconcat", "hconcat"))
         and not any(k in encoding for k in ("row", "column"))
     )

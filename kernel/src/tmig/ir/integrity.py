@@ -143,6 +143,9 @@ def _check_refresh(ds: Datasource, errors: list[str]) -> None:
 
 def check_references(ir: IR) -> list[str]:
     from tmig.ir.models import (
+        GENERATED_FIELDS,
+        GEOMETRY_GENERATED,
+        LATITUDE_GENERATED,
         MEASURE_VALUES,
         SPECIAL_FIELDS,
         FieldUse,
@@ -340,6 +343,8 @@ def check_references(ir: IR) -> list[str]:
                 check_use(
                     use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True, extra=blended
                 )
+            if card.geometry is not None and card.geometry.field != GEOMETRY_GENERATED:
+                errors.append(f"{base}.{name}.geometry：只支援 Geometry (generated)")
             for i, tip in enumerate(card.tooltip_sheets):
                 where = f"{base}.{name}.tooltip_sheets[{i}]"
                 if tip.worksheet not in sheets or tip.worksheet == ws.id:
@@ -353,6 +358,9 @@ def check_references(ir: IR) -> list[str]:
             if pane.measure.field == MEASURE_VALUES:
                 if not ws.measure_values:
                     errors.append(f"{where}：Measure Values 的標記卡，工作表卻沒有 Measure Values")
+            elif pane.measure.field in GENERATED_FIELDS:
+                if pane.measure.field != LATITUDE_GENERATED or pane.axis != "rows":
+                    errors.append(f"{where}：地圖的標記圖層必須對應列架上的 Latitude (generated)")
             else:
                 check_use(pane.measure, ws.datasource, where, tcs, extra=blended)
             if pane.measure not in (ws.rows if pane.axis == "rows" else ws.columns):

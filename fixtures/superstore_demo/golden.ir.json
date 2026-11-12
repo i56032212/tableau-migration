@@ -37,6 +37,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
         {
@@ -53,6 +55,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
         {
@@ -69,6 +73,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
         {
@@ -85,6 +91,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
         {
@@ -101,6 +109,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
         {
@@ -117,6 +127,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
         {
@@ -133,6 +145,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
         {
@@ -149,6 +163,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
         {
@@ -165,6 +181,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
         {
@@ -181,6 +199,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
         {
@@ -197,6 +217,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": "state",
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
         {
@@ -213,6 +235,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": "zip",
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -229,6 +253,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
         {
@@ -245,6 +271,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
         {
@@ -261,6 +289,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
         {
@@ -277,6 +307,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
         {
@@ -293,6 +325,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
         {
@@ -309,6 +343,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
         {
@@ -325,6 +361,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
         {
@@ -341,6 +379,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
         {
@@ -357,6 +397,8 @@
           "calc": null,
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
         {
@@ -410,6 +452,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -459,6 +503,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -512,6 +558,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -552,6 +600,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -607,6 +657,8 @@
           },
           "set": null,
           "aliases": [],
+          "geo_role": null,
+          "geo_aliases": [],
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         }
       ],
@@ -634,6 +686,10 @@
       ],
       "hierarchies": [],
       "published": null,
+      "geo": {
+        "country": "United States",
+        "state": null
+      },
       "source_ref": "/workbook/datasources/datasource[2]"
     }
   ],
@@ -722,7 +778,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -874,6 +932,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -930,7 +989,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -1042,6 +1103,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -1106,7 +1168,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -1205,6 +1269,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1266,7 +1331,9 @@
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
-        "path": null
+        "path": null,
+        "geometry": null,
+        "density": null
       },
       "panes": [],
       "measure_values": [],
@@ -1391,6 +1458,7 @@
       "pages": null,
       "page": null,
       "blends": [],
+      "map": null,
       "source_ref": "/workbook/worksheets/worksheet[4]"
     }
   ],

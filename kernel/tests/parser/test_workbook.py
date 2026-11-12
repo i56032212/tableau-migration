@@ -396,7 +396,7 @@ def test_nested_dimensions_and_dates(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"encodings": f"<geometry column='{ref('none:Category:nk')}' />"}, "標記編碼 <geometry>"),
+        ({"encodings": f"<geometry column='{ref('none:Category:nk')}' />"}, "空間檔案"),
         # 預測（Worksheet.forecast）只從工作表的 <table> 之下讀取，且要標明開啟
         ({"pane_extra": "<forecast-specification enabled='true' />"}, "不在工作表的 <table> 之下"),
         ({"table_extra": "<forecast-specification />"}, "沒有標明是否開啟"),

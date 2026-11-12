@@ -29,6 +29,9 @@ from tmig.ir.models import (
     FileColumn,
     FileConnection,
     FileTable,
+    GeoAlias,
+    GeoRole,
+    GeoSettings,
     Hierarchy,
     JoinRelation,
     LiveConnection,
@@ -123,6 +126,15 @@ DS_CHILDREN = frozenset(
         "field-sort-info",
     }
 )
+GEO_ROLES: dict[str, GeoRole] = {
+    "Country": "country",
+    "State": "state",
+    "County": "county",
+    "City": "city",
+    "ZipCode": "zip",
+}
+"""地理角色（semantic-role 的第一段，例如 [State].[Name]、[Country].[ISO3166_2]）→ IR 的地理角色；
+緯度、經度是 [Geographical].[Latitude]／[Longitude]。"""
 FILE_SOURCES = frozenset({"excel-direct", "textscan", "hyper", "dataengine"})
 """檔案型連線（沒有萃取時匯入 DuckDB，見 FileConnection）。.hyper 只有一張資料表時與萃取相同，
 有 join、多個 .hyper 檔或 Relationship 模型時是檔案型連線。"""
@@ -362,6 +374,7 @@ class DatasourceParser:
         )
         self._fields(state, conn, data_conn, via_extract)
         self._hierarchies(state)
+        self._geography(state)
         if not state.fields:
             ctx.flag(el, f"資料源「{self.caption}」沒有可用的欄位")
             return None
@@ -380,6 +393,49 @@ class DatasourceParser:
                 state.analytic_models[name.get("name", "")] = model
         self._check_children()
         return state
+
+    def _geography(self, state: DsState) -> None:
+        """地理角色（<column semantic-role>）、「編輯位置」中指定的對應（欄位的 <semantic-values>）與
+        資料源的預設國家、州（資料源的 <semantic-values>，%null% 表示沒有指定）。"""
+        for column in children(self.el, "column"):
+            role_ref = column.get("semantic-role")
+            found = state.by_name.get(column.get("name", ""))
+            if not role_ref or found is None:
+                continue
+            role = geo_role(role_ref)
+            if role is None:
+                self.ctx.ignore(
+                    column,
+                    f"欄位「{found.caption}」的地理角色 {role_ref} 尚未支援：放到地圖上時列為未知的位置",
+                )
+                continue
+            found.geo_role = role
+            for values in children(column, "semantic-values"):
+                for item in children(values, "semantic-value"):
+                    try:
+                        key = parse_literal(item.get("key"), "string")
+                        location = parse_literal(item.get("value"), "string")
+                    except LiteralError:
+                        key = location = None
+                    if isinstance(key, str) and isinstance(location, str):
+                        found.geo_aliases.append(GeoAlias(value=key, location=location))
+                    else:
+                        self.ctx.ignore(
+                            item,
+                            f"欄位「{found.caption}」編輯位置的對應 {item.get('key')} 無法辨識",
+                        )
+        defaults: dict[str, str] = {}
+        for item in children(child(self.el, "semantic-values"), "semantic-value"):
+            parts = qualified_parts(item.get("key", ""))
+            role = GEO_ROLES.get(parts[0]) if parts else None
+            try:
+                value = parse_literal(item.get("value"), "string")
+            except LiteralError:
+                value = None
+            if role in ("country", "state") and isinstance(value, str) and value:
+                defaults[role] = value
+        if defaults:
+            state.geo = GeoSettings(country=defaults.get("country"), state=defaults.get("state"))
 
     # ------------------------------------------------------------ 連線
 
@@ -1214,6 +1270,14 @@ def raw_field(
         aliases=aliases,
         source_ref=xpath(anchor),
     )
+
+
+def geo_role(semantic_role: str) -> GeoRole | None:
+    """Tableau 的地理角色（例如 [State].[Name]、[Geographical].[Latitude]）；不支援的角色為 None。"""
+    parts = qualified_parts(semantic_role)
+    if len(parts) == 2 and parts[0] == "Geographical":
+        return {"Latitude": "latitude", "Longitude": "longitude"}.get(parts[1])  # type: ignore[return-value]
+    return GEO_ROLES.get(parts[0]) if parts else None
 
 
 def single_live_table(state: DsState) -> str | None:

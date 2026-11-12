@@ -348,9 +348,11 @@ class Renderer:
                 raise SubscriptionError(
                     f"無法開啟 view「{name}」：{page.locator('main.error').inner_text()}"
                 )
+            # 每張工作表都查詢完、畫好（地圖的形狀從 /api/geo/ 下載後才畫好）
             page.wait_for_function(
                 "(() => { const items = Array.from(document.querySelectorAll('.worksheet'));"
-                " return items.length > 0 && items.every(e => e.dataset.loading === 'false'); })()",
+                " return items.length > 0 && items.every(e => e.dataset.loading === 'false')"
+                " && !document.querySelector('[data-drawn=\"false\"]'); })()",
                 timeout=120_000,
             )
             page.wait_for_timeout(300)

@@ -15,6 +15,7 @@ import {
   DirectionDialog,
   ForecastDialog,
   FormatDialog,
+  GeoDialog,
   HierarchyDialog,
   ParameterDialog,
   ReferenceDialog,
@@ -30,6 +31,7 @@ import {
   type CatalogField,
   cardMarks,
   fieldIndex,
+  isMapSheet,
   MEASURE_VALUES,
   markUses,
   newTableCalc,
@@ -79,6 +81,102 @@ function replaceDatasource(sheet: SheetIR, from: CatalogField[], to: CatalogFiel
   if (missing) return null;
   // 次要資料源與連結由伺服器依新的主要資料源重新決定
   return { ...updated, datasource: target, formats: {}, blends: [] };
+}
+
+/** 地圖的設定（Tableau 的「地圖」選單：背景地圖、地圖圖層）。 */
+interface MapOptionsIR {
+  style: string;
+  washout: number;
+  layers: Record<string, boolean>;
+  viewport: { west: number; south: number; east: number; north: number } | null;
+  hide_unknown: boolean;
+}
+
+const MAP_STYLES: [string, string][] = [
+  ["light", "淺色"],
+  ["normal", "一般"],
+  ["dark", "深色"],
+  ["streets", "街道"],
+  ["outdoors", "戶外"],
+  ["satellite", "衛星"],
+];
+
+/** 底圖圖層與預設（與 kernel 的 tmig.render.maps.DEFAULT_LAYERS 相同）。 */
+const MAP_LAYERS: [string, string, boolean][] = [
+  ["base", "陸地", true],
+  ["water", "水域", true],
+  ["country_borders", "國界", true],
+  ["country_names", "國名", true],
+  ["state_borders", "州界、省界", true],
+  ["state_names", "州名、省名", true],
+  ["county_borders", "郡界（美國）", false],
+  ["cities", "城市名稱", false],
+];
+
+function MapCard() {
+  const editor = useEditor();
+  const options: MapOptionsIR = {
+    style: "light",
+    washout: 0,
+    layers: {},
+    viewport: null,
+    hide_unknown: false,
+    ...((editor.sheet.map as Partial<MapOptionsIR> | null | undefined) ?? {}),
+  };
+  const change = (update: Partial<MapOptionsIR>) =>
+    editor.apply((s) => ({ ...s, map: { ...options, ...update } }));
+  return (
+    <div className="card map-card" data-shelf="map">
+      <div className="card-title">地圖</div>
+      <label className="inline">
+        背景地圖
+        <select aria-label="背景地圖" value={options.style} onChange={(e) => change({ style: e.target.value })}>
+          {MAP_STYLES.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="inline" title="淡化背景地圖（0% 為原色，100% 為全白）">
+        淡化
+        <input
+          type="range"
+          aria-label="淡化"
+          min={0}
+          max={100}
+          value={Math.round(options.washout * 100)}
+          onChange={(e) => change({ washout: Number(e.target.value) / 100 })}
+        />
+        {Math.round(options.washout * 100)}%
+      </label>
+      <fieldset className="map-layers">
+        <legend>地圖圖層</legend>
+        {MAP_LAYERS.map(([key, label, preset]) => (
+          <label key={key} className="inline">
+            <input
+              type="checkbox"
+              checked={options.layers[key] ?? preset}
+              onChange={(e) => {
+                const layers = { ...options.layers, [key]: e.target.checked };
+                if (layers[key] === preset) delete layers[key];
+                change({ layers });
+              }}
+            />{" "}
+            {label}
+          </label>
+        ))}
+      </fieldset>
+      <label className="inline" title="找不到位置的標記不列入檢視（Tableau 的「篩選資料」）">
+        <input type="checkbox" checked={options.hide_unknown} onChange={(e) => change({ hide_unknown: e.target.checked })} /> 篩選掉未知的位置
+      </label>
+      {options.viewport && (
+        <button type="button" title="改回依標記的位置自動縮放" onClick={() => change({ viewport: null })}>
+          重設地圖（自動縮放）
+        </button>
+      )}
+    </div>
+  );
 }
 
 function AnalyticsCard() {
@@ -484,6 +582,7 @@ export function Editor({
           <FiltersShelf />
           {measureValuesUsed && <MeasureValuesCard />}
           <MarksCard />
+          {isMapSheet(sheet) && <MapCard />}
           <AnalyticsCard />
         </div>
         <div className="view-pane">
@@ -560,6 +659,18 @@ export function Editor({
           onClose={() => setDialog(null)}
           onSaved={() => {
             void reloadCatalog();
+            onChanged();
+          }}
+        />
+      )}
+      {dialog?.kind === "geo" && (
+        <GeoDialog
+          datasource={dialog.datasource}
+          field={dialog.field}
+          onClose={() => setDialog(null)}
+          onSaved={() => {
+            void reloadCatalog();
+            setRevision((r) => r + 1);
             onChanged();
           }}
         />

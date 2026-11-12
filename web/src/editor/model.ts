@@ -14,7 +14,31 @@ export interface CatalogField {
   level: "row" | "aggregate" | "lod" | "table_calc" | null;
   default_agg: string | null;
   hidden: boolean;
+  /** 地理角色（country、state、county、city、zip、latitude、longitude） */
+  geo_role?: GeoRole | null;
+  /** 編輯位置中指定的地名 */
+  geo_aliases?: GeoAlias[];
 }
+
+export type GeoRole = "country" | "state" | "county" | "city" | "zip" | "latitude" | "longitude";
+
+export interface GeoAlias {
+  value: string;
+  location: string;
+}
+
+export const GEO_ROLES: [GeoRole, string][] = [
+  ["country", "國家/地區"],
+  ["state", "州/省/直轄市/縣市"],
+  ["county", "郡（美國）"],
+  ["city", "城市"],
+  ["zip", "郵遞區號（美國）"],
+  ["latitude", "緯度"],
+  ["longitude", "經度"],
+];
+
+/** 有區域形狀（填色地圖）的地理角色；郵遞區號在平台上以中心點的圓點呈現。 */
+const SHAPED_ROLES = new Set<string>(["country", "state", "county", "zip"]);
 
 /** 階層（Tableau 的 drill-path）：由上到下的維度 */
 export interface CatalogHierarchy {
@@ -27,6 +51,8 @@ export interface CatalogDatasource {
   caption: string;
   fields: CatalogField[];
   hierarchies?: CatalogHierarchy[];
+  /** 編輯位置的預設國家、州 */
+  geo?: { country: string | null; state: string | null } | null;
 }
 
 export interface CatalogParameter {
@@ -160,6 +186,8 @@ export const MARK_TYPES: [string, string][] = [
   ["pie", "圓餅"],
   ["gantt", "甘特條"],
   ["polygon", "多邊形"],
+  ["map", "地圖"],
+  ["density", "密度"],
 ];
 
 export const AGGREGATIONS: [string, string][] = [
@@ -292,7 +320,7 @@ export function isMeasure(use: FieldUse, fields: Map<string, CatalogField>): boo
 /** 膠囊上的文字（與 Tableau 相同：SUM(Sales)、YEAR(Order Date)）。 */
 export function pillLabel(use: FieldUse, fields: Map<string, CatalogField>, calcs: TableCalcIR[]): string {
   const field = fields.get(use.field);
-  let text = field?.caption ?? use.field;
+  let text = field?.caption ?? GENERATED_LABELS[use.field] ?? use.field;
   if (use.date) {
     const name = DATE_NAMES[use.date.unit] ?? use.date.unit.toUpperCase();
     text = `${name}(${text})`;
@@ -361,7 +389,48 @@ export function allUses(sheet: SheetIR): FieldUse[] {
 
 export const MEASURE_NAMES = "measure_names";
 export const MEASURE_VALUES = "measure_values";
-export const isSpecial = (use: FieldUse) => use.field === MEASURE_NAMES || use.field === MEASURE_VALUES;
+export const LATITUDE_GENERATED = "latitude_generated";
+export const LONGITUDE_GENERATED = "longitude_generated";
+export const GEOMETRY_GENERATED = "geometry_generated";
+/** Tableau 依地理角色產生的欄位（資料窗格的 Latitude／Longitude (generated)）。 */
+export const GENERATED_LABELS: Record<string, string> = {
+  [LATITUDE_GENERATED]: "Latitude (generated)",
+  [LONGITUDE_GENERATED]: "Longitude (generated)",
+  [GEOMETRY_GENERATED]: "Geometry (generated)",
+};
+export const isGenerated = (use: FieldUse) => use.field in GENERATED_LABELS;
+export const isSpecial = (use: FieldUse) =>
+  use.field === MEASURE_NAMES || use.field === MEASURE_VALUES || isGenerated(use);
+
+export function generatedUse(field: string): FieldUse {
+  return { field, agg: null, date: null, continuous: field !== GEOMETRY_GENERATED, table_calc: null };
+}
+
+/** 地圖：Latitude／Longitude (generated) 在欄列架上。 */
+export function isMapSheet(sheet: SheetIR): boolean {
+  return [...sheet.rows, ...sheet.columns].some(
+    (u) => u.field === LATITUDE_GENERATED || u.field === LONGITUDE_GENERATED,
+  );
+}
+
+/**
+ * 連按兩下地理角色的欄位（與 Tableau 相同）：建立地圖——Latitude／Longitude (generated) 放到列與欄，
+ * 欄位放到詳細資料；有區域形狀的角色（國家、州、郡、郵遞區號）畫成填色地圖。已經是地圖時只加到詳細資料。
+ */
+export function buildMap(sheet: SheetIR, use: FieldUse, role: GeoRole): SheetIR {
+  const detail = sheet.marks.detail.some((u) => sameUse(u, use)) ? sheet.marks.detail : [...sheet.marks.detail, use];
+  if (isMapSheet(sheet)) return { ...sheet, marks: { ...sheet.marks, detail } };
+  const marks: MarksIR = { ...sheet.marks, detail };
+  if (SHAPED_ROLES.has(role) && (marks.type === "automatic" || marks.type === "map"))
+    marks.geometry = generatedUse(GEOMETRY_GENERATED);
+  return {
+    ...sheet,
+    rows: [generatedUse(LATITUDE_GENERATED)],
+    columns: [generatedUse(LONGITUDE_GENERATED)],
+    marks,
+    panes: [],
+  };
+}
 
 /** 架上的維度（Table Calculation 的定址依它們；Measure Names／Values 不算）。 */
 function isDim(use: FieldUse, fields: Map<string, CatalogField>): boolean {

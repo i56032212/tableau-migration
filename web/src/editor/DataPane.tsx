@@ -7,19 +7,29 @@ import { currentDrag, endDrag, startDrag, useEditor } from "./context";
 import { hierarchyCandidates } from "./Dialogs";
 import {
   blendSources,
+  buildMap,
   type CatalogField,
   type CatalogHierarchy,
   defaultUse,
+  GENERATED_LABELS,
   insertUse,
   isDate,
   isMeasure,
+  LATITUDE_GENERATED,
+  LONGITUDE_GENERATED,
   MEASURE_NAMES,
   MEASURE_VALUES,
   removeUse,
 } from "./model";
 
-/** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合）。 */
+/** 可以指定地理角色的欄位：文字或整數的維度（地名、郵遞區號），數字的欄位（緯度、經度）。 */
+function canHaveGeoRole(field: CatalogField): boolean {
+  return field.kind !== "set" && ["string", "integer", "real"].includes(field.datatype);
+}
+
+/** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合；有地理角色的為地球）。 */
 function fieldIcon(field: CatalogField): string {
+  if (field.geo_role) return "🌐";
   if (field.kind === "set") return "◎";
   if (field.datatype === "integer" || field.datatype === "real") return "#";
   if (isDate(field)) return field.datatype === "datetime" ? "◷" : "▦";
@@ -61,9 +71,12 @@ function FieldRow({
   const measure = field.role === "measure" || field.level === "aggregate" || field.level === "table_calc";
   const add = () =>
     editor.apply(async (sheet) => {
-      // 連按兩下：維度放到列，量值放到欄（列上已有量值時）或列
       const use = defaultUse(field);
       const [prepared, ready] = await editor.prepare(sheet, use);
+      // 地理角色的維度：與 Tableau 相同建立地圖（或加到地圖的詳細資料）
+      const role = field.geo_role;
+      if (role && role !== "latitude" && role !== "longitude" && !measure) return buildMap(prepared, ready, role);
+      // 連按兩下：維度放到列，量值放到欄（列上已有量值時）或列
       const rowsHaveMeasure = prepared.rows.some((u) => isMeasure(u, editor.fields));
       const shelf = measure ? (prepared.rows.length > 0 && !rowsHaveMeasure ? "columns" : "rows") : "rows";
       return insertUse(prepared, shelf, ready);
@@ -83,8 +96,18 @@ function FieldRow({
         {field.kind === "calc" ? "=" : ""}
         {field.caption}
       </span>
-      {(field.kind === "calc" || hierarchical) && (
-        <span className="field-actions">
+      <span className="field-actions">
+        {canHaveGeoRole(field) && (
+          <button
+            type="button"
+            className="link"
+            title={field.geo_role ? "地理角色、編輯位置…" : "指定地理角色…"}
+            aria-label={`「${field.caption}」的地理角色`}
+            onClick={() => editor.openDialog({ kind: "geo", datasource, field: field.id })}
+          >
+            🌐
+          </button>
+        )}
           {hierarchical && !hierarchy && (
             <button
               type="button"
@@ -115,7 +138,7 @@ function FieldRow({
               ↤
             </button>
           )}
-          {field.kind === "calc" && (
+        {field.kind === "calc" && (
             <>
               <button type="button" className="link" title="編輯計算欄位" onClick={() => editor.openCalc(field, datasource)}>
                 ✎
@@ -138,8 +161,7 @@ function FieldRow({
               </button>
             </>
           )}
-        </span>
-      )}
+      </span>
     </li>
   );
 }
@@ -228,7 +250,7 @@ function HierarchyGroup({
   );
 }
 
-function SpecialRow({ id, label, measure }: { id: string; label: string; measure: boolean }) {
+function SpecialRow({ id, label, measure, geo = false }: { id: string; label: string; measure: boolean; geo?: boolean }) {
   return (
     <li
       className={`field ${measure ? "measure" : "dimension"} special`}
@@ -237,7 +259,7 @@ function SpecialRow({ id, label, measure }: { id: string; label: string; measure
       onDragStart={(e) => startDrag(e, { kind: "field", field: id })}
       onDragEnd={endDrag}
     >
-      <span className="field-icon">{measure ? "#" : "Abc"}</span>
+      <span className="field-icon">{geo ? "🌐" : measure ? "#" : "Abc"}</span>
       <span className="field-name">{label}</span>
     </li>
   );
@@ -268,6 +290,8 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
   const hierarchies = (ds?.hierarchies ?? []).filter((h) => h.fields.some((id) => dimensions.some((f) => f.id === id)));
   const inHierarchy = new Set(hierarchies.flatMap((h) => h.fields));
   const candidates = new Set(hierarchyCandidates(dimensions).map((f) => f.id));
+  // 有地名角色的欄位時，與 Tableau 相同列出 Latitude／Longitude (generated)
+  const geographic = (ds?.fields ?? []).some((f) => f.geo_role && f.geo_role !== "latitude" && f.geo_role !== "longitude");
   return (
     <aside className={`data-pane${over ? " over" : ""}`} {...handlers} aria-label="資料">
       <div className="pane-title">資料</div>
@@ -341,6 +365,12 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
         {measures.map((f) => (
           <FieldRow key={f.id} field={f} datasource={shown} />
         ))}
+        {!term && geographic && (
+          <>
+            <SpecialRow id={LATITUDE_GENERATED} label={GENERATED_LABELS[LATITUDE_GENERATED]} measure geo />
+            <SpecialRow id={LONGITUDE_GENERATED} label={GENERATED_LABELS[LONGITUDE_GENERATED]} measure geo />
+          </>
+        )}
         {!term && <SpecialRow id={MEASURE_VALUES} label="Measure Values" measure />}
       </ul>
       <div className="pane-section">

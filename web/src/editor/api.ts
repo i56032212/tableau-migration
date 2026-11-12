@@ -2,7 +2,7 @@
 
 import { request } from "../api";
 import type { Action, Dashboard, Domain, FieldUse, Scalar, Story } from "../types";
-import type { Catalog, CatalogField, CatalogHierarchy, SheetIR } from "./model";
+import type { Catalog, CatalogField, CatalogHierarchy, GeoAlias, GeoRole, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
 const part = encodeURIComponent;
@@ -129,6 +129,18 @@ export const editApi = {
       `${edit(workbook)}/datasources/${part(datasource)}/hierarchies?name=${encodeURIComponent(name)}`,
       { method: "DELETE" },
     ),
+  /** 欄位的地理角色（null 取消）與編輯位置中指定的地名（省略時不變） */
+  saveGeography: (workbook: string, datasource: string, field: string, role: GeoRole | null, aliases?: GeoAlias[]) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/geography`, {
+      method: "PUT",
+      body: JSON.stringify({ role, ...(aliases ? { aliases } : {}) }),
+    }),
+  /** 編輯位置的預設國家、州 */
+  saveGeoDefaults: (workbook: string, datasource: string, country: string | null, state: string | null) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/geography`, {
+      method: "PUT",
+      body: JSON.stringify({ country, state }),
+    }),
   /** 欄位目前的不重複值（含 LOD 的計算欄位），轉成參數的型別：動態參數的目前值與允許值 */
   fieldValues: (workbook: string, field: string, datatype?: string | null) =>
     request<{ values: Scalar[]; more: boolean }>(`${edit(workbook)}/field-values`, {
