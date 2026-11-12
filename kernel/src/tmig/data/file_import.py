@@ -20,10 +20,9 @@ import math
 import os
 import re
 import tempfile
-import zipfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import duckdb
 import pyarrow as pa
@@ -112,11 +111,47 @@ class FileImportError(HyperImportError):
     """檔案讀不了，或內容與 Tableau 記下的欄位不符。"""
 
 
+class Archive(Protocol):
+    """檔案的來源：.twbx（zipfile.ZipFile）或資料夾（FolderArchive）。"""
+
+    @property
+    def filename(self) -> str | None: ...
+
+    def namelist(self) -> list[str]: ...
+
+    def read(self, name: str) -> bytes: ...
+
+
+class FolderArchive:
+    """資料夾中的檔案，以與 .twbx 相同的方式讀取：桌面版建立的資料源的檔案放在報表目錄的 sources/
+    （路徑與 FileTable.path 相同，例如 Data/銷售.xlsx）。"""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    @property
+    def filename(self) -> str | None:
+        return str(self.root)
+
+    def namelist(self) -> list[str]:
+        if not self.root.is_dir():
+            return []
+        return sorted(
+            p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file()
+        )
+
+    def read(self, name: str) -> bytes:
+        path = (self.root / name).resolve()
+        if not path.is_relative_to(self.root.resolve()) or not path.is_file():
+            raise KeyError(name)
+        return path.read_bytes()
+
+
 # ---------------------------------------------------------------- 匯入
 
 
 def import_file_tables(
-    archive: zipfile.ZipFile, connection: FileConnection, out_path: Path
+    archive: Archive, connection: FileConnection, out_path: Path
 ) -> list[TableImport]:
     """把檔案型資料源的每張資料表匯入 out_path（DuckDB 檔，Files.<name>），並做匯入自檢。"""
     tmp_out = out_path.with_name(out_path.name + ".tmp")
@@ -146,9 +181,7 @@ def import_file_tables(
     return results
 
 
-def _hyper_exports(
-    archive: zipfile.ZipFile, connection: FileConnection, work: Path
-) -> dict[str, Any]:
+def _hyper_exports(archive: Archive, connection: FileConnection, work: Path) -> dict[str, Any]:
     """.hyper 檔中的資料表匯出成 Parquet（每個檔案啟動一次 Hyper），以關聯樹中的資料表名稱為鍵。"""
     by_path: dict[str, list[FileTable]] = {}
     for table in connection.tables:
@@ -171,7 +204,7 @@ def _hyper_exports(
     return found
 
 
-def read_member(archive: zipfile.ZipFile, path: str) -> bytes:
+def read_member(archive: Archive, path: str) -> bytes:
     names = {n.replace("\\", "/"): n for n in archive.namelist()}
     wanted = path.replace("\\", "/").lstrip("./")
     if wanted not in names:
@@ -179,7 +212,7 @@ def read_member(archive: zipfile.ZipFile, path: str) -> bytes:
     return archive.read(names[wanted])
 
 
-def spatial_rows(archive: zipfile.ZipFile, table: FileTable) -> list[list[Any]]:
+def spatial_rows(archive: Archive, table: FileTable) -> list[list[Any]]:
     """空間檔案（Shapefile、GeoJSON、KML、TopoJSON）的各列，依 Tableau 記下的欄名（不分大小寫）取值；
     Geometry 是 WKT 文字（tmig.data.spatial_files）。"""
     from tmig.data.spatial_files import SpatialFileError, read_spatial, sidecar_paths
@@ -635,7 +668,9 @@ def _parse_text(text: str, datatype: str, locale: str | None) -> Any:
 
 
 __all__ = [
+    "Archive",
     "FileImportError",
+    "FolderArchive",
     "convert",
     "excel_rows",
     "file_missing_columns",

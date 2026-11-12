@@ -1,6 +1,7 @@
 // 桌面版（D0）：本機引擎提供開啟、儲存、關閉的 API；選檔對話框由桌面版外殼（Tauri）提供。
 // 在瀏覽器中開發時沒有外殼，改以輸入完整路徑代替對話框。外殼的選單呼叫 window.tmigDesktop。
 import { api } from "./api";
+import { datasourceApi, type InspectedTable } from "./editor/datasourceApi";
 import type { DesktopDocument } from "./types";
 
 interface TauriGlobal {
@@ -14,7 +15,9 @@ export type DesktopDialog =
   | { kind: "sign-in" }
   | { kind: "open-server" }
   | { kind: "publish"; workbook: string }
-  | { kind: "publish-datasource"; workbook: string; datasource?: string };
+  | { kind: "publish-datasource"; workbook: string; datasource?: string }
+  /** 新增報表或資料源：選擇資料檔中的資料表（workbook 為 null 時是新的報表） */
+  | { kind: "choose-table"; title: string; path: string; tables: InspectedTable[]; workbook: string | null };
 export const DIALOG_EVENT = "tmig:desktop-dialog";
 /** 報表的定義在檢視器之外改變了（例如報表改用發布的資料源）：畫面重新載入報表。 */
 export const CHANGED_EVENT = "tmig:workbook-changed";
@@ -54,6 +57,75 @@ export async function pickOpenPath(): Promise<string | null> {
   }
   const path = window.prompt("要開啟的檔案（.twbx、.twb 或 .tmigx）的完整路徑");
   return path?.trim() || null;
+}
+
+/** 選擇要連線的資料檔（Excel、文字檔、空間檔案）；取消時為 null。 */
+export async function pickDataPath(): Promise<string | null> {
+  const tauri = shell();
+  if (tauri) {
+    try {
+      return await tauri.core.invoke<string | null>("pick_data_path");
+    } catch (e) {
+      console.warn("選檔對話框無法使用，改以輸入路徑", e);
+    }
+  }
+  const path = window.prompt("要連線的資料檔（.xlsx、.xls、.csv、.txt、.shp、.geojson、.kml 等）的完整路徑");
+  return path?.trim() || null;
+}
+
+/** 新增報表（Tableau 的「連線到資料」）：選擇資料檔，檔案中有多張資料表時選一張，建立後開啟資料源分頁。 */
+export async function newWorkbook(go: Go): Promise<void> {
+  const path = await pickDataPath();
+  if (!path) return;
+  try {
+    const inspected = await datasourceApi.inspectNew(path);
+    if (inspected.tables.length === 1) {
+      await createWorkbook(path, inspected.tables[0].name, go);
+      return;
+    }
+    openDialog({ kind: "choose-table", title: `新增報表：${inspected.name}`, path, tables: inspected.tables, workbook: null });
+  } catch (e) {
+    toast(`無法連線到資料：${(e as Error).message}`, "error");
+  }
+}
+
+export async function createWorkbook(path: string, table: string, go: Go): Promise<boolean> {
+  try {
+    const result = await datasourceApi.newWorkbook(path, table);
+    go(`/w/${encodeURIComponent(result.document.id)}/edit-ds/${encodeURIComponent(result.datasource)}`);
+    return true;
+  } catch (e) {
+    toast(`無法建立報表：${(e as Error).message}`, "error");
+    return false;
+  }
+}
+
+/** 報表加上新的資料源（Tableau 的「資料＞新增資料源」）。 */
+export async function addDatasource(workbook: string, go: Go): Promise<void> {
+  const path = await pickDataPath();
+  if (!path) return;
+  try {
+    const inspected = await datasourceApi.inspect(workbook, path);
+    if (inspected.tables.length === 1) {
+      await addDatasourceFrom(workbook, path, inspected.tables[0].name, go);
+      return;
+    }
+    openDialog({ kind: "choose-table", title: `新增資料源：${inspected.name}`, path, tables: inspected.tables, workbook });
+  } catch (e) {
+    toast(`無法連線到資料：${(e as Error).message}`, "error");
+  }
+}
+
+export async function addDatasourceFrom(workbook: string, path: string, table: string, go: Go): Promise<boolean> {
+  try {
+    const result = await datasourceApi.addDatasource(workbook, path, table);
+    workbookChanged(workbook);
+    go(`/w/${encodeURIComponent(workbook)}/edit-ds/${encodeURIComponent(result.datasource)}`);
+    return true;
+  } catch (e) {
+    toast(`無法新增資料源：${(e as Error).message}`, "error");
+    return false;
+  }
 }
 
 /** 選擇存檔位置（預設為報表套件；匯出時指定標題、副檔名與檔案類型）；取消時為 null。 */
@@ -155,6 +227,7 @@ export function installMenuCommands(go: Go): void {
   };
   (window as unknown as { tmigDesktop?: Record<string, () => Promise<void>> }).tmigDesktop = {
     open: () => openDocument(go),
+    newWorkbook: () => newWorkbook(go),
     save: withWorkbook((wb) => saveDocument(wb, false)),
     saveAs: withWorkbook((wb) => saveDocument(wb, true)),
     close: withWorkbook((wb) => closeDocument(wb, go)),

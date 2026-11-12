@@ -18,7 +18,7 @@ from typing import Any, Literal
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, has_local_data, load_ir
+from tmig.ir import IR, FileConnection, has_local_data, load_ir
 from tmig.parser.workbook import parse_workbook
 from tmig.planner.dynamic import resolve_parameters
 from tmig.planner.state import StateError
@@ -145,9 +145,22 @@ def ensure_data(directory: Path, ir: IR) -> list[str]:
     missing = [ds.id for ds in extracts if not (data / f"{ds.id}.duckdb").is_file()]
     if not missing:
         return notes
-    from tmig.data.hyper_import import import_workbook
+    from tmig.data.hyper_import import import_sources, import_workbook
+    from tmig.package import SOURCES
 
     twbx = next(directory.glob("*.twbx"), None)
+    files = [
+        ds.id
+        for ds in ir.datasources
+        if ds.id in missing and isinstance(ds.connection, FileConnection)
+    ]
+    if twbx is None and (directory / SOURCES).is_dir() and files == missing:
+        # 桌面版建立的檔案型資料源：檔案在報表目錄的 sources/
+        results = import_sources(directory / SOURCES, data, ir, only=missing)
+        bad = [r.datasource for r in results if not r.ok]
+        if bad:
+            raise ExecutionError(f"檔案匯入自檢失敗：{'、'.join(bad)}；見 data/*.import.json")
+        return [*notes, f"已由報表中的檔案匯入 {'、'.join(missing)}"]
     if twbx is None:
         raise FileNotFoundError(
             f"{directory} 缺少萃取的資料（DuckDB 檔），也沒有 .twbx 可以匯入；"

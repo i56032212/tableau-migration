@@ -450,13 +450,53 @@ def _type_warnings(
     return warnings
 
 
+def import_sources(
+    sources: str | Path, out_dir: str | Path, ir: IR, only: list[str] | None = None
+) -> list[DatasourceImport]:
+    """匯入檔案型資料源（桌面版建立的資料源）：檔案在 sources 資料夾（路徑與 FileTable.path 相同）。
+    only：只匯入這些資料源（省略時為全部的檔案型資料源）。"""
+    from tmig.data.file_import import FolderArchive
+
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    archive = FolderArchive(Path(sources))
+    results: list[DatasourceImport] = []
+    for ds in ir.datasources:
+        if isinstance(ds.connection, FileConnection) and (only is None or ds.id in only):
+            results.append(_import_files(archive, target, ds))
+    return results
+
+
+def _import_files(archive: Any, target: Path, ds: Any) -> DatasourceImport:
+    from tmig.data.file_import import file_missing_columns, import_file_tables, read_member
+
+    connection = ds.connection
+    assert isinstance(connection, FileConnection)
+    out_path = target / f"{ds.id}.duckdb"
+    tables = import_file_tables(archive, connection, out_path)
+    digest = hashlib.sha256()
+    paths = list(dict.fromkeys(t.path for t in connection.tables))
+    for path in paths:
+        digest.update(read_member(archive, path))
+    result = DatasourceImport(
+        datasource=ds.id,
+        hyper_file="、".join(paths),
+        hyper_sha256=digest.hexdigest(),
+        duckdb=out_path.name,
+        table=tables[0],
+        other_tables=[],
+        missing_columns=file_missing_columns(connection, ds.fields, tables),
+        extra_tables=tables[1:],
+    )
+    _write_report(target, ds.id, result)
+    return result
+
+
 def import_workbook(
     twbx: str | Path, out_dir: str | Path, ir: IR | None = None
 ) -> list[DatasourceImport]:
     """匯入 .twbx 內每個資料源的萃取與檔案（Excel、文字檔）：<out_dir>/<資料源 id>.duckdb 與
     .import.json。"""
-    from tmig.data.file_import import file_missing_columns, import_file_tables, read_member
-
     twbx_path = Path(twbx)
     target = Path(out_dir)
     target.mkdir(parents=True, exist_ok=True)
@@ -466,24 +506,7 @@ def import_workbook(
         work = Path(tmp)
         for ds in workbook_ir.datasources:
             if isinstance(ds.connection, FileConnection):
-                out_path = target / f"{ds.id}.duckdb"
-                tables = import_file_tables(archive, ds.connection, out_path)
-                digest = hashlib.sha256()
-                paths = list(dict.fromkeys(t.path for t in ds.connection.tables))
-                for path in paths:
-                    digest.update(read_member(archive, path))
-                result = DatasourceImport(
-                    datasource=ds.id,
-                    hyper_file="、".join(paths),
-                    hyper_sha256=digest.hexdigest(),
-                    duckdb=out_path.name,
-                    table=tables[0],
-                    other_tables=[],
-                    missing_columns=file_missing_columns(ds.connection, ds.fields, tables),
-                    extra_tables=tables[1:],
-                )
-                _write_report(target, ds.id, result)
-                results.append(result)
+                results.append(_import_files(archive, target, ds))
                 continue
             if not isinstance(ds.connection, ExtractConnection):
                 continue  # Live 連線的資料在來源資料庫，不在 .twbx 內

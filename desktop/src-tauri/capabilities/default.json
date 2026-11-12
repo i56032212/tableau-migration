@@ -13,6 +13,7 @@
   "permissions": [
     "core:default",
     "allow-pick-open-path",
+    "allow-pick-data-path",
     "allow-pick-save-path"
   ]
 }

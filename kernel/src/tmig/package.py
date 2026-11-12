@@ -6,8 +6,10 @@ zip 檔，內容：
 - ``report.ir.json``：報表定義（IR），與 golden.ir.json 相同的寫法
 - ``data/<資料源 id>.duckdb``：萃取的資料（Live 連線的資料源沒有）
 - ``files/<路徑>``：報表用到的圖片（圖片區塊、圖片按鈕），路徑與 IR 中記的相同
+- ``sources/<路徑>``：桌面版連線的檔案（Excel、文字檔、空間檔案）的複本，路徑與 IR 中 FileTable.path 相同；
+  之後在資料源分頁加入同一個檔案的其他資料表、變更資料類型時重新匯入用（查詢一律讀 data/ 中的 DuckDB 檔）
 
-開啟時解到報表目錄：golden.ir.json、data/、files/，與 fixtures 的結構相同，查詢服務照常使用。
+開啟時解到報表目錄：golden.ir.json、data/、files/、sources/，與 fixtures 的結構相同，查詢服務照常使用。
 套件中沒有任何連線的帳號密碼（IR 本來就不記）。
 
 資料源套件（.tmigds）：桌面版發布資料源用，相當於 Tableau 的 .tdsx。格式與報表套件相同，manifest 的 kind 為
@@ -37,6 +39,8 @@ DATASOURCE_KIND = "datasource"
 """manifest 的 kind：資料源套件（沒有 kind 的是報表套件）。"""
 MANIFEST = "manifest.json"
 REPORT = "report.ir.json"
+SOURCES = "sources"
+"""報表目錄中放桌面版連線的檔案的資料夾（套件中也是 sources/）。"""
 
 
 class PackageError(ValueError):
@@ -215,6 +219,10 @@ def write_package(target: Path, ir: IR, directory: Path, *, kind: str | None = N
                     continue
                 archive.writestr(f"files/{relative}", content)
                 included.append(path)
+            sources = directory / SOURCES
+            if sources.is_dir() and kind != DATASOURCE_KIND:
+                for path in sorted(p for p in sources.rglob("*") if p.is_file()):
+                    archive.write(path, f"{SOURCES}/{path.relative_to(sources).as_posix()}")
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
@@ -264,6 +272,10 @@ def read_package(source: Path, directory: Path) -> IR:
                 relative = member_path(name.removeprefix("files/"))
                 if relative is not None:
                     _extract(archive, name, directory.joinpath("files", *relative.parts))
+            elif name.startswith(f"{SOURCES}/"):
+                relative = member_path(name.removeprefix(f"{SOURCES}/"))
+                if relative is not None:
+                    _extract(archive, name, directory.joinpath(SOURCES, *relative.parts))
     return ir
 
 

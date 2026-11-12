@@ -260,6 +260,7 @@ export function Editor({
   onChanged,
   onOpen,
   onClose,
+  onEditDatasource,
 }: {
   workbook: string;
   worksheet: string;
@@ -269,6 +270,8 @@ export function Editor({
   onOpen: (worksheet: string) => void;
   /** 完成編輯（回到檢視）；沒有工作表時為 null */
   onClose: (worksheet: string | null) => void;
+  /** 開啟資料源分頁的編輯 */
+  onEditDatasource?: (datasource: string) => void;
 }) {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [history, setHistoryState] = useState<History | null>(null);
@@ -576,7 +579,7 @@ export function Editor({
             完成
           </button>
         </div>
-        <DataPane onDatasource={changeDatasource} />
+        <DataPane onDatasource={changeDatasource} onEditDatasource={onEditDatasource} />
         <div className="cards-pane">
           <Shelf label="頁面" shelf="pages" />
           <FiltersShelf />

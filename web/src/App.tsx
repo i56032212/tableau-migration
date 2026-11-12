@@ -22,6 +22,10 @@ import {
   type DesktopDialog,
   installMenuCommands,
   openDialog,
+  addDatasource,
+  addDatasourceFrom,
+  createWorkbook,
+  newWorkbook,
   openDocument,
   saveDocument,
   setDesktopMode,
@@ -40,6 +44,7 @@ import {
 import { SessionGate, UserBar } from "./Session";
 import { setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
+import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
 import { DashboardEditor } from "./editor/DashboardEditor";
 import { Editor } from "./editor/Editor";
 import { StoryEditor } from "./editor/StoryEditor";
@@ -62,7 +67,8 @@ type Route =
   | { page: "datasource"; workbook: string; datasource: string }
   | { page: "edit"; workbook: string; worksheet: string }
   | { page: "edit-dashboard"; workbook: string; dashboard: string }
-  | { page: "edit-story"; workbook: string; story: string };
+  | { page: "edit-story"; workbook: string; story: string }
+  | { page: "edit-datasource"; workbook: string; datasource: string };
 
 function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
@@ -77,6 +83,7 @@ function parseRoute(path: string): Route {
     if (parts[2] === "edit" && parts[3]) return { page: "edit", workbook: parts[1], worksheet: parts[3] };
     if (parts[2] === "edit-d" && parts[3]) return { page: "edit-dashboard", workbook: parts[1], dashboard: parts[3] };
     if (parts[2] === "edit-story" && parts[3]) return { page: "edit-story", workbook: parts[1], story: parts[3] };
+    if (parts[2] === "edit-ds" && parts[3]) return { page: "edit-datasource", workbook: parts[1], datasource: parts[3] };
     return { page: "workbook", workbook: parts[1] };
   }
   return { page: "home" };
@@ -85,7 +92,7 @@ function parseRoute(path: string): Route {
 /** 檢視（dashboard、工作表、Story）、資料源分頁與編輯器的網址。 */
 function viewPath(
   workbook: string,
-  kind: "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story",
+  kind: "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story" | "edit-ds",
   id: string,
 ): string {
   return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
@@ -161,6 +168,21 @@ function DesktopCommands() {
   if (dialog.kind === "publish-datasource")
     return <PublishDatasourceDialog workbook={dialog.workbook} datasource={dialog.datasource} onClose={close} />;
   if (dialog.kind === "open-server") return <OpenFromServerDialog onClose={close} go={navigate} />;
+  if (dialog.kind === "choose-table") {
+    const chosen = dialog;
+    return (
+      <ChooseTableDialog
+        title={chosen.title}
+        tables={chosen.tables}
+        onClose={close}
+        onChoose={(table) =>
+          chosen.workbook
+            ? addDatasourceFrom(chosen.workbook, chosen.path, table, navigate)
+            : createWorkbook(chosen.path, table, navigate)
+        }
+      />
+    );
+  }
   return (
     <Modal title="登入伺服器" onClose={close}>
       <ServerPanel onOpenFromServer={() => setDialog({ kind: "open-server" })} />
@@ -234,6 +256,11 @@ function Home({ me }: { me: Me }) {
             開啟檔案…
           </button>
         )}
+        {desktop && (
+          <button type="button" onClick={() => void newWorkbook(navigate)} title="以 Excel、文字檔或空間檔案建立新的報表">
+            新增報表（連線到資料）…
+          </button>
+        )}
         {!desktop && me.user?.admin && <Link to="/admin">站台管理</Link>}
         {subscriptions !== null && (
           <Link to="/subscriptions">我的訂閱{subscriptions ? `（${subscriptions}）` : ""}</Link>
@@ -283,7 +310,7 @@ function Home({ me }: { me: Me }) {
       {workbooks?.length === 0 && (
         <p>
           {desktop
-            ? "還沒有開啟的報表：按「開啟檔案…」（Ctrl+O）開啟 Tableau 的 .twbx、.twb，或報表套件 .tmigx。"
+            ? "還沒有開啟的報表：按「開啟檔案…」（Ctrl+O）開啟 Tableau 的 .twbx、.twb，或報表套件 .tmigx；或按「新增報表（連線到資料）…」（Ctrl+N）以 Excel、文字檔建立新的報表。"
             : me.mode === "none"
               ? "fixtures 中沒有報表。"
               : "沒有可以檢視的報表；請向報表的擁有者申請權限。"}
@@ -489,6 +516,7 @@ function WorkbookPage({
   const editing = route.page === "edit" && me.mode === "desktop" ? route.worksheet : null;
   const editingDashboard = route.page === "edit-dashboard" && me.mode === "desktop" ? route.dashboard : null;
   const editingStory = route.page === "edit-story" && me.mode === "desktop" ? route.story : null;
+  const editingDatasource = route.page === "edit-datasource" && me.mode === "desktop" ? route.datasource : null;
   const story = route.page === "story" ? stories.find((s) => s.id === route.story) : undefined;
   const datasource = route.page === "datasource" ? datasources.find((d) => d.id === route.datasource) : undefined;
   const base = window.location.pathname;
@@ -536,7 +564,9 @@ function WorkbookPage({
                         ? `edit-d:${editingDashboard}`
                         : editingStory
                           ? `edit-story:${editingStory}`
-                          : ""
+                          : editingDatasource
+                            ? `edit-ds:${editingDatasource}`
+                            : ""
           }
           onChange={(e) => {
             const [kind, id] = e.target.value.split(":");
@@ -552,13 +582,13 @@ function WorkbookPage({
                     ? "edit-story"
                     : kind;
             navigate(
-              viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story", id) +
+              viewPath(workbook, target as "d" | "s" | "story" | "ds" | "edit" | "edit-d" | "edit-story" | "edit-ds", id) +
                 window.location.search,
             );
           }}
         >
           {datasources.map((d) => (
-            <option key={d.id} value={`ds:${d.id}`}>
+            <option key={d.id} value={editingDatasource === d.id ? `edit-ds:${d.id}` : `ds:${d.id}`}>
               資料源：{d.caption}
             </option>
           ))}
@@ -599,6 +629,20 @@ function WorkbookPage({
             onClick={() => navigate(viewPath(workbook, "edit-story", story.id))}
           >
             編輯 Story
+          </button>
+        )}
+        {me.mode === "desktop" && datasource && (
+          <button
+            type="button"
+            className="primary"
+            onClick={() => navigate(viewPath(workbook, "edit-ds", datasource.id))}
+          >
+            編輯資料源
+          </button>
+        )}
+        {me.mode === "desktop" && (datasource || editingDatasource) && (
+          <button type="button" onClick={() => void addDatasource(workbook, navigate)}>
+            新增資料源…
           </button>
         )}
         {(dashboard || worksheet || story) && (
@@ -767,6 +811,7 @@ function WorkbookPage({
             setVersion((v) => v + 1);
             navigate(id ? viewPath(workbook, "s", id) : `/w/${encodeURIComponent(workbook)}`);
           }}
+          onEditDatasource={(id) => navigate(viewPath(workbook, "edit-ds", id))}
         />
       )}
       {editingDashboard && (
@@ -831,6 +876,18 @@ function WorkbookPage({
         />
       )}
       {datasource && <DatasourceView workbook={workbook} datasource={datasource} />}
+      {editingDatasource && (
+        <DatasourceEditor
+          key={editingDatasource}
+          workbook={workbook}
+          datasource={editingDatasource}
+          onChanged={() => setVersion((v) => v + 1)}
+          onOpenSheet={() => {
+            const sheet = ir.worksheets.find((w) => w.datasource === editingDatasource) ?? ir.worksheets[0];
+            if (sheet) navigate(viewPath(workbook, "edit", sheet.id));
+          }}
+        />
+      )}
       {route.page === "datasource" && !datasource && (datasources.length > 0 || datasourceError) && (
         <main className="error">{datasourceError ? `無法開啟資料源：${datasourceError}` : "找不到這個資料源"}</main>
       )}
@@ -840,6 +897,7 @@ function WorkbookPage({
         !editing &&
         !editingDashboard &&
         !editingStory &&
+        !editingDatasource &&
         route.page !== "datasource" && <main className="error">找不到這個 dashboard、工作表或 Story</main>}
     </div>
   );

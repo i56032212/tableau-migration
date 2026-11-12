@@ -101,6 +101,10 @@ MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA 與 COLLECT 等空間函式（�
 在 1e-6 以內），以及空間 join（Intersects，例如 CSV 的地點以 MAKEPOINT 對到所在的行政區）。前面 113 份公開報表中的 18 份地圖報表（含 2 份附有作者截圖）全部解析通過、都能畫出；
 Superstore 銷售績效的填色地圖與截圖相同（中部各州、Blue-Teal 的自動色盤與州名、銷售標籤）。
 
+桌面版也能從資料檔建立報表（見「連線到資料與資料源的編輯」）：連線到 Excel、文字檔或空間檔案，在資料源的編輯畫面
+以關聯、join、聯集加入其他資料表、樞紐、修改欄位的名稱、隱藏、角色與資料類型，再到工作表建立檢視；樞紐、聯集與
+合併不相符的欄位也能從 Tableau 的報表移轉（見「Live 連線」之後的說明）。
+
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
 才算完成 Spec 的驗收（見下方「已知限制與待驗證」）。
 
@@ -676,6 +680,39 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
 
 每次變更由引擎檢查（欄位、參照、Table Calculation）後寫回開啟中的報表（`tmig.edit`、`/api/edit`），檢視立即
 重新查詢；不正確的變更退回並顯示原因。改過還沒儲存的報表在關閉前會提醒，「儲存」把變更寫進報表套件。
+
+### 連線到資料與資料源的編輯
+
+與 Tableau Desktop 2020.2 起的「連線」與「資料來源」分頁相同（`kernel/src/tmig/authoring.py`、
+`tmig_service.datasource_editor`、檢視器的 `web/src/editor/DatasourceEditor.tsx`）：
+
+- **新增報表**（檔案選單的「新增報表（連線到資料）」Ctrl+N、首頁的「新增報表（連線到資料）…」）：選 Excel
+  （.xlsx、.xlsm、.xls）、文字檔（.csv、.tsv、.txt、.tab）或空間檔案（Shapefile、GeoJSON、KML、TopoJSON），
+  檔案中有多張工作表或圖層時選一張；建立一個資料源與空白的「工作表 1」，開啟資料源的編輯畫面（網址
+  `/w/<報表>/edit-ds/<資料源>`）。已開啟的報表以工具列的「新增資料源…」加入另一個資料源，「編輯資料源」
+  （或資料窗格的「編輯資料源…」）開啟目前資料源的編輯畫面
+- **型別與角色**：Excel 依儲存格的型別（整數、小數、日期、日期時間、TRUE／FALSE 為布林，文字的儲存格即使寫的是
+  數字也是字串）；文字檔自動判斷分隔字元（逗號、分號、Tab、直線）與字元集（UTF-8、Big5、Latin-1），依 en_US
+  的寫法判斷數字與日期，只有 true／false 是布林值。數字為量值（預設總和），其他為維度；欄名是 Country、State、
+  City、Postal Code、Latitude、Longitude 等時給地理角色（緯度、經度預設平均，其他地理欄位是維度）
+- **加入資料表**（左邊連線中的資料表，或「其他檔案…」）：預設以**關聯**成為另一張邏輯資料表（條件預設為名稱
+  相同的欄，可用 =、≠、<、≤、>、≥ 與多個條件）；也可以在邏輯資料表中 **join**（內部、左側、右側、完整外部）或
+  **聯集**（欄位依名稱對應，另有 Table Name，Excel 另有 Sheet、文字檔另有 Path）。join 的類型與條件、關聯的
+  條件可以修改；最後加入的 join、聯集的一張與邏輯資料表可以移除（只在這張資料表中的欄位一併移除）
+- **樞紐**：欄位清單中勾選同一張資料表的欄，「樞紐所選的欄位」轉成 Pivot Field Names、Pivot Field Values；
+  可以移除樞紐
+- **欄位**：改名、隱藏、角色（維度／量值）與資料類型（檔案的欄位以新的型別重新匯入，不符合的值成為 Null）；
+  工作表、計算欄位、集合、階層或篩選用到的欄位不能移除、改角色或型別，退回並列出用到的地方。下面是資料的預覽，
+  Relationship 模型點選邏輯資料表切換
+- **檔案的複本**：連線的檔案複製進報表（`Data/<檔名>`，與 Tableau 封裝的 .twbx 相同），報表套件中存在
+  `sources/` 之下；每次變更後以 DuckDB 重新匯入。再開啟報表套件、驗證（`tmig verify`）與發布都由這份複本匯入
+- API（`/api/edit/<報表>/…`）：`POST inspect-file`、`POST datasources`（新增資料源）、
+  `GET datasources/<資料源>/model`、`POST …/tables`（加入資料表）、`DELETE …/tables/<資料表>`、
+  `PUT …/joins/<資料表>`、`PUT …/relationships/<邏輯資料表>`、`POST …/pivot`、`DELETE …/pivot/<名稱>`、
+  `PUT …/fields/<欄位>`、`PUT datasources/<資料源>`（改名）；桌面版另有 `POST /api/desktop/inspect` 與
+  `POST /api/desktop/new`
+- 限制：只能連線到檔案；從 Tableau 開啟的報表中，Live 連線與萃取的資料源只能改資料源的名稱與欄位的名稱、隱藏、
+  角色（連線與資料表沿用原本的定義）；資料解譯器、萬用字元聯集、join 計算與關聯計算、自訂 SQL 不支援
 
 ## 發布與版本
 

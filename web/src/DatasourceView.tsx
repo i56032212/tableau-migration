@@ -245,7 +245,7 @@ function Connection({ connection }: { connection: DatasourceConnection }) {
   );
 }
 
-function DataGrid({ preview, error, loading }: { preview: DatasourcePreview | null; error: string | null; loading: boolean }) {
+export function DataGrid({ preview, error, loading }: { preview: DatasourcePreview | null; error: string | null; loading: boolean }) {
   if (error) return <div className="placeholder error">無法預覽：{error}</div>;
   if (!preview) return <div className="placeholder">{loading ? "載入中…" : ""}</div>;
   return (

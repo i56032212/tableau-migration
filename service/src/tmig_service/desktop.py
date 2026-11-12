@@ -12,6 +12,8 @@
 - 工作區：每個開啟的檔案複製（或解開）到工作區的一個子目錄，結構與 fixtures 相同，
   檢視與查詢沿用查詢服務的 API；原始檔不會被鎖住或改動
 - 開啟：Tableau 的 .twbx、.twb（以解析器轉成 IR），或平台的報表套件（.tmigx）
+- 新增：以一個資料檔（Excel、文字檔、空間檔案）建立新的報表（一個資料源與空白的工作表；資料源的編輯見
+  tmig_service.datasource_editor）
 - 儲存：報表套件（.tmigx，見 tmig.package）
 - 外殼以 --exit-with-parent 啟動時，標準輸入關閉（外殼結束或異常終止）引擎就結束
 
@@ -19,6 +21,8 @@ API（都在 /api/desktop 下）：
 
 - ``GET  /documents``：開啟中的檔案
 - ``POST /open``：``{"path": "C:/…/銷售.twbx"}`` → 開啟，回傳文件與轉不過來的元素
+- ``POST /inspect``：``{"path": "C:/…/銷售.xlsx"}`` → 資料檔中的資料表、欄名、型別與列數
+- ``POST /new``：``{"path": "C:/…/銷售.xlsx", "table": "Orders"}`` → 以資料檔建立新的報表
 - ``POST /save``：``{"workbook": "<id>", "path": "C:/…/銷售.tmigx"}`` → 存成報表套件
 - ``POST /close``：``{"workbook": "<id>"}`` → 關閉並刪除工作區中的複本
 - 伺服器（登入、從伺服器開啟、發布）：見 tmig_service.desktop_remote
@@ -55,6 +59,7 @@ from tmig.verify.run import ensure_data
 from tmig_service.app import Workspace, create_app
 from tmig_service.auth import Authenticator, AuthSettings
 from tmig_service.credentials import CredentialStore, default_credentials
+from tmig_service.datasource_editor import datasource_editor_router
 from tmig_service.desktop_remote import (
     CALLBACK_PATH,
     SETTINGS_FILE,
@@ -68,7 +73,7 @@ TOKEN_COOKIE = "tmig_desktop"
 TOKEN_HEADER = "x-tmig-token"
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
 DOCUMENT_FILE = ".document.json"
-Kind = Literal["twbx", "twb", "package"]
+Kind = Literal["twbx", "twb", "package", "new"]
 KINDS: dict[str, Kind] = {".twbx": "twbx", ".twb": "twb", SUFFIX: "package"}
 UNSUPPORTED_SHOWN = 20
 """開啟時列出的不支援元素數量上限（其餘只計數）。"""
@@ -209,6 +214,16 @@ class OpenRequest(BaseModel):
     path: str
 
 
+class NewRequest(BaseModel):
+    """以資料檔建立新的報表：path 為作者電腦上的檔案，table 為其中的資料表（Excel 的工作表等）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    table: str | None = None
+    name: str | None = None
+
+
 class SaveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -277,6 +292,54 @@ def desktop_router(documents: Documents) -> APIRouter:
         document.name = loaded.ir.workbook.name
         documents.update(document)
         return _opened(document, workspace(request), already_open=False)
+
+    @router.post("/inspect")
+    def inspect_document_file(body: OpenRequest) -> dict[str, Any]:
+        """新增報表前檢查資料檔：其中的資料表（Excel 的工作表等）、欄名、型別與列數。"""
+        from tmig_service.datasource_editor import inspect, local_file
+
+        return inspect(local_file(body.path)).to_json()
+
+    @router.post("/new")
+    def new_document(body: NewRequest, request: Request) -> dict[str, Any]:
+        """新的報表：資料檔複製到報表目錄、建立資料源與空白的工作表、匯入資料。"""
+        from tmig.authoring import new_workbook
+        from tmig.data.hyper_import import import_sources
+        from tmig.edit import EditError
+        from tmig.ir import save_ir
+        from tmig.package import SOURCES
+        from tmig_service.datasource_editor import copy_source, inspect, local_file
+
+        source = inspect(local_file(body.path))
+        stem = (body.name or "").strip() or source.path.stem
+        document, directory = documents.create_named(stem, str(source.path), "new")
+        try:
+            package_path = copy_source(directory, source)
+            ir = new_workbook(stem, source, body.table, package_path)
+            save_ir(ir, directory / "golden.ir.json")
+            results = import_sources(directory / SOURCES, directory / "data", ir)
+            bad = [r for r in results if not r.ok]
+            if bad:
+                raise HTTPException(422, f"匯入資料失敗：{'、'.join(bad[0].missing_columns)}")
+            workspace(request).get(document.id)
+        except EditError as exc:
+            documents.remove(document.id)
+            raise HTTPException(422, str(exc)) from exc
+        except HTTPException:
+            documents.remove(document.id)
+            workspace(request).forget(document.id)
+            raise
+        except Exception as exc:
+            documents.remove(document.id)
+            workspace(request).forget(document.id)
+            raise HTTPException(422, f"無法以 {source.path.name} 建立報表：{exc}") from exc
+        document.name = ir.workbook.name
+        document.modified = True
+        documents.update(document)
+        opened = _opened(document, workspace(request), already_open=False)
+        opened["datasource"] = ir.datasources[0].id
+        opened["worksheet"] = ir.worksheets[0].id
+        return opened
 
     @router.post("/save")
     def save_document(body: SaveRequest, request: Request) -> dict[str, Any]:
@@ -434,6 +497,7 @@ def create_desktop_app(
             desktop_router(documents),
             remote_router(remote, documents, _opened),
             editor_router(on_change=documents.mark_modified),
+            datasource_editor_router(on_change=documents.mark_modified),
         ],
     )
     app.state.documents = documents

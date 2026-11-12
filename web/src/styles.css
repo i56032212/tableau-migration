@@ -501,3 +501,48 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .home-search input { font: inherit; padding: 5px 8px; width: min(420px, 100%); }
 .home-shortcuts { margin: 12px 0; }
 .home-shortcuts h2 { font-size: 14px; color: var(--muted); margin: 0 0 6px; }
+
+/* 資料源分頁的編輯（桌面版）：連線的檔案、邏輯資料表與關聯、欄位與資料 */
+.ds-editor { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; }
+.ds-editor[data-busy="true"] { cursor: progress; }
+.dse-header { display: flex; align-items: center; gap: 10px; }
+.dse-caption { font-size: 18px; font-weight: 600; border: 1px solid transparent; border-radius: 4px; padding: 2px 6px; min-width: 240px; background: transparent; }
+.dse-caption:hover, .dse-caption:focus { border-color: var(--line); background: var(--panel); }
+.dse-header .primary { margin-left: auto; }
+.dse-body { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 12px; }
+.dse-files, .dse-canvas, .dse-fields, .dse-preview { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; min-width: 0; }
+.dse-files h2, .dse-canvas h2, .dse-fields h2, .dse-preview h2 { font-size: 13px; font-weight: 600; margin: 4px 0 8px; color: var(--muted); }
+.dse-file { margin-bottom: 10px; }
+.dse-file-name { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.dse-file ul { list-style: none; margin: 4px 0 0; padding: 0; font-size: 13px; }
+.dse-file li { display: flex; gap: 4px; align-items: baseline; padding: 1px 0; }
+.dse-add { text-align: left; }
+.dse-logicals { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.dse-logical { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 4px; background: #f8fafc; padding: 8px 10px; min-width: 220px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.dse-logical.active { border-color: var(--accent); background: #eef4fb; }
+.dse-logical-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.dse-table { display: flex; gap: 8px; align-items: center; }
+.dse-join, .dse-union, .dse-pivot { display: flex; flex-direction: column; gap: 6px; }
+.dse-join-right { border-top: 1px dashed var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.dse-join-type { display: flex; gap: 8px; align-items: center; }
+.dse-label { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.dse-conditions { display: flex; flex-direction: column; gap: 4px; }
+.dse-condition { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.dse-condition select, .dse-join-type select { font: inherit; font-size: 12px; padding: 1px 4px; max-width: 220px; }
+.dse-relationships { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.dse-relationship { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.dse-field-grid input.dse-field-caption { font: inherit; border: 1px solid transparent; background: transparent; padding: 1px 4px; min-width: 160px; }
+.dse-field-grid input.dse-field-caption:hover, .dse-field-grid input.dse-field-caption:focus { border-color: var(--line); background: #fff; }
+.dse-field-grid select { font: inherit; font-size: 12px; padding: 0 2px; }
+.dse-fields .ds-table-wrap { max-height: 32vh; }
+.dse-preview .ds-table-wrap { max-height: 36vh; }
+.dse-how { border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 13px; }
+.dse-choose { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.dse-columns { font-size: 12px; overflow-wrap: anywhere; }
+.dse-conditions > button { align-self: flex-start; }
+.dse-files > button.dse-other { font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
+.dse-logical-head button:disabled { color: var(--ink); cursor: default; }
+.data-pane .ds-edit-link { align-self: flex-start; font-size: 12px; }
+@media (max-width: 760px) {
+  .dse-body { grid-template-columns: 1fr; }
+}

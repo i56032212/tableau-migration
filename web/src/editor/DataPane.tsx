@@ -266,7 +266,14 @@ function SpecialRow({ id, label, measure, geo = false }: { id: string; label: st
   );
 }
 
-export function DataPane({ onDatasource }: { onDatasource: (id: string) => void }) {
+export function DataPane({
+  onDatasource,
+  onEditDatasource,
+}: {
+  onDatasource: (id: string) => void;
+  /** 開啟資料源分頁的編輯（桌面版） */
+  onEditDatasource?: (id: string) => void;
+}) {
   const editor = useEditor();
   const { catalog, sheet } = editor;
   const [search, setSearch] = useState("");
@@ -309,6 +316,16 @@ export function DataPane({ onDatasource }: { onDatasource: (id: string) => void 
           </option>
         ))}
       </select>
+      {onEditDatasource && (
+        <button
+          type="button"
+          className="link ds-edit-link"
+          title="開啟資料源分頁：加入資料表、關聯、join、聯集、樞紐與欄位的設定"
+          onClick={() => onEditDatasource(shown)}
+        >
+          編輯資料源…
+        </button>
+      )}
       {shown !== sheet.datasource && (
         <div className="pane-actions blend-actions">
           <span className="hint">量值放到檢視上即與主要資料源混合（Data Blending，依名稱相同的維度連結）</span>

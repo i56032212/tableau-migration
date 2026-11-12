@@ -4,7 +4,7 @@
 //!   主視窗再載入引擎提供的檢視器；外殼結束時關閉引擎（引擎也會在標準輸入關閉時自行結束）
 //! - 檔案選單（開啟、儲存、另存新檔、關閉報表）與伺服器選單（登入、從伺服器開啟、發布、登出）
 //!   呼叫檢視器的 `window.tmigDesktop`，邏輯只在檢視器與本機引擎中寫一次
-//! - 選檔與存檔對話框由外殼提供（`pick_open_path`、`pick_save_path`）
+//! - 選檔與存檔對話框由外殼提供（`pick_open_path`、`pick_data_path`、`pick_save_path`）
 //! - 引擎的記錄寫到應用程式的記錄資料夾（engine.log）
 //! - 只執行一份：工作區只有一個，第二份的引擎啟動時會清掉第一份開啟中的報表；
 //!   再次啟動時把已開著的視窗帶到前面
@@ -149,6 +149,11 @@ fn fail(app: &AppHandle, message: String) {
 
 fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     let file = SubmenuBuilder::new(app, "檔案")
+        .item(
+            &MenuItemBuilder::with_id("new_workbook", "新增報表（連線到資料）…")
+                .accelerator("CmdOrCtrl+N")
+                .build(app)?,
+        )
         .item(&MenuItemBuilder::with_id("open", "開啟…").accelerator("CmdOrCtrl+O").build(app)?)
         .item(&MenuItemBuilder::with_id("save", "儲存").accelerator("CmdOrCtrl+S").build(app)?)
         .item(
@@ -182,6 +187,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
 
 fn menu_action(app: &AppHandle, id: &str) {
     let script = match id {
+        "new_workbook" => "window.tmigDesktop && window.tmigDesktop.newWorkbook()",
         "open" => "window.tmigDesktop && window.tmigDesktop.open()",
         "save" => "window.tmigDesktop && window.tmigDesktop.save()",
         "save_as" => "window.tmigDesktop && window.tmigDesktop.saveAs()",
@@ -235,6 +241,32 @@ async fn pick_open_path(app: AppHandle) -> Option<String> {
     .flatten()
 }
 
+/// 選擇要連線的資料檔（Excel、文字檔、空間檔案）；取消時回傳 null。
+#[tauri::command]
+async fn pick_data_path(app: AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        path_text(
+            app.dialog()
+                .file()
+                .set_title("連線到資料")
+                .add_filter(
+                    "資料檔",
+                    &[
+                        "xlsx", "xlsm", "xls", "csv", "tsv", "txt", "shp", "zip", "geojson", "json",
+                        "kml", "kmz", "topojson",
+                    ],
+                )
+                .add_filter("Excel", &["xlsx", "xlsm", "xls"])
+                .add_filter("文字檔", &["csv", "tsv", "txt"])
+                .add_filter("空間檔案", &["shp", "zip", "geojson", "json", "kml", "kmz", "topojson"])
+                .blocking_pick_file(),
+        )
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// 選擇存檔位置（預設為報表套件；匯出時另指定標題、副檔名與檔案類型的名稱）；取消時回傳 null。
 #[tauri::command]
 async fn pick_save_path(
@@ -279,7 +311,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| bring_to_front(app)))
         .plugin(tauri_plugin_dialog::init())
         .manage(Engine(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![pick_open_path, pick_save_path])
+        .invoke_handler(tauri::generate_handler![pick_open_path, pick_data_path, pick_save_path])
         .setup(|app| {
             let handle = app.handle().clone();
             build_menu(&handle)?;
