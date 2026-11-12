@@ -136,6 +136,7 @@ AGG_LABELS = {
     "pct75": "PCT75",
     "pct90": "PCT90",
     "pct95": "PCT95",
+    "collect": "COLLECT",
 }
 TC_LABELS = {
     "running_total": "累計",
@@ -658,7 +659,11 @@ class _Builder:
                 encoding["x"] = {**x, "axis": axis}
             text_field = self.label_field(marks) if dots else self.text_field(marks)
             if text_field is None and not dots:
-                measures = [c for c in self.channels.values() if c.role == "measure"]
+                measures = [
+                    c
+                    for c in self.channels.values()
+                    if c.role == "measure" and c.datatype != "spatial"
+                ]
                 text_field = measures[0].label if measures else None
             if dots:
                 vl_mark = {"type": VL_MARKS[mark], "tooltip": True}
@@ -1019,7 +1024,11 @@ class _Builder:
         label = self.text_field(marks) if mark == "text" else self.label_field(marks)
         if mark == "text":
             if label is None:
-                measures = [c for c in self.channels.values() if c.role == "measure"]
+                measures = [
+                    c
+                    for c in self.channels.values()
+                    if c.role == "measure" and c.datatype != "spatial"
+                ]
                 label = measures[0].label if measures else None
             if label is None:
                 return None
@@ -1442,8 +1451,11 @@ class _Builder:
             ch = self.ch(use)
             if ch.role == "dimension":
                 encoding.setdefault("detail", []).append({"field": ch.name, "type": "nominal"})
+        # 空間資料（形狀）不在工具提示中（與 Tableau 相同）
         encoding["tooltip"] = [
-            {"field": ch.label, "title": ch.title} for ch in self.channels.values()
+            {"field": ch.label, "title": ch.title}
+            for ch in self.channels.values()
+            if ch.datatype != "spatial"
         ]
 
     # ------------------------------------------------------------ 多個量值
@@ -1937,14 +1949,12 @@ def build_spec(
     mark = ws.marks.type
     multiple = len(rows_meas) > 1 or len(cols_meas) > 1
     if map_plan is not None:
-        body = maps.body(builder, ir, ws, map_plan)
+        body = maps.body(builder, ir, ws, map_plan, rows_dims, cols_dims, params)
         mark = "map"
         for name, present in (
-            ("參考線", ws.reference_lines),
             ("趨勢線", any(m.trend for m in [ws.marks, *(p.marks for p in ws.panes)])),
             ("預測", ws.forecast),
             ("註解", ws.annotations),
-            ("欄列架上的維度（分格的地圖）", rows_dims or cols_dims),
         ):
             if present:
                 builder.notes.append(f"地圖上的{name}尚未支援，未畫出（不影響數字）")
@@ -3307,29 +3317,79 @@ def _with_reference_lines(
 
     範圍：整張表；窗格＝欄列架上的離散維度，但各架最內層若是離散維度則不算（它切出的是儲存格）；
     儲存格＝欄列架上所有的離散維度。線畫在標記之上；底色（參考區間、分布、盒鬚圖）畫在標記之下。
+    同一架上有多個量值（每個量值一張圖）與雙軸時，每張圖（雙軸的每一層）畫自己的座標軸上的參考線，
+    與那個量值共用刻度。
     """
     ws, notes = builder.ws, builder.notes
-    encoding = body.get("encoding") if "mark" in body or "layer" in body else None
-    if encoding is None:
-        notes.append("多個量值、圓餅等圖表上的參考線尚未畫出（不影響數字）")
+    handled: set[int] = set()
+
+    def walk(node: dict[str, Any]) -> dict[str, Any]:
+        for key in ("vconcat", "hconcat"):
+            if key in node:
+                return {**node, key: [walk(child) for child in node[key]]}
+        if "layer" in node and "resolve" in node and not isinstance(node.get("encoding"), dict):
+            # 雙軸：每一層是一個量值的圖，各自的刻度
+            return {**node, "layer": [walk(child) for child in node["layer"]]}
+        if "mark" not in node and "layer" not in node:
+            return node
+        data = node.get("data")
+        own = isinstance(data, dict) and "values" in data
+        records = data["values"] if isinstance(data, dict) and "values" in data else values
+        # 同一個量值在雙軸的兩層（例如區域加折線）時，參考線只畫在第一層
+        found, done = _chart_reference_lines(builder, node, records, params, handled)
+        handled.update(done)
+        if own and found is not node:
+            # 這張圖有自己的資料（詳細程度較粗的標記卡）：參考線的圖層也用它
+            inner = [
+                {k: v for k, v in layer.items() if k != "data"} if layer is node else layer
+                for layer in found["layer"]
+            ]
+            return {"data": data, "layer": inner}
+        return found
+
+    if not any(k in body for k in ("vconcat", "hconcat", "mark", "layer")):
+        notes.append("圓餅等沒有座標軸的圖表上的參考線尚未畫出（不影響數字）")
         return body
+    body = walk(body)
+    for n, line in enumerate(ws.reference_lines):
+        if n not in handled:
+            notes.append(f"參考線 {line.id} 的量值不在座標軸上，沒有畫出")
+    return body
+
+
+def _chart_reference_lines(
+    builder: _Builder,
+    body: dict[str, Any],
+    values: list[dict[str, Any]],
+    params: dict[str, Scalar],
+    skip: set[int] | None = None,
+) -> tuple[dict[str, Any], set[int]]:
+    """一張圖（有 x、y 的 encoding）上的參考線：只畫量值在這張圖的座標軸上、還沒畫過（skip 以外）的；
+    回傳圖與處理過的參考線。"""
+    ws, notes = builder.ws, builder.notes
+    encoding = main_encoding(body)
+    if not isinstance(encoding, dict):
+        return body, set()
     scopes = _scope_keys(builder)
     behind: list[dict[str, Any]] = []
     front: list[dict[str, Any]] = []
     drawn: dict[str, tuple[str, str]] = {}
+    handled: set[int] = set()
     for n, line in enumerate(ws.reference_lines):
         axis = builder.channels.get(use_key(line.axis))
         position = next(
             (
                 c
                 for c in ("x", "y")
-                if axis is not None and encoding.get(c, {}).get("field") == axis.name
+                if axis is not None
+                and isinstance(encoding.get(c), dict)
+                and encoding[c].get("field") == axis.name
             ),
             None,
         )
-        if axis is None or position is None:
-            notes.append(f"參考線 {line.id} 的量值不在座標軸上，沒有畫出")
+        if axis is None or position is None or (skip is not None and n in skip):
             continue
+        handled.add(n)
         group_keys = scopes[line.scope]
         groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
         for record in values:
@@ -3390,8 +3450,8 @@ def _with_reference_lines(
             for i, text in _reference_labels(line, axis, first, temporal):
                 front.append(place.label(f"{names[i]}_label", names[i], text))
     if not behind and not front:
-        return body
-    return {"layer": [*behind, body, *front]}
+        return body, handled
+    return {"layer": [*behind, body, *front]}, handled
 
 
 ANNOTATION = f"{DECO}_annotation"

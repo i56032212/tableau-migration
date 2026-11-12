@@ -27,9 +27,10 @@ function canHaveGeoRole(field: CatalogField): boolean {
   return field.kind !== "set" && ["string", "integer", "real"].includes(field.datatype);
 }
 
-/** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合；有地理角色的為地球）。 */
+/** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合；有地理角色的為地球、空間資料為地圖）。 */
 function fieldIcon(field: CatalogField): string {
   if (field.geo_role) return "🌐";
+  if (field.datatype === "spatial") return "🗺";
   if (field.kind === "set") return "◎";
   if (field.datatype === "integer" || field.datatype === "real") return "#";
   if (isDate(field)) return field.datatype === "datetime" ? "◷" : "▦";

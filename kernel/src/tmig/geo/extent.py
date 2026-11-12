@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
 
 MAX_LATITUDE = 85.0511
 """Web Mercator 的緯度上限。"""
@@ -121,6 +124,15 @@ class Projector:
         return (
             self.x_offset + self.k * math.radians(dx),
             self.y_offset - self.k * mercator_y(lat),
+        )
+
+    def arrays(self, lons: Any, lats: Any) -> tuple[np.ndarray, np.ndarray]:
+        """經緯度的陣列 → 像素的陣列（空間資料的形狀依畫面簡化時使用）。"""
+        dx = (np.asarray(lons, dtype=float) - self.box.center + 180.0) % 360.0 - 180.0
+        phi = np.radians(np.clip(np.asarray(lats, dtype=float), -MAX_LATITUDE, MAX_LATITUDE))
+        return (
+            self.x_offset + self.k * np.radians(dx),
+            self.y_offset - self.k * np.log(np.tan(np.pi / 4 + phi / 2)),
         )
 
     def invert(self, x: float, y: float) -> tuple[float, float]:

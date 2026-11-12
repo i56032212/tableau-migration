@@ -83,6 +83,7 @@ AGG_LABELS: dict[str, list[str]] = {
     "pct50": ["PCT50({c})", "Pct50 {c}", "Percentile 50 of {c}"],
     "pct75": ["PCT75({c})", "Pct75 {c}", "Percentile 75 of {c}"],
     "pct90": ["PCT90({c})", "Pct90 {c}", "Percentile 90 of {c}"],
+    "collect": ["COLLECT({c})", "Collect of {c}", "{c}"],
     "pct95": ["PCT95({c})", "Pct95 {c}", "Percentile 95 of {c}"],
 }
 AGG_WORDS = {"sum": "Sum", "avg": "Average", "min": "Minimum", "max": "Maximum"}

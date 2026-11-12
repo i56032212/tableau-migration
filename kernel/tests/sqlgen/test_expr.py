@@ -399,7 +399,11 @@ def test_every_row_and_aggregate_function_is_tested() -> None:
     # Table Calculation 在 test_query 以整張工作表實跑；使用者函式在 test_rls 以不同的登入者實跑
     table_calcs = {name for name in implemented_names() if is_table_calc_function(name)}
     nondeterministic = {"TODAY", "NOW", "RANDOM"}
-    missing = implemented_names() - tested - table_calcs - USER_FUNCTIONS - nondeterministic
+    # 空間函式在 test_spatial 與 Hyper（Tableau 的引擎）的結果逐一比對
+    spatial = {"MAKEPOINT", "MAKELINE", "DISTANCE", "BUFFER", "AREA", "COLLECT"}
+    missing = (
+        implemented_names() - tested - table_calcs - USER_FUNCTIONS - nondeterministic - spatial
+    )
     assert missing == set()
 
 

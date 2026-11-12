@@ -19,6 +19,7 @@ import {
   firstMeasure,
   type FilterIR,
   GENERATED_LABELS,
+  GEOMETRY_GENERATED,
   generatedUse,
   insertUse,
   isDate,
@@ -606,6 +607,7 @@ const SLOTS: [MarkSlot, string][] = [
   ["shape", "形狀"],
   ["angle", "角度"],
   ["path", "路徑"],
+  ["geometry", "空間"],
 ];
 
 function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; card: Card }) {
@@ -613,7 +615,7 @@ function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; car
   const menu = usePillMenu();
   const shelf = `marks.${slot}` as ShelfName;
   const { over, handlers, dropAt } = useDropTarget(shelf, card);
-  const uses = usesOn(editor.sheet, shelf, card);
+  const uses = usesOn(editor.sheet, shelf, card).filter((u) => slot !== "geometry" || u.field !== GEOMETRY_GENERATED);
   return (
     <div className={`mark-slot${over ? " over" : ""}`} {...handlers} data-drop={shelf}>
       <span className="mark-slot-label">{label}</span>
@@ -633,6 +635,8 @@ export function MarksCard() {
   const { sheet, card, setCard, fields, apply } = editor;
   const marks = cardMarks(sheet, card);
   const tabs = sheet.panes.length > 0;
+  // 空間資料的形狀：資料源有空間欄位時才顯示這一格（Geometry (generated) 不顯示）
+  const spatialShown = [...fields.values()].some((f) => f.datatype === "spatial");
   return (
     <div className="card marks-card" data-shelf="marks">
       <div className="card-title">標記</div>
@@ -695,7 +699,7 @@ export function MarksCard() {
           />
         </label>
       </div>
-      {SLOTS.map(([slot, label]) => (
+      {SLOTS.filter(([slot]) => slot !== "geometry" || spatialShown).map(([slot, label]) => (
         <MarkSlotRow key={slot} slot={slot} label={label} card={card} />
       ))}
     </div>

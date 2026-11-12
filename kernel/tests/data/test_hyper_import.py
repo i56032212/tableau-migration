@@ -104,8 +104,8 @@ def test_ir_columns_missing_from_extract(imported: tuple[Path, list]) -> None:
 def test_unsupported_types_raise() -> None:
     with pytest.raises(HyperImportError, match="沒有定義對應"):
         duckdb_type(SqlType.bytes())
-    with pytest.raises(HyperImportError):
-        duckdb_type(SqlType.geography())
+    # 空間資料以 WKT 文字匯入
+    assert duckdb_type(SqlType.geography()) == "VARCHAR"
     assert duckdb_type(SqlType.numeric(18, 4)) == "DECIMAL(18, 4)"
     assert duckdb_type(SqlType.varchar(10)) == "VARCHAR"
 
@@ -159,3 +159,32 @@ def test_case_insensitive_collation_is_kept(tmp_path: Path) -> None:
         # 沒有定序的欄位仍分大小寫
         code = 'SELECT sum("N") FROM "Extract"."Extract" WHERE "Code" = \'a\''
         assert con.execute(code).fetchall() == [(1,)]
+
+
+def test_locale_collation_orders_like_tableau(tmp_path: Path) -> None:
+    """依語系的定序（en_US）：與 Tableau 相同依語系排序（apple、Apple、banana，不是位元組順序的
+    Apple、Banana、apple），比較仍分大小寫。"""
+    table = TableDefinition(
+        TableName("Extract", "Extract"),
+        [TableDefinition.Column("Name", SqlType.text(), collation="en_US")],
+    )
+    hyper = tmp_path / "locale.hyper"
+    with (
+        HyperProcess(
+            Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, parameters={"log_dir": str(tmp_path)}
+        ) as process,
+        Connection(process.endpoint, hyper, CreateMode.CREATE_AND_REPLACE) as conn,
+    ):
+        conn.catalog.create_schema("Extract")
+        conn.catalog.create_table(table)
+        with Inserter(conn, table) as inserter:
+            inserter.add_rows([["banana"], ["Apple"], ["apple"], ["Banana"]])
+            inserter.execute()
+    twbx = b.write_twbx(tmp_path, b.workbook(), {"Data/Extracts/test.hyper": hyper.read_bytes()})
+    (result,) = import_workbook(twbx, tmp_path / "data", parse_workbook(twbx))
+    assert not any("Name" in w for w in result.table.warnings)
+    with duckdb.connect(str(tmp_path / "data" / "ds_orders.duckdb"), read_only=True) as con:
+        names = con.execute('SELECT "Name" FROM "Extract"."Extract" ORDER BY 1').fetchall()
+        assert [n for (n,) in names] == ["apple", "Apple", "banana", "Banana"]
+        same = 'SELECT count(*) FROM "Extract"."Extract" WHERE "Name" = \'apple\''
+        assert con.execute(same).fetchall() == [(1,)]

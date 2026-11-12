@@ -840,6 +840,15 @@ class SheetParser:
                     return item
         raise KeyError(field_id)
 
+    def _spatial(self, use: FieldUse) -> bool:
+        """空間資料的欄位（Shapefile 的 Geometry、MAKEPOINT 等計算欄位）。"""
+        if use.field in SPECIAL_FIELDS:
+            return False
+        try:
+            return self._field(use.field).datatype == "spatial"
+        except KeyError:
+            return False
+
     def _is_measure(self, use: FieldUse) -> bool:
         """在檢視中是否為量值（次要資料源的欄位依它自己的資料源判斷）。"""
         assert self.ds is not None
@@ -1064,7 +1073,12 @@ class SheetParser:
             )
             return None
         axis = self.resolve(instance_key(element.get("axis-column", "")))
-        if isinstance(axis, str) or axis.field in SPECIAL_FIELDS:
+        # 地圖的緯度、經度（generated）軸上的參考線照畫（見 tmig.render.maps）
+        if isinstance(axis, str) or axis.field in (
+            MEASURE_NAMES,
+            MEASURE_VALUES,
+            GEOMETRY_GENERATED,
+        ):
             ctx.ignore(element, "Measure Values 軸上的參考線新平台不畫（不影響數字）")
             return None
         value_ref = element.get("value-column", "")
@@ -1084,7 +1098,11 @@ class SheetParser:
                 return None
         else:
             found = self.resolve(instance_key(value_ref)) if value_ref else axis
-            if isinstance(found, str) or found.field in SPECIAL_FIELDS:
+            if isinstance(found, str) or found.field in (
+                MEASURE_NAMES,
+                MEASURE_VALUES,
+                GEOMETRY_GENERATED,
+            ):
                 ctx.ignore(element, f"參考線的量值 {value_ref} 新平台不畫（不影響數字）")
                 return None
             value = found
@@ -1292,11 +1310,16 @@ class SheetParser:
                     color_ref = enc.get("column")
             elif tag == "path":
                 marks.path = use
-            elif tag == "geometry":
-                if use.field != GEOMETRY_GENERATED:
-                    self.ctx.flag(enc, "空間檔案（Shapefile 等）的幾何欄位 v0 不支援")
+            elif tag == "geometry" or (tag == "lod" and self._spatial(use)):
+                # 空間欄位的 COLLECT 同時寫在詳細資料與 geometry：一律當作標記的形狀
+                if use.field != GEOMETRY_GENERATED and not self._spatial(use):
+                    self.ctx.flag(enc, f"標記編碼 geometry：欄位不是空間資料（{use.field}）")
+                    continue
+                if marks.geometry is not None and marks.geometry != use:
+                    self.ctx.flag(enc, "標記卡上有多個空間欄位，v0 只畫第一個")
                     continue
                 marks.geometry = use
+                continue
             elif tag == "text":
                 marks.label.append(use)
             elif tag == "lod":

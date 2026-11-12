@@ -105,6 +105,7 @@ AGG_FUNCTIONS = {
     "stdevp": "STDEVP",
     "var": "VAR",
     "varp": "VARP",
+    "collect": "COLLECT",
 }
 RANK_FUNCTIONS = {
     "competition": "RANK",

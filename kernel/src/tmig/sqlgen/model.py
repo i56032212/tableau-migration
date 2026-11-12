@@ -58,6 +58,7 @@ NULL_TYPES = {
     "boolean": "BOOLEAN",
     "date": "DATE",
     "datetime": "TIMESTAMP",
+    "spatial": "VARCHAR",
 }
 
 

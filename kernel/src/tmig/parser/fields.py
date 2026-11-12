@@ -47,6 +47,7 @@ AGG_DERIVATIONS: dict[str, Aggregation] = {
     "StdevP": "stdevp",
     "Var": "var",
     "VarP": "varp",
+    "Collect": "collect",
 }
 DATE_DERIVATIONS: dict[str, tuple[Literal["part", "trunc"], str]] = {
     "Year": ("part", "year"),
@@ -93,6 +94,7 @@ NAME_PREFIXES = {
     "my": "MY",
     "mdy": "MDY",
     "io": "InOut",
+    "clct": "Collect",
 }
 """欄位實例名稱的前綴（例如 [yr:Order Date:ok] 的 yr）→ 衍生方式；用於沒有 column-instance 的參照。"""
 

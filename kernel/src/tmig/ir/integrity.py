@@ -176,6 +176,7 @@ def check_references(ir: IR) -> list[str]:
         _check_model(ds, errors)
         _check_files(ds, errors)
         _check_refresh(ds, errors)
+    field_types = {(ds.id, fld.id): fld.datatype for ds in ir.datasources for fld in ds.fields}
     for prm in ir.parameters:
         claim(prm.id, f"parameters[{prm.id}]")
     param_ids = {prm.id for prm in ir.parameters}
@@ -343,8 +344,13 @@ def check_references(ir: IR) -> list[str]:
                 check_use(
                     use, ws.datasource, f"{base}.{name}[{i}]", tcs, special=True, extra=blended
                 )
-            if card.geometry is not None and card.geometry.field != GEOMETRY_GENERATED:
-                errors.append(f"{base}.{name}.geometry：只支援 Geometry (generated)")
+            geometry = card.geometry
+            if geometry is not None and geometry.field != GEOMETRY_GENERATED:
+                found = field_types.get((ws.datasource, geometry.field))
+                if found != "spatial" or geometry.agg != "collect":
+                    errors.append(
+                        f"{base}.{name}.geometry：只支援 Geometry (generated) 或空間欄位的 COLLECT"
+                    )
             for i, tip in enumerate(card.tooltip_sheets):
                 where = f"{base}.{name}.tooltip_sheets[{i}]"
                 if tip.worksheet not in sheets or tip.worksheet == ws.id:
@@ -413,12 +419,20 @@ def check_references(ir: IR) -> list[str]:
                         )
         for line in ws.reference_lines:
             where = f"{base}.reference_lines[{line.id}]"
-            check_use(line.axis, ws.datasource, f"{where}.axis", tcs)
+            # 地圖的緯度、經度（generated）軸上的參考線
+            coordinates = line.axis.field in GENERATED_FIELDS
+            check_use(line.axis, ws.datasource, f"{where}.axis", tcs, special=coordinates)
             if isinstance(line.value, ParamRef):
                 if line.value.parameter not in params:
                     errors.append(f"{where}.value：參數「{line.value.parameter}」不存在")
             elif line.value is not None:
-                check_use(line.value, ws.datasource, f"{where}.value", tcs)
+                check_use(
+                    line.value,
+                    ws.datasource,
+                    f"{where}.value",
+                    tcs,
+                    special=line.value.field in GENERATED_FIELDS,
+                )
 
     for db in ir.dashboards:
         for layout in db.layouts:

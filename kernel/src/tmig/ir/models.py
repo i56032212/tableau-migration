@@ -41,7 +41,8 @@ SourceRef = Annotated[str, Field(min_length=1, description="此實體在 .twb �
 Scalar = StrictBool | StrictInt | StrictFloat | StrictStr | None
 """常值。日期與時間一律以 ISO 8601 字串表示。"""
 
-DataType = Literal["string", "integer", "real", "boolean", "date", "datetime"]
+DataType = Literal["string", "integer", "real", "boolean", "date", "datetime", "spatial"]
+"""spatial：空間資料（Shapefile 等空間檔案的 Geometry、MAKEPOINT 等空間函式的結果），以 WKT 文字存放。"""
 Role = Literal["dimension", "measure"]
 Aggregation = Literal[
     "sum",
@@ -63,8 +64,10 @@ Aggregation = Literal[
     "pct75",
     "pct90",
     "pct95",
+    "collect",
 ]
-"""pct5…pct95：百分位數（Tableau 彙總選單的 Percentile，以內插計算，同 PERCENTILE 函式）。"""
+"""pct5…pct95：百分位數（Tableau 彙總選單的 Percentile，以內插計算，同 PERCENTILE 函式）；
+collect：空間資料的彙總（COLLECT，合成一個形狀）。"""
 PERCENTILES: dict[str, int] = {f"pct{p}": p for p in (5, 10, 25, 50, 75, 90, 95)}
 """百分位數彙總 → 百分位（0–100）。"""
 DatePart = Literal["year", "quarter", "month", "week", "weekday", "day", "hour", "minute", "second"]
@@ -446,12 +449,17 @@ class FileColumn(IRModel):
 
 
 class FileTable(IRModel):
-    """檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等），或 .hyper 檔中的資料表
-    （直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；只有一張資料表時與萃取相同）。"""
+    """檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等）、空間檔案（Shapefile、GeoJSON、
+    KML、TopoJSON），或 .hyper 檔中的資料表（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；
+    只有一張資料表時與萃取相同）。"""
 
     name: str = Field(min_length=1, description="關聯樹中的資料表名稱（relation 的 name）")
-    format: Literal["excel", "text", "hyper"]
+    format: Literal["excel", "text", "hyper", "spatial"]
     path: str = Field(min_length=1, description=".twbx 內的路徑，一律用 /")
+    layer: str | None = Field(
+        default=None,
+        description="空間檔案的圖層：壓縮檔中的 Shapefile、TopoJSON 的物件（Tableau 的資料表名稱）",
+    )
     sheet: str | None = Field(default=None, description="Excel 的工作表（或具名範圍）")
     table: list[str] | None = Field(
         default=None, description=".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]"
@@ -467,8 +475,8 @@ class FileTable(IRModel):
 
 
 class FileConnection(IRModel):
-    """資料在 .twbx 內的檔案（Excel、文字檔、.hyper）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進
-    DuckDB（每張資料表一張 Files.<name>；.hyper 依它本身的型別），之後與萃取相同在本機查詢。檔案的
+    """資料在 .twbx 內的檔案（Excel、文字檔、空間檔案、.hyper）且沒有萃取：匯入時依 Tableau 讀到的欄位
+    型別讀進 DuckDB（每張資料表一張 Files.<name>；.hyper 依它本身的型別），之後與萃取相同在本機查詢。檔案的
     內容是報表封裝時的快照（與 Tableau Server 上的 .twbx 相同）。"""
 
     kind: Literal["file"]
@@ -1108,7 +1116,9 @@ class Marks(IRModel):
     angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
     path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")
     geometry: FieldUse | None = Field(
-        default=None, description="地圖上標記的形狀（Geometry (generated)）：有時畫成填色的區域"
+        default=None,
+        description="地圖上標記的形狀：Geometry (generated)（地理角色的區域），或空間欄位的 COLLECT"
+        "（空間檔案的 Geometry、MAKEPOINT 等），畫成多邊形、線或點",
     )
     density: DensityStyle | None = Field(default=None, description="密度標記的配色與強度")
     labels: MarkLabels | None = Field(

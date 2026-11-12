@@ -1582,7 +1582,8 @@
             "real",
             "boolean",
             "date",
-            "datetime"
+            "datetime",
+            "spatial"
           ],
           "title": "Datatype",
           "type": "string"
@@ -1609,7 +1610,8 @@
                 "pct50",
                 "pct75",
                 "pct90",
-                "pct95"
+                "pct95",
+                "collect"
               ],
               "type": "string"
             },
@@ -2254,7 +2256,8 @@
                 "pct50",
                 "pct75",
                 "pct90",
-                "pct95"
+                "pct95",
+                "collect"
               ],
               "type": "string"
             },
@@ -2322,7 +2325,8 @@
             "real",
             "boolean",
             "date",
-            "datetime"
+            "datetime",
+            "spatial"
           ],
           "title": "Datatype",
           "type": "string"
@@ -2337,7 +2341,7 @@
     },
     "FileConnection": {
       "additionalProperties": false,
-      "description": "資料在 .twbx 內的檔案（Excel、文字檔、.hyper）且沒有萃取：匯入時依 Tableau 讀到的欄位型別讀進\nDuckDB（每張資料表一張 Files.<name>；.hyper 依它本身的型別），之後與萃取相同在本機查詢。檔案的\n內容是報表封裝時的快照（與 Tableau Server 上的 .twbx 相同）。",
+      "description": "資料在 .twbx 內的檔案（Excel、文字檔、空間檔案、.hyper）且沒有萃取：匯入時依 Tableau 讀到的欄位\n型別讀進 DuckDB（每張資料表一張 Files.<name>；.hyper 依它本身的型別），之後與萃取相同在本機查詢。檔案的\n內容是報表封裝時的快照（與 Tableau Server 上的 .twbx 相同）。",
       "properties": {
         "kind": {
           "const": "file",
@@ -2390,7 +2394,7 @@
     },
     "FileTable": {
       "additionalProperties": false,
-      "description": "檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等），或 .hyper 檔中的資料表\n（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；只有一張資料表時與萃取相同）。",
+      "description": "檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等）、空間檔案（Shapefile、GeoJSON、\nKML、TopoJSON），或 .hyper 檔中的資料表（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；\n只有一張資料表時與萃取相同）。",
       "properties": {
         "name": {
           "description": "關聯樹中的資料表名稱（relation 的 name）",
@@ -2402,7 +2406,8 @@
           "enum": [
             "excel",
             "text",
-            "hyper"
+            "hyper",
+            "spatial"
           ],
           "title": "Format",
           "type": "string"
@@ -2412,6 +2417,19 @@
           "minLength": 1,
           "title": "Path",
           "type": "string"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "空間檔案的圖層：壓縮檔中的 Shapefile、TopoJSON 的物件（Tableau 的資料表名稱）",
+          "title": "Layer"
         },
         "sheet": {
           "anyOf": [
@@ -3660,7 +3678,7 @@
             }
           ],
           "default": null,
-          "description": "地圖上標記的形狀（Geometry (generated)）：有時畫成填色的區域"
+          "description": "地圖上標記的形狀：Geometry (generated)（地理角色的區域），或空間欄位的 COLLECT（空間檔案的 Geometry、MAKEPOINT 等），畫成多邊形、線或點"
         },
         "density": {
           "anyOf": [
@@ -3978,7 +3996,8 @@
             "real",
             "boolean",
             "date",
-            "datetime"
+            "datetime",
+            "spatial"
           ],
           "title": "Datatype",
           "type": "string"

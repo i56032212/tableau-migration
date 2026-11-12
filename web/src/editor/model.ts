@@ -122,6 +122,8 @@ export interface MarksIR {
   shape: FieldUse | null;
   angle: FieldUse | null;
   path: FieldUse | null;
+  /** 地圖上標記的形狀：Geometry (generated)，或空間資料的 COLLECT（Shapefile 的 Geometry、MAKEPOINT 等） */
+  geometry?: FieldUse | null;
   tooltip_sheets?: TooltipSheetIR[];
   [key: string]: unknown;
 }
@@ -170,7 +172,7 @@ export interface SheetIR {
 export const EDITOR_REF = "/editor";
 
 /** 標記卡上的位置：單一欄位或多個欄位。 */
-export type MarkSlot = "color" | "size" | "shape" | "angle" | "path" | "label" | "detail" | "tooltip";
+export type MarkSlot = "color" | "size" | "shape" | "angle" | "path" | "label" | "detail" | "tooltip" | "geometry";
 export const LIST_SLOTS: MarkSlot[] = ["label", "detail", "tooltip"];
 export type ShelfName = "rows" | "columns" | "filters" | "pages" | "measure_values" | `marks.${MarkSlot}`;
 
@@ -301,9 +303,11 @@ export function blendSources(sheet: SheetIR): string[] {
 export const isDate = (field: CatalogField | undefined) =>
   field !== undefined && (field.datatype === "date" || field.datatype === "datetime");
 
-/** 欄位放到架上的預設：量值為彙總（預設的彙總或 SUM）且連續；日期維度為離散的年；其他維度為離散。 */
+/** 欄位放到架上的預設：量值為彙總（預設的彙總或 SUM）且連續；日期維度為離散的年；其他維度為離散；
+ * 空間資料為 COLLECT。 */
 export function defaultUse(field: CatalogField): FieldUse {
   const base: FieldUse = { field: field.id, agg: null, date: null, continuous: false, table_calc: null };
+  if (field.datatype === "spatial") return { ...base, agg: "collect" };
   if (field.level === "aggregate" || field.level === "table_calc") return { ...base, continuous: true };
   if (field.role === "measure") return { ...base, agg: field.default_agg ?? "sum", continuous: true };
   if (isDate(field)) return { ...base, date: { kind: "part", unit: "year" } };
@@ -691,9 +695,47 @@ function tidyCards(sheet: SheetIR): SheetIR {
   return { ...sheet, panes, subtotals, measure_values: measureValues, measure_aliases: aliases };
 }
 
-/** 每次變更後整理：標記卡、排序、Table Calculation 的定址。 */
+/**
+ * 空間資料（Shapefile 等空間檔案的 Geometry、MAKEPOINT 等計算欄位）：與 Tableau 相同，放進檢視就畫成地圖——
+ * COLLECT 的膠囊成為標記卡上的形狀（不在其他位置），欄列架換成 Latitude／Longitude (generated)。
+ * 形狀的位置上不是空間資料的膠囊去掉（Geometry (generated) 除外）。
+ */
+export function spatialMap(sheet: SheetIR, fields: Map<string, CatalogField>): SheetIR {
+  const spatial = (u: FieldUse | null | undefined): u is FieldUse =>
+    Boolean(u) && fields.get((u as FieldUse).field)?.datatype === "spatial";
+  const marks = sheet.marks;
+  const current = marks.geometry ?? null;
+  const placed = [...sheet.rows, ...sheet.columns, ...markUses(marks)].find(spatial);
+  const invalid = current !== null && current.field !== GEOMETRY_GENERATED && !spatial(current);
+  if (!placed && !invalid) return sheet;
+  if (!placed) return { ...sheet, marks: { ...marks, geometry: null } };
+  const geometry: FieldUse = { ...placed, agg: "collect", date: null, continuous: false, table_calc: null };
+  const strip = (uses: FieldUse[]) => uses.filter((u) => !spatial(u));
+  const single = (u: FieldUse | null) => (spatial(u) ? null : u);
+  const map = isMapSheet(sheet);
+  return {
+    ...sheet,
+    rows: map ? strip(sheet.rows) : [generatedUse(LATITUDE_GENERATED)],
+    columns: map ? strip(sheet.columns) : [generatedUse(LONGITUDE_GENERATED)],
+    marks: {
+      ...marks,
+      color: single(marks.color),
+      size: single(marks.size),
+      shape: single(marks.shape),
+      angle: single(marks.angle),
+      path: single(marks.path),
+      label: strip(marks.label),
+      detail: strip(marks.detail),
+      tooltip: strip(marks.tooltip),
+      geometry,
+    },
+    panes: map ? sheet.panes : [],
+  };
+}
+
+/** 每次變更後整理：空間資料、標記卡、排序、Table Calculation 的定址。 */
 export function tidySheet(sheet: SheetIR, fields: Map<string, CatalogField>): SheetIR {
-  return tidy(tidyCards(sheet), fields);
+  return tidy(tidyCards(spatialMap(sheet, fields)), fields);
 }
 
 /** 交換欄與列（Tableau 工具列的「交換」）。 */

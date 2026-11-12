@@ -54,7 +54,9 @@ SQL_TYPES = {
     "boolean": "BOOLEAN",
     "date": "DATE",
     "datetime": "TIMESTAMP",
+    "spatial": "VARCHAR",
 }
+"""IR 的型別 → DuckDB 的型別（空間資料是 WKT 文字）。"""
 
 
 def cast(expr: str, datatype: str) -> str:

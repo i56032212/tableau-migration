@@ -92,6 +92,7 @@ METADATA_AGG: dict[str, Aggregation] = {
     "StdevP": "stdevp",
     "Var": "var",
     "VarP": "varp",
+    "Collect": "collect",
 }
 WEEK_DAYS: tuple[WeekDay, ...] = (
     "sunday",
@@ -135,9 +136,10 @@ GEO_ROLES: dict[str, GeoRole] = {
 }
 """地理角色（semantic-role 的第一段，例如 [State].[Name]、[Country].[ISO3166_2]）→ IR 的地理角色；
 緯度、經度是 [Geographical].[Latitude]／[Longitude]。"""
-FILE_SOURCES = frozenset({"excel-direct", "textscan", "hyper", "dataengine"})
+FILE_SOURCES = frozenset({"excel-direct", "textscan", "hyper", "dataengine", "ogrdirect"})
 """檔案型連線（沒有萃取時匯入 DuckDB，見 FileConnection）。.hyper 只有一張資料表時與萃取相同，
-有 join、多個 .hyper 檔或 Relationship 模型時是檔案型連線。"""
+有 join、多個 .hyper 檔或 Relationship 模型時是檔案型連線；ogrdirect 是空間檔案（Shapefile、GeoJSON、
+KML、TopoJSON 等）。"""
 TABLE_ID_PREFIX = "[__tableau_internal_object_id__]."
 """物件模型中每張邏輯資料表的筆數欄位（Tableau 2020.2 起的「資料表 (計數)」）。"""
 
@@ -163,7 +165,7 @@ def parse_parameters(ctx: ParseContext, ds_el: etree._Element) -> None:
         name = column.get("name", "")
         caption = column.get("caption") or strip_brackets(name)
         datatype = column.get("datatype", "")
-        if datatype not in DATATYPES:
+        if datatype not in DATATYPES or datatype == "spatial":
             ctx.flag(column, f"參數「{caption}」的型別 {datatype} v0 不支援")
             continue
         domain = column.get("param-domain-type", "any")
@@ -592,6 +594,18 @@ class DatasourceParser:
                 locale=columns_el.get("locale") or None,
                 columns=columns,
             )
+        if source.get("class") == "ogrdirect":
+            # 空間檔案：資料表名稱是圖層（壓縮檔中的 Shapefile、TopoJSON 的物件）
+            filename = (source.get("filename") or "").replace("\\", "/")
+            directory = (source.get("directory") or "").replace("\\", "/").rstrip("/")
+            joined = f"{directory}/{filename}" if directory and "/" not in filename else filename
+            path = self._packaged(joined)
+            if path is None:
+                self.ctx.flag(source, f"資料源「{self.caption}」的檔案「{filename}」不在 .twbx 內")
+                return None
+            return FileTable(
+                name=name, format="spatial", path=path, layer=table or None, columns=columns
+            )
         filename = source.get("filename", "")
         path = self._packaged(filename)
         if path is None:
@@ -959,7 +973,7 @@ class DatasourceParser:
             data_field = state.field_by_id(use.field)
         if data_field.set is not None:
             raise GroupError(f"層級 {name} 是集合")
-        if data_field.datatype not in DATATYPES:
+        if data_field.datatype not in DATATYPES or data_field.datatype == "spatial":
             raise GroupError(f"層級 {name} 的型別 {data_field.datatype} 不支援")
         part = use.date is not None and use.date.kind == "part"
         return Level(
@@ -1251,10 +1265,14 @@ def raw_field(
         return None
     aliases = member_aliases(ctx, column, datatype, f"欄位「{caption}」")
     role = (column.get("role") if column is not None else None) or (
-        "measure" if datatype in ("integer", "real") else "dimension"
+        "measure" if datatype in ("integer", "real", "spatial") else "dimension"
     )
+    if datatype == "spatial":
+        role = "measure"  # 空間資料只能以 COLLECT 彙總放進檢視
     agg_text = (column.get("aggregation") if column is not None else None) or aggregation
     default_agg = METADATA_AGG.get(agg_text) if role == "measure" else None
+    if datatype == "spatial":
+        default_agg = "collect"
     return DataField(
         id=ctx.ids.make("f", caption, name),
         name=name,
@@ -1434,15 +1452,21 @@ def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) ->
         ctx.flag(column, f"計算欄位「{caption}」的型別 {datatype} v0 不支援")
         return None
     aliases = member_aliases(ctx, column, datatype, f"計算欄位「{caption}」")
-    role = column.get("role") or ("measure" if datatype in ("integer", "real") else "dimension")
+    role = column.get("role") or (
+        "measure" if datatype in ("integer", "real", "spatial") else "dimension"
+    )
     agg_text = column.get("aggregation", "")
+    default_agg = METADATA_AGG.get(agg_text) if role == "measure" else None
+    if datatype == "spatial":
+        # 空間資料的計算欄位（MAKEPOINT 等）：與 Tableau 相同以 COLLECT 彙總
+        role, default_agg = "measure", "collect"
     data_field = DataField(
         id=ctx.ids.make("f", caption, name),
         name=name,
         caption=caption,
         role=role,  # type: ignore[arg-type]
         datatype=datatype,  # type: ignore[arg-type]
-        default_agg=METADATA_AGG.get(agg_text) if role == "measure" else None,
+        default_agg=default_agg,
         format=column.get("default-format"),
         hidden=column.get("hidden") == "true",
         column=None,

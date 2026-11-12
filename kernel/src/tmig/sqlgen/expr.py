@@ -15,6 +15,7 @@
 - REGEXP_EXTRACT 沒有符合時得 NULL；取代字串的 $1 轉成 RE2 的 \\1
 - 日期相減得相差的天數（兩邊都是日期時為整數）
 - DATENAME 的月份與星期為英文名稱（Tableau 依工作簿的地區設定）
+- 空間函式與 COLLECT 以 Python 計算（tmig.data.udf；空間資料是 WKT 文字）
 """
 
 from __future__ import annotations
@@ -285,6 +286,9 @@ class ExprCompiler:
             y = arg(1)
             fn = {"CORR": "corr", "COVAR": "covar_samp", "COVARP": "covar_pop"}[name]
             return f"{fn}({x}, {y})"
+        if name == "COLLECT":
+            # 空間資料合成一個形狀（tmig.geo.spatial.collect）；全是 Null 時為 Null
+            return f"{udf.GEO_COLLECT}(list({x}) FILTER (WHERE {x} IS NOT NULL))"
         raise FormulaSemanticError(f"尚不支援彙總函式 {name}", node.pos, unsupported=True)
 
     def _week_start(self, node: Call, index: int) -> int:
@@ -473,6 +477,21 @@ class ExprCompiler:
             else:
                 repl = a[2]
             return f"regexp_replace({a[0]}, {a[1]}, {repl}, 'g')"
+        if name == "MAKEPOINT":
+            if nargs == 3:
+                return (
+                    f"{udf.GEO_POINT_SRID}(CAST({a[0]} AS DOUBLE), CAST({a[1]} AS DOUBLE), "
+                    f"CAST({a[2]} AS BIGINT))"
+                )
+            return f"{udf.GEO_POINT}(CAST({a[0]} AS DOUBLE), CAST({a[1]} AS DOUBLE))"
+        if name == "MAKELINE":
+            return f"{udf.GEO_LINE}({a[0]}, {a[1]})"
+        if name == "DISTANCE":
+            return f"{udf.GEO_DISTANCE}({a[0]}, {a[1]}, {a[2]})"
+        if name == "BUFFER":
+            return f"{udf.GEO_BUFFER}({a[0]}, CAST({a[1]} AS DOUBLE), {a[2]})"
+        if name == "AREA":
+            return f"{udf.GEO_AREA}({a[0]}, {a[1]})"
         if name == "PI":
             return "pi()"
         if name == "RANDOM":

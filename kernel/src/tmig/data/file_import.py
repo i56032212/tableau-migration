@@ -56,6 +56,7 @@ ARROW_TYPES = {
     "boolean": pa.bool_(),
     "date": pa.date32(),
     "datetime": pa.timestamp("us"),
+    "spatial": pa.string(),
 }
 DUCKDB_TYPES = {
     "string": "VARCHAR",
@@ -64,6 +65,7 @@ DUCKDB_TYPES = {
     "boolean": "BOOLEAN",
     "date": "DATE",
     "datetime": "TIMESTAMP",
+    "spatial": "VARCHAR",
 }
 STAT_TAGS = {
     "string": "TEXT",
@@ -72,8 +74,9 @@ STAT_TAGS = {
     "boolean": "BOOL",
     "date": "DATE",
     "datetime": "TIMESTAMP",
+    "spatial": "TABGEOGRAPHY",
 }
-"""依 Tableau 型別對應的統計項目（與 Hyper 匯入相同的分類）。"""
+"""依 Tableau 型別對應的統計項目（與 Hyper 匯入相同的分類；空間資料只比對非空值數）。"""
 
 COMMA_DECIMAL = ("de", "es", "it", "pt", "nl", "id", "tr", "da", "el", "ro", "hr", "sl", "sr")
 SPACE_THOUSANDS = (
@@ -123,6 +126,11 @@ def import_file_tables(
             if table.format == "hyper":
                 results.append(load_hyper_export(con, hyper[table.name], FILE_SCHEMA, table.name))
                 continue
+            if table.format == "spatial":
+                raw = spatial_rows(archive, table)
+                values, warnings = typed_columns(raw, table)
+                results.append(_load(con, table, values, warnings))
+                continue
             data = read_member(archive, table.path)
             if table.format == "excel":
                 raw = excel_rows(data, table, books)
@@ -165,6 +173,29 @@ def read_member(archive: zipfile.ZipFile, path: str) -> bytes:
     if wanted not in names:
         raise FileImportError(f"{Path(archive.filename or '').name} 內找不到 {path}")
     return archive.read(names[wanted])
+
+
+def spatial_rows(archive: zipfile.ZipFile, table: FileTable) -> list[list[Any]]:
+    """空間檔案（Shapefile、GeoJSON、KML、TopoJSON）的各列，依 Tableau 記下的欄名（不分大小寫）取值；
+    Geometry 是 WKT 文字（tmig.data.spatial_files）。"""
+    from tmig.data.spatial_files import SpatialFileError, read_spatial, sidecar_paths
+
+    names = [n.replace("\\", "/") for n in archive.namelist()]
+    files = {p: read_member(archive, p) for p in sidecar_paths(names, table.path)}
+    files.setdefault(table.path, read_member(archive, table.path))
+    try:
+        found = read_spatial(files, table.path, table.layer)
+    except SpatialFileError as exc:
+        raise FileImportError(str(exc)) from exc
+    lowered = {name.lower(): name for name in found.columns}
+    missing = [c.name for c in table.columns if c.name.lower() not in lowered]
+    if missing:
+        raise FileImportError(
+            f"{table.path} 中沒有 Tableau 記下的欄位：{'、'.join(missing)}"
+            f"（檔案中有：{'、'.join(found.columns)}）"
+        )
+    keys = [lowered[c.name.lower()] for c in table.columns]
+    return [[row.get(key) for key in keys] for row in found.rows]
 
 
 def file_missing_columns(
@@ -410,7 +441,7 @@ def convert(value: Any, datatype: str, locale: str | None) -> tuple[Any, bool]:
         text = value.strip()
         if text == "":
             return None, True
-        if datatype == "string":
+        if datatype in ("string", "spatial"):
             return value, True
         parsed = _parse_text(text, datatype, locale)
         return parsed, parsed is not None

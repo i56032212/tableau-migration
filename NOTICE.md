@@ -15,3 +15,11 @@
 建置時使用，不隨平台散布。
 
 GeoNames 的資料以 CC BY 4.0 授權：使用平台的地圖時，城市的位置來自 GeoNames（© GeoNames contributors）。
+
+## 程式庫
+
+| 程式庫 | 用途 | 授權 |
+| --- | --- | --- |
+| [GeographicLib](https://geographiclib.sourceforge.io/)（Python 版 `geographiclib`，Charles Karney） | 空間函式 DISTANCE 的大地線長度（WGS84 橢球） | MIT |
+
+投影公式（`kernel/src/tmig/geo/projection.py`）依 IOGP 的 EPSG Guidance Note 7-2 與 Snyder 的 *Map Projections: A Working Manual*（USGS Professional Paper 1395）自行實作。

@@ -32,7 +32,8 @@ SNIPPET_LIMIT = 600
 FilterKind = Literal["categorical", "range", "top_n", "condition", "relative_date"]
 """單一欄位篩選的種類（dashboard 依此決定篩選控制項）。"""
 
-DATATYPES = frozenset({"string", "integer", "real", "boolean", "date", "datetime"})
+DATATYPES = frozenset({"string", "integer", "real", "boolean", "date", "datetime", "spatial"})
+"""欄位的型別；spatial 是空間資料（參數、群組的層級不能是空間資料）。"""
 
 
 def snippet(element: etree._Element, limit: int = SNIPPET_LIMIT) -> str:

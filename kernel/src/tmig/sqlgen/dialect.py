@@ -608,7 +608,11 @@ class Rewriter:
         if handler is not None:
             return handler(node)
         name = _anon_name(node)
-        if name in udf.FUNCTIONS:
+        if name in udf.SPATIAL_FUNCTIONS:
+            raise DialectError(
+                f"空間資料（MAKEPOINT 等空間函式、空間檔案的形狀）在 Live 連線的 {self.name} 尚未支援"
+            )
+        if name in udf.REGEX_FUNCTIONS:
             assert isinstance(node, exp.Anonymous)
             return self._icu_regex(name, list(node.expressions))
         if name is not None:

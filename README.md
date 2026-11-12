@@ -95,8 +95,10 @@ INCLUDE／EXCLUDE LOD（相對於排序或篩選的維度）、開啟報表時�
 資料，資料預覽與工作表相同套用資料源篩選與列層級權限（見「資料源分頁」）。
 
 地圖也已支援（見「地圖」）：地理角色、Latitude／Longitude (generated)、符號地圖、填色地圖（國家、州／省、
-美國的郡）、密度圖、標記圖層與雙軸地圖、背景地圖的樣式與圖層、「編輯位置」與存檔時固定的範圍。前面 113 份公開
-報表中的 18 份地圖報表（含 2 份附有作者截圖）全部解析通過，17 張地圖都能畫出（另 1 份是空間檔案，見下）；
+美國的郡）、密度圖、標記圖層與雙軸地圖、背景地圖的樣式與圖層、「編輯位置」與存檔時固定的範圍、地圖上的參考線與
+分格的地圖，以及空間資料：Shapefile、GeoJSON、KML、TopoJSON 等空間檔案（含 .prj 的投影座標）與萃取中的形狀，
+MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA 與 COLLECT 等空間函式（與 Tableau 的 Hyper 引擎逐一比對，數字的差距
+在 1e-6 以內）。前面 113 份公開報表中的 18 份地圖報表（含 2 份附有作者截圖）全部解析通過、都能畫出；
 Superstore 銷售績效的填色地圖與截圖相同（中部各州、Blue-Teal 的自動色盤與州名、銷售標籤）。
 
 示範與功能報表的預期結果由獨立的 Python 程式計算，**不是 Tableau 產生**；換上真實報表、以 Tableau 匯出的 CSV 比對，
@@ -331,8 +333,10 @@ Tableau 下線後，Published Data Source 也發布到新平台（有報表庫�
 萃取型的報表平常讀 DuckDB 檔（由 .twbx 內的 .hyper 匯入）。萃取中文字欄位的定序照樣保留：Tableau 的萃取多半是
 大小寫不分的定序（`en_US_CI`、`en_IN_CI` 等），在 DuckDB 以 `NOCASE`（重音不分的 `_AI` 加 `NOACCENT`）定序
 建立欄位，比較、篩選、分組與排序與 Tableau 相同不分大小寫（公開報表 Credit Card Complaints 以 'In Progress'
-比對資料中的 'In progress'，Tableau 算出 329 筆，新平台相同）；依語系但分大小寫的定序（`en_US` 等）依位元組
-排序，匯入時列出提醒。`tmig extract refresh` 依萃取各欄在來源的位置
+比對資料中的 'In progress'，Tableau 算出 329 筆，新平台相同）；依語系的定序（`en_US`、`de_DE` 等）以 DuckDB
+的 ICU 語系定序建立（`en_us`；沒有這個地區時用語言，例如 `en_IN` → `en`），排序與 Tableau 相同依語系
+（apple、Apple、banana，而不是 Apple、Banana、apple），認不得的語系才依位元組排序並在匯入時提醒。空間資料
+（Hyper 的 GEOGRAPHY）以 WKT 文字匯入（與 Tableau 畫出的形狀相同，座標到小數第 7 位）。`tmig extract refresh` 依萃取各欄在來源的位置
 （萃取 metadata-record 的 family 與 remote-alias）從來源資料庫重建（`kernel/src/tmig/data/extract_refresh.py`）：
 
 1. 連線設定與 Live 連線相同；`tmig connections template` 也會列出萃取的來源（標示「萃取更新」）
@@ -712,6 +716,26 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   著色且沒有設定色盤時與 Tableau 相同為 Blue-Teal。地圖上的標籤：區域在中央、點在右側，互相重疊的不顯示
 - **密度圖**：各標記以高斯核疊加（大小決定核的半徑），依密度與 Tableau 的配色（藍色、多色等）與強度上色
 - **標記圖層**（Tableau 2020.4 起）與雙軸地圖：每個圖層一張標記卡，依序由下往上畫；詳細程度較粗的圖層各自查詢
+- **分格的地圖**：欄列架上有離散的維度時與 Tableau 相同每一格一張地圖（範圍相同），標籤的重疊依每一格的大小判斷
+- **參考線**：緯度、經度座標軸上的參考線（平均、中位數、最小、最大、常數、參數等）畫成橫跨地圖的緯線、經線，
+  以標記的位置計算；參考區間、分布與盒鬚圖尚未畫出
+- **空間資料**（Tableau 的空間檔案與空間函式）：
+  - 空間檔案（`ogrdirect` 連線，沒有萃取時匯入資料庫）：Esri Shapefile（.shp 與 .dbf、.prj、.cpg，或壓縮成
+    .zip）、GeoJSON、KML／KMZ 與 TopoJSON。投影座標依 .prj 換成經緯度（橫麥卡托如 TWD97 二度分帶與 UTM、
+    麥卡托與 Web Mercator、Lambert 正形圓錐如美國州平面座標、Albers 等積圓錐、Lambert 方位等積，公式依
+    EPSG Guidance Note 7-2，以其中的範例驗算）；多邊形的各環依包含關係分成外環與內環；屬性的文字依 .cpg
+    （例如 Big5 的 950）解碼。萃取中的形狀（GEOGRAPHY）以 WKT 匯入
+  - 形狀與 Hyper 讀入時相同處理（經緯度上的直線邊切分、外環逆時針），以 Hyper 實測逐字相同
+  - 空間函式：MAKEPOINT(緯度, 經度)、MAKEPOINT(X, Y, SRID)（TWD97、UTM、Web Mercator、日本與韓國的平面座標等
+    常用的 EPSG 代碼）、MAKELINE、DISTANCE（WGS84 橢球的大地線，GeographicLib）、BUFFER（點的 120 邊形，與 Hyper
+    相同）、AREA（大地線多邊形的面積）與彙總 COLLECT（同種形狀合成 MULTI*，不同種合成 GEOMETRYCOLLECTION）。
+    與 Hyper 的 `tableau.geo_*` 函式逐一比對：DISTANCE、AREA 的相對差距在 1e-6 以內（Hyper 內部的座標精度約
+    6e-8 度），MAKEPOINT、MAKELINE、COLLECT 的文字相同，BUFFER 的頂點相差在 3e-7 度以內
+  - 地圖：標記卡上的 COLLECT 是每個標記的形狀，多邊形填色（與填色地圖相同的框線與 Blue-Teal 色盤）、線依顏色
+    畫線（粗細依大小，兩點之間畫成大地線）、點畫成圓點（大小依欄位）；形狀依畫面的像素簡化，WKT 不放進規格；
+    工具提示不列出形狀
+  - 編輯器：資料窗格以「🗺」標出空間欄位；連按兩下或拖到標記卡上與 Tableau 相同建立地圖（COLLECT 為標記卡
+    「空間」格的形狀，Latitude／Longitude (generated) 放到欄列架）
 - **背景地圖**：淺色、一般、深色、街道、戶外、衛星的配色、淡化，以及陸地、水域、國界、國名、州界、州名、郡界、
   城市名稱等圖層的開關（.twb 的 `map-style`、`washout` 與 `map-layer`）；底圖的地名依縮放層級出現，與標記的
   標籤重疊的不顯示
@@ -889,8 +913,11 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   衛星影像與美國人口普查的資料圖層，「街道」「戶外」「衛星」樣式以相近的配色呈現；郵遞區號沒有區域形狀（平台的
   資料只有中心點），填色地圖以中心點的圓點呈現；美國以外沒有郡的資料。同名而範圍不足以區分的地名（例如沒有州的
   Springfield）列為未知，與 Tableau 的「不明確」相同。地圖的平移、縮放（地圖工具列）、Tableau 的選取工具與
-  自訂的 WMS、Mapbox 背景地圖尚不支援（以內建的底圖呈現）；密度圖依色彩分組、地圖上的參考線與趨勢線、
-  分格的地圖（欄列架上的維度）尚未畫出。標籤重疊的判斷依工作表在 dashboard 上的大小估計
+  自訂的 WMS、Mapbox 背景地圖尚不支援（以內建的底圖呈現）；密度圖依色彩分組、地圖上的趨勢線與參考區間尚未畫出。
+  標籤重疊的判斷依工作表在 dashboard 上的大小估計。空間資料：基準面之間的轉換（例如 TWD67、OSGB 1936 到 WGS84）
+  尚未計算（TWD97、NAD83 等與 WGS84 的差距在 1 公尺左右）；BUFFER 只支援點（Tableau 2021.2 的範圍）；
+  空間 join（Intersects）、Esri File Geodatabase、MapInfo 與 Live 連線（PostGIS、SQL Server 等）的空間資料
+  尚不支援；MAKEPOINT 的 SRID 只支援常用的代碼
 - **TOTAL()**：以量值篩選後仍在檢視中的標記所對應的底層資料重新彙總
 - **週起始日**：.twb 沒寫時視為星期日
 - **預期 CSV 的格式**：Tableau 匯出的欄名與數值格式依版本與語系而異；欄名用 mapping.yaml 對照，
@@ -992,7 +1019,9 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   工作表上依參考線 id 設定的線條顏色、粗細、樣式、底色與標籤的數字格式照樣套用；參考區間的預設底色、
   分布的配色（`palette`）與中位數信賴區間的算法（以二項分配取對稱的順序統計量）依公開資料推定。
   盒鬚圖每個範圍以線性內插的四分位數畫出兩種灰色的盒子（中位數上下），鬚延伸到 1.5 倍四分位距內最遠的值
-  （或最小、最大值），可以隱藏鬚以內的標記；盒子的顏色與寬度依公開資料推定
+  （或最小、最大值），可以隱藏鬚以內的標記；盒子的顏色與寬度依公開資料推定。
+  同一架有多個量值（各自的座標軸）或雙軸時，每條參考線畫在它的量值所在的座標軸上（例如雙軸的折線上的平均線），
+  同一條線只畫一次；圓餅等沒有座標軸的圖表上的參考線尚未畫出
 - **趨勢線**：與 Tableau 相同依窗格與顏色（「允許依色彩」）分組，以轉換後的最小平方法配適五種模型（線性、對數、
   指數、乘冪、2–8 次多項式；對數與乘冪不納入 X ≤ 0、指數與乘冪不納入 Y ≤ 0 的標記），可以通過原點、排除分組的因子；
   線畫在各組資料的範圍內、顏色與標記相同（或依格式設定），信賴區間為平均值的 95% 信賴區間（上下兩條虛線，
@@ -1029,7 +1058,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   只支援寫在工作表上的 Table Calculation 計算欄位中；視窗函式的起訖可以是運算式（例如 `FIRST() + 1`、參數），
   逐列決定範圍，起點在終點之後時為 Null；HEXBINX／HEXBINY 的六角形邊長為 1、頂點朝上（與 d3-hexbin 相同，
   方向依公開資料推定）。外部分析服務（SCRIPT_*）、預測模型（MODEL_PERCENTILE、MODEL_QUANTILE）、
-  直通資料庫的 SQL（RAWSQL_*）與空間函式（MAKEPOINT、DISTANCE 等，屬於地圖）尚不支援
+  直通資料庫的 SQL（RAWSQL_*）尚不支援；空間函式見「地圖」
 - **Relationship 模型**：語意依 Tableau 文件（「How Analysis Works for Multi-table Data Sources」）與公開文章推定；
   維度表中沒有量值的成員何時列出、只用到其他資料表欄位的篩選對沒有關聯的列以 Null 判斷，這兩點待真實報表確認。
   維度是一對多資料表欄位的運算式（日期部分、計算欄位）時，Tableau 在原值還是運算式的值上去重不明，列為不支援
@@ -1082,7 +1111,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
-合併集合（XML 的寫法尚未在公開報表中看到）、空間檔案（Shapefile 等）與 MAKEPOINT 等空間函式、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
+合併集合（XML 的寫法尚未在公開報表中看到）、空間 join（Intersects）、Esri File Geodatabase 與 MapInfo、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
 Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、

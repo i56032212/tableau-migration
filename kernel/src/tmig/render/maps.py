@@ -7,6 +7,9 @@
 - 以麥卡托投影畫出（與 Tableau 的 Web Mercator 相同）：自動縮放到所有標記的範圍，存檔時固定了範圍
   （平移、縮放過）的地圖畫出存檔的範圍；跨越 180 度經線的範圍（例如俄羅斯）以該處為中心
 - 標記圖層與雙軸地圖：每張標記卡是一個圖層，依序由下往上畫
+- 空間資料（Shapefile 等空間檔案的 Geometry、MAKEPOINT 等空間函式）：每個標記的形狀是查詢結果中
+  COLLECT 的 WKT，多邊形、線與點分別畫出（多邊形填色、線依顏色畫線、點畫成圓點）；形狀依畫面的
+  像素簡化，WKT 不放進規格
 """
 
 from __future__ import annotations
@@ -15,17 +18,22 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from tmig.geo import SHAPES, version
+from tmig.geo import SHAPES, spatial, version
 from tmig.geo.extent import MAX_LATITUDE, Box, Projector, mercator_y, normalize_lon
 from tmig.geo.gazetteer import ROLES, Place, gazetteer
 from tmig.geo.geocode import GeoSettings, finest, geocode
 from tmig.ir.models import (
+    GEOMETRY_GENERATED,
     IR,
+    LATITUDE_GENERATED,
+    LONGITUDE_GENERATED,
     ColorPalette,
     DataField,
+    FieldUse,
     MapLayerName,
     MapOptions,
     Marks,
+    Scalar,
     Worksheet,
 )
 from tmig.planner.state import use_key
@@ -38,6 +46,9 @@ LON, LAT, SHAPE, FEATURE, LABEL = "__lon", "__lat", "__shape", "__feature", "__m
 """每個圖層在資料列中的位置欄（後面接圖層的編號）：經度、緯度、形狀檔、形狀 id、標籤。"""
 GEO = "__geo"
 """查出的形狀（GeoJSON）。"""
+GPOLY, GLINE, GPTS, GPT, GLON, GLAT = "__gpoly", "__gline", "__gpts", "__gpt", "__glon", "__glat"
+"""空間資料的圖層在資料列中的欄（後面接圖層的編號）：多邊形與線（GeoJSON）、點（[經度, 緯度] 的清單，
+畫圖時展開成一點一列）。"""
 DECO = "__deco_map"
 """底圖的圖層名稱前綴（檢視器不對它們醒目提示、選取）。"""
 
@@ -96,6 +107,10 @@ MAP_SEQUENTIAL = "blue_teal_10_0"
 """填色地圖的自動連續色盤（Tableau 的 Blue-Teal）。"""
 MAX_LABELS = 160
 """每種底圖地名最多的數量（重要的在前）。"""
+FACET_HEADER = 24
+"""分格的地圖每一格標題的高度（像素，估計每一格的大小用）。"""
+FACET_GAP = 16
+"""分格的地圖格與格之間的距離（像素）。"""
 
 
 @dataclass
@@ -117,6 +132,12 @@ class Layer:
     unknown: int = 0
     place_label: str | None = None
     """最細的地理角色欄位的顯示文字欄：開啟標記標籤、標籤上沒有欄位時標示地名（與 Tableau 相同）。"""
+    geoms: dict[int, spatial.Geometry] = field(default_factory=dict)
+    """空間資料的圖層：各資料列（以 id() 為鍵）的形狀。"""
+    areas: dict[int, float] = field(default_factory=dict)
+    """空間資料的圖層：各資料列的形狀範圍的大小（標籤的優先順序）。"""
+    centered: bool = False
+    """空間資料的圖層中有多邊形：標籤寫在形狀的中央（與填色地圖相同）。"""
 
     def name(self, base: str) -> str:
         return f"{base}{self.index}"
@@ -168,11 +189,21 @@ def locate(
     )
     coordinates = _coordinate_fields(ws, fields)
     plan = MapPlan([])
+    shapes: dict[str, spatial.Geometry | None] = {}
+    wkt_columns: set[str] = set()
     for n, (pane, marks) in enumerate(cards):
         own = pane is not None and pane in pane_values
         records = pane_values[pane] if own and pane is not None else values
         layer = Layer(n, marks, pane, records, own)
         plan.layers.append(layer)
+        geometry = marks.geometry
+        if geometry is not None and geometry.field != GEOMETRY_GENERATED:
+            # 空間資料：位置與形狀就是查詢結果中的 WKT
+            ch = channels.get(use_key(geometry))
+            if ch is not None:
+                _place_geometries(layer, ch.name, shapes, plan)
+                wkt_columns.update((ch.name, ch.label))
+            continue
         if coordinates is not None:
             _place_coordinates(layer, channels[coordinates[0]].name, channels[coordinates[1]].name)
             continue
@@ -245,7 +276,46 @@ def locate(
                 pane_values[layer.pane] if layer.own_data and layer.pane is not None else values
             )
             layer.unknown = 0
+    # WKT 不放進規格（畫圖用的形狀依畫面簡化後另外放）
+    for records in [values, *pane_values.values()]:
+        for record in records:
+            for column in wkt_columns:
+                if column in record:
+                    record[column] = None
     return plan, values, pane_values
+
+
+def _place_geometries(
+    layer: Layer, column: str, shapes: dict[str, spatial.Geometry | None], plan: MapPlan
+) -> None:
+    """空間資料的圖層：各資料列的形狀（WKT）、範圍與標籤的位置；沒有形狀（Null）的標記不畫。"""
+    layer.kind = "geometry"
+    failed = 0
+    for record in layer.records:
+        text = record.get(column)
+        geom: spatial.Geometry | None = None
+        if isinstance(text, str):
+            if text not in shapes:
+                try:
+                    shapes[text] = spatial.parse_wkt(text)
+                except spatial.SpatialError:
+                    shapes[text] = None
+                    failed += 1
+            geom = shapes[text]
+        found = spatial.bounds(geom)
+        if geom is None or found is None:
+            record[layer.name(LON)] = record[layer.name(LAT)] = None
+            continue
+        west, south, east, north = found
+        point = spatial.label_point(geom) or [(west + east) / 2, (south + north) / 2]
+        record[layer.name(LON)], record[layer.name(LAT)] = point[0], point[1]
+        layer.geoms[id(record)] = geom
+        layer.boxes.append(found)
+        layer.areas[id(record)] = (east - west) * (mercator_y(north) - mercator_y(south))
+        if not layer.centered and next(spatial.iter_polygons(geom), None) is not None:
+            layer.centered = True
+    if failed:
+        plan.notes.append(f"{failed} 個形狀的 WKT 無法解析，沒有畫出")
 
 
 def _place_coordinates(layer: Layer, lat_column: str, lon_column: str) -> None:
@@ -278,10 +348,57 @@ def _kind(marks: Marks, role: str | None) -> str:
 # ---------------------------------------------------------------- 規格
 
 
-def body(builder: _Builder, ir: IR, ws: Worksheet, plan: MapPlan) -> dict[str, Any]:
-    """地圖的規格片段（projection 與各圖層）。"""
+def body(
+    builder: _Builder,
+    ir: IR,
+    ws: Worksheet,
+    plan: MapPlan,
+    rows_dims: list[FieldUse] | None = None,
+    cols_dims: list[FieldUse] | None = None,
+    params: dict[str, Scalar] | None = None,
+) -> dict[str, Any]:
+    """地圖的規格片段（projection 與各圖層）。欄列架上有離散維度時與 Tableau 相同分格（每格一張地圖，
+    範圍相同），以 Vega-Lite 的 facet 畫出；標籤的重疊依每一格的大小各自判斷。"""
     options = ws.map or MapOptions()
     layers_on: dict[MapLayerName, bool] = {**DEFAULT_LAYERS, **options.layers}
+    facet: dict[str, Any] = {}
+    if rows_dims:
+        facet["row"] = builder._facet(rows_dims, "rows_dim")
+    if cols_dims:
+        facet["column"] = builder._facet(cols_dims, "cols_dim")
+    sheet_extent = builder.extent
+    if facet:
+        # 每一格的大小：依格數平分（減去標題的高度），投影與標籤的位置依它估計
+        def count(channel: str) -> int:
+            spec = facet.get(channel)
+            if spec is None:
+                return 1
+            return len({r.get(spec["field"]) for r in builder.values}) or 1
+
+        builder.extent = (
+            max(sheet_extent[0] / count("column") - FACET_GAP, 80.0),
+            max(sheet_extent[1] / count("row") - FACET_HEADER - FACET_GAP, 60.0),
+        )
+        if any(layer.own_data for layer in plan.layers):
+            builder.notes.append("分格的地圖中，詳細程度較粗的圖層在每一格都畫出全部的標記")
+        if any(layer.kind == "density" for layer in plan.layers):
+            builder.notes.append("分格的密度圖在每一格都畫出全部標記的密度")
+    try:
+        return _body(builder, ir, ws, plan, options, layers_on, facet, params or {})
+    finally:
+        builder.extent = sheet_extent
+
+
+def _body(
+    builder: _Builder,
+    ir: IR,
+    ws: Worksheet,
+    plan: MapPlan,
+    options: MapOptions,
+    layers_on: dict[MapLayerName, bool],
+    facet: dict[str, Any],
+    params: dict[str, Scalar],
+) -> dict[str, Any]:
     width, height = builder.extent
     box = _view_box(ir, ws, plan, options)
     zoom = box.zoom(width, height)
@@ -296,15 +413,17 @@ def body(builder: _Builder, ir: IR, ws: Worksheet, plan: MapPlan) -> dict[str, A
     label_layers: list[dict[str, Any]] = []
     placed: list[Rect] = []
     """已放上的標籤（像素範圍，依工作表在 dashboard 上的大小估計）：互相重疊的不顯示。"""
+    keys = [spec["field"] for spec in facet.values()]
     for layer in plan.layers:
-        drawn, labels = _data_layer(builder, layer, project, box, placed)
+        drawn, labels = _data_layer(builder, layer, project, box, placed, keys)
         marks_layers += drawn
         label_layers += labels
     base = _base_layers(box, zoom, layers_on, style)
     names = _place_labels(box, zoom, project, width, height, layers_on, style, placed)
-    layers = [*base, *marks_layers, *names, *label_layers]
+    references = _reference_layers(builder, ir, ws, plan, box, params)
+    layers = [*base, *marks_layers, *references, *names, *label_layers]
     if plan.unknown:
-        layers.append(_unknown_indicator(plan.unknown, builder.text_color()))
+        layers.append(_unknown_indicator(plan.unknown, builder.text_color(), bool(facet)))
     projection: dict[str, Any] = {
         "type": "mercator",
         "fit": {
@@ -321,12 +440,123 @@ def body(builder: _Builder, ir: IR, ws: Worksheet, plan: MapPlan) -> dict[str, A
     }
     if abs(box.center) > 1e-9:
         projection["rotate"] = [round(-box.center, 6), 0, 0]
-    # 畫面之外的形狀裁掉（SVG 小很多）；多留 2 像素，邊緣不會出現裁切的框線
-    projection["clipExtent"] = {"expr": "[[-2, -2], [width + 2, height + 2]]"}
+    # 畫面之外的形狀裁掉（SVG 小很多）；多留 2 像素，邊緣不會出現裁切的框線（分格時依每一格的大小）
+    w, h = ("child_width", "child_height") if facet else ("width", "height")
+    projection["clipExtent"] = {"expr": f"[[-2, -2], [{w} + 2, {h} + 2]]"}
     result: dict[str, Any] = {"projection": projection, "layer": layers}
     if layers_on["water"] and layers_on["base"]:
         result["view"] = {"fill": style.water, "stroke": None}
+    if facet:
+        return {"facet": facet, "spec": result}
     return result
+
+
+def _reference_layers(
+    builder: _Builder, ir: IR, ws: Worksheet, plan: MapPlan, box: Box, params: dict[str, Scalar]
+) -> list[dict[str, Any]]:
+    """地圖上的參考線：緯度（列架）、經度（欄架）座標軸上的參考線，與 Tableau 相同畫成橫跨地圖的緯線、
+    經線，以第一個圖層的標記位置計算（平均、中位數、最小、最大、常數或參數等）；標籤寫在線的左端（經線在
+    上端）。參考區間、分布與盒鬚圖尚未畫出。"""
+    if not ws.reference_lines or not plan.layers:
+        return []
+    from tmig.render.vegalite import (
+        REF,
+        Channel,
+        _Constant,
+        _line_style,
+        _reference_labels,
+        _reference_source,
+        _reference_values,
+    )
+
+    fields = {f.id: f for d in ir.datasources for f in d.fields}
+    main = plan.layers[0]
+    layers: list[dict[str, Any]] = []
+    for n, line in enumerate(ws.reference_lines):
+        role = _coordinate_role(line.axis, fields)
+        if role is None:
+            builder.notes.append(f"地圖上的參考線 {line.id} 不在經緯度的座標軸上，沒有畫出")
+            continue
+        if line.kind != "line" or line.paired is not None:
+            builder.notes.append(f"地圖上的參考區間、分布與盒鬚圖尚未畫出（參考線 {line.id}）")
+            continue
+        position = main.name(LAT if role == "latitude" else LON)
+        source: str | _Constant | None = _reference_source(line, builder.channels, params, False)
+        if source is None and isinstance(line.value, FieldUse):
+            # 標記的位置（Latitude／Longitude (generated)）：以這個圖層找到的經緯度計算
+            source = position if _coordinate_role(line.value, fields) == role else None
+        if source is None:
+            builder.notes.append(f"地圖上的參考線 {line.id} 的值不在查詢結果中，沒有畫出")
+            continue
+        numbers = [
+            float(r[source])
+            for r in main.records
+            if isinstance(source, str) and isinstance(r.get(source), int | float)
+        ]
+        values = [v for v in _reference_values(line, numbers, source) if v is not None]
+        style = _line_style(line)
+        east = box.east if box.east >= box.west else box.east + 360
+        name = f"{REF}{n}_map"
+        for value in values:
+            if role == "latitude":
+                points = [{"lon": box.west, "lat": value}, {"lon": east, "lat": value}]
+            else:
+                points = [{"lon": value, "lat": box.south}, {"lon": value, "lat": box.north}]
+            if style is not None:
+                layers.append(
+                    {
+                        "name": name,
+                        "data": {"values": points},
+                        "mark": {"type": "line", "clip": True, **style},
+                        "encoding": {
+                            "longitude": {"field": "lon", "type": "quantitative"},
+                            "latitude": {"field": "lat", "type": "quantitative"},
+                        },
+                    }
+                )
+        axis = Channel(position, position, role.capitalize(), "measure", "real", line.axis)
+        for i, text in _reference_labels(line, axis, list(values), False):
+            point = _label_point(role, values[i], box, east)
+            mark: dict[str, Any] = {
+                "type": "text",
+                "align": "left",
+                "baseline": "bottom" if role == "latitude" else "top",
+                "dx": 3,
+                "dy": -2 if role == "latitude" else 2,
+                "fontSize": 11,
+                "color": "#333333",
+                "clip": True,
+            }
+            layers.append(
+                {
+                    "name": f"{name}_label",
+                    "data": {"values": [{**point, "text": text}]},
+                    "mark": mark,
+                    "encoding": {
+                        "longitude": {"field": "lon", "type": "quantitative"},
+                        "latitude": {"field": "lat", "type": "quantitative"},
+                        "text": {"field": "text"},
+                    },
+                }
+            )
+    return layers
+
+
+def _label_point(role: str, value: float, box: Box, east: float) -> dict[str, float]:
+    """參考線標籤的位置：緯線在左端、經線在上端（稍微往內，避開地圖的邊緣）。"""
+    if role == "latitude":
+        return {"lon": box.west + (east - box.west) * 0.01, "lat": value}
+    return {"lon": value, "lat": box.north - (box.north - box.south) * 0.01}
+
+
+def _coordinate_role(use: FieldUse, fields: dict[str, DataField]) -> str | None:
+    """欄位是緯度或經度（Latitude／Longitude (generated)，或地理角色為緯度、經度的欄位）。"""
+    if use.field == LATITUDE_GENERATED:
+        return "latitude"
+    if use.field == LONGITUDE_GENERATED:
+        return "longitude"
+    role = fields[use.field].geo_role if use.field in fields else None
+    return role if role in ("latitude", "longitude") else None
 
 
 def _view_box(ir: IR, ws: Worksheet, plan: MapPlan, options: MapOptions) -> Box:
@@ -521,8 +751,9 @@ def _place_labels(
     return layers
 
 
-def _unknown_indicator(count: int, color: str) -> dict[str, Any]:
-    """右下角的「N 個未知」（與 Tableau 相同，找不到位置的標記不畫）。"""
+def _unknown_indicator(count: int, color: str, faceted: bool = False) -> dict[str, Any]:
+    """右下角的「N 個未知」（與 Tableau 相同，找不到位置的標記不畫）；分格時寫在每一格的右下角。"""
+    w, h = ("child_width", "child_height") if faceted else ("width", "height")
     return {
         "name": f"{DECO}_unknown",
         "data": {"values": [{"text": f"{count:,} 個未知"}]},
@@ -530,8 +761,8 @@ def _unknown_indicator(count: int, color: str) -> dict[str, Any]:
             "type": "text",
             "align": "right",
             "baseline": "bottom",
-            "x": {"expr": "width - 6"},
-            "y": {"expr": "height - 4"},
+            "x": {"expr": f"{w} - 6"},
+            "y": {"expr": f"{h} - 4"},
             "fontSize": 10,
             "color": color,
             "opacity": 0.8,
@@ -544,9 +775,14 @@ def _unknown_indicator(count: int, color: str) -> dict[str, Any]:
 
 
 def _data_layer(
-    builder: _Builder, layer: Layer, project: Projector, box: Box, placed: list[Rect]
+    builder: _Builder,
+    layer: Layer,
+    project: Projector,
+    box: Box,
+    placed: list[Rect],
+    keys: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """一張標記卡的圖層與標籤圖層。"""
+    """一張標記卡的圖層與標籤圖層（keys：分格的欄，標籤的重疊依每一格判斷）。"""
     from tmig.render.vegalite import _mark_style
 
     marks = layer.marks
@@ -563,7 +799,9 @@ def _data_layer(
     if layer.kind == "density":
         image = _density_layer(builder, layer, project)
         return ([image] if image is not None else []), []
-    if layer.kind == "polygon":
+    if layer.kind == "geometry":
+        drawn = _geometry_layers(builder, layer, project, encoding, data)
+    elif layer.kind == "polygon":
         encoding.pop("size", None)
         encoding.pop("shape", None)
         _map_palette(builder, layer, encoding)
@@ -618,7 +856,11 @@ def _data_layer(
     elif layer.kind == "text":
         text_field = builder.text_field(marks)
         if text_field is None:
-            measures = [c for c in builder.channels.values() if c.role == "measure"]
+            measures = [
+                c
+                for c in builder.channels.values()
+                if c.role == "measure" and c.datatype != "spatial"
+            ]
             text_field = measures[0].label if measures else None
         mark = {
             "type": "text",
@@ -657,8 +899,96 @@ def _data_layer(
         )
         if marks.type in ("pie", "bar", "area", "gantt", "polygon"):
             builder.notes.append(f"地圖上的{marks.type}標記以圓點呈現")
-    labels = _label_layer(builder, layer, project, encoding, data, position, placed)
+    labels = _label_layer(builder, layer, project, encoding, data, position, placed, keys or [])
     return drawn, labels
+
+
+def _geometry_layers(
+    builder: _Builder,
+    layer: Layer,
+    project: Projector,
+    encoding: dict[str, Any],
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """空間資料的圖層：多邊形（填色，與填色地圖相同的框線）、線（依顏色畫線，粗細依標記的大小）與點
+    （圓點）。形狀依畫面的像素簡化（半個像素以內的頂點合併）。"""
+    from tmig.render.vegalite import LINE_WIDTH, _mark_style
+
+    marks = layer.marks
+    poly, line, pts = layer.name(GPOLY), layer.name(GLINE), layer.name(GPTS)
+    has: dict[str, bool] = {poly: False, line: False, pts: False}
+    for record in layer.records:
+        geom = layer.geoms.get(id(record))
+        polygons, lines, points = (
+            spatial.render_parts(geom, project.arrays) if geom is not None else (None, None, [])
+        )
+        record[poly], record[line] = polygons, lines
+        record[pts] = points or None
+        has[poly] = has[poly] or polygons is not None
+        has[line] = has[line] or lines is not None
+        has[pts] = has[pts] or bool(points)
+    drawn: list[dict[str, Any]] = []
+    shaped = {k: v for k, v in encoding.items() if k not in ("size", "shape")}
+    if has[poly]:
+        fill_encoding = dict(shaped)
+        _map_palette(builder, layer, fill_encoding)
+        mark = _mark_style({"type": "geoshape", "tooltip": True, "clip": True}, marks)
+        if marks.stroke is None:
+            mark.update(stroke="#5f5f5f", strokeWidth=0.6, strokeOpacity=0.55)
+        drawn.append(
+            {
+                **data,
+                "transform": [{"filter": f"isValid(datum[{json.dumps(poly)}])"}],
+                "mark": mark,
+                "encoding": {**fill_encoding, "shape": {"field": poly, "type": "geojson"}},
+            }
+        )
+    if has[line]:
+        width = LINE_WIDTH * (marks.mark_size if marks.mark_size is not None else 1)
+        mark = _mark_style(
+            {
+                "type": "geoshape",
+                "filled": False,
+                "tooltip": True,
+                "clip": True,
+                "strokeWidth": round(width, 2),
+                "strokeCap": "round",
+                "strokeJoin": "round",
+            },
+            marks,
+        )
+        line_encoding = dict(shaped)
+        drawn.append(
+            {
+                **data,
+                "transform": [{"filter": f"isValid(datum[{json.dumps(line)}])"}],
+                "mark": mark,
+                "encoding": {**line_encoding, "shape": {"field": line, "type": "geojson"}},
+            }
+        )
+    if has[pts]:
+        point = _mark_style({"type": "circle", "tooltip": True, "clip": True}, marks)
+        point_encoding = dict(encoding)
+        builder.size_mark(point, point_encoding, marks)
+        item, lon, lat = layer.name(GPT), layer.name(GLON), layer.name(GLAT)
+        drawn.append(
+            {
+                **data,
+                "transform": [
+                    {"filter": f"isValid(datum[{json.dumps(pts)}])"},
+                    {"flatten": [pts], "as": [item]},
+                    {"calculate": f"datum[{json.dumps(item)}][0]", "as": lon},
+                    {"calculate": f"datum[{json.dumps(item)}][1]", "as": lat},
+                ],
+                "mark": point,
+                "encoding": {
+                    **point_encoding,
+                    "longitude": {"field": lon, "type": "quantitative"},
+                    "latitude": {"field": lat, "type": "quantitative"},
+                },
+            }
+        )
+    return drawn
 
 
 def _map_palette(builder: _Builder, layer: Layer, encoding: dict[str, Any]) -> None:
@@ -696,6 +1026,7 @@ def _label_layer(
     data: dict[str, Any],
     position: dict[str, Any],
     placed: list[Rect],
+    keys: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """標記的標籤：填色的區域在標籤點的中央，點在右側；互相重疊的標籤與 Tableau 相同不顯示
     （依工作表在 dashboard 上的大小估計，較大的區域、標記優先）。"""
@@ -704,7 +1035,7 @@ def _label_layer(
     if source is None:
         return []
     font = builder.font("cell", marks.label_font)
-    polygon = layer.kind == "polygon"
+    polygon = layer.kind == "polygon" or layer.centered
     name = layer.name(LABEL)
     sizes = builder.size_values(marks, layer.records) if marks.size is not None else None
     order = sorted(
@@ -713,6 +1044,8 @@ def _label_layer(
         reverse=True,
     )
     width, height = builder.extent
+    # 分格時每一格各自判斷重疊（其他格的標籤不影響）；底圖的地名避開所有格的標籤
+    cells: dict[tuple[Any, ...], list[Rect]] = {}
     for i in order:
         record = layer.records[i]
         record[name] = ""
@@ -728,8 +1061,10 @@ def _label_layer(
             rect = (x + LABEL_GAP + 4, y - h / 2, x + LABEL_GAP + 4 + w, y + h / 2)
         if not (-w < rect[0] < width and -h < rect[1] < height):
             continue
-        if any(_overlap(rect, other) for other in placed):
+        cell = cells.setdefault(tuple(record.get(k) for k in keys or []), [])
+        if any(_overlap(rect, other) for other in (cell if keys else placed)):
             continue
+        cell.append(rect)
         placed.append(rect)
         record[name] = str(text)
     mark: dict[str, Any] = {"type": "text", "lineBreak": "\n", "clip": True, **font.mark()}
@@ -753,6 +1088,8 @@ def _priority(layer: Layer, index: int, sizes: list[float | None] | None) -> flo
     """標籤的優先順序：點的大小，區域的面積（範圍的大小，以麥卡托投影的比例近似）。"""
     if sizes is not None:
         return sizes[index] or 0.0
+    if layer.kind == "geometry":
+        return layer.areas.get(id(layer.records[index]), 0.0)
     place = layer.places.get(id(layer.records[index]))
     if place is None or layer.kind != "polygon":
         return 0.0

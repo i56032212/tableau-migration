@@ -195,3 +195,29 @@ def test_line_formats_and_labels(tmp_path: Path, db: Path) -> None:
     }
     mean = statistics.fmean(ORDER_SALES)
     assert named["__ref0_0_label"]["encoding"]["text"]["value"] == f"{mean:,.1f}"
+
+
+def test_reference_lines_on_each_measure(tmp_path: Path, db: Path) -> None:
+    """同一架上有兩個量值（各一張圖）：參考線畫在自己的量值的那張圖上，與它共用刻度。"""
+    profit = instance("[Profit]", "Sum", "[sum:Profit:qk]", "quantitative")
+    sheet = worksheet(
+        "Two",
+        [REGION, SALES, profit],
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("none:Region:nk"),
+        pane_extra=refline(0, "average", axis="sum:Profit:qk")
+        + refline(1, "constant", extra=" value='100'"),
+    )
+    rendered = render(parse(tmp_path, sheet), db)
+    assert not [n for n in rendered.notes if "參考線" in n]
+    sales_chart, profit_chart = rendered.spec["vconcat"]
+    names = lambda chart: {  # noqa: E731
+        layer.get("name") for layer in chart.get("layer", []) if layer.get("name")
+    }
+    assert "__ref0_0" in names(profit_chart) and "__ref0_0" not in names(sales_chart)
+    assert "__ref1_0" in names(sales_chart)
+    profit_key = next(
+        k for k, v in rendered.spec["usermeta"]["measures"].items() if v == "sum(f_profit)"
+    )
+    numbers = [r[profit_key] for r in rendered.spec["data"]["values"]]
+    assert first(rendered.spec)["__ref0_0"] == pytest.approx(sum(numbers) / len(numbers))

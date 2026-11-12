@@ -1,6 +1,10 @@
-"""DuckDB 中 Tableau 的正規表示式：Tableau 以 ICU 執行，DuckDB 以 RE2 執行。RE2 不支援、ICU 支援的語法
-（前後查看、反向參照、原子群組、佔有量詞）改以 Python 的 re 計算（這些語法的寫法與 ICU 相同），
-公式編譯時只有樣式用到這些語法才呼叫（見 tmig.sqlgen.expr）。
+"""DuckDB 中以 Python 計算的函式：
+
+- Tableau 的正規表示式：Tableau 以 ICU 執行，DuckDB 以 RE2 執行。RE2 不支援、ICU 支援的語法
+  （前後查看、反向參照、原子群組、佔有量詞）改以 Python 的 re 計算（這些語法的寫法與 ICU 相同），
+  公式編譯時只有樣式用到這些語法才呼叫（見 tmig.sqlgen.expr）
+- 空間函式（MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA 與彙總 COLLECT）：空間資料是 WKT 文字，
+  計算見 tmig.geo.spatial（WGS84 橢球的大地測量）與 tmig.geo.projection（MAKEPOINT 的 SRID）
 
 同一個 DuckDB 檔的連線共用一個資料庫實體：函式不能重複加入，加入函式的連線關閉後其他連線再用會當掉。
 所以用到這些函式的查詢以 attached() 另開自己的記憶體資料庫、唯讀附加資料檔再加入函式；記憶體資料庫
@@ -8,9 +12,12 @@
 
 from __future__ import annotations
 
+import functools
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import duckdb
 
@@ -24,7 +31,24 @@ except ImportError:  # pragma: no cover - DuckDB 1.x
 MATCH = "tmig_regexp_match"
 EXTRACT = "tmig_regexp_extract"
 REPLACE = "tmig_regexp_replace"
-FUNCTIONS = (MATCH, EXTRACT, REPLACE)
+REGEX_FUNCTIONS = (MATCH, EXTRACT, REPLACE)
+GEO_COLLECT = "tmig_geo_collect"
+GEO_POINT = "tmig_geo_point"
+GEO_POINT_SRID = "tmig_geo_point_srid"
+GEO_LINE = "tmig_geo_makeline"
+GEO_DISTANCE = "tmig_geo_distance"
+GEO_BUFFER = "tmig_geo_buffer"
+GEO_AREA = "tmig_geo_area"
+SPATIAL_FUNCTIONS = (
+    GEO_COLLECT,
+    GEO_POINT,
+    GEO_POINT_SRID,
+    GEO_LINE,
+    GEO_DISTANCE,
+    GEO_BUFFER,
+    GEO_AREA,
+)
+FUNCTIONS = REGEX_FUNCTIONS + SPATIAL_FUNCTIONS
 
 
 @lru_cache(maxsize=256)
@@ -89,8 +113,32 @@ def regexp_replace(text: str, pattern: str, replacement: str) -> str:
     return _compiled(pattern).sub(swap, text)
 
 
+def _safe(func: Callable[..., Any]) -> Callable[..., Any]:
+    """空間資料寫法不正確（WKT 無法解析）時為 Null，不讓整個查詢失敗（保留原函式的參數個數，
+    DuckDB 依它檢查）。"""
+
+    @functools.wraps(func)
+    def wrapped(*args: Any) -> Any:
+        from tmig.geo.spatial import SpatialError
+
+        try:
+            return func(*args)
+        except SpatialError:
+            return None
+
+    return wrapped
+
+
+def _point_srid(x: float, y: float, srid: int) -> str | None:
+    from tmig.geo.projection import make_point_srid
+
+    return make_point_srid(x, y, srid)
+
+
 def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
-    """在連線上加入正規表示式的函式（Null 的參數得 Null）。"""
+    """在連線上加入正規表示式與空間函式（Null 的參數得 Null）。"""
+    from tmig.geo import spatial
+
     con.create_function(MATCH, regexp_match, ["VARCHAR", "VARCHAR"], "BOOLEAN")
     # 沒有符合時傳回 Null：Null 的參數自己處理
     con.create_function(
@@ -101,6 +149,18 @@ def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
         null_handling=HANDLES_NULLS,
     )
     con.create_function(REPLACE, regexp_replace, ["VARCHAR", "VARCHAR", "VARCHAR"], "VARCHAR")
+    # 空間函式：不是點、不認得的單位或 SRID 等也傳回 Null，Null 的參數由函式自己處理
+    spatial_functions: list[tuple[str, Callable[..., Any], list[Any], str]] = [
+        (GEO_COLLECT, spatial.collect, ["VARCHAR[]"], "VARCHAR"),
+        (GEO_POINT, spatial.make_point, ["DOUBLE", "DOUBLE"], "VARCHAR"),
+        (GEO_POINT_SRID, _point_srid, ["DOUBLE", "DOUBLE", "BIGINT"], "VARCHAR"),
+        (GEO_LINE, spatial.make_line, ["VARCHAR", "VARCHAR"], "VARCHAR"),
+        (GEO_DISTANCE, spatial.distance, ["VARCHAR", "VARCHAR", "VARCHAR"], "DOUBLE"),
+        (GEO_BUFFER, spatial.buffer, ["VARCHAR", "DOUBLE", "VARCHAR"], "VARCHAR"),
+        (GEO_AREA, spatial.area, ["VARCHAR", "VARCHAR"], "DOUBLE"),
+    ]
+    for name, func, parameters, result in spatial_functions:
+        con.create_function(name, _safe(func), parameters, result, null_handling=HANDLES_NULLS)
     return con
 
 
@@ -108,7 +168,7 @@ ATTACHED = "data"
 
 
 def needed(sql: str) -> bool:
-    """SQL 用到這些函式（只有樣式用到 RE2 不支援的語法時才會）。"""
+    """SQL 用到這些函式（正規表示式只有樣式用到 RE2 不支援的語法時才會；空間資料的查詢）。"""
     lowered = sql.lower()
     return any(name in lowered for name in FUNCTIONS)
 
@@ -127,4 +187,21 @@ def attached(path: str | Path) -> duckdb.DuckDBPyConnection:
     return con
 
 
-__all__ = ["EXTRACT", "FUNCTIONS", "MATCH", "REPLACE", "attached", "needed", "register"]
+__all__ = [
+    "EXTRACT",
+    "FUNCTIONS",
+    "GEO_AREA",
+    "GEO_BUFFER",
+    "GEO_COLLECT",
+    "GEO_DISTANCE",
+    "GEO_LINE",
+    "GEO_POINT",
+    "GEO_POINT_SRID",
+    "MATCH",
+    "REGEX_FUNCTIONS",
+    "REPLACE",
+    "SPATIAL_FUNCTIONS",
+    "attached",
+    "needed",
+    "register",
+]

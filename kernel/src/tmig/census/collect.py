@@ -240,7 +240,7 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         for c in named:
             if c.get("class") == "excel-direct" and c.get("filename"):
                 data_files.append(c.get("filename", ""))
-            elif c.get("class") == "textscan" and c.get("filename"):
+            elif c.get("class") in ("textscan", "ogrdirect") and c.get("filename"):
                 directory = (c.get("directory") or "").replace("\\", "/").rstrip("/")
                 filename = c.get("filename", "")
                 data_files.append(f"{directory}/{filename}" if directory else filename)
@@ -563,7 +563,7 @@ def _checks(
                 for f in ds.data_files
                 if _norm(f) not in packaged_paths and PurePath(_norm(f)).name not in packaged_names
             ]
-            if files and not set(files) <= {"excel-direct", "textscan"}:
+            if files and not set(files) <= {"excel-direct", "textscan", "ogrdirect"}:
                 problems.append(f"「{ds.caption}」是連到檔案（{'、'.join(files)}）的 Live 連線")
             elif files and not packaged:
                 problems.append(

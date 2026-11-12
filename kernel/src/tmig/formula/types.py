@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-DataType = Literal["integer", "real", "string", "boolean", "date", "datetime", "null"]
-"""null 表示型別未定，只會出現在 NULL 常值。"""
+DataType = Literal["integer", "real", "string", "boolean", "date", "datetime", "spatial", "null"]
+"""null 表示型別未定，只會出現在 NULL 常值；spatial 是空間資料（MAKEPOINT 等的結果、空間檔案的形狀）。"""
 
 Level = Literal["const", "row", "agg", "tc"]
 """const：常值或參數；row：列層級；agg：彙總；tc：Table Calculation。"""

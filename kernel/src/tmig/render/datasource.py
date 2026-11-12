@@ -49,6 +49,7 @@ DATABASES = {
     "teradata": "Teradata",
     "excel-direct": "Microsoft Excel",
     "textscan": "文字檔",
+    "ogrdirect": "空間檔案",
     "sqlproxy": "Tableau Server 資料源",
 }
 """Tableau 的連線類型（dbclass）→ 顯示名稱；沒有列出的顯示原文。"""
@@ -83,6 +84,7 @@ AGGREGATIONS = {
     "pct75": "PCT75",
     "pct90": "PCT90",
     "pct95": "PCT95",
+    "collect": "COLLECT",
 }
 VALUES_SHOWN = 10
 """篩選的說明中最多列出幾個值。"""
@@ -113,8 +115,8 @@ def datasource_summary(ds: Datasource, parameters: Sequence[Parameter] = ()) -> 
     if isinstance(ds.connection, FileConnection):
         # 檔案型資料源：資料表顯示檔案與工作表（而不是匯入後的 Files.<name>）
         files = {
-            t.name: f"{PurePosixPath(t.path).name}：{t.sheet}"
-            if t.sheet
+            t.name: f"{PurePosixPath(t.path).name}：{t.sheet or t.layer}"
+            if t.sheet or (t.layer and t.format == "spatial" and t.path.lower().endswith(".zip"))
             else PurePosixPath(t.path).name
             for t in ds.connection.tables
         }
@@ -287,6 +289,7 @@ def _connection(connection: ExtractConnection | LiveConnection | FileConnection)
             "excel": DATABASES["excel-direct"],
             "text": DATABASES["textscan"],
             "hyper": DATABASES["hyper"],
+            "spatial": DATABASES["ogrdirect"],
         }
         return {
             "kind": "file",

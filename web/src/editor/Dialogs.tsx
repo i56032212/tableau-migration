@@ -37,6 +37,7 @@ const TYPES: Record<string, string> = {
   boolean: "布林",
   date: "日期",
   datetime: "日期時間",
+  spatial: "空間",
 };
 
 // ---------------------------------------------------------------- 計算欄位

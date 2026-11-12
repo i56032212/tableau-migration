@@ -351,3 +351,38 @@ def test_spec_is_json_serializable(tmp_path: Path, db: Path) -> None:
     )
     rendered = render(parse(tmp_path, sheet), db)
     json.dumps(rendered.spec)
+
+
+def test_faceted_map_and_reference_lines(tmp_path: Path, db: Path) -> None:
+    """欄列架上有離散維度的地圖：與 Tableau 相同分格（每一州一格、範圍相同）；緯度座標軸上的參考線
+    （平均）畫成橫跨地圖的緯線，標籤寫在左端。"""
+    from ..parser.test_extensions import refline
+
+    lines = refline(0, "average", label="value", axis="Latitude (generated)").replace(
+        b.ref("Latitude (generated)"), GEN_LAT
+    )
+    sheet = worksheet(
+        "Faceted",
+        [STATE, CITY, SALES],
+        rows=f"({b.ref('none:State:nk')} / {GEN_LAT})",
+        cols=GEN_LON,
+        mark="Circle",
+        encodings=f"<lod column='{b.ref('none:City:nk')}' />",
+        pane_extra=lines,
+    )
+    ir = parse(tmp_path, sheet)
+    rendered = render(ir, db)
+    spec = rendered.spec
+    assert spec is not None and rendered.mark == "map"
+    assert "row" in spec["facet"] and "width" not in spec
+    inner = spec["spec"]
+    assert inner["projection"]["clipExtent"]["expr"].startswith("[[-2, -2], [child_width")
+    references = [
+        layer for layer in inner["layer"] if str(layer.get("name", "")).startswith("__ref")
+    ]
+    line, label = references
+    lats = [r["__lat0"] for r in spec["data"]["values"] if r.get("__lat0") is not None]
+    average = sum(lats) / len(lats)
+    assert [p["lat"] for p in line["data"]["values"]] == [pytest.approx(average)] * 2
+    assert label["data"]["values"][0]["text"]
+    assert not [n for n in rendered.notes if "參考線" in n or "分格" in n]

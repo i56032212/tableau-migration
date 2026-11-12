@@ -90,7 +90,10 @@ EXECUTABLE: frozenset[str] = frozenset(
 )
 """已有方言轉譯與執行器的方言（與 tmig.sqlgen.dialect.SUPPORTED 一致，測試會檢查）。"""
 
-FILE_CLASSES = frozenset({"excel-direct", "textscan", "excel", "csv", "hyper", "dataengine"})
+FILE_CLASSES = frozenset(
+    {"excel-direct", "textscan", "excel", "csv", "hyper", "dataengine", "ogrdirect"}
+)
+"""檔案型的連線類型（ogrdirect 是 Shapefile、GeoJSON、KML 等空間檔案）。"""
 
 INITIAL_SQL_PARAM = re.compile(r"\[([A-Za-z]+)\]")
 INITIAL_SQL_USER = {
@@ -249,6 +252,11 @@ def parse_relation(ctx: ParseContext, element: etree._Element, caption: str) -> 
             return None
         clause = child(element, "clause")
         condition = child(clause, "expression")
+        if condition is not None and "intersects" in {
+            (e.get("op") or "").lower() for e in condition.iter() if isinstance(e.tag, str)
+        }:
+            ctx.flag(condition, f"資料源「{caption}」的空間 join（Intersects）尚未支援")
+            return None
         on = _conditions(condition) if condition is not None else None
         if not on:
             ctx.flag(

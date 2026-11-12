@@ -10,6 +10,8 @@
 - 匯入自檢：列數、每欄非空值數，數值欄的總和、最小值、最大值，日期與文字欄的最小值、最大值，
   兩邊逐一比對，不一致即失敗。浮點數總和因累加順序不同，允許 1e-9 的相對誤差
 - 文字欄若使用非二進位定序（例如不分大小寫），DuckDB 的比較結果可能與 Tableau 不同，列為警告
+- 空間資料（Hyper 的 GEOGRAPHY）以 WKT 文字匯入（CAST(… AS TEXT)，座標到小數第 7 位，與 Tableau
+  畫出的形狀相同），自檢比對非空值數
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import tempfile
 import zipfile
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,8 @@ from tmig.ir.models import IR, DataField, ExtractConnection, FileConnection, Tab
 from tmig.parser.workbook import parse_workbook
 
 NUMERIC_TAGS = frozenset({"BIG_INT", "INT", "SMALL_INT", "NUMERIC", "DOUBLE", "FLOAT"})
+SPATIAL_TAGS = frozenset({"TABGEOGRAPHY", "GEOGRAPHY"})
+"""Hyper 的空間資料：匯出時轉成 WKT 文字（Parquet 不能存 GEOGRAPHY）。"""
 ORDERED_TAGS = frozenset({"DATE", "TIMESTAMP", "TIMESTAMP_TZ", "TIME", "TEXT", "VARCHAR", "CHAR"})
 DOUBLE_TAGS = frozenset({"DOUBLE", "FLOAT"})
 SUM_REL_TOL = 1e-9
@@ -127,6 +132,8 @@ def duckdb_type(sql_type: Any) -> str:
         return simple[tag]
     if tag == "NUMERIC":
         return f"DECIMAL({sql_type.precision}, {sql_type.scale})"
+    if tag in SPATIAL_TAGS:
+        return "VARCHAR"  # WKT 文字
     raise HyperImportError(f"Hyper 型別 {sql_type} 沒有定義對應的 DuckDB 型別")
 
 
@@ -134,17 +141,39 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+COLLATION_FLAGS = {"CI": "nocase", "AI": "noaccent"}
+"""Hyper 定序名稱結尾的旗標 → DuckDB 的定序（CS、AS 等分大小寫、分重音的旗標是預設，不需要）。"""
+
+
+@lru_cache(maxsize=1)
+def icu_collations() -> frozenset[str]:
+    """DuckDB 內建的 ICU 語系定序（en_us、de、zh_tw 等）。"""
+    with duckdb.connect() as con:
+        return frozenset(
+            str(r[0]) for r in con.execute("SELECT collname FROM pragma_collations()").fetchall()
+        )
+
+
 def duckdb_collation(collation: str | None) -> str | None:
-    """Hyper 的定序 → DuckDB 的定序：大小寫不分（en_US_CI 等）為 NOCASE，重音不分（_AI）加 NOACCENT；
-    其他（binary、依語系但分大小寫的 en_US 等）為 None（DuckDB 依位元組比較）。"""
-    parts = {p.upper() for p in (collation or "").split("_")}
-    names = [name for flag, name in (("CI", "NOCASE"), ("AI", "NOACCENT")) if flag in parts]
+    """Hyper 的定序 → DuckDB 的定序：語系依 ICU 排序（en_US → en_us；沒有這個地區時用語言，例如 en_IN →
+    en），大小寫不分（_CI）加 nocase、重音不分（_AI）加 noaccent，與 Tableau 的萃取相同；binary 或認不得的
+    語系為 None（DuckDB 依位元組比較與排序）。"""
+    if not collation or collation.lower() == "binary":
+        return None
+    parts = collation.split("_")
+    flags = [COLLATION_FLAGS[p.upper()] for p in parts if p.upper() in COLLATION_FLAGS]
+    locale = "_".join(p for p in parts if p.upper() not in ("CI", "AI", "CS", "AS", "KS", "WS"))
+    available = icu_collations()
+    found = next(
+        (c for c in (locale.lower(), locale.split("_")[0].lower()) if c and c in available), None
+    )
+    names = ([found] if found else []) + flags
     return ".".join(names) if names else None
 
 
 def cast_column(name: str, duckdb_type: str, collation: str | None) -> str:
     """載入萃取時的欄：轉成 DuckDB 的型別，文字欄位加上對應的定序（Tableau 的萃取多半大小寫不分：
-    'In Progress' 與 'In progress' 相同）。"""
+    'In Progress' 與 'In progress' 相同；依語系排序：apple、Apple、banana 而不是 Apple、Banana、apple）。"""
     expr = f"CAST({_quote(name)} AS {duckdb_type}) "
     found = duckdb_collation(collation) if duckdb_type == "VARCHAR" else None
     if found is not None:
@@ -274,8 +303,18 @@ def export_hyper_tables(
             sql, labels = _stat_sql(columns, tags, hyper_table)
             hyper_stats = conn.execute_list_query(sql)[0]
             parquet = log_dir / f"table{i}.parquet"
+            source = hyper_table
+            if any(tag in SPATIAL_TAGS for tag in tags.values()):
+                # 空間資料轉成 WKT 文字（Parquet 不能存 GEOGRAPHY）
+                select = ", ".join(
+                    f"CAST({_quote(c.name)} AS TEXT) AS {_quote(c.name)}"
+                    if tags[c.name] in SPATIAL_TAGS
+                    else _quote(c.name)
+                    for c in columns
+                )
+                source = f"(SELECT {select} FROM {hyper_table})"
             conn.execute_command(
-                f"COPY {hyper_table} TO {escape_string_literal(str(parquet))} WITH (FORMAT PARQUET)"
+                f"COPY {source} TO {escape_string_literal(str(parquet))} WITH (FORMAT PARQUET)"
             )
             exported.append(HyperExport(schema, table, columns, tags, labels, hyper_stats, parquet))
     return exported, names
@@ -303,7 +342,7 @@ def load_hyper_export(
         )
         for (column, stat), h, d in zip(export.labels, export.hyper_stats, duck_stats, strict=True)
     ]
-    # 大小寫（重音）不分的定序以 DuckDB 的定序保留；其他依語系的定序（例如 en_US）排序可能不同
+    # 定序以 DuckDB 的 ICU 語系定序與 nocase、noaccent 保留；認不得的語系才提醒
     warnings = [
         f"欄位「{c.name}」使用定序 {c.collation}，文字的排序可能與 Tableau 不同（DuckDB 依位元組排序）"
         for c in export.columns
@@ -383,6 +422,7 @@ TYPE_FAMILIES = {
     "string": ("VARCHAR",),
     "date": ("DATE", "TIMESTAMP"),
     "datetime": ("TIMESTAMP", "TIMESTAMPTZ", "DATE"),
+    "spatial": ("VARCHAR",),
 }
 """IR 的型別 → 萃取中可以直接當成這個型別查詢的 DuckDB 型別。"""
 

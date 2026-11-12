@@ -510,6 +510,88 @@ def _sum(name: str) -> Checker:
     return _same_numeric(name)
 
 
+# 空間函式（Tableau 2021.2：MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA 與彙總 COLLECT）
+
+
+def unit_literal(node: Node, info: Info, name: str, pos: int) -> None:
+    """長度單位：字串常值須是 Tableau 認得的單位（meters、km、miles、feet 等，不分大小寫）；
+    參數等其他字串在查詢時檢查（不認得時為 Null）。"""
+    from tmig.geo.spatial import LENGTH_UNITS
+
+    if isinstance(node, LiteralNode) and node.kind == "string":
+        if str(node.value).strip().lower() not in LENGTH_UNITS:
+            raise FormulaSemanticError(
+                f"{name} 的單位「{node.value}」不正確（meters、kilometers、miles、feet 等）", pos
+            )
+        return
+    _need(info.datatype in ("string", "null"), f"{name} 的單位必須是字串", pos)
+
+
+def _spatial_arg(name: str, args: list[Info], index: int, pos: int) -> None:
+    _need(
+        args[index].datatype in ("spatial", "null"),
+        f"{name} 的第 {index + 1} 個參數必須是空間資料",
+        pos,
+    )
+
+
+def _makepoint(name: str) -> Checker:
+    """MAKEPOINT(緯度, 經度) 或 MAKEPOINT(X, Y, SRID)。"""
+
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        for i in range(len(args)):
+            _numeric(name, i)(args, pos)
+        return "spatial"
+
+    return check
+
+
+def _makeline(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        _spatial_arg(name, args, 0, pos)
+        _spatial_arg(name, args, 1, pos)
+        return "spatial"
+
+    return check
+
+
+def _distance(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        _spatial_arg(name, args, 0, pos)
+        _spatial_arg(name, args, 1, pos)
+        unit_literal(nodes[2], args[2], name, pos)
+        return "real"
+
+    return check
+
+
+def _buffer(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        _spatial_arg(name, args, 0, pos)
+        _numeric(name, 1)(args, pos)
+        unit_literal(nodes[2], args[2], name, pos)
+        return "spatial"
+
+    return check
+
+
+def _area(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        _spatial_arg(name, args, 0, pos)
+        unit_literal(nodes[1], args[1], name, pos)
+        return "real"
+
+    return check
+
+
+def _collect(name: str) -> Checker:
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        _spatial_arg(name, args, 0, pos)
+        return "spatial"
+
+    return check
+
+
 # ---------------------------------------------------------------- 目錄
 
 _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
@@ -602,6 +684,11 @@ _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("STR", 1, 1, _fixed("string", "any")),
     ("DATE", 1, 1, _fixed("date", "any")),
     ("DATETIME", 1, 1, _fixed("datetime", "any")),
+    ("MAKEPOINT", 2, 3, _makepoint),
+    ("MAKELINE", 2, 2, _makeline),
+    ("DISTANCE", 3, 3, _distance),
+    ("BUFFER", 3, 3, _buffer),
+    ("AREA", 2, 2, _area),
 ]
 
 _AGGREGATE: list[tuple[str, int, int, Callable[[str], Checker]]] = [
@@ -621,6 +708,7 @@ _AGGREGATE: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("CORR", 2, 2, _real_numeric),
     ("COVAR", 2, 2, _real_numeric),
     ("COVARP", 2, 2, _real_numeric),
+    ("COLLECT", 1, 1, _collect),
 ]
 
 _TABLE_CALC: list[tuple[str, int, int, Callable[[str], Checker]]] = [

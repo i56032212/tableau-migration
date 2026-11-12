@@ -13,6 +13,7 @@ const DATATYPES: Record<string, string> = {
   date: "日期",
   datetime: "日期時間",
   boolean: "T|F",
+  spatial: "空間",
 };
 const KINDS: Record<DatasourceField["kind"], string> = { column: "欄位", calc: "計算欄位", set: "集合" };
 const ROLES: Record<string, string> = { dimension: "維度", measure: "量值" };

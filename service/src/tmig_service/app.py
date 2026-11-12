@@ -928,7 +928,12 @@ def create_app(
             # 叢集與預測在查詢之後計算：估計不了時的說明（例如資料不足以預測）
             rendered.notes.extend(query.analytics.notes)
         fields = {f.id: f for ds in ir.datasources for f in ds.fields}
-        shown = [c for c in query.columns if c.role != "sort" and c.use is not None]
+        # 空間資料（形狀的 WKT）不放進資料表（地圖上已畫出，文字很長）
+        shown = [
+            c
+            for c in query.columns
+            if c.role != "sort" and c.use is not None and c.datatype != "spatial"
+        ]
         index = {key: i for i, key in enumerate(result.columns)}
         # 成員別名：資料表與圖表相同，顯示別名
         aliases = {
