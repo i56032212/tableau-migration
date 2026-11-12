@@ -535,6 +535,7 @@ class SheetParser:
             text_color=sheet_formats.text_color,
             cell_color=sheet_formats.cell_color,
             field_fonts=sheet_formats.field_fonts,
+            title_background=sheet_formats.title_background,
             field_colors=sheet_formats.field_colors,
             cell_align=sheet_formats.cell_align,
             field_label_background=sheet_formats.field_label_background,

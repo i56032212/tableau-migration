@@ -1599,6 +1599,9 @@ class Worksheet(IRModel):
     field_label_background: HexColor | None = Field(
         default=None, description="欄位標籤的背景顏色（列標題上方的欄位名稱）；None 為不上色"
     )
+    title_background: HexColor | None = Field(
+        default=None, description="工作表標題區域的背景顏色（Format > 標題的陰影）；None 為不上色"
+    )
     fit: FitMode = Field(default="standard", description="工作表本身（工作表分頁）的顯示大小")
     disaggregated: bool = Field(
         default=False,

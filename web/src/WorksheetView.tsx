@@ -646,7 +646,7 @@ export function WorksheetView({
       style={{ background: usermeta.background }}
     >
       {showTitle ? (
-        <div className="worksheet-header">
+        <div className="worksheet-header" style={{ background: usermeta.title_background }}>
           <span className="worksheet-title" style={titleStyle(usermeta)}>
             {title}
           </span>

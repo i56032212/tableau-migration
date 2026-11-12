@@ -134,6 +134,24 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def duckdb_collation(collation: str | None) -> str | None:
+    """Hyper 的定序 → DuckDB 的定序：大小寫不分（en_US_CI 等）為 NOCASE，重音不分（_AI）加 NOACCENT；
+    其他（binary、依語系但分大小寫的 en_US 等）為 None（DuckDB 依位元組比較）。"""
+    parts = {p.upper() for p in (collation or "").split("_")}
+    names = [name for flag, name in (("CI", "NOCASE"), ("AI", "NOACCENT")) if flag in parts]
+    return ".".join(names) if names else None
+
+
+def cast_column(name: str, duckdb_type: str, collation: str | None) -> str:
+    """載入萃取時的欄：轉成 DuckDB 的型別，文字欄位加上對應的定序（Tableau 的萃取多半大小寫不分：
+    'In Progress' 與 'In progress' 相同）。"""
+    expr = f"CAST({_quote(name)} AS {duckdb_type}) "
+    found = duckdb_collation(collation) if duckdb_type == "VARCHAR" else None
+    if found is not None:
+        expr += f"COLLATE {found} "
+    return f"{expr}AS {_quote(name)}"
+
+
 def _stat_sql(
     columns: list[ColumnInfo], tags: dict[str, str], table: str
 ) -> tuple[str, list[tuple[str | None, str]]]:
@@ -268,9 +286,7 @@ def load_hyper_export(
 ) -> TableImport:
     """把匯出的資料表載入 DuckDB 的 schema.table（結構描述須已建立），並與 Hyper 的統計值比對。"""
     target = f"{_quote(schema)}.{_quote(table)}"
-    select = ", ".join(
-        f"CAST({_quote(c.name)} AS {c.duckdb_type}) AS {_quote(c.name)}" for c in export.columns
-    )
+    select = ", ".join(cast_column(c.name, c.duckdb_type, c.collation) for c in export.columns)
     con.execute(
         f"CREATE TABLE {target} AS SELECT {select} FROM read_parquet(?)", [str(export.parquet)]
     )
@@ -287,10 +303,11 @@ def load_hyper_export(
         )
         for (column, stat), h, d in zip(export.labels, export.hyper_stats, duck_stats, strict=True)
     ]
+    # 大小寫（重音）不分的定序以 DuckDB 的定序保留；其他依語系的定序（例如 en_US）排序可能不同
     warnings = [
-        f"欄位「{c.name}」使用定序 {c.collation}，文字比較與排序可能與 DuckDB 不同"
+        f"欄位「{c.name}」使用定序 {c.collation}，文字的排序可能與 Tableau 不同（DuckDB 依位元組排序）"
         for c in export.columns
-        if c.collation not in (None, "", "binary")
+        if c.collation not in (None, "", "binary") and duckdb_collation(c.collation) is None
     ]
     return TableImport(
         schema=schema,

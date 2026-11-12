@@ -89,6 +89,7 @@ class SheetFormats:
     cell_color: str | None = None
     cell_align: Literal["left", "center", "right"] | None = None
     field_label_background: str | None = None
+    title_background: str | None = None
     label_valign: Literal["top", "center", "bottom"] | None = None
     fonts: dict[FontElement, FontStyle] = field(default_factory=dict)
     field_fonts: dict[str, FontStyle] = field(default_factory=dict)
@@ -213,6 +214,8 @@ def worksheet_formats(
                 result.background = hex_color(value) or result.background
             elif tag == "format" and name == "background-color" and element == "field-labels":
                 result.field_label_background = _opaque(value)
+            elif tag == "format" and name == "background-color" and element == "title":
+                result.title_background = _opaque(value)
             elif tag == "format" and element == "cell" and name == "text-align" and ref is None:
                 if item.get("data-class") is None and scope is None:
                     result.cell_align = _align(value)

@@ -238,3 +238,34 @@ def test_kpi_lines_with_their_own_styles(tmp_path: Path, db: Path) -> None:
     record = spec["data"]["values"][0]
     assert record[title["encoding"]["text"]["field"]] == "Total Sales"
     assert record[value["encoding"]["text"]["field"]] == "1,310"
+
+
+def test_line_colored_by_measure_is_one_line(tmp_path: Path, db: Path) -> None:
+    """依量值（連續色彩）著色的折線：Vega-Lite 會依顏色的值分開各條線，改以色階中間的顏色畫成一條線。"""
+    sheet = trend("", f"<color column='{ref('sum:Sales:qk')}' />")
+    rendered = render(parse(tmp_path, sheet), db)
+    assert "color" not in rendered.spec["encoding"]
+    assert rendered.spec["mark"]["color"].startswith("#")
+    assert any("依量值著色的折線" in note for note in rendered.notes)
+
+
+def test_kpi_text_has_no_padding(tmp_path: Path, db: Path) -> None:
+    sheet = worksheet(
+        "KPI", [SALES], mark="Text", encodings=f"<text column='{ref('sum:Sales:qk')}' />"
+    )
+    assert render(parse(tmp_path, sheet), db).spec["padding"] == 0
+
+
+def test_title_background(tmp_path: Path, db: Path) -> None:
+    sheet = worksheet(
+        "KPI", [SALES], mark="Text", encodings=f"<text column='{ref('sum:Sales:qk')}' />"
+    )
+    sheet = sheet.replace(
+        "<style />",
+        "<style><style-rule element='title'><format attr='background-color' value='#094ba2' />"
+        "</style-rule></style>",
+        1,
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.worksheets[0].title_background == "#094ba2"
+    assert render(ir, db).spec["usermeta"]["title_background"] == "#094ba2"

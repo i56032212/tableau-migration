@@ -742,6 +742,17 @@ class _Builder:
             }
             rect = _mark_style({"type": "rect", "tooltip": True}, marks)
             return {"encoding": encoding, "layer": [{"mark": rect}, text]}, mark
+        color = encoding.get("color")
+        if (
+            vl_mark["type"] in ("line", "area")
+            and not vl_mark.get("filled")
+            and isinstance(color, dict)
+            and color.get("type") == "quantitative"
+        ):
+            # Vega-Lite 依顏色的欄位分開各條線（依量值著色時每個值一條）：以色階中間的顏色畫成一條線
+            del encoding["color"]
+            vl_mark["color"] = _middle_color(color.get("scale"))
+            self.notes.append("依量值著色的折線以色階中間的單一顏色畫出（Tableau 依各段的值著色）")
         _mark_style(vl_mark, marks)
         self.size_mark(vl_mark, encoding, marks)
         if marks.path is not None and vl_mark["type"] in ("line", "area"):
@@ -2050,11 +2061,16 @@ def build_spec(
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
     spec["usermeta"]["title_color"] = title_color or _title_color(ws)
     spec["usermeta"]["title_font"] = _title_font(ws)
+    if ws.title_background is not None:
+        spec["usermeta"]["title_background"] = _css_color(ws.title_background)
     if "vconcat" in body or "hconcat" in body or "facet" in body:
         # 多張圖（分面）無法自動填滿容器，由檢視器依區塊大小設定每張圖的寬高
         del spec["width"], spec["height"]
         spec["autosize"] = {"type": "pad"}
     spec.update(body)
+    if mark == "text" and not (rows_dims or cols_dims or rows_meas or cols_meas):
+        # 單格的文字（KPI）：與 Tableau 相同不留內距，小區塊中的大數字不會被裁掉
+        spec["padding"] = 0
     if builder.culled:
         spec["params"] = [*spec.get("params", []), {"name": LABEL_HIDDEN, "value": []}]
     if column_field is not None:
@@ -3912,6 +3928,14 @@ def _scope_keys(builder: _Builder) -> dict[str, list[str]]:
 
 def _is_number(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _middle_color(scale: Any) -> str:
+    """連續色彩的比例尺中間的顏色（沒有時為 Tableau 預設的標記顏色）。"""
+    colors = scale.get("range") if isinstance(scale, dict) else None
+    if isinstance(colors, list) and colors and all(isinstance(c, str) for c in colors):
+        return colors[len(colors) // 2]
+    return DEFAULT_MARK_COLOR
 
 
 def _hashable(value: Any) -> Any:

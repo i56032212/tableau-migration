@@ -31,6 +31,7 @@ from typing import Any
 
 import duckdb
 
+from tmig.data.hyper_import import cast_column
 from tmig.data.sources import Executor
 from tmig.ir.models import (
     IR,
@@ -283,6 +284,7 @@ def refresh_extract(
         if existing is None:
             raise RefreshError(f"增量更新需要現有的萃取檔 {out_path}；請先完整更新或匯入 .hyper")
     types = _existing_types(existing, plan) if existing is not None else {}
+    collations = _import_collations(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.name + ".refresh-tmp")
     wal = tmp.with_name(tmp.name + ".wal")
@@ -295,7 +297,9 @@ def refresh_extract(
             shutil.copyfile(existing, tmp)
         with duckdb.connect(str(tmp)) as con:
             for table in plan.tables:
-                results.append(_write_table(con, plan, table, executor, types, incremental))
+                results.append(
+                    _write_table(con, plan, table, executor, types, incremental, collations)
+                )
             con.execute("CHECKPOINT")
         _replace(tmp, out_path)
     finally:
@@ -327,6 +331,7 @@ def _write_table(
     executor: Executor,
     types: dict[tuple[str, str], dict[str, str]],
     incremental: bool,
+    collations: dict[tuple[str, str], dict[str, str]] | None = None,
 ) -> TableRefresh:
     target = f"{ident(table.schema)}.{ident(table.table)}"
     known = types.get((table.schema, table.table), {})
@@ -343,8 +348,10 @@ def _write_table(
         rows = executor.fetch(sql)
     except Exception as exc:
         raise RefreshError(f"來源資料庫執行失敗（{table.schema}.{table.table}）：{exc}") from exc
+    # 沿用匯入 .hyper 時的定序（大小寫不分的文字欄位，見 tmig.data.hyper_import.cast_column）
+    collated = (collations or {}).get((table.schema, table.table), {})
     casts = ", ".join(
-        f"CAST({ident(name)} AS {known.get(name) or SQL_TYPES[table.datatypes[name]]}) AS {ident(name)}"
+        cast_column(name, known.get(name) or SQL_TYPES[table.datatypes[name]], collated.get(name))
         for name, _ in table.columns
     )
     con.register("__tmig_rows", rows)
@@ -365,6 +372,25 @@ def _write_table(
 def _count(con: duckdb.DuckDBPyConnection, target: str) -> int:
     (row,) = con.execute(f"SELECT count(*) FROM {target}").fetchall()
     return int(row[0])
+
+
+def _import_collations(out_path: Path) -> dict[tuple[str, str], dict[str, str]]:
+    """匯入 .hyper 時記下的各表各欄的定序（<資料源>.import.json；沒有時為空）。"""
+    report = out_path.with_name(f"{out_path.stem}.import.json")
+    try:
+        data = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    tables = data.get("tables") or ([data["table"]] if data.get("table") else [])
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for table in tables:
+        key = (str(table.get("schema")), str(table.get("table")))
+        result[key] = {
+            str(c["name"]): str(c["collation"])
+            for c in table.get("columns", [])
+            if c.get("collation")
+        }
+    return result
 
 
 def _existing_types(path: Path, plan: RefreshPlan) -> dict[tuple[str, str], dict[str, str]]:

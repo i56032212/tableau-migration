@@ -541,3 +541,28 @@ def test_verify_notes_refreshed_data(report: Report, tmp_path: Path) -> None:
     import_workbook(report.twbx, data, report.ir)
     assert not (data / f"{ds_id}.refresh.json").exists()
     assert ensure_data(tmp_path, report.ir) == []
+
+
+@pytest.mark.parametrize("source", ["duckdb"], indirect=True)
+def test_refresh_keeps_case_insensitive_collation(
+    report: Report, source: Source, tmp_path: Path
+) -> None:
+    """從來源更新萃取時沿用匯入 .hyper 時的定序（大小寫不分的文字欄位比較時不分大小寫）。"""
+    import json
+
+    ds_id = report.ir.datasources[0].id
+    out = tmp_path / "data" / f"{ds_id}.duckdb"
+    out.parent.mkdir()
+    imported = {
+        "table": {
+            "schema": "Extract",
+            "table": "Extract",
+            "columns": [{"name": "REGION", "collation": "en_US_CI"}],
+        }
+    }
+    (out.parent / f"{ds_id}.import.json").write_text(json.dumps(imported), encoding="utf-8")
+    refresh(report, source, out)
+    with duckdb.connect(str(out), read_only=True) as con:
+        west = 'SELECT count(*) FROM "Extract"."Extract" WHERE "REGION" = \'west\''
+        (count,) = con.execute(west).fetchone() or (0,)
+    assert count == sum(1 for r in SNAPSHOT if r[2] == "West")

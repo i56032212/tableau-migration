@@ -119,3 +119,43 @@ def test_stat_comparison_rules() -> None:
     assert _same("min", "DATE", dt.date(2024, 1, 1), dt.date(2024, 1, 1))
     assert not _same("max", "TEXT", None, "a")
     assert StatCheck(column=None, stat="rows", hyper="1", duckdb="1", ok=True).ok
+
+
+def test_case_insensitive_collation_is_kept(tmp_path: Path) -> None:
+    """Tableau 的萃取多半是大小寫不分的定序（en_US_CI）：DuckDB 以 NOCASE 定序保留，比較、篩選與分組與
+    Tableau 相同（公開報表 Credit Card Complaints 以 'In Progress' 比對資料中的 'In progress'）。"""
+    table = TableDefinition(
+        TableName("Extract", "Extract"),
+        [
+            TableDefinition.Column("Status", SqlType.text(), collation="en_US_CI"),
+            TableDefinition.Column("Code", SqlType.text()),
+            TableDefinition.Column("N", SqlType.big_int()),
+        ],
+    )
+    hyper = tmp_path / "ci.hyper"
+    with (
+        HyperProcess(
+            Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, parameters={"log_dir": str(tmp_path)}
+        ) as process,
+        Connection(process.endpoint, hyper, CreateMode.CREATE_AND_REPLACE) as conn,
+    ):
+        conn.catalog.create_schema("Extract")
+        conn.catalog.create_table(table)
+        with Inserter(conn, table) as inserter:
+            inserter.add_rows(
+                [["In progress", "a", 1], ["In Progress", "A", 2], ["Closed", "b", 4]]
+            )
+            inserter.execute()
+    twbx = b.write_twbx(tmp_path, b.workbook(), {"Data/Extracts/test.hyper": hyper.read_bytes()})
+    (result,) = import_workbook(twbx, tmp_path / "data", parse_workbook(twbx))
+    assert result.table.ok, [c for c in result.table.checks if not c.ok]
+    assert {c.name: c.collation for c in result.table.columns}["Status"] == "en_US_CI"
+    assert not any("Status" in w for w in result.table.warnings)
+    with duckdb.connect(str(tmp_path / "data" / "ds_orders.duckdb"), read_only=True) as con:
+        status = 'SELECT sum("N") FROM "Extract"."Extract" WHERE "Status" = \'In Progress\''
+        assert con.execute(status).fetchall() == [(3,)]
+        groups = 'SELECT count(*) FROM (SELECT "Status" FROM "Extract"."Extract" GROUP BY 1)'
+        assert con.execute(groups).fetchall() == [(2,)]
+        # 沒有定序的欄位仍分大小寫
+        code = 'SELECT sum("N") FROM "Extract"."Extract" WHERE "Code" = \'a\''
+        assert con.execute(code).fetchall() == [(1,)]
