@@ -40,6 +40,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
         {
@@ -59,6 +62,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
         {
@@ -78,6 +84,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
         {
@@ -97,6 +106,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
         {
@@ -116,6 +128,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
         {
@@ -135,6 +150,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
         {
@@ -154,6 +172,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
         {
@@ -173,6 +194,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
         {
@@ -192,6 +216,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
         {
@@ -211,6 +238,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
         {
@@ -230,6 +260,9 @@
           "aliases": [],
           "geo_role": "state",
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
         {
@@ -249,6 +282,9 @@
           "aliases": [],
           "geo_role": "zip",
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -268,6 +304,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
         {
@@ -287,6 +326,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
         {
@@ -306,6 +348,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
         {
@@ -325,6 +370,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
         {
@@ -344,6 +392,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
         {
@@ -363,6 +414,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
         {
@@ -382,6 +436,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
         {
@@ -401,6 +458,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
         {
@@ -420,6 +480,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
         {
@@ -476,6 +539,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -528,6 +594,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -584,6 +653,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -627,6 +699,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -685,6 +760,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
@@ -752,6 +830,21 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": {
+            "source": "f_region",
+            "groups": [
+              {
+                "name": "Coasts",
+                "members": [
+                  "East",
+                  "West"
+                ]
+              }
+            ],
+            "other": null
+          },
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[10]"
         },
         {
@@ -820,6 +913,21 @@
           ],
           "geo_role": null,
           "geo_aliases": [],
+          "group": {
+            "source": "f_ship_mode",
+            "groups": [
+              {
+                "name": "Fast",
+                "members": [
+                  "First Class",
+                  "Same Day"
+                ]
+              }
+            ],
+            "other": "Other"
+          },
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[11]"
         },
         {
@@ -875,6 +983,13 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": {
+            "source": "f_quantity",
+            "size": 3.0,
+            "peg": 0.0
+          },
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[12]"
         },
         {
@@ -941,6 +1056,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[13]"
         },
         {
@@ -974,6 +1092,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[14]"
         },
         {
@@ -1022,6 +1143,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[15]"
         },
         {
@@ -1095,6 +1219,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[16]"
         },
         {
@@ -1168,6 +1295,9 @@
           "aliases": [],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[17]"
         },
         {
@@ -1214,6 +1344,9 @@
           ],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/group[4]"
         },
         {
@@ -1322,6 +1455,9 @@
           ],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/group[5]"
         },
         {
@@ -1366,6 +1502,9 @@
           ],
           "geo_role": null,
           "geo_aliases": [],
+          "group": null,
+          "bin": null,
+          "comment": null,
           "source_ref": "/workbook/datasources/datasource[2]/group[6]"
         }
       ],

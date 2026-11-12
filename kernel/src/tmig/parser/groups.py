@@ -17,72 +17,78 @@ Null 也可以是成員（%null%）。
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from lxml import etree
 
 from tmig.ir.models import Scalar
-from tmig.ir.setformula import FormulaValueError, formula_literal, members_condition
+from tmig.ir.setformula import (
+    CONVERT,
+    FormulaValueError,
+    bin_expression,
+    formula_literal,
+    group_expression,
+    members_condition,
+)
 from tmig.parser.twbx import children, text_of
 from tmig.parser.values import parse_literal
-
-CONVERT = {
-    "string": "STR",
-    "integer": "INT",
-    "real": "FLOAT",
-    "date": "DATE",
-    "datetime": "DATETIME",
-}
-
 
 GroupError = FormulaValueError
 """無法轉成公式的群組或集合定義。"""
 
 
-def group_formula(column: etree._Element, calc: etree._Element, source_datatype: str | None) -> str:
-    """categorical-bin → 公式。source_datatype 為來源欄位的型別（不知道時為 None）。"""
+@dataclass(frozen=True)
+class GroupDefinition:
+    """群組的定義：來源欄位（公式中的寫法）、各組的名稱與成員、「其他」的名稱（None 為維持原值）。"""
+
+    source: str
+    groups: list[tuple[Scalar, list[Scalar]]]
+    other: Scalar
+    has_other: bool
+
+
+@dataclass(frozen=True)
+class BinDefinition:
+    """數值分組的定義：來源（公式）、大小（常值或參數的寫法）與起點。"""
+
+    expression: str
+    size: float | None
+    size_parameter: str | None
+    peg: float
+
+
+def group_formula(
+    column: etree._Element, calc: etree._Element, source_datatype: str | None
+) -> tuple[str, GroupDefinition]:
+    """categorical-bin → 公式與定義。source_datatype 為來源欄位的型別（不知道時為 None）。"""
     source = calc.get("column")
     if not source:
         raise GroupError("沒有來源欄位")
     datatype = column.get("datatype") or "string"
     if datatype not in CONVERT:
         raise GroupError(f"群組的型別 {datatype} 不支援")
-    branches: list[tuple[list[Scalar], Scalar]] = []
-    null_group: list[Scalar] = []
+    groups: list[tuple[Scalar, list[Scalar]]] = []
     for bin_el in children(calc, "bin"):
         name = parse_literal(bin_el.get("value"), datatype)
         members = [parse_literal(text_of(v), source_datatype) for v in children(bin_el, "value")]
-        if any(m is None for m in members) and not null_group:
-            null_group.append(name)
-        values: list[Scalar] = [m for m in members if m is not None]
-        if values:
-            branches.append((values, name))
-
+        if members:
+            groups.append((name, members))
     default = calc.get("default")
-    if default is not None:
-        otherwise = formula_literal(parse_literal(default, datatype), datatype)
-    elif source_datatype is None or source_datatype == datatype:
-        otherwise = source
-    else:
-        otherwise = f"{CONVERT[datatype]}({source})"
-
-    conditions: list[str] = []
-    if null_group:
-        conditions.append(f"ISNULL({source}) THEN {formula_literal(null_group[0], datatype)}")
-    for values, name in branches:
-        listed = ", ".join(formula_literal(v, source_datatype) for v in values)
-        conditions.append(f"{source} IN ({listed}) THEN {formula_literal(name, datatype)}")
-    if not conditions:
-        return otherwise  # 沒有任何群組：每個成員維持原值
-    lines = [f"IF {conditions[0]}", *[f"ELSEIF {c}" for c in conditions[1:]]]
-    return "\n".join([*lines, f"ELSE {otherwise}", "END"])
+    other = parse_literal(default, datatype) if default is not None else None
+    formula = group_expression(
+        source, source_datatype, groups, other, datatype, null_other=default is not None
+    )
+    return formula, GroupDefinition(source, groups, other, default is not None)
 
 
-def bin_formula(calc: etree._Element) -> str:
-    """bin → 公式：所在區間的下限。"""
+def bin_formula(calc: etree._Element) -> tuple[str, BinDefinition]:
+    """bin → 公式（所在區間的下限）與定義。"""
     expression = calc.get("formula")
-    size = calc.get("size-parameter") or calc.get("size")
+    parameter = calc.get("size-parameter")
+    size = parameter or calc.get("size")
     if not expression or not size:
         raise GroupError("缺少分組的欄位或大小")
+    number: float | None = None
     if not size.startswith("["):
         try:
             number = float(size)
@@ -95,10 +101,8 @@ def bin_formula(calc: etree._Element) -> str:
         peg = float(calc.get("peg") or "0")
     except ValueError as exc:
         raise GroupError(f"無法辨識的分組起點「{calc.get('peg')}」") from exc
-    if peg == 0:
-        return f"FLOOR(({expression}) / {size}) * {size}"
-    anchor = formula_literal(int(peg) if peg.is_integer() else peg)
-    return f"FLOOR((({expression}) - {anchor}) / {size}) * {size} + {anchor}"
+    definition = BinDefinition(expression, number, size if number is None else None, peg)
+    return bin_expression(expression, size, peg), definition
 
 
 _STRINGS = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|//[^\n]*')

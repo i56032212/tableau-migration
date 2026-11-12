@@ -2,11 +2,12 @@
 // 每次變更整理後把整張工作表存回（PUT），檢視重新查詢；復原與重做在這裡記錄。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FieldUse, Scalar } from "../types";
+import type { FieldUse, Mark, Scalar } from "../types";
 import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
 import { DataPane } from "./DataPane";
+import { AliasDialog, BinDialog, CommentDialog, FieldFormatDialog, GroupDialog, RenameDialog, SetDialog } from "./FieldDialogs";
 import {
   AxisDialog,
   CalcDialog,
@@ -36,6 +37,8 @@ import {
   markUses,
   newTableCalc,
   pillLabel,
+  selectionFilter,
+  selectionLevels,
   setAggregated,
   type SheetIR,
   swapAxes,
@@ -277,6 +280,8 @@ export function Editor({
   const [history, setHistoryState] = useState<History | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  // 檢視上選取的標記（只保留、排除、群組與集合）；工作表或它的定義改變時清除
+  const [selected, setSelected] = useState<Mark[]>([]);
   const [card, setCard] = useState<Card>("all");
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
@@ -331,6 +336,8 @@ export function Editor({
   }, [workbook, worksheet]);
 
   const sheet = history ? history.entries[history.index] : null;
+  const sheetId = sheet?.id ?? null;
+  useEffect(() => setSelected([]), [sheetId, revision]);
   const fields = useMemo(() => (catalog && sheet ? fieldIndex(catalog, sheet.datasource) : new Map<string, CatalogField>()), [catalog, sheet?.datasource]);
   fieldsRef.current = fields;
 
@@ -615,13 +622,42 @@ export function Editor({
             {empty ? (
               <div className="placeholder">將欄位從資料窗格拖曳到欄、列或標記卡</div>
             ) : (
-              <WorksheetView
-                workbook={workbook}
-                worksheet={sheet.id}
-                state={EMPTY_STATE}
-                revision={revision}
-                tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
-              />
+              <>
+                {selected.length > 0 && (
+                  <SelectionBar
+                    marks={selected}
+                    onClear={() => setSelected([])}
+                    onFilter={(mode) => {
+                      const marks = selected;
+                      setSelected([]);
+                      apply(async (s) => selectionFilter(s, marks, mode, await newId("flt", mode === "include" ? "keep only" : "exclude")) ?? s);
+                      notify(mode === "include" ? "已只保留選取的標記" : "已排除選取的標記");
+                    }}
+                  />
+                )}
+                <WorksheetView
+                  workbook={workbook}
+                  worksheet={sheet.id}
+                  state={EMPTY_STATE}
+                  revision={revision}
+                  selected={selected}
+                  onMarks={(event) => {
+                    if (event.kind !== "click") return;
+                    const mark = event.mark;
+                    if (!mark || !Object.keys(mark).length) {
+                      setSelected([]);
+                      return;
+                    }
+                    const key = JSON.stringify(mark);
+                    setSelected((current) => {
+                      const has = current.some((m) => JSON.stringify(m) === key);
+                      if (event.additive) return has ? current.filter((m) => JSON.stringify(m) !== key) : [...current, mark];
+                      return has && current.length === 1 ? [] : [mark];
+                    });
+                  }}
+                  tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
+                />
+              </>
             )}
           </div>
         </div>
@@ -678,6 +714,11 @@ export function Editor({
           }}
         />
       )}
+      {dialog && fieldDialog(dialog, () => setDialog(null), () => {
+        void reloadCatalog();
+        setRevision((r) => r + 1);
+        onChanged();
+      })}
       {dialog?.kind === "parameter" && (
         <ParameterDialog
           parameter={dialog.parameter}
@@ -691,4 +732,109 @@ export function Editor({
       )}
     </EditorContext.Provider>
   );
+}
+
+/** 選取標記後的命令（Tableau 工具提示的「只保留」「排除」「群組」與「建立集合」）。 */
+function SelectionBar({
+  marks,
+  onClear,
+  onFilter,
+}: {
+  marks: Mark[];
+  onClear: () => void;
+  onFilter: (mode: "include" | "exclude") => void;
+}) {
+  const editor = useEditor();
+  const levels = selectionLevels(editor.sheet, marks);
+  const plain = levels?.every((l) => l.use.date === null) ?? false;
+  const fields = (levels ?? []).map((l) => editor.fields.get(l.use.field));
+  const groupable = plain && levels?.length === 1 && fields[0]?.kind !== "set";
+  const datasource = editor.sheet.datasource;
+  const values = (key: string) => {
+    const found: Scalar[] = [];
+    for (const m of marks) if (!found.some((v) => v === m[key])) found.push(m[key] ?? null);
+    return found;
+  };
+  return (
+    <div className="selection-bar" role="toolbar" aria-label="選取的標記">
+      <span className="hint">已選取 {marks.length} 個標記</span>
+      <button type="button" disabled={!levels} title="只保留選取的標記（加上篩選）" onClick={() => onFilter("include")}>
+        ✓ 只保留
+      </button>
+      <button type="button" disabled={!levels} title="排除選取的標記（加上篩選）" onClick={() => onFilter("exclude")}>
+        ✕ 排除
+      </button>
+      <button
+        type="button"
+        disabled={!groupable || !levels}
+        title={groupable ? "以選取的成員建立群組" : "只有一個維度（不是日期的部分）時可以建立群組"}
+        onClick={() =>
+          levels &&
+          editor.openDialog({ kind: "group", datasource, source: levels[0].use.field, field: null, members: values(levels[0].key) })
+        }
+      >
+        📎 群組…
+      </button>
+      <button
+        type="button"
+        disabled={!plain || !levels}
+        title={plain ? "以選取的成員建立集合" : "日期的部分不能建立集合"}
+        onClick={() =>
+          levels &&
+          editor.openDialog({
+            kind: "set",
+            datasource,
+            levels: levels.map((l) => l.use.field),
+            field: null,
+            members: marks.map((m) => levels.map((l) => m[l.key] ?? null)),
+          })
+        }
+      >
+        ◎ 建立集合…
+      </button>
+      <button type="button" className="link" onClick={onClear}>
+        清除選取
+      </button>
+    </div>
+  );
+}
+
+/** 資料窗格的欄位選單開啟的對話框（重新命名、註解、格式、別名、群組、數值分組、集合）。 */
+function fieldDialog(dialog: EditorDialog, onClose: () => void, onSaved: () => void): React.ReactNode {
+  switch (dialog.kind) {
+    case "rename":
+      return <RenameDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "comment":
+      return <CommentDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "field-format":
+      return <FieldFormatDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "aliases":
+      return <AliasDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "group":
+      return (
+        <GroupDialog
+          datasource={dialog.datasource}
+          source={dialog.source}
+          field={dialog.field}
+          members={dialog.members}
+          onClose={onClose}
+          onSaved={onSaved}
+        />
+      );
+    case "bins":
+      return <BinDialog datasource={dialog.datasource} source={dialog.source} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "set":
+      return (
+        <SetDialog
+          datasource={dialog.datasource}
+          levels={dialog.levels}
+          field={dialog.field}
+          members={dialog.members}
+          onClose={onClose}
+          onSaved={onSaved}
+        />
+      );
+    default:
+      return null;
+  }
 }

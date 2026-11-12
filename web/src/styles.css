@@ -273,7 +273,8 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .field-name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .field.special .field-name { font-style: italic; }
 .field-actions { display: none; gap: 2px; }
-.field:hover .field-actions { display: inline-flex; }
+.field:hover .field-actions, .field.menu-open .field-actions { display: inline-flex; }
+.field.hidden-field .field-name { color: var(--muted); font-style: italic; }
 /* 階層：名稱（拖曳維度到名稱上即加入）與縮排的欄位 */
 .hierarchy { list-style: none; }
 .hierarchy-name { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 3px; white-space: nowrap; }
@@ -546,3 +547,27 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 @media (max-width: 760px) {
   .dse-body { grid-template-columns: 1fr; }
 }
+
+/* 資料窗格的欄位選單：群組、集合、數值分組、別名與預設屬性的對話框 */
+.group-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 8px 0; }
+.group-editor h3 { font-size: 14px; margin: 0 0 6px; }
+.group-editor section { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.member-list { list-style: none; margin: 0; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; max-height: 260px; overflow-y: auto; }
+.member-list li { padding: 1px 0; }
+.group-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+.group-list > li { border: 1px solid var(--line); border-radius: 4px; padding: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.group-list > li > input { flex: 1; min-width: 120px; }
+.group-members { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+.chip { display: inline-flex; align-items: center; gap: 2px; background: #eef2f7; border-radius: 10px; padding: 1px 8px; font-size: 12px; }
+.alias-table-wrap { max-height: 360px; overflow-y: auto; margin: 6px 0; }
+.alias-table { width: 100%; border-collapse: collapse; }
+.alias-table th, .alias-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.alias-table input { width: 100%; box-sizing: border-box; }
+.set-members, .set-rule { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.inline-fields { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.field-comment { width: 100%; box-sizing: border-box; font: inherit; }
+.bin-stats { border: 1px solid var(--line); border-radius: 4px; margin: 8px 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+@media (max-width: 640px) { .group-editor { grid-template-columns: 1fr; } }
+.selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; margin-bottom: 6px; background: #f3f6fb; border: 1px solid var(--line); border-radius: 4px; }
+.selection-bar button:not(.link) { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+.selection-bar button:disabled { opacity: 0.5; cursor: default; }

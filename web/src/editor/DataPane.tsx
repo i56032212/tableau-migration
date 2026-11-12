@@ -5,6 +5,8 @@ import { useState } from "react";
 import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor } from "./context";
 import { hierarchyCandidates } from "./Dialogs";
+import { fieldMenu } from "./FieldDialogs";
+import { PopupMenu } from "./Shelves";
 import {
   blendSources,
   buildMap,
@@ -27,11 +29,14 @@ function canHaveGeoRole(field: CatalogField): boolean {
   return field.kind !== "set" && ["string", "integer", "real"].includes(field.datatype);
 }
 
-/** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合；有地理角色的為地球、空間資料為地圖）。 */
+/** 欄位的圖示（與 Tableau 相同：Abc、#、日曆、T|F、集合、群組的迴紋針、數值分組；有地理角色的為地球、
+空間資料為地圖）。 */
 function fieldIcon(field: CatalogField): string {
   if (field.geo_role) return "🌐";
   if (field.datatype === "spatial") return "🗺";
   if (field.kind === "set") return "◎";
+  if (field.group) return "📎";
+  if (field.bin) return "▥";
   if (field.datatype === "integer" || field.datatype === "real") return "#";
   if (isDate(field)) return field.datatype === "datetime" ? "◷" : "▦";
   if (field.datatype === "boolean") return "T|F";
@@ -69,6 +74,7 @@ function FieldRow({
   hierarchical?: boolean;
 }) {
   const editor = useEditor();
+  const [menu, setMenu] = useState<DOMRect | null>(null);
   const measure = field.role === "measure" || field.level === "aggregate" || field.level === "table_calc";
   const add = () =>
     editor.apply(async (sheet) => {
@@ -84,20 +90,34 @@ function FieldRow({
     });
   return (
     <li
-      className={`field ${measure ? "measure" : "dimension"}`}
+      className={`field ${measure ? "measure" : "dimension"}${menu ? " menu-open" : ""}${field.hidden ? " hidden-field" : ""}`}
       draggable
       data-field={field.id}
       onDragStart={(e) => startDrag(e, { kind: "field", field: field.id })}
       onDragEnd={endDrag}
       onDoubleClick={add}
-      title={field.formula ? `${field.caption}\n${field.formula}` : field.caption}
+      onContextMenu={(e) => {
+        // 按右鍵：與 Tableau 相同的欄位選單
+        e.preventDefault();
+        setMenu(new DOMRect(e.clientX, e.clientY, 0, 0));
+      }}
+      title={[field.caption, field.formula, field.comment].filter(Boolean).join("\n")}
     >
       <span className="field-icon">{fieldIcon(field)}</span>
       <span className="field-name">
-        {field.kind === "calc" ? "=" : ""}
+        {field.kind === "calc" && !field.group && !field.bin ? "=" : ""}
         {field.caption}
       </span>
       <span className="field-actions">
+        <button
+          type="button"
+          className="link field-menu"
+          title="欄位選單（重新命名、複製、隱藏、建立群組、集合、數值分組、別名、預設屬性…）"
+          aria-label={`「${field.caption}」的選單`}
+          onClick={(e) => setMenu((e.currentTarget as HTMLElement).getBoundingClientRect())}
+        >
+          ▾
+        </button>
         {canHaveGeoRole(field) && (
           <button
             type="button"
@@ -163,6 +183,18 @@ function FieldRow({
             </>
           )}
       </span>
+      {menu && (
+        // 選單在可以拖曳的欄位中：選單上的拖曳、連按兩下不作用到欄位
+        <span
+          onDoubleClick={(e) => e.stopPropagation()}
+          onDragStart={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          <PopupMenu anchor={menu} items={fieldMenu(editor, field, datasource, hierarchical && !hierarchy)} onClose={() => setMenu(null)} />
+        </span>
+      )}
     </li>
   );
 }

@@ -25,6 +25,8 @@ from tmig.ir.models import (
     DataField,
     ExtractConnection,
     ExtractRefresh,
+    FieldBin,
+    FieldGroup,
     FieldUse,
     FileColumn,
     FileConnection,
@@ -32,6 +34,7 @@ from tmig.ir.models import (
     GeoAlias,
     GeoRole,
     GeoSettings,
+    GroupItem,
     Hierarchy,
     JoinRelation,
     LiveConnection,
@@ -39,6 +42,7 @@ from tmig.ir.models import (
     MemberAlias,
     ModelRelation,
     Parameter,
+    ParamRef,
     PivotRelation,
     ProjectRelation,
     PublishedSource,
@@ -63,6 +67,8 @@ from tmig.parser.fields import (
     use_from_name,
 )
 from tmig.parser.groups import (
+    BinDefinition,
+    GroupDefinition,
     GroupError,
     bin_formula,
     group_formula,
@@ -381,6 +387,7 @@ class DatasourceParser:
         self._fields(state, conn, data_conn, via_extract)
         self._hierarchies(state)
         self._geography(state)
+        self._comments(state)
         if not state.fields:
             ctx.flag(el, f"資料源「{self.caption}」沒有可用的欄位")
             return None
@@ -399,6 +406,13 @@ class DatasourceParser:
                 state.analytic_models[name.get("name", "")] = model
         self._check_children()
         return state
+
+    def _comments(self, state: DsState) -> None:
+        """欄位的註解（Tableau 的「預設屬性＞註解」，<column><desc>）：資料表中的欄位也可以有。"""
+        for column in children(self.el, "column"):
+            found = state.by_name.get(column.get("name", ""))
+            if found is not None and found.comment is None:
+                found.comment = field_comment(column)
 
     def _geography(self, state: DsState) -> None:
         """地理角色（<column semantic-role>）、「編輯位置」中指定的對應（欄位的 <semantic-values>）與
@@ -1474,14 +1488,15 @@ def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) ->
     calc = child(column, "calculation")
     assert calc is not None
     calc_class = calc.get("class", "")
+    definition: GroupDefinition | BinDefinition | None = None
     if calc_class in GROUP_KINDS:
-        # 群組與數值分組轉成等價的公式，之後與一般計算欄位相同
+        # 群組與數值分組轉成等價的公式，之後與一般計算欄位相同；定義另外記下（編輯器的「編輯群組」）
         try:
             if calc_class == "categorical-bin":
                 source = calc.get("column", "")
-                formula = group_formula(column, calc, _source_datatype(state, source))
+                formula, definition = group_formula(column, calc, _source_datatype(state, source))
             else:
-                formula = bin_formula(calc)
+                formula, definition = bin_formula(calc)
         except (GroupError, LiteralError) as exc:
             ctx.flag(column, f"{GROUP_KINDS[calc_class]}「{caption}」：{exc}")
             return None
@@ -1518,10 +1533,67 @@ def add_calc_field(ctx: ParseContext, state: DsState, column: etree._Element) ->
         column=None,
         calc=Calc(formula=formula),
         aliases=aliases,
+        comment=field_comment(column),
         source_ref=xpath(column),
     )
+    if definition is not None:
+        resolved = _definition(ctx, state, definition)
+        if resolved is not None:
+            data_field = _with_definition(data_field, resolved)
+        else:
+            state.definitions[data_field.id] = definition  # 來源欄位在後面：分析公式前再對應
     state.add_field(data_field)
     return data_field
+
+
+def field_comment(column: etree._Element) -> str | None:
+    """欄位的註解（<desc><formatted-text><run>…）：各段文字接起來。"""
+    desc = child(column, "desc")
+    if desc is None:
+        return None
+    text = "".join(run.text or "" for run in desc.iter() if local_name(run) == "run").strip()
+    return text or None
+
+
+def _definition(
+    ctx: ParseContext, state: DsState, definition: GroupDefinition | BinDefinition
+) -> FieldGroup | FieldBin | None:
+    """群組或數值分組的定義 → IR（來源欄位以 id 表示）；來源不是資料源中的欄位時為 None。"""
+    if isinstance(definition, GroupDefinition):
+        source = state.by_name.get(definition.source)
+        if source is None or (definition.has_other and definition.other is None):
+            return None
+        groups = [GroupItem(name=name, members=members) for name, members in definition.groups]
+        return FieldGroup(source=source.id, groups=groups, other=definition.other)
+    source = state.by_name.get(definition.expression.strip())
+    if source is None:
+        return None
+    if definition.size is not None:
+        return FieldBin(source=source.id, size=definition.size, peg=definition.peg)
+    parameter = ctx.parameter(definition.size_parameter or "")
+    if parameter is None:
+        return None
+    return FieldBin(source=source.id, size=ParamRef(parameter=parameter.id), peg=definition.peg)
+
+
+def _with_definition(data_field: DataField, definition: FieldGroup | FieldBin) -> DataField:
+    key = "group" if isinstance(definition, FieldGroup) else "bin"
+    return data_field.model_copy(update={key: definition})
+
+
+def resolve_definitions(ctx: ParseContext, state: DsState) -> None:
+    """來源欄位在群組、數值分組之後才定義時：所有欄位都加入後再對應定義。"""
+    for field_id, definition in list(state.definitions.items()):
+        resolved = _definition(ctx, state, definition)
+        del state.definitions[field_id]
+        if resolved is None:
+            continue
+        for i, data_field in enumerate(state.fields):
+            if data_field.id == field_id:
+                updated = _with_definition(data_field, resolved)
+                state.fields[i] = updated
+                state.by_name[updated.name] = updated
+                break
 
 
 def _level(info_level: str, has_lod: bool) -> CalcLevel:
@@ -1567,6 +1639,7 @@ def _check_set(
 
 def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
     """以公式引擎分析計算欄位：補上語法樹（附解析出的 id）與計算層級。"""
+    resolve_definitions(ctx, state)
     scope = DatasourceScope(state.name, state.fields, ctx.parameters)
     analyzer = Analyzer(scope)
     state.analyzer = analyzer

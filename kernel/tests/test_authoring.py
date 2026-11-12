@@ -276,7 +276,7 @@ def test_relationship_and_join(book: Path, sources: Path, tmp_path: Path) -> Non
     with pytest.raises(EditError, match="沒有欄位"):
         set_join(ir, ds, "Returns", "left", [(f["Order ID"], "=", "Missing")])
     # 工作表用到的欄位所在的資料表不能移除；不用之後移除，回到兩張邏輯資料表
-    with pytest.raises(EditError, match="用到這些欄位"):
+    with pytest.raises(EditError, match="用到"):
         remove_table(place(ir, f["Returned"], f["Sales"]), ds, "Returns")
     ir = remove_table(clear(ir), ds, "Returns")
     model = ir.datasources[0].connection.relation  # type: ignore[union-attr]
@@ -316,7 +316,7 @@ def test_union_pivot_and_fields(book: Path, sources: Path, tmp_path: Path) -> No
         "Sales": 425.75,
         "Quantity": 7,
     }
-    with pytest.raises(EditError, match="用到這些欄位"):
+    with pytest.raises(EditError, match="用到"):
         unpivot(place(ir, f["Pivot Field Names"], f["Pivot Field Values"]), ds, "Pivot")
     ir = unpivot(clear(ir), ds, "Pivot")
     f = ids(ir)

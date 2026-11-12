@@ -1,11 +1,14 @@
 // 桌面版編輯器的 API（/api/edit）：資料窗格、工作表、計算欄位與篩選的可選值。
 
 import { request } from "../api";
-import type { Action, Dashboard, Domain, FieldUse, Scalar, Story } from "../types";
-import type { Catalog, CatalogField, CatalogHierarchy, GeoAlias, GeoRole, SheetIR } from "./model";
+import type { Action, Dashboard, Domain, FieldUse, MemberAlias, Scalar, Story } from "../types";
+import type { Catalog, CatalogField, CatalogHierarchy, GeoAlias, GeoRole, SetRuleIR, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
 const part = encodeURIComponent;
+
+/** 建立或修改集合時送出的規則（固定成員、條件或 Top／Bottom N）。 */
+export type SetRuleBody = SetRuleIR;
 
 export interface FormulaCheck {
   ok: boolean;
@@ -113,6 +116,50 @@ export const editApi = {
     request<{ field: CatalogField }>(`${edit(workbook)}/analytics-fields`, {
       method: "POST",
       body: JSON.stringify({ datasource, kind }),
+    }).then((r) => r.field),
+  /** 複製欄位（「<名稱> (copy)」） */
+  duplicateField: (workbook: string, datasource: string, field: string) =>
+    request<{ field: CatalogField }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/duplicate`, {
+      method: "POST",
+    }).then((r) => r.field),
+  saveAliases: (workbook: string, datasource: string, field: string, aliases: MemberAlias[]) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/aliases`, {
+      method: "PUT",
+      body: JSON.stringify({ aliases }),
+    }),
+  /** 預設的數字或日期格式、註解（只改送出的項目；null 為清除） */
+  saveFieldProperties: (workbook: string, datasource: string, field: string, body: { format?: string | null; comment?: string | null }) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/properties`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  /** 刪除計算欄位、群組、數值分組或集合 */
+  removeField: (workbook: string, datasource: string, field: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}`, {
+      method: "DELETE",
+    }),
+  saveGroup: (
+    workbook: string,
+    datasource: string,
+    body: { source: string; caption: string; groups: { name: string; members: Scalar[] }[]; other: string | null; field: string | null },
+  ) =>
+    request<{ field: CatalogField }>(`${edit(workbook)}/datasources/${part(datasource)}/groups`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then((r) => r.field),
+  saveBins: (
+    workbook: string,
+    datasource: string,
+    body: { source: string; caption: string; size: number | null; parameter: string | null; field: string | null },
+  ) =>
+    request<{ field: CatalogField }>(`${edit(workbook)}/datasources/${part(datasource)}/bins`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then((r) => r.field),
+  saveSet: (workbook: string, datasource: string, body: { levels: string[]; caption: string; rule: SetRuleBody; field: string | null }) =>
+    request<{ field: CatalogField }>(`${edit(workbook)}/datasources/${part(datasource)}/sets`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }).then((r) => r.field),
   removeCalc: (workbook: string, datasource: string, field: string) =>
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/calcs/${part(field)}`, {

@@ -34,10 +34,8 @@ from tmig.edit import (
     _replace_datasource,
     _validated,
     add_worksheet,
+    check_unused,
 )
-from tmig.formula.ast import FieldRef, walk
-from tmig.formula.lexer import FormulaSyntaxError
-from tmig.formula.parser import parse_formula
 from tmig.ir import (
     FILE_SCHEMA,
     IR,
@@ -1246,38 +1244,8 @@ def _relationship_conditions(
 
 
 def _check_unused(ir: IR, ds: Datasource, fields: list[DataField]) -> None:
-    """欄位沒有工作表、計算欄位、集合、階層或篩選用到。"""
-    ids = {f.id for f in fields}
-    if not ids:
-        return
-    names = {f.name for f in fields}
-    for other in ds.fields:
-        if other.id in ids or other.calc is None:
-            continue
-        try:
-            node = parse_formula(other.calc.formula)
-        except FormulaSyntaxError:
-            continue
-        refs = {f"[{n.parts[-1]}]" for n in walk(node) if isinstance(n, FieldRef)}
-        if refs & names:
-            raise EditError(f"計算欄位「{other.caption}」用到這些欄位，先修改它")
-    for hierarchy in ds.hierarchies:
-        if ids & set(hierarchy.fields):
-            raise EditError(f"階層「{hierarchy.name}」用到這些欄位，先移除它們")
-    places: list[tuple[str, Any]] = [(w.name, w.model_dump(mode="json")) for w in ir.worksheets]
-    places += [("資料源篩選", f.model_dump(mode="json")) for f in ds.filters]
-    places += [(a.name, a.model_dump(mode="json")) for a in ir.actions]
-    for where, data in places:
-        if _mentions(data, ids):
-            raise EditError(f"「{where}」用到這些欄位，先移除它們")
-
-
-def _mentions(value: Any, ids: set[str]) -> bool:
-    if isinstance(value, dict):
-        return any(_mentions(v, ids) for v in value.values())
-    if isinstance(value, list):
-        return any(_mentions(v, ids) for v in value)
-    return isinstance(value, str) and value in ids
+    """欄位沒有工作表、計算欄位、集合、階層或篩選用到（見 tmig.edit.check_unused）。"""
+    check_unused(ir, ds, fields)
 
 
 __all__ = [

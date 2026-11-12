@@ -1740,6 +1740,43 @@
           "title": "Geo Aliases",
           "type": "array"
         },
+        "group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldGroup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "群組的定義（查詢時以 calc 的等價公式計算）"
+        },
+        "bin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldBin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "數值分組的定義（查詢時以 calc 的等價公式計算）"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "註解（Tableau 的「預設屬性＞註解」）：資料窗格的提示",
+          "title": "Comment"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -2192,6 +2229,87 @@
         "columns"
       ],
       "title": "ExtractRefresh",
+      "type": "object"
+    },
+    "FieldBin": {
+      "additionalProperties": false,
+      "description": "數值分組（Tableau 的 bin）：值為所在區間的下限（從 peg 起每 size 一格）。查詢時以等價的公式\n（DataField.calc）計算；定義另外記在這裡，供編輯器的「編輯數值分組」使用。",
+      "properties": {
+        "source": {
+          "description": "來源欄位的 id",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Source",
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/ParamRef"
+            }
+          ],
+          "title": "Size"
+        },
+        "peg": {
+          "default": 0,
+          "title": "Peg",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source",
+        "size"
+      ],
+      "title": "FieldBin",
+      "type": "object"
+    },
+    "FieldGroup": {
+      "additionalProperties": false,
+      "description": "群組（Tableau 的 categorical-bin）：來源欄位的成員對應到群組的名稱，其餘成員歸入「其他」\n（other）或維持原值（other 為 None）。查詢時以等價的公式（DataField.calc）計算；定義另外記在\n這裡，供編輯器的「編輯群組」使用。",
+      "properties": {
+        "source": {
+          "description": "來源欄位的 id",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Source",
+          "type": "string"
+        },
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/GroupItem"
+          },
+          "title": "Groups",
+          "type": "array"
+        },
+        "other": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "「其他」的名稱；None 為其餘成員維持原值",
+          "title": "Other"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "FieldGroup",
       "type": "object"
     },
     "FieldSet": {
@@ -2810,6 +2928,62 @@
         }
       },
       "title": "GeoSettings",
+      "type": "object"
+    },
+    "GroupItem": {
+      "additionalProperties": false,
+      "description": "群組中的一組：這些來源欄位的成員（Null 也可以是成員）顯示為 name。",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "members": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Members",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "members"
+      ],
+      "title": "GroupItem",
       "type": "object"
     },
     "Hierarchy": {

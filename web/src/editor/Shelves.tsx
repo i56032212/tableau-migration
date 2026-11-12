@@ -521,6 +521,13 @@ export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: Sh
   );
 }
 
+/** 依值組合的篩選：篩選動作，或檢視上「只保留」「排除」的多個維度（與 Tableau 的包含、排除項目相同）。 */
+function tupleLabel(filter: FilterIR, fields: Map<string, CatalogField>): string {
+  if (filter.action) return "動作（篩選）";
+  const names = ((filter.fields as FieldUse[] | undefined) ?? []).map((u) => fields.get(u.field)?.caption ?? u.field).join("、");
+  return `${filter.mode === "exclude" ? "排除" : "包含"}（${names}）`;
+}
+
 /** 篩選架：每個篩選一個膠囊（編輯、加入至內容、移除）。 */
 export function FiltersShelf() {
   const editor = useEditor();
@@ -554,7 +561,7 @@ export function FiltersShelf() {
         {sheet.filters.map((filter, i) => {
           const label =
             filter.kind === "tuple"
-              ? "動作（篩選）"
+              ? tupleLabel(filter, fields)
               : `${pillLabel(filter.field, fields, sheet.table_calcs)}${filter.kind === "top_n" ? "（頂部）" : filter.kind === "relative_date" ? "（相對日期）" : ""}`;
           const className = `pill filter${filter.stage === "context" ? " context" : ""}${filter.field?.continuous ? " continuous" : " discrete"}`;
           return (

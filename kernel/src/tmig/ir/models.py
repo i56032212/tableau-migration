@@ -194,6 +194,32 @@ class FieldSet(IRModel):
     rule: SetRule
 
 
+class GroupItem(IRModel):
+    """群組中的一組：這些來源欄位的成員（Null 也可以是成員）顯示為 name。"""
+
+    name: Scalar
+    members: list[Scalar] = Field(min_length=1)
+
+
+class FieldGroup(IRModel):
+    """群組（Tableau 的 categorical-bin）：來源欄位的成員對應到群組的名稱，其餘成員歸入「其他」
+    （other）或維持原值（other 為 None）。查詢時以等價的公式（DataField.calc）計算；定義另外記在
+    這裡，供編輯器的「編輯群組」使用。"""
+
+    source: Id = Field(description="來源欄位的 id")
+    groups: list[GroupItem] = Field(default_factory=list)
+    other: Scalar = Field(default=None, description="「其他」的名稱；None 為其餘成員維持原值")
+
+
+class FieldBin(IRModel):
+    """數值分組（Tableau 的 bin）：值為所在區間的下限（從 peg 起每 size 一格）。查詢時以等價的公式
+    （DataField.calc）計算；定義另外記在這裡，供編輯器的「編輯數值分組」使用。"""
+
+    source: Id = Field(description="來源欄位的 id")
+    size: Annotated[float, Field(gt=0)] | ParamRef
+    peg: float = 0
+
+
 class Calc(IRModel):
     """計算欄位。解析器只填 formula；ast 與 level 由公式引擎（B2）補上。"""
 
@@ -245,6 +271,15 @@ class DataField(IRModel):
         default_factory=list,
         description="「編輯位置」中指定的對應（比對不到或比對錯誤的值 → 地名）",
     )
+    group: FieldGroup | None = Field(
+        default=None, description="群組的定義（查詢時以 calc 的等價公式計算）"
+    )
+    bin: FieldBin | None = Field(
+        default=None, description="數值分組的定義（查詢時以 calc 的等價公式計算）"
+    )
+    comment: str | None = Field(
+        default=None, description="註解（Tableau 的「預設屬性＞註解」）：資料窗格的提示"
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -256,6 +291,10 @@ class DataField(IRModel):
             )
         if self.set is not None and self.datatype != "boolean":
             raise ValueError("集合的型別必須是 boolean")
+        if (self.group is not None or self.bin is not None) and self.calc is None:
+            raise ValueError("群組與數值分組必須有等價的公式（calc）")
+        if self.group is not None and self.bin is not None:
+            raise ValueError("欄位不能同時是群組與數值分組")
         return self
 
 

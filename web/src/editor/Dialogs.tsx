@@ -251,7 +251,7 @@ export function DirectionDialog({ tableCalc, onClose }: { tableCalc: string; onC
 
 // ---------------------------------------------------------------- 數字格式
 
-type FormatKind = "auto" | "number" | "currency" | "percent";
+export type FormatKind = "auto" | "number" | "currency" | "percent";
 
 /** 數字格式的設定 → Tableau 的格式字串（與 tmig.render.format 認得的寫法相同）。 */
 export function formatString(kind: FormatKind, decimals: number, grouping: boolean, units: number, symbol: string): string | null {
@@ -265,7 +265,7 @@ export function formatString(kind: FormatKind, decimals: number, grouping: boole
   return `n${integer}${fraction}${scale}${suffix}`;
 }
 
-function parseFormat(text: string | undefined): { kind: FormatKind; decimals: number; grouping: boolean; units: number; symbol: string } {
+export function parseFormat(text: string | undefined): { kind: FormatKind; decimals: number; grouping: boolean; units: number; symbol: string } {
   const result = { kind: "auto" as FormatKind, decimals: 2, grouping: true, units: 0, symbol: "$" };
   if (!text) return result;
   const head = text.split(";")[0];

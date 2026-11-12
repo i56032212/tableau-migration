@@ -168,7 +168,7 @@ def test_new_workbook_and_model(client: TestClient, book: Path, tmp_path: Path) 
     assert (renamed["caption"], renamed["hidden"]) == ("數量", True)
     people = model["logical"][1]["id"]
     blocked = client.delete(f"/api/edit/{workbook}/datasources/{datasource}/tables/{people}")
-    assert blocked.status_code == 422 and "用到這些欄位" in blocked.json()["detail"]
+    assert blocked.status_code == 422 and "用到" in blocked.json()["detail"]
     # 存成報表套件、關閉後再開啟：資料與來源檔案都在
     target = tmp_path / "Sales.tmigx"
     ok(client.post("/api/desktop/save", json={"workbook": workbook, "path": str(target)}))

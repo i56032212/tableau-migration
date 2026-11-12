@@ -97,6 +97,67 @@ def members_formula(
     return f"NOT ({member})" if mode == "exclude" else member
 
 
+CONVERT = {
+    "string": "STR",
+    "integer": "INT",
+    "real": "FLOAT",
+    "date": "DATE",
+    "datetime": "DATETIME",
+}
+"""群組的型別與來源不同時，維持原值的成員以這些函式轉型。"""
+
+
+def group_expression(
+    source: str,
+    source_datatype: str | None,
+    groups: Sequence[tuple[Scalar, Sequence[Scalar]]],
+    other: Scalar,
+    datatype: str = "string",
+    null_other: bool = False,
+) -> str:
+    """群組 → 公式：列出的成員（Null 也可以）對應到群組的名稱，其餘成員為 other（None 時維持原值，
+    型別不同時轉型；null_other 時為 Null）。source 為來源欄位在公式中的寫法，例如 [Region]。
+
+        IF ISNULL([Result]) THEN "DRAW"
+        ELSEIF [Result] IN ("Lose", "Lose D/L") THEN "LOSE"
+        ELSE [Result]
+        END
+    """
+    if datatype not in CONVERT:
+        raise FormulaValueError(f"群組的型別 {datatype} 不支援")
+    if other is not None or null_other:
+        otherwise = formula_literal(other, datatype)
+    elif source_datatype is None or source_datatype == datatype:
+        otherwise = source
+    else:
+        otherwise = f"{CONVERT[datatype]}({source})"
+    conditions: list[str] = []
+    # Null 是成員時先比對（第一個含 Null 的群組）
+    null_group = [name for name, members in groups if None in members][:1]
+    if null_group:
+        conditions.append(f"ISNULL({source}) THEN {formula_literal(null_group[0], datatype)}")
+    for name, members in groups:
+        values = [m for m in members if m is not None]
+        if values:
+            listed = ", ".join(formula_literal(v, source_datatype) for v in values)
+            conditions.append(f"{source} IN ({listed}) THEN {formula_literal(name, datatype)}")
+    if not conditions:
+        return otherwise  # 沒有任何群組：每個成員維持原值
+    lines = [f"IF {conditions[0]}", *[f"ELSEIF {c}" for c in conditions[1:]]]
+    return "\n".join([*lines, f"ELSE {otherwise}", "END"])
+
+
+def bin_expression(expression: str, size: str, peg: float = 0) -> str:
+    """數值分組 → 公式：所在區間的下限。size 為公式中的大小（常值或 [Parameters].[…]）。
+
+    FLOOR(([Age]) / [Parameters].[Age (bin) Parameter]) * [Parameters].[Age (bin) Parameter]
+    """
+    if peg == 0:
+        return f"FLOOR(({expression}) / {size}) * {size}"
+    anchor = formula_literal(int(peg) if float(peg).is_integer() else peg)
+    return f"FLOOR((({expression}) - {anchor}) / {size}) * {size} + {anchor}"
+
+
 def set_levels(fields: Sequence[DataField], field_set: FieldSet) -> list[tuple[str, str]]:
     """集合各層級在公式中的寫法與值的型別（日期部分為整數）。"""
     by_id = {f.id: f for f in fields}
@@ -109,9 +170,12 @@ def set_levels(fields: Sequence[DataField], field_set: FieldSet) -> list[tuple[s
 
 
 __all__ = [
+    "CONVERT",
     "DATE_FUNCTIONS",
     "FormulaValueError",
+    "bin_expression",
     "formula_literal",
+    "group_expression",
     "level_expr",
     "members_condition",
     "members_formula",

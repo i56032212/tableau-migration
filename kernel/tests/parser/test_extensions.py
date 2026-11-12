@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tmig.ir import IR, CategoricalFilter, FieldUse, TupleFilter, iter_zones
+from tmig.ir import IR, CategoricalFilter, FieldUse, ParamRef, TupleFilter, iter_zones
 from tmig.parser.workbook import parse_workbook
 
 from . import builder as b
@@ -1742,3 +1742,44 @@ def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:
         u.reason == "顯示／隱藏按鈕的區塊 z99 不在此 dashboard 上（Tableau 上按了也沒有作用）"
         for u in ir.ignored
     )
+
+
+def test_group_and_bin_definitions_and_comments(tmp_path: Path) -> None:
+    """群組、數值分組的定義另外記下（編輯器的「編輯群組」）；欄位的註解（<desc>）。"""
+    bins = (
+        "<bin value='&quot;Coasts&quot;'><value>&quot;East&quot;</value><value>%null%</value></bin>"
+        "<bin value='&quot;North&quot;'><value>&quot;North&quot;</value></bin>"
+    )
+    group = group_column("column='[Region]' default='&quot;Other&quot;' new-bin='true'", bins)
+    sized = (
+        "<column caption='Sales (bin)' datatype='real' name='[Sales (bin)]' role='dimension' "
+        "type='ordinal'><calculation class='bin' decimals='1' formula='[Sales]' peg='2.5' size='10' />"
+        "</column>"
+    )
+    by_parameter = (
+        "<column caption='Qty (bin)' datatype='integer' name='[Qty (bin)]' role='dimension' "
+        "type='ordinal'><calculation class='bin' decimals='0' formula='[Quantity]' peg='0' "
+        "size-parameter='[Parameters].[Parameter 1]' /></column>"
+    )
+    commented = (
+        "<column datatype='string' name='[Region]' role='dimension' type='nominal'>"
+        "<desc><formatted-text><run>銷售</run><run fontname='Arial'>區域</run></formatted-text>"
+        "</desc></column>"
+    )
+    columns = group + sized + by_parameter + commented
+    ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=columns)))
+    assert reasons(ir) == []
+    fields = {f.id: f for ds in ir.datasources for f in ds.fields}
+    found = fields["f_region_group"].group
+    assert found is not None and found.source == "f_region" and found.other == "Other"
+    assert [(g.name, g.members) for g in found.groups] == [
+        ("Coasts", ["East", None]),
+        ("North", ["North"]),
+    ]
+    sales_bin = fields["f_sales_bin"].bin
+    assert sales_bin is not None
+    assert (sales_bin.source, sales_bin.size, sales_bin.peg) == ("f_sales", 10.0, 2.5)
+    qty_bin = fields["f_qty_bin"].bin
+    top_n = next(p for p in ir.parameters if p.caption == "Top N")
+    assert qty_bin is not None and qty_bin.size == ParamRef(parameter=top_n.id)
+    assert fields["f_region"].comment == "銷售區域"

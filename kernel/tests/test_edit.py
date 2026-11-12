@@ -141,7 +141,7 @@ def test_calc_in_use_cannot_be_removed_or_broken(ir: IR) -> None:
         update={"columns": [FieldUse(field=field.id, agg="sum", continuous=True)]}
     )
     ir, _ = replace_worksheet(ir, sheet)
-    with pytest.raises(EditError, match="還在使用中"):
+    with pytest.raises(EditError, match="用到"):
         remove_calc(ir, "ds_orders", field.id)
     # 改成彙總的公式：工作表上的膠囊不再加彙總（AGG(…)）；改成 Table Calculation 時加上計算方向
     agg_ir, _ = upsert_calc(ir, "ds_orders", "Rows", "SUM([Sales]) * 2", field.id)

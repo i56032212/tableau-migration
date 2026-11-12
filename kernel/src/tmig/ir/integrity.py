@@ -220,6 +220,20 @@ def check_references(ir: IR) -> list[str]:
     for ds in ir.datasources:
         by_id = {fld.id: fld for fld in ds.fields}
         for fld in ds.fields:
+            source = fld.group.source if fld.group else fld.bin.source if fld.bin else None
+            if source is not None and (source not in by_id or source == fld.id):
+                kind = "group" if fld.group else "bin"
+                errors.append(
+                    f"datasources[{ds.id}].fields[{fld.id}].{kind}：來源欄位「{source}」不在資料源中"
+                )
+            if (
+                fld.bin is not None
+                and isinstance(fld.bin.size, ParamRef)
+                and fld.bin.size.parameter not in param_ids
+            ):
+                errors.append(
+                    f"datasources[{ds.id}].fields[{fld.id}].bin：參數「{fld.bin.size.parameter}」不存在"
+                )
             if fld.set is None:
                 continue
             where = f"datasources[{ds.id}].fields[{fld.id}].set"

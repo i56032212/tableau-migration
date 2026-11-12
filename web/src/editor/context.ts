@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react";
 import type React from "react";
-import type { FieldUse } from "../types";
+import type { FieldUse, Scalar } from "../types";
 import type { Card, Catalog, CatalogField, ShelfName, SheetIR } from "./model";
 
 /** 篩選對話框的對象：新的篩選（index 為 null）或修改第 index 個篩選。 */
@@ -48,7 +48,15 @@ export type EditorDialog =
   | { kind: "colors"; card: Card }
   | { kind: "tooltip"; card: Card }
   /** 欄位的地理角色與編輯位置 */
-  | { kind: "geo"; datasource: string; field: string };
+  | { kind: "geo"; datasource: string; field: string }
+  /** 資料窗格的欄位選單：重新命名、註解、預設格式、別名 */
+  | { kind: "rename" | "comment" | "field-format" | "aliases"; datasource: string; field: string }
+  /** 建立（field 為 null）或編輯群組；members 為從檢視上選取的成員 */
+  | { kind: "group"; datasource: string; source: string; field: string | null; members?: Scalar[] }
+  /** 建立或編輯數值分組 */
+  | { kind: "bins"; datasource: string; source: string; field: string | null }
+  /** 建立或編輯集合；members 為從檢視上選取的成員（各層級的值組合） */
+  | { kind: "set"; datasource: string; levels: string[]; field: string | null; members?: Scalar[][] };
 
 export const EditorContext = createContext<EditorContextValue | null>(null);
 

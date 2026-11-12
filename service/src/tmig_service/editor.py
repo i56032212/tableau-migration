@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
@@ -47,8 +47,17 @@ from tmig.edit import (
     upsert_hierarchy,
     upsert_parameter,
 )
-from tmig.ir import FieldUse
-from tmig.ir.models import GeoAlias, GeoRole
+from tmig.field_edit import (
+    duplicate_field,
+    remove_field,
+    set_aliases,
+    set_field_properties,
+    upsert_bins,
+    upsert_group,
+    upsert_set,
+)
+from tmig.ir import FieldUse, MemberAlias, ParamRef
+from tmig.ir.models import GeoAlias, GeoRole, Scalar, SetRule
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import QueryError, custom_sql_parameters, domain_sql, worksheet_sql
@@ -168,6 +177,62 @@ class IdBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prefix: str
     text: str
+
+
+class AliasesBody(BaseModel):
+    """維度成員的別名（空白的別名表示不設定）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    aliases: list[MemberAlias]
+
+
+class GroupItemBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    members: list[Scalar]
+
+
+class GroupBody(BaseModel):
+    """群組：來源欄位、名稱（空白時為「<來源> (group)」）、各組與「其他」；field 為修改的群組。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source: str
+    caption: str = ""
+    groups: list[GroupItemBody]
+    other: str | None = None
+    field: str | None = None
+
+
+class BinsBody(BaseModel):
+    """數值分組：大小為數字（size）或參數（parameter）；field 為修改的數值分組。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source: str
+    caption: str = ""
+    size: float | None = None
+    parameter: str | None = None
+    field: str | None = None
+
+
+class SetBody(BaseModel):
+    """集合：維度（固定成員可以多個）、名稱與規則（members、condition、top_n）；field 為修改的集合。"""
+
+    model_config = ConfigDict(extra="forbid")
+    levels: list[str]
+    caption: str = ""
+    rule: dict[str, Any]
+    field: str | None = None
+
+
+class PropertiesBody(BaseModel):
+    """預設屬性：只改送來的項目（null 為清除）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    format: str | None = None
+    comment: str | None = None
+
+
+SET_RULE: TypeAdapter[Any] = TypeAdapter(SetRule)
 
 
 def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
@@ -360,6 +425,81 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     ) -> dict[str, bool]:
         edit(request, workbook, lambda ir: remove_calc(ir, datasource, field))
         return {"ok": True}
+
+    @router.post("/{workbook}/datasources/{datasource}/fields/{field}/duplicate")
+    def post_duplicate_field(
+        workbook: str, datasource: str, field: str, request: Request
+    ) -> dict[str, Any]:
+        """複製欄位：「<名稱> (copy)」（見 tmig.field_edit.duplicate_field）。"""
+        copy = edit(request, workbook, lambda ir: duplicate_field(ir, datasource, field))
+        return {"field": copy.model_dump(mode="json")}
+
+    @router.put("/{workbook}/datasources/{datasource}/fields/{field}/aliases")
+    def put_aliases(
+        workbook: str, datasource: str, field: str, body: AliasesBody, request: Request
+    ) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: set_aliases(ir, datasource, field, body.aliases))
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/fields/{field}/properties")
+    def put_properties(
+        workbook: str, datasource: str, field: str, body: PropertiesBody, request: Request
+    ) -> dict[str, bool]:
+        """預設的數字或日期格式與註解（只改送來的項目）。"""
+        changes = {key: getattr(body, key) for key in body.model_fields_set}
+        edit(request, workbook, lambda ir: set_field_properties(ir, datasource, field, **changes))
+        return {"ok": True}
+
+    @router.delete("/{workbook}/datasources/{datasource}/fields/{field}")
+    def delete_field(
+        workbook: str, datasource: str, field: str, request: Request
+    ) -> dict[str, bool]:
+        """刪除計算欄位、群組、數值分組或集合（用到時 422 並說明用到的地方）。"""
+        edit(request, workbook, lambda ir: remove_field(ir, datasource, field))
+        return {"ok": True}
+
+    @router.post("/{workbook}/datasources/{datasource}/groups")
+    def post_group(
+        workbook: str, datasource: str, body: GroupBody, request: Request
+    ) -> dict[str, Any]:
+        groups = [(g.name, g.members) for g in body.groups]
+        created = edit(
+            request,
+            workbook,
+            lambda ir: upsert_group(
+                ir, datasource, body.source, body.caption, groups, body.other, body.field
+            ),
+        )
+        return {"field": created.model_dump(mode="json")}
+
+    @router.post("/{workbook}/datasources/{datasource}/bins")
+    def post_bins(
+        workbook: str, datasource: str, body: BinsBody, request: Request
+    ) -> dict[str, Any]:
+        if (body.size is None) == (body.parameter is None):
+            raise HTTPException(422, "數值分組的大小要指定數字或參數其中之一")
+        size: float | ParamRef = (
+            ParamRef(parameter=body.parameter) if body.parameter is not None else body.size or 0
+        )
+        created = edit(
+            request,
+            workbook,
+            lambda ir: upsert_bins(ir, datasource, body.source, body.caption, size, body.field),
+        )
+        return {"field": created.model_dump(mode="json")}
+
+    @router.post("/{workbook}/datasources/{datasource}/sets")
+    def post_set(workbook: str, datasource: str, body: SetBody, request: Request) -> dict[str, Any]:
+        try:
+            rule = SET_RULE.validate_python(body.rule)
+        except ValidationError as exc:
+            raise HTTPException(422, f"集合的規則不正確：{exc.errors()[0].get('msg', '')}") from exc
+        created = edit(
+            request,
+            workbook,
+            lambda ir: upsert_set(ir, datasource, body.levels, body.caption, rule, body.field),
+        )
+        return {"field": created.model_dump(mode="json")}
 
     @router.put("/{workbook}/datasources/{datasource}/hierarchies")
     def put_hierarchy(

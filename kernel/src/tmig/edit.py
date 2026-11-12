@@ -16,8 +16,9 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from tmig.formula.analyze import Analyzer
-from tmig.formula.ast import FieldRef, to_json
+from tmig.formula.ast import FieldRef, to_json, walk
 from tmig.formula.lexer import FormulaSyntaxError
+from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir import (
     IR,
@@ -114,6 +115,13 @@ def _field_entry(f: DataField) -> dict[str, Any]:
         "hidden": f.hidden,
         "geo_role": f.geo_role,
         "geo_aliases": [a.model_dump(mode="json") for a in f.geo_aliases],
+        "aliases": [a.model_dump(mode="json") for a in f.aliases],
+        "group": f.group.model_dump(mode="json") if f.group is not None else None,
+        "bin": f.bin.model_dump(mode="json") if f.bin is not None else None,
+        "set": f.set.model_dump(mode="json") if f.set is not None else None,
+        "format": f.format,
+        "comment": f.comment,
+        "column": f.column,
     }
 
 
@@ -422,11 +430,12 @@ def _across(ir: IR, ws: Worksheet) -> list[str]:
 
 
 def remove_calc(ir: IR, datasource: str, field_id: str) -> IR:
-    """刪除計算欄位：工作表或其他計算欄位還在使用時不能刪。"""
+    """刪除計算欄位：工作表、其他計算欄位、集合、篩選或動作還在使用時不能刪。"""
     ds = _datasource(ir, datasource)
     field = next((f for f in ds.fields if f.id == field_id), None)
     if field is None or field.calc is None:
         raise EditError(f"找不到計算欄位 {field_id}")
+    check_unused(ir, ds, [field], hierarchies=False)
     updated = _replace_datasource(
         ir,
         ds.model_copy(
@@ -438,6 +447,67 @@ def remove_calc(ir: IR, datasource: str, field_id: str) -> IR:
         ),
     )
     return _validated(updated, f"「{field.caption}」還在使用中，不能刪除")
+
+
+def _formula_refs(formula: str) -> set[str]:
+    """公式中參照的欄位名稱（最後一段，不含方括號）；語法錯誤時為空。"""
+    try:
+        node = parse_formula(formula)
+    except FormulaSyntaxError:
+        return set()
+    return {n.parts[-1] for n in walk(node) if isinstance(n, FieldRef)}
+
+
+def _strip_name(name: str) -> str:
+    return name[1:-1].replace("]]", "]") if name.startswith("[") and name.endswith("]") else name
+
+
+def check_unused(ir: IR, ds: Datasource, fields: list[DataField], hierarchies: bool = True) -> None:
+    """這些欄位沒有被其他欄位（計算欄位的公式、群組與數值分組的來源、集合的層級與條件）、階層
+    （hierarchies 為 False 時不檢查，刪除時一併移出）、參數、工作表、資料源篩選或動作用到；用到時以
+    EditError 說明第一個用到的地方。公式中的參照依內部名稱或顯示名稱比對。"""
+    ids = {f.id for f in fields}
+    if not ids:
+        return
+    names = {_strip_name(f.name) for f in fields} | {f.caption for f in fields}
+    for other in ds.fields:
+        if other.id in ids:
+            continue
+        formulas = [other.calc.formula] if other.calc is not None else []
+        if other.set is not None:
+            rule = other.set.rule
+            if rule.kind == "condition":
+                formulas.append(rule.condition)
+            elif rule.kind == "top_n":
+                formulas.append(rule.by)
+        if any(_formula_refs(text) & names for text in formulas):
+            raise EditError(f"「{other.caption}」的公式用到「{fields[0].caption}」，先修改它")
+        sources = {other.group.source} if other.group else set()
+        sources |= {other.bin.source} if other.bin else set()
+        sources |= {u.field for u in other.set.levels} if other.set else set()
+        if sources & ids:
+            raise EditError(f"「{other.caption}」以「{fields[0].caption}」為來源，先刪除它")
+    if hierarchies:
+        for hierarchy in ds.hierarchies:
+            if ids & set(hierarchy.fields):
+                raise EditError(f"階層「{hierarchy.name}」用到這些欄位，先移除它們")
+    for parameter in ir.parameters:
+        if {parameter.value_field, parameter.domain_field} & ids:
+            raise EditError(f"參數「{parameter.caption}」的值取自這個欄位，先修改參數")
+    places: list[tuple[str, Any]] = [(w.name, w.model_dump(mode="json")) for w in ir.worksheets]
+    places += [("資料源篩選", f.model_dump(mode="json")) for f in ds.filters]
+    places += [(a.name, a.model_dump(mode="json")) for a in ir.actions]
+    for where, data in places:
+        if _mentions(data, ids):
+            raise EditError(f"「{where}」用到「{fields[0].caption}」，先從那裡移除")
+
+
+def _mentions(value: Any, ids: set[str]) -> bool:
+    if isinstance(value, dict):
+        return any(_mentions(v, ids) for v in value.values())
+    if isinstance(value, list):
+        return any(_mentions(v, ids) for v in value)
+    return isinstance(value, str) and value in ids
 
 
 def upsert_hierarchy(

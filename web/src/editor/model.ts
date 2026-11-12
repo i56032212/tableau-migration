@@ -1,7 +1,7 @@
 // 工作表編輯器的資料模型：IR 的工作表（只列出編輯器會改的部分，其餘欄位原樣保留）與資料窗格。
 // 欄列架、標記卡上的每一個「膠囊」是一個 FieldUse；編輯時產生新的工作表物件（不改動舊的，方便復原）。
 
-import type { FieldUse, Scalar } from "../types";
+import type { FieldUse, Mark, MemberAlias, Scalar } from "../types";
 
 export interface CatalogField {
   id: string;
@@ -18,7 +18,27 @@ export interface CatalogField {
   geo_role?: GeoRole | null;
   /** 編輯位置中指定的地名 */
   geo_aliases?: GeoAlias[];
+  /** 成員的別名 */
+  aliases?: MemberAlias[];
+  /** 群組的定義（來源欄位、各組與「其他」） */
+  group?: { source: string; groups: { name: Scalar; members: Scalar[] }[]; other: Scalar } | null;
+  /** 數值分組的定義（大小為數字或參數） */
+  bin?: { source: string; size: number | { parameter: string }; peg: number } | null;
+  /** 集合的定義（層級與規則） */
+  set?: { levels: FieldUse[]; rule: SetRuleIR } | null;
+  /** 預設的數字或日期格式字串 */
+  format?: string | null;
+  /** 註解（預設屬性） */
+  comment?: string | null;
+  /** 資料表中的欄名（計算欄位、集合為 null） */
+  column?: string | null;
 }
+
+/** 集合的規則：固定成員（包含或排除）、條件或 Top／Bottom N。 */
+export type SetRuleIR =
+  | { kind: "members"; mode: "include" | "exclude"; members: Scalar[][] }
+  | { kind: "condition"; condition: string; mode?: string; values?: Scalar[] }
+  | { kind: "top_n"; direction: "top" | "bottom"; count: number | { parameter: string }; by: string; mode?: string; values?: Scalar[] };
 
 export type GeoRole = "country" | "state" | "county" | "city" | "zip" | "latitude" | "longitude";
 
@@ -886,4 +906,63 @@ export function drillPill(
   let end = index + 1;
   while (end < uses.length && sameLevel(uses[end], found.levels[found.position + 1 + (end - index - 1)])) end += 1;
   return setUses(sheet, shelf, [...uses.slice(0, index + 1), ...uses.slice(end)]);
+}
+
+/** 檢視上的標記的欄位鍵（例如 f_region、year(f_order_date)）→ 工作表上的那個維度。 */
+export function useOfKey(sheet: SheetIR, key: string): FieldUse | null {
+  const uses = [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks), ...sheet.panes.flatMap((p) => markUses(p.marks))];
+  return uses.find((u) => u.agg === null && u.table_calc === null && useKey(u) === key) ?? null;
+}
+
+/** 選取的標記的維度（依第一個標記的欄位鍵）：每個鍵的欄位使用與各標記的值。 */
+export function selectionLevels(sheet: SheetIR, marks: Mark[]): { key: string; use: FieldUse }[] | null {
+  if (!marks.length) return null;
+  const keys = Object.keys(marks[0]);
+  const levels = keys.map((key) => ({ key, use: useOfKey(sheet, key) }));
+  if (!levels.length || levels.some((l) => l.use === null)) return null;
+  return levels as { key: string; use: FieldUse }[];
+}
+
+/**
+ * 選取的標記「只保留」或「排除」（Tableau 工具提示的 Keep Only／Exclude）：只有一個維度時是這個維度的篩選
+ * （取代同一個維度原有的一般篩選），多個維度時是依值組合篩選（tuple）。
+ */
+export function selectionFilter(sheet: SheetIR, marks: Mark[], mode: "include" | "exclude", id: string): SheetIR | null {
+  const levels = selectionLevels(sheet, marks);
+  if (!levels) return null;
+  if (levels.length === 1) {
+    const [{ key, use }] = levels;
+    const values: Scalar[] = [];
+    for (const mark of marks) if (!values.some((v) => v === mark[key])) values.push(mark[key] ?? null);
+    const field: FieldUse = { ...use, continuous: false };
+    const filter: FilterIR = {
+      kind: "categorical",
+      id,
+      field,
+      stage: "dimension",
+      mode,
+      values,
+      ranges: [],
+      group: null,
+      source_ref: EDITOR_REF,
+    };
+    const existing = sheet.filters.findIndex((f) => f.kind === "categorical" && f.stage === "dimension" && f.field && useKey(f.field) === key);
+    const filters = existing >= 0 ? sheet.filters.map((f, i) => (i === existing ? filter : f)) : [...sheet.filters, filter];
+    return { ...sheet, filters };
+  }
+  const tuples = marks.map((m) => levels.map((l) => m[l.key] ?? null));
+  const filter = {
+    kind: "tuple",
+    id,
+    fields: levels.map((l) => ({ ...l.use, continuous: false })),
+    stage: "dimension",
+    mode,
+    tuples,
+    action: null,
+    source_fields: null,
+    group: null,
+    tooltip: false,
+    source_ref: EDITOR_REF,
+  } as unknown as FilterIR;
+  return { ...sheet, filters: [...sheet.filters, filter] };
 }

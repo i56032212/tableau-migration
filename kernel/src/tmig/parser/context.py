@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from lxml import etree
 
@@ -75,6 +75,8 @@ class DsState:
     """階層（<drill-paths>）。"""
     geo: GeoSettings | None = None
     """地理設定（預設的國家、州）。"""
+    definitions: dict[str, Any] = field(default_factory=dict)
+    """來源欄位還沒解析的群組、數值分組（欄位 id → 定義）：分析公式前再對應（resolve_definitions）。"""
 
     def add_field(self, data_field: DataField) -> None:
         self.fields.append(data_field)
