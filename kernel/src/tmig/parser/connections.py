@@ -6,9 +6,9 @@
 - 依檢視者的身分查詢資料庫的設定列為不支援：Initial SQL（平台不會執行，用到 [TableauServerUser] 時
   資料庫可能依檢視者過濾資料）、要求檢視者輸入自己的帳號、以檢視者的身分模擬；
   Windows 整合驗證、Kerberos 與 OAuth 由功能盤點列為需注意（伺服器上可能以服務帳號連線）
-- 關聯樹：資料表（type='table'）、自訂 SQL（type='text'）與 join（type='join'，條件為欄位或常值的比較，
-  以 AND 連接）；
-  union、Relationship 模型等其他寫法列為不支援
+- 關聯樹：資料表（type='table'）、自訂 SQL（type='text'）與 join（type='join'，條件為欄位或常值的比較、
+  join 計算或空間 join，以 AND 連接）、樞紐（type='pivot'）、聯集（type='union'）與合併不相符的欄位
+  （type='project'）；其他寫法列為不支援
 """
 
 from __future__ import annotations
@@ -27,14 +27,24 @@ from tmig.ir.models import (
     JoinRelation,
     JoinTerm,
     LiveConnection,
+    PivotColumn,
+    PivotRelation,
+    ProjectColumn,
+    ProjectRelation,
     Relation,
     SqlRelation,
     TableRelation,
+    UnionColumn,
+    UnionPart,
+    UnionRelation,
 )
 from tmig.parser.context import ParseContext
 from tmig.parser.ids import slugify, strip_brackets
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import child, children, local_name
+
+UNION_TYPES = frozenset({"string", "integer", "real", "boolean", "date", "datetime", "spatial"})
+"""聯集中的資料表記下的欄位型別。"""
 
 DIALECTS: dict[str, Dialect] = {
     "oracle": "oracle",
@@ -262,8 +272,119 @@ def parse_relation(ctx: ParseContext, element: etree._Element, caption: str) -> 
             )
             return None
         return JoinRelation(kind="join", join=join, left=left, right=right, on=on)  # type: ignore[arg-type]
+    if kind == "pivot":
+        return _pivot(ctx, element, caption)
+    if kind == "union":
+        return _union(ctx, element, caption)
+    if kind == "project":
+        return _project(ctx, element, caption)
     ctx.flag(element, f"資料源「{caption}」的資料表關聯方式 {kind or '（未標示）'} 尚不支援")
     return None
+
+
+def _inner_relations(element: etree._Element) -> list[etree._Element]:
+    return [r for r in children(element) if local_name(r) == "relation"]
+
+
+def _pivot(ctx: ParseContext, element: etree._Element, caption: str) -> PivotRelation | None:
+    """<relation type='pivot'>：<columns> 是名稱欄與值欄，<tag> 的 <value> 是名稱欄的值，<groups> 的
+    <field> 是被樞紐的來源欄位（依序對應）。"""
+    name = strip_brackets(element.get("name", "")) or "Pivot"
+    inner = _inner_relations(element)
+    if len(inner) != 1:
+        ctx.flag(element, f"資料源「{caption}」的樞紐（pivot）沒有剛好一個來源")
+        return None
+    source = parse_relation(ctx, inner[0], caption)
+    if source is None:
+        return None
+    if not isinstance(source, TableRelation | SqlRelation):
+        ctx.flag(element, f"資料源「{caption}」的樞紐（pivot）的來源是 {source.kind}，尚不支援")
+        return None
+    declared = [c for c in children(child(element, "columns"), "column") if c.get("name")]
+    tag = child(element, "tag")
+    group = child(child(element, "groups"), "group")
+    labels = [strip_brackets(v.get("name", "")) for v in children(tag, "value")]
+    fields = [qualified_parts(f.get("name", "")) for f in children(group, "field")]
+    names = (tag.get("name") if tag is not None else None) or "Pivot Field Names"
+    values = (group.get("name") if group is not None else None) or "Pivot Field Values"
+    datatype = next(
+        (c.get("datatype", "") for c in declared if strip_brackets(c.get("name", "")) == values),
+        "",
+    )
+    if (
+        not fields
+        or len(labels) != len(fields)
+        or any(len(f) != 2 or f[0] != source.name for f in fields)
+        or datatype not in ("string", "integer", "real", "boolean", "date", "datetime")
+    ):
+        ctx.flag(element, f"資料源「{caption}」的樞紐（pivot）無法解析")
+        return None
+    return PivotRelation(
+        kind="pivot",
+        name=name,
+        source=source,
+        names=names,
+        values=values,
+        datatype=datatype,  # type: ignore[arg-type]
+        columns=[
+            PivotColumn(column=f[1], label=label) for f, label in zip(fields, labels, strict=True)
+        ],
+    )
+
+
+def _union(ctx: ParseContext, element: etree._Element, caption: str) -> UnionRelation | None:
+    """<relation type='union'>：上下相接的資料表（同一個連線），每張的 <columns> 記下它的欄位。"""
+    name = strip_brackets(element.get("name", "")) or "Union"
+    parts: list[UnionPart] = []
+    for inner in _inner_relations(element):
+        relation = parse_relation(ctx, inner, caption)
+        if relation is None:
+            return None
+        if not isinstance(relation, TableRelation | SqlRelation):
+            ctx.flag(inner, f"資料源「{caption}」的聯集中有 {relation.kind}，尚不支援")
+            return None
+        declared = [
+            UnionColumn(name=c.get("name", ""), datatype=c.get("datatype", ""))  # type: ignore[arg-type]
+            for c in children(child(inner, "columns"), "column")
+            if c.get("name") and c.get("datatype") in UNION_TYPES
+        ]
+        table = strip_brackets(inner.get("table", ""))
+        parts.append(
+            UnionPart(
+                relation=relation,
+                columns=declared or None,
+                sheet=table[:-1] if table.endswith("$") else None,
+            )
+        )
+    if not parts:
+        ctx.flag(element, f"資料源「{caption}」的聯集（union）沒有資料表")
+        return None
+    return UnionRelation(kind="union", name=name, parts=parts)
+
+
+def _project(ctx: ParseContext, element: etree._Element, caption: str) -> ProjectRelation | None:
+    """<relation type='project'>：合併不相符的欄位等，在來源上加上計算的欄位（<bindings> 的公式）。"""
+    inner = _inner_relations(element)
+    if len(inner) != 1:
+        ctx.flag(element, f"資料源「{caption}」的 project 沒有剛好一個來源")
+        return None
+    source = parse_relation(ctx, inner[0], caption)
+    if source is None:
+        return None
+    columns: list[ProjectColumn] = []
+    project = strip_brackets(element.get("name", "")) or "Project"
+    for binding in children(child(element, "bindings"), "binding"):
+        parts = qualified_parts(binding.get("name", ""))
+        formula = (binding.get("expression") or "").replace("\r\n", "\n")
+        if len(parts) != 2 or not formula.strip():
+            ctx.flag(binding, f"資料源「{caption}」的 project 欄位 {binding.get('name')} 無法解析")
+            return None
+        project = parts[0]
+        columns.append(ProjectColumn(name=parts[1], formula=formula))
+    if not columns:
+        ctx.flag(element, f"資料源「{caption}」的 project 沒有計算的欄位")
+        return None
+    return ProjectRelation(kind="project", name=project, source=source, columns=columns)
 
 
 def _conditions(expression: etree._Element) -> list[JoinCondition] | None:
@@ -322,4 +443,8 @@ def relation_tables(relation: Relation | None) -> list[str]:
         return []
     if isinstance(relation, JoinRelation):
         return relation_tables(relation.left) + relation_tables(relation.right)
+    if isinstance(relation, PivotRelation | ProjectRelation):
+        return [relation.name, *relation_tables(relation.source)]
+    if isinstance(relation, UnionRelation):
+        return [relation.name]
     return [relation.name]

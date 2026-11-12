@@ -218,7 +218,13 @@ class DataField(IRModel):
     column: str | None = Field(default=None, description="萃取資料表中的實體欄位；計算欄位為 None")
     table: str | None = Field(
         default=None,
-        description="Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None",
+        description="Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None；"
+        "Relationship 模型中為所屬的邏輯資料表（object id）",
+    )
+    physical_table: str | None = Field(
+        default=None,
+        description="Relationship 模型中，邏輯資料表內含 join（實體層）時欄位所屬的實體資料表"
+        "（join 樹中資料表的名稱）；其他情形為 None",
     )
     calc: Calc | None = None
     set: FieldSet | None = Field(
@@ -328,8 +334,80 @@ class JoinRelation(IRModel):
     on: list[JoinCondition] = Field(min_length=1, description="以 AND 連接")
 
 
-Relation = Annotated[TableRelation | SqlRelation | JoinRelation, Field(discriminator="kind")]
+class PivotColumn(IRModel):
+    column: str = Field(min_length=1, description="來源資料表中被樞紐的欄位")
+    label: str = Field(description="樞紐後名稱欄的值（Tableau 的 Pivot Field Names）")
+
+
+class PivotRelation(IRModel):
+    """資料源的樞紐（Tableau 的 Pivot，欄轉成列）：來源的每一列對每個樞紐的欄位各成一列，names 欄是欄位的
+    名稱、values 欄是它的值（Null 也保留）；其他的欄位照樣帶著。來源的欄位（parent-name 是來源資料表）與
+    樞紐產生的兩欄（parent-name 是樞紐）都從樞紐的子查詢取得。"""
+
+    kind: Literal["pivot"]
+    name: str = Field(min_length=1, description="樞紐在關聯樹中的名稱（例如 Pivot）")
+    source: Annotated[TableRelation | SqlRelation, Field(discriminator="kind")] = Field(
+        description="被樞紐的資料表或自訂 SQL"
+    )
+    names: str = Field(min_length=1, description="名稱欄（預設 Pivot Field Names）")
+    values: str = Field(min_length=1, description="值欄（預設 Pivot Field Values）")
+    datatype: DataType = Field(description="值欄的型別")
+    columns: list[PivotColumn] = Field(min_length=1)
+
+
+class UnionColumn(IRModel):
+    name: str = Field(min_length=1)
+    datatype: DataType
+
+
+class UnionPart(IRModel):
+    """聯集中的一張資料表。"""
+
+    relation: Annotated[TableRelation | SqlRelation, Field(discriminator="kind")]
+    columns: list[UnionColumn] | None = Field(
+        default=None,
+        description="這張資料表的欄位（檔案記下的欄名與型別）；沒有記下時為 None，視為有聯集的所有欄位",
+    )
+    sheet: str | None = Field(default=None, description="Excel 的工作表名稱（Sheet 欄的值）")
+    path: str | None = Field(default=None, description="檔案的路徑（Path 欄的值）")
+
+
+class UnionRelation(IRModel):
+    """聯集（Tableau 的 union）：資料表上下相接，欄位依名稱對應（沒有這一欄的資料表為 Null）。
+    另有來源的欄位：Table Name（資料表的名稱）、Sheet（Excel 的工作表）與 Path（檔案的路徑）。
+    聯集的欄位（parent-name 是聯集）依資料源中用到的欄位決定。"""
+
+    kind: Literal["union"]
+    name: str = Field(min_length=1)
+    parts: list[UnionPart] = Field(min_length=1)
+
+
+class ProjectColumn(IRModel):
+    name: str = Field(min_length=1, description="新欄位的名稱")
+    formula: str = Field(
+        min_length=1,
+        description="新欄位的公式（Tableau 的公式，以 [資料表].[欄位] 參照來源的欄位）",
+    )
+
+
+class ProjectRelation(IRModel):
+    """在來源上加上計算的欄位（Tableau 的 project，例如聯集中「合併不相符的欄位」）：來源的欄位照樣帶著，
+    新欄位的 parent-name 是 project 的名稱。"""
+
+    kind: Literal["project"]
+    name: str = Field(default="Project", min_length=1)
+    source: Relation
+    columns: list[ProjectColumn] = Field(min_length=1)
+
+
+Relation = Annotated[
+    TableRelation | SqlRelation | JoinRelation | PivotRelation | UnionRelation | ProjectRelation,
+    Field(discriminator="kind"),
+]
 JoinRelation.model_rebuild()
+PivotRelation.model_rebuild()
+UnionPart.model_rebuild()
+ProjectRelation.model_rebuild()
 
 
 class LogicalTable(IRModel):
@@ -369,7 +447,14 @@ class ModelRelation(IRModel):
 
 
 TopRelation = Annotated[
-    TableRelation | SqlRelation | JoinRelation | ModelRelation, Field(discriminator="kind")
+    TableRelation
+    | SqlRelation
+    | JoinRelation
+    | PivotRelation
+    | UnionRelation
+    | ProjectRelation
+    | ModelRelation,
+    Field(discriminator="kind"),
 ]
 
 

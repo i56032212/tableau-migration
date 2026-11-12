@@ -45,8 +45,12 @@ from tmig.ir.models import (
     DataField,
     FileConnection,
     FileTable,
+    JoinRelation,
     ModelRelation,
-    TableRelation,
+    PivotRelation,
+    ProjectRelation,
+    Relation,
+    UnionRelation,
 )
 
 ARROW_TYPES = {
@@ -201,22 +205,55 @@ def spatial_rows(archive: zipfile.ZipFile, table: FileTable) -> list[list[Any]]:
 def file_missing_columns(
     connection: FileConnection, fields: Sequence[DataField], tables: Sequence[TableImport]
 ) -> list[str]:
-    """IR 的實體欄位不在所屬資料表的欄位中。"""
+    """IR 的實體欄位不在所屬資料表的欄位中（樞紐、聯集與合併的欄位依它們產生的欄判斷）。"""
     by_name = {t.table: {c.name for c in t.columns} for t in tables}
-    owner: dict[str, str] = {}
-    if isinstance(connection.relation, ModelRelation):
-        for logical in connection.relation.tables:
-            if isinstance(logical.relation, TableRelation):
-                owner[logical.id] = logical.relation.name
+    top = connection.relation
+    available: dict[str, set[str]] = {}
+    owner: dict[str, Relation] = {}
+    if isinstance(top, ModelRelation):
+        for logical in top.tables:
+            owner[logical.id] = logical.relation
+            available.update(_available(logical.relation, by_name))
+    elif top is not None:
+        available = _available(top, by_name)
     default = connection.tables[0].name if len(connection.tables) == 1 else None
     missing: list[str] = []
     for data_field in fields:
         if data_field.column is None:
             continue
-        table = owner.get(data_field.table or "", data_field.table) or default
-        if data_field.column not in by_name.get(table or "", set()):
+        relation = owner.get(data_field.table or "")
+        if relation is not None and not isinstance(relation, JoinRelation):
+            # 邏輯資料表：資料表或樞紐、聯集（欄位以欄名參照它產生的欄）
+            names = set().union(*_available(relation, by_name).values())
+            table = data_field.table
+        else:
+            table = data_field.physical_table or data_field.table or default
+            names = available.get(table or "", set())
+        if data_field.column not in names:
             missing.append(f"{data_field.id}（{table}.{data_field.column}）")
     return sorted(missing)
+
+
+def _available(relation: Relation, by_name: dict[str, set[str]]) -> dict[str, set[str]]:
+    """關聯樹中各名稱（資料表、樞紐、聯集、project）可以參照的欄。"""
+    if isinstance(relation, JoinRelation):
+        return {**_available(relation.left, by_name), **_available(relation.right, by_name)}
+    if isinstance(relation, PivotRelation):
+        pivoted = {c.column for c in relation.columns}
+        source = by_name.get(relation.source.name, set())
+        return {
+            relation.source.name: source - pivoted,
+            relation.name: {relation.names, relation.values},
+        }
+    if isinstance(relation, UnionRelation):
+        columns = {"Table Name", "Sheet", "Path"}
+        for part in relation.parts:
+            columns |= by_name.get(part.relation.name, set())
+        return {relation.name: columns}
+    if isinstance(relation, ProjectRelation):
+        inner = _available(relation.source, by_name)
+        return {**inner, relation.name: {c.name for c in relation.columns}}
+    return {relation.name: by_name.get(relation.name, set())}
 
 
 def _load(

@@ -25,6 +25,8 @@ from tmig.ir.models import (
     LiveConnection,
     ModelRelation,
     Parameter,
+    PivotRelation,
+    ProjectRelation,
     RangeFilter,
     Relation,
     RelativeDateFilter,
@@ -33,6 +35,7 @@ from tmig.ir.models import (
     TableRelation,
     TopNFilter,
     TupleFilter,
+    UnionRelation,
 )
 
 DATABASES = {
@@ -249,9 +252,22 @@ def _single(ds: Datasource) -> list[dict[str, Any]]:
 
 
 def _physical(relation: Relation) -> list[dict[str, Any]]:
-    """join 樹中的實體資料表與自訂 SQL。"""
+    """join 樹中的實體資料表與自訂 SQL；樞紐、聯集與合併的欄位另列一項說明。"""
     if isinstance(relation, JoinRelation):
         return _physical(relation.left) + _physical(relation.right)
+    if isinstance(relation, PivotRelation):
+        labels = "、".join(c.label for c in relation.columns[:6])
+        more = "…" if len(relation.columns) > 6 else ""
+        note = f"樞紐：{labels}{more} 轉成 {relation.names}、{relation.values}"
+        return [*_physical(relation.source), {"name": relation.name, "source": note, "sql": None}]
+    if isinstance(relation, UnionRelation):
+        parts = [t for part in relation.parts for t in _physical(part.relation)]
+        note = f"聯集：{len(relation.parts)} 張資料表上下相接"
+        return [*parts, {"name": relation.name, "source": note, "sql": None}]
+    if isinstance(relation, ProjectRelation):
+        names = "、".join(c.name for c in relation.columns)
+        note = f"合併不相符的欄位：{names}"
+        return [*_physical(relation.source), {"name": relation.name, "source": note, "sql": None}]
     if isinstance(relation, TableRelation):
         return [{"name": relation.name, "source": ".".join(relation.table), "sql": None}]
     assert isinstance(relation, SqlRelation)

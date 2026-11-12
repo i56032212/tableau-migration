@@ -1663,8 +1663,21 @@
             }
           ],
           "default": null,
-          "description": "Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None",
+          "description": "Live 連線時欄位所屬的資料表（關聯樹中資料表的名稱）；萃取只有一張表，為 None；Relationship 模型中為所屬的邏輯資料表（object id）",
           "title": "Table"
+        },
+        "physical_table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relationship 模型中，邏輯資料表內含 join（實體層）時欄位所屬的實體資料表（join 樹中資料表的名稱）；其他情形為 None",
+          "title": "Physical Table"
         },
         "calc": {
           "anyOf": [
@@ -2362,8 +2375,11 @@
             "mapping": {
               "join": "#/$defs/JoinRelation",
               "model": "#/$defs/ModelRelation",
+              "pivot": "#/$defs/PivotRelation",
+              "project": "#/$defs/ProjectRelation",
               "sql": "#/$defs/SqlRelation",
-              "table": "#/$defs/TableRelation"
+              "table": "#/$defs/TableRelation",
+              "union": "#/$defs/UnionRelation"
             },
             "propertyName": "kind"
           },
@@ -2376,6 +2392,15 @@
             },
             {
               "$ref": "#/$defs/JoinRelation"
+            },
+            {
+              "$ref": "#/$defs/PivotRelation"
+            },
+            {
+              "$ref": "#/$defs/UnionRelation"
+            },
+            {
+              "$ref": "#/$defs/ProjectRelation"
             },
             {
               "$ref": "#/$defs/ModelRelation"
@@ -2885,8 +2910,11 @@
           "discriminator": {
             "mapping": {
               "join": "#/$defs/JoinRelation",
+              "pivot": "#/$defs/PivotRelation",
+              "project": "#/$defs/ProjectRelation",
               "sql": "#/$defs/SqlRelation",
-              "table": "#/$defs/TableRelation"
+              "table": "#/$defs/TableRelation",
+              "union": "#/$defs/UnionRelation"
             },
             "propertyName": "kind"
           },
@@ -2899,6 +2927,15 @@
             },
             {
               "$ref": "#/$defs/JoinRelation"
+            },
+            {
+              "$ref": "#/$defs/PivotRelation"
+            },
+            {
+              "$ref": "#/$defs/UnionRelation"
+            },
+            {
+              "$ref": "#/$defs/ProjectRelation"
             }
           ],
           "title": "Left"
@@ -2907,8 +2944,11 @@
           "discriminator": {
             "mapping": {
               "join": "#/$defs/JoinRelation",
+              "pivot": "#/$defs/PivotRelation",
+              "project": "#/$defs/ProjectRelation",
               "sql": "#/$defs/SqlRelation",
-              "table": "#/$defs/TableRelation"
+              "table": "#/$defs/TableRelation",
+              "union": "#/$defs/UnionRelation"
             },
             "propertyName": "kind"
           },
@@ -2921,6 +2961,15 @@
             },
             {
               "$ref": "#/$defs/JoinRelation"
+            },
+            {
+              "$ref": "#/$defs/PivotRelation"
+            },
+            {
+              "$ref": "#/$defs/UnionRelation"
+            },
+            {
+              "$ref": "#/$defs/ProjectRelation"
             }
           ],
           "title": "Right"
@@ -3148,8 +3197,11 @@
                 "mapping": {
                   "join": "#/$defs/JoinRelation",
                   "model": "#/$defs/ModelRelation",
+                  "pivot": "#/$defs/PivotRelation",
+                  "project": "#/$defs/ProjectRelation",
                   "sql": "#/$defs/SqlRelation",
-                  "table": "#/$defs/TableRelation"
+                  "table": "#/$defs/TableRelation",
+                  "union": "#/$defs/UnionRelation"
                 },
                 "propertyName": "kind"
               },
@@ -3162,6 +3214,15 @@
                 },
                 {
                   "$ref": "#/$defs/JoinRelation"
+                },
+                {
+                  "$ref": "#/$defs/PivotRelation"
+                },
+                {
+                  "$ref": "#/$defs/UnionRelation"
+                },
+                {
+                  "$ref": "#/$defs/ProjectRelation"
                 },
                 {
                   "$ref": "#/$defs/ModelRelation"
@@ -3205,8 +3266,11 @@
           "discriminator": {
             "mapping": {
               "join": "#/$defs/JoinRelation",
+              "pivot": "#/$defs/PivotRelation",
+              "project": "#/$defs/ProjectRelation",
               "sql": "#/$defs/SqlRelation",
-              "table": "#/$defs/TableRelation"
+              "table": "#/$defs/TableRelation",
+              "union": "#/$defs/UnionRelation"
             },
             "propertyName": "kind"
           },
@@ -3219,6 +3283,15 @@
             },
             {
               "$ref": "#/$defs/JoinRelation"
+            },
+            {
+              "$ref": "#/$defs/PivotRelation"
+            },
+            {
+              "$ref": "#/$defs/UnionRelation"
+            },
+            {
+              "$ref": "#/$defs/ProjectRelation"
             }
           ],
           "title": "Relation"
@@ -4170,6 +4243,198 @@
         "field"
       ],
       "title": "ParameterAction",
+      "type": "object"
+    },
+    "PivotColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "description": "來源資料表中被樞紐的欄位",
+          "minLength": 1,
+          "title": "Column",
+          "type": "string"
+        },
+        "label": {
+          "description": "樞紐後名稱欄的值（Tableau 的 Pivot Field Names）",
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "column",
+        "label"
+      ],
+      "title": "PivotColumn",
+      "type": "object"
+    },
+    "PivotRelation": {
+      "additionalProperties": false,
+      "description": "資料源的樞紐（Tableau 的 Pivot，欄轉成列）：來源的每一列對每個樞紐的欄位各成一列，names 欄是欄位的\n名稱、values 欄是它的值（Null 也保留）；其他的欄位照樣帶著。來源的欄位（parent-name 是來源資料表）與\n樞紐產生的兩欄（parent-name 是樞紐）都從樞紐的子查詢取得。",
+      "properties": {
+        "kind": {
+          "const": "pivot",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "description": "樞紐在關聯樹中的名稱（例如 Pivot）",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "description": "被樞紐的資料表或自訂 SQL",
+          "discriminator": {
+            "mapping": {
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            }
+          ],
+          "title": "Source"
+        },
+        "names": {
+          "description": "名稱欄（預設 Pivot Field Names）",
+          "minLength": 1,
+          "title": "Names",
+          "type": "string"
+        },
+        "values": {
+          "description": "值欄（預設 Pivot Field Values）",
+          "minLength": 1,
+          "title": "Values",
+          "type": "string"
+        },
+        "datatype": {
+          "description": "值欄的型別",
+          "enum": [
+            "string",
+            "integer",
+            "real",
+            "boolean",
+            "date",
+            "datetime",
+            "spatial"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/PivotColumn"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "source",
+        "names",
+        "values",
+        "datatype",
+        "columns"
+      ],
+      "title": "PivotRelation",
+      "type": "object"
+    },
+    "ProjectColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "新欄位的名稱",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "formula": {
+          "description": "新欄位的公式（Tableau 的公式，以 [資料表].[欄位] 參照來源的欄位）",
+          "minLength": 1,
+          "title": "Formula",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "formula"
+      ],
+      "title": "ProjectColumn",
+      "type": "object"
+    },
+    "ProjectRelation": {
+      "additionalProperties": false,
+      "description": "在來源上加上計算的欄位（Tableau 的 project，例如聯集中「合併不相符的欄位」）：來源的欄位照樣帶著，\n新欄位的 parent-name 是 project 的名稱。",
+      "properties": {
+        "kind": {
+          "const": "project",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "default": "Project",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "discriminator": {
+            "mapping": {
+              "join": "#/$defs/JoinRelation",
+              "pivot": "#/$defs/PivotRelation",
+              "project": "#/$defs/ProjectRelation",
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation",
+              "union": "#/$defs/UnionRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            },
+            {
+              "$ref": "#/$defs/JoinRelation"
+            },
+            {
+              "$ref": "#/$defs/PivotRelation"
+            },
+            {
+              "$ref": "#/$defs/UnionRelation"
+            },
+            {
+              "$ref": "#/$defs/ProjectRelation"
+            }
+          ],
+          "title": "Source"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/ProjectColumn"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "columns"
+      ],
+      "title": "ProjectRelation",
       "type": "object"
     },
     "PublishedSource": {
@@ -6377,6 +6642,137 @@
         "source_ref"
       ],
       "title": "TupleFilter",
+      "type": "object"
+    },
+    "UnionColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "datatype": {
+          "enum": [
+            "string",
+            "integer",
+            "real",
+            "boolean",
+            "date",
+            "datetime",
+            "spatial"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "datatype"
+      ],
+      "title": "UnionColumn",
+      "type": "object"
+    },
+    "UnionPart": {
+      "additionalProperties": false,
+      "description": "聯集中的一張資料表。",
+      "properties": {
+        "relation": {
+          "discriminator": {
+            "mapping": {
+              "sql": "#/$defs/SqlRelation",
+              "table": "#/$defs/TableRelation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TableRelation"
+            },
+            {
+              "$ref": "#/$defs/SqlRelation"
+            }
+          ],
+          "title": "Relation"
+        },
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/UnionColumn"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "這張資料表的欄位（檔案記下的欄名與型別）；沒有記下時為 None，視為有聯集的所有欄位",
+          "title": "Columns"
+        },
+        "sheet": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Excel 的工作表名稱（Sheet 欄的值）",
+          "title": "Sheet"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "檔案的路徑（Path 欄的值）",
+          "title": "Path"
+        }
+      },
+      "required": [
+        "relation"
+      ],
+      "title": "UnionPart",
+      "type": "object"
+    },
+    "UnionRelation": {
+      "additionalProperties": false,
+      "description": "聯集（Tableau 的 union）：資料表上下相接，欄位依名稱對應（沒有這一欄的資料表為 Null）。\n另有來源的欄位：Table Name（資料表的名稱）、Sheet（Excel 的工作表）與 Path（檔案的路徑）。\n聯集的欄位（parent-name 是聯集）依資料源中用到的欄位決定。",
+      "properties": {
+        "kind": {
+          "const": "union",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/UnionPart"
+          },
+          "minItems": 1,
+          "title": "Parts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "parts"
+      ],
+      "title": "UnionRelation",
       "type": "object"
     },
     "Unsupported": {

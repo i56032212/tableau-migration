@@ -518,7 +518,14 @@ def _action(act: etree._Element) -> ActionInfo:
 # ---------------------------------------------------------------- 起步條件與分級
 
 
-RELATION_TEXT = {"table": "資料表", "text": "自訂 SQL", "join": "join"}
+RELATION_TEXT = {
+    "table": "資料表",
+    "text": "自訂 SQL",
+    "join": "join",
+    "pivot": "樞紐",
+    "union": "聯集",
+    "project": "合併的欄位",
+}
 
 
 def _quote(names: list[str]) -> str:
@@ -606,7 +613,7 @@ def _checks(
         if ds.published:
             continue  # 結構在 Published Data Source 中（資料可以取得的檢查已列出）
         if ds.logical_tables > 1:
-            # Relationship 模型（N6）：不支援的寫法（例如邏輯資料表內含 join）由解析器列為不支援
+            # Relationship 模型（N6）：不支援的寫法（例如關聯條件含計算）由解析器列為不支援
             kind = "萃取" if ds.data_in_hyper else "Live"
             notes.append(
                 f"「{ds.caption}」：Relationship 模型（{ds.logical_tables} 張邏輯資料表，{kind}）"

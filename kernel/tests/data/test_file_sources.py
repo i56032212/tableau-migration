@@ -170,6 +170,45 @@ def workbook_xml() -> str:
         f"{records(RETURNS, 'Returns', 'Returns_2')}</metadata-records>",
         graph,
     )
+    # Relationship 模型中邏輯資料表內含 join：「Returned Orders」是 Orders 與 Returns 的 inner join，
+    # 以地區關聯到文字檔的 Targets
+    targets_rel = (
+        "<relation connection='textscan.t' name='targets.csv' table='[targets#csv]' type='table'>"
+        + columns_xml(
+            TARGETS, "character-set='windows-1252' header='yes' locale='de_DE' separator=';'"
+        )
+        + "</relation>"
+    )
+    join_rel = (
+        "<relation join='inner' type='join'><clause type='join'><expression op='='>"
+        "<expression op='[Orders].[Order ID]' /><expression op='[Returns].[Order ID]' />"
+        f"</expression></clause>{ORDERS_REL}{RETURNS_REL}</relation>"
+    )
+    join_graph = (
+        "<object-graph><objects>"
+        f"<object caption='Returned Orders' id='Returned_3'><properties context=''>{join_rel}"
+        "</properties></object>"
+        f"<object caption='Targets' id='Targets_4'><properties context=''>{targets_rel}"
+        "</properties></object>"
+        "</objects><relationships><relationship><expression op='='>"
+        "<expression op='[Region]' /><expression op='[Region (targets.csv)]' /></expression>"
+        "<first-end-point object-id='Returned_3' /><second-end-point object-id='Targets_4' />"
+        "</relationship></relationships></object-graph>"
+    )
+    target_records = records(TARGETS, "targets.csv", "Targets_4").replace(
+        "<local-name>[Region]</local-name>", "<local-name>[Region (targets.csv)]</local-name>"
+    )
+    model_join = datasource(
+        "federated.modeljoin",
+        "Model Join",
+        f"<named-connections>{EXCEL_CONN}<named-connection caption='targets' name='textscan.t'>"
+        "<connection class='textscan' directory='Data' filename='targets.csv' />"
+        "</named-connection></named-connections>"
+        f"<relation type='collection'>{ORDERS_REL}{RETURNS_REL}{targets_rel}</relation>"
+        f"<metadata-records>{records(ORDERS, 'Orders', 'Returned_3')}"
+        f"{records(RETURNS, 'Returns', 'Returned_3')}{target_records}</metadata-records>",
+        join_graph,
+    )
     text = datasource(
         "federated.targets",
         "Targets",
@@ -188,8 +227,10 @@ def workbook_xml() -> str:
         + sheet("Joined", "federated.joined", "Region", "Quantity")
         + sheet("Model", "federated.model", "Region", "Sales")
         + sheet("Text", "federated.targets", "Region", "Target")
+        + sheet("Model Join", "federated.modeljoin", "Region", "Sales")
+        + sheet("Model Join Targets", "federated.modeljoin", "Region (targets.csv)", "Sales")
     )
-    return b.workbook(single + joined + model + text, worksheets=sheets, params=False)
+    return b.workbook(single + joined + model + text + model_join, worksheets=sheets, params=False)
 
 
 @pytest.fixture(scope="module")
@@ -247,6 +288,10 @@ def test_parse_file_connections(parsed: IR) -> None:
     assert isinstance(joined.relation, JoinRelation)
     assert [t.name for t in joined.tables] == ["Orders", "Returns"]
     assert isinstance(connection(parsed, "Model").relation, ModelRelation)
+    model_join = connection(parsed, "Model Join")
+    assert isinstance(model_join.relation, ModelRelation)
+    assert isinstance(model_join.relation.tables[0].relation, JoinRelation)
+    assert [t.name for t in model_join.tables] == ["Orders", "Returns", "targets.csv"]
     (text,) = connection(parsed, "Targets").tables
     assert (text.format, text.path, text.separator, text.charset, text.locale) == (
         "text",
@@ -295,6 +340,12 @@ def test_queries_on_file_sources(parsed: IR, data: Path) -> None:
     assert rows(parsed, data, "Model") == {"East": 150.75, "West": 200.0, None: None}
     # 德文地區設定：1.234,5 → 1234.5、2.000 → 2000；windows-1252 的 Ü
     assert rows(parsed, data, "Text") == {"East": 1234.5, "West": 2000.0}
+    # 邏輯資料表內含 join：只有退貨的訂單（O1、O3 都在 East）；Targets 中沒有量值的 West 也列出
+    model_join = next(ds for ds in parsed.datasources if ds.caption == "Model Join")
+    report = json.loads((data / f"{model_join.id}.import.json").read_text(encoding="utf-8"))
+    assert (report["ok"], report["missing_columns"]) == (True, [])
+    assert rows(parsed, data, "Model Join") == {"East": 150.75}
+    assert rows(parsed, data, "Model Join Targets") == {"East": 150.75, "West": None}
 
 
 def test_text_dates_and_charset(parsed: IR, data: Path) -> None:

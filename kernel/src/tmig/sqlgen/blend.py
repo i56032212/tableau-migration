@@ -28,8 +28,11 @@ from tmig.ir.models import (
     LiveConnection,
     Marks,
     ModelRelation,
+    PivotRelation,
+    ProjectRelation,
     Relation,
     TableRelation,
+    UnionRelation,
     Worksheet,
 )
 from tmig.planner.identity import Identity
@@ -189,6 +192,16 @@ def _attached_relation(relation: Relation, alias: str) -> Relation:
         )
     if isinstance(relation, TableRelation):
         return relation.model_copy(update={"table": [alias, *relation.table]})
+    if isinstance(relation, PivotRelation):
+        return relation.model_copy(update={"source": _attached_relation(relation.source, alias)})
+    if isinstance(relation, ProjectRelation):
+        return relation.model_copy(update={"source": _attached_relation(relation.source, alias)})
+    if isinstance(relation, UnionRelation):
+        parts = [
+            part.model_copy(update={"relation": _attached_relation(part.relation, alias)})
+            for part in relation.parts
+        ]
+        return relation.model_copy(update={"parts": parts})
     return relation
 
 

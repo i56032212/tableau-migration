@@ -44,7 +44,7 @@ from tmig.ir import (
     TableRelation,
     TopNFilter,
 )
-from tmig.ir.models import DataField, Sort
+from tmig.ir.models import DataField, JoinRelation, Relation, Sort
 from tmig.parser.workbook import NoDatasourceError, parse_workbook
 from tmig.planner.state import FilterValue, QueryState
 from tmig.sqlgen.query import QueryError, domain_sql, worksheet_sql
@@ -86,7 +86,11 @@ PRODUCTS = pa.table(
         "CATEGORY": ["Furniture", "Office", "Office", "Tech", "Toys"],
     }
 )
+PRICES = pa.table({"PROD_ID": ["P1", "P2", "P3", "P9"], "PRICE": [5.0, 7.0, 11.0, 13.0]})
+"""邏輯資料表 Products 內含 join 時的另一張實體資料表（P5 沒有價格、P9 不在 PRODUCTS）。"""
 TABLES = {"ORDERS": ORDERS, "CUSTOMERS": CUSTOMERS, "REGIONS": REGIONS, "PRODUCTS": PRODUCTS}
+SOURCE_TABLES = {**TABLES, "PRICES": PRICES}
+"""來源資料庫中的資料表（含 PRICES）。"""
 OBJECTS = {
     "ORDERS": ("Orders", "ORDERS_1A"),
     "CUSTOMERS": ("Customers", "CUSTOMERS_2B"),
@@ -323,24 +327,155 @@ def unsupported_reasons(tmp_path: Path, xml: str) -> list[str]:
     return [u.reason for u in info.value.unsupported]
 
 
-def test_live_logical_table_with_join_unsupported(tmp_path: Path) -> None:
-    # 邏輯資料表內含實體層的 join：Live 連線尚不支援（萃取已存成單一資料表，可以使用）
-    plain = (
-        "<properties context=''><relation connection='db.1' name='PRODUCTS' "
-        "table='[SALES].[PRODUCTS]' type='table' /></properties>"
-    )
-    joined = (
-        "<properties context=''><relation join='inner' type='join'><clause type='join'>"
-        "<expression op='='><expression op='[PRODUCTS].[PROD_ID]' />"
-        "<expression op='[PRICES].[PROD_ID]' /></expression></clause>"
-        "<relation connection='db.1' name='PRODUCTS' table='[SALES].[PRODUCTS]' type='table' />"
-        "<relation connection='db.1' name='PRICES' table='[SALES].[PRICES]' type='table' />"
-        "</relation></properties>"
-    )
+PRODUCTS_PLAIN = (
+    "<properties context=''><relation connection='db.1' name='PRODUCTS' "
+    "table='[SALES].[PRODUCTS]' type='table' /></properties>"
+)
+PRODUCTS_JOINED = (
+    "<properties context=''><relation join='inner' type='join'><clause type='join'>"
+    "<expression op='='><expression op='[PRODUCTS].[PROD_ID]' />"
+    "<expression op='[PRICES].[PROD_ID]' /></expression></clause>"
+    "<relation connection='db.1' name='PRODUCTS' table='[SALES].[PRODUCTS]' type='table' />"
+    "<relation connection='db.1' name='PRICES' table='[SALES].[PRICES]' type='table' />"
+    "</relation></properties>"
+)
+
+
+def joined_datasource() -> str:
+    """邏輯資料表 Products 內含實體層的 join（PRODUCTS inner join PRICES）：PRICES 的欄位的 parent-name
+    是 PRICES，object-id 是 Products。"""
     xml = datasource()
-    assert xml.count(plain) == 1
-    reasons = unsupported_reasons(tmp_path, xml.replace(plain, joined))
-    assert any("「Products」內含 join（實體層），Live 連線尚不支援" in r for r in reasons)
+    assert xml.count(PRODUCTS_PLAIN) == 1
+    prices = "".join(
+        f"""<metadata-record class='column'>
+          <remote-name>{remote}</remote-name><remote-type>5</remote-type>
+          <local-name>[{local}]</local-name><parent-name>[PRICES]</parent-name>
+          <local-type>{datatype}</local-type><aggregation>{agg}</aggregation>
+          <{FCP}object-id>[{OBJECTS["PRODUCTS"][1]}]</{FCP}object-id>
+        </metadata-record>"""
+        for remote, local, datatype, agg in [
+            ("PROD_ID", "Prod ID (Prices)", "string", "Count"),
+            ("PRICE", "Price", "real", "Sum"),
+        ]
+    )
+    xml = xml.replace(PRODUCTS_PLAIN, PRODUCTS_JOINED)
+    return xml.replace("</metadata-records>", prices + "</metadata-records>", 1)
+
+
+@pytest.fixture(scope="module")
+def joined_ir(tmp_path_factory: pytest.TempPathFactory) -> IR:
+    tmp = tmp_path_factory.mktemp("relationships-join")
+    xml = b.workbook(datasource=joined_datasource(), worksheets=base_sheet())
+    ir = parse_workbook(b.write_twb(tmp, xml))
+    assert ir.unsupported == [], [u.reason for u in ir.unsupported]
+    return ir
+
+
+def test_parse_logical_table_with_join(joined_ir: IR) -> None:
+    from tmig.ir.integrity import check_references
+
+    assert check_references(joined_ir) == []
+    ds = joined_ir.datasources[0]
+    connection = ds.connection
+    assert isinstance(connection, LiveConnection) and isinstance(connection.relation, ModelRelation)
+    products = next(t for t in connection.relation.tables if t.caption == "Products")
+    assert isinstance(products.relation, JoinRelation)
+    fields = {f.caption: f for f in ds.fields}
+    # 欄位屬於邏輯資料表，另記所屬的實體資料表
+    assert (fields["Price"].table, fields["Price"].physical_table) == ("PRODUCTS_4D", "PRICES")
+    assert (fields["Category"].table, fields["Category"].physical_table) == (
+        "PRODUCTS_4D",
+        "PRODUCTS",
+    )
+    assert fields["Sales"].physical_table is None
+
+
+def test_logical_table_with_join(joined_ir: IR, engine: Engine) -> None:
+    """join 在邏輯資料表之內先做（P5 沒有價格，Toys 不在 Products 中），關聯再連接 Orders：
+    量值仍在 Orders 彙總，P1 的兩個類別各算一次。"""
+    ir = view(joined_ir, [dim(joined_ir, "Category")], [measure(joined_ir, "Sales")])
+    assert rows_of(run(ir, engine)) == {"Furniture": 170, "Office": 230, "Tech": 30, None: 20}
+    # 只用到 Products：在邏輯資料表（join 的結果）中彙總
+    ir = view(joined_ir, [dim(joined_ir, "Category")], [measure(joined_ir, "Price")])
+    assert rows_of(run(ir, engine)) == {"Furniture": 5, "Office": 12, "Tech": 11}
+    # 量值來自兩張資料表（Orders 的 Sales 與 Products 的 Price）
+    two = [measure(joined_ir, "Sales"), measure(joined_ir, "Price")]
+    ir = view(joined_ir, [dim(joined_ir, "Category")], two)
+    assert rows_of(run(ir, engine)) == {
+        "Furniture": (170, 5),
+        "Office": (230, 12),
+        "Tech": (30, 11),
+        None: (20, None),
+    }
+
+
+def duckdb_engine(tmp_path: Path) -> Engine:
+    """DuckDB 檔當作來源資料庫（SALES 結構描述）。"""
+    path = tmp_path / "source.duckdb"
+    with duckdb.connect(str(path)) as con:
+        con.execute('CREATE SCHEMA "SALES"')
+        for name, table in SOURCE_TABLES.items():
+            con.register(f"rows_{name}", table)
+            con.execute(f'CREATE TABLE "SALES"."{name}" AS SELECT * FROM "rows_{name}"')
+    return Engine("duckdb", DuckDBExecutor(path))
+
+
+def test_custom_sql_inside_logical_join(joined_ir: IR, tmp_path: Path) -> None:
+    """自訂 SQL 的佔位資料表依邏輯資料表的順序、內含 join 時依 join 樹中的順序編號（與 model_custom_sql
+    相同）：Customers 與 Products 的 PRICES 換成自訂 SQL，結果不變。"""
+    from tmig.ir.models import SqlRelation
+    from tmig.sqlgen.source import model_custom_sql
+
+    ds = joined_ir.datasources[0]
+    connection = ds.connection
+    assert isinstance(connection, LiveConnection) and isinstance(connection.relation, ModelRelation)
+    tables = []
+    for logical in connection.relation.tables:
+        relation = logical.relation
+        if logical.caption == "Customers":
+            relation = SqlRelation(
+                kind="sql", name="CUSTOMERS", sql='SELECT * FROM "SALES"."CUSTOMERS"'
+            )
+        elif isinstance(relation, JoinRelation):
+            prices = SqlRelation(kind="sql", name="PRICES", sql='SELECT * FROM "SALES"."PRICES"')
+            relation = relation.model_copy(update={"right": prices})
+        tables.append(logical.model_copy(update={"relation": relation}))
+    model = connection.relation.model_copy(update={"tables": tables})
+    assert model_custom_sql(model) == [
+        'SELECT * FROM "SALES"."CUSTOMERS"',
+        'SELECT * FROM "SALES"."PRICES"',
+    ]
+    changed = ds.model_copy(
+        update={"connection": connection.model_copy(update={"relation": model})}
+    )
+    ir = joined_ir.model_copy(update={"datasources": [changed]})
+    engine = duckdb_engine(tmp_path)
+    sales = [measure(ir, "Sales")]
+    assert rows_of(run(view(ir, [dim(ir, "Category")], sales), engine)) == {
+        "Furniture": 170,
+        "Office": 230,
+        "Tech": 30,
+        None: 20,
+    }
+    assert rows_of(run(view(ir, [dim(ir, "Name")], sales), engine)) == {
+        "Ann": 150,
+        "Bob": 70,
+        "Cid": 30,
+        "Dee": None,
+        None: 30,
+    }
+    # 兩個自訂 SQL 在同一個查詢中（只有維度：經由 Orders 內部連接）
+    combos = {
+        (r[0], r[1]) for r in run(view(ir, [dim(ir, "Name"), dim(ir, "Category")]), engine).rows
+    }
+    assert combos == {
+        ("Ann", "Furniture"),
+        ("Ann", "Office"),
+        ("Bob", "Furniture"),
+        ("Bob", "Office"),
+        ("Cid", "Tech"),
+    }
+    engine.executor.close()
 
 
 def test_inequality_relationship(tmp_path: Path) -> None:
@@ -395,7 +530,7 @@ def engine(
         path = tmp_path_factory.mktemp("source") / "source.duckdb"
         con = duckdb.connect(str(path) if request.param == "duckdb" else ":memory:")
         con.execute('CREATE SCHEMA "SALES"')
-        for name, table in TABLES.items():
+        for name, table in SOURCE_TABLES.items():
             con.register(f"rows_{name}", table)
             con.execute(f'CREATE TABLE "SALES"."{name}" AS SELECT * FROM "rows_{name}"')
         if request.param == "oracle":
@@ -410,13 +545,13 @@ def engine(
     if request.param == "postgres":
         with postgres_cluster() as dsn:
             con = pg_connect(dsn)
-            for name, table in TABLES.items():
+            for name, table in SOURCE_TABLES.items():
                 pg_load(con, name, table, "SALES")
             yield Engine("postgres", postgres_executor(con))
             con.close()
         return
     with spark_session() as spark:
-        for name, table in TABLES.items():
+        for name, table in SOURCE_TABLES.items():
             spark.createDataFrame(table).createOrReplaceTempView(name)
         yield Engine("spark", SparkExecutor(spark), spark=True)
 
@@ -431,16 +566,23 @@ def for_engine(ir: IR, engine: Engine) -> IR:
         assert isinstance(connection, LiveConnection)
         model = connection.relation
         assert isinstance(model, ModelRelation)
-        tables = []
-        for logical in model.tables:
-            relation = logical.relation
-            assert isinstance(relation, TableRelation)
-            relation = relation.model_copy(update={"table": relation.table[-1:]})
-            tables.append(logical.model_copy(update={"relation": relation}))
+        tables = [
+            logical.model_copy(update={"relation": _no_schema(logical.relation)})
+            for logical in model.tables
+        ]
         model = model.model_copy(update={"tables": tables})
         connection = connection.model_copy(update={"relation": model})
         datasources.append(ds.model_copy(update={"connection": connection}))
     return ir.model_copy(update={"datasources": datasources})
+
+
+def _no_schema(relation: Relation) -> Relation:
+    if isinstance(relation, JoinRelation):
+        return relation.model_copy(
+            update={"left": _no_schema(relation.left), "right": _no_schema(relation.right)}
+        )
+    assert isinstance(relation, TableRelation)
+    return relation.model_copy(update={"table": relation.table[-1:]})
 
 
 def run(ir: IR, engine: Engine, state: QueryState | None = None) -> QueryResult:

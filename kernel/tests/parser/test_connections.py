@@ -289,9 +289,18 @@ def test_unsupported_connections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         conn = ir.datasources[0].connection
         assert isinstance(conn, LiveConnection) and conn.dialect == dialect
 
-    union = "<relation type='union'><relation name='A' table='[A]' type='table' /></relation>"
+    # 聯集中有 join：尚不支援（聯集的資料表只能是資料表或自訂 SQL）
+    union = (
+        "<relation type='union'><relation join='inner' type='join'><clause type='join'>"
+        "<expression op='='><expression op='[A].[x]' /><expression op='[B].[x]' /></expression>"
+        "</clause><relation name='A' table='[A]' type='table' />"
+        "<relation name='B' table='[B]' type='table' /></relation></relation>"
+    )
     ir = parse(tmp_path, live_datasource(ORACLE, union), lenient=True)
-    assert any("資料表關聯方式 union 尚不支援" in r for r in reasons(ir))
+    assert any("聯集中有 join，尚不支援" in r for r in reasons(ir))
+    unknown_kind = "<relation type='stored-proc' name='P' />"
+    ir = parse(tmp_path, live_datasource(ORACLE, unknown_kind), lenient=True)
+    assert any("資料表關聯方式 stored-proc 尚不支援" in r for r in reasons(ir))
 
     calc_join = """
       <relation join='inner' type='join'>

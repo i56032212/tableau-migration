@@ -5,7 +5,8 @@ Tableau 2020.2 起，多表的資料源預設是 Relationship 模型：object-gr
 relationships 以欄位（local name）的比較連接兩張邏輯資料表，連成一棵樹。
 
 - 欄位所屬的邏輯資料表：metadata-record 的 object-id（Live），或萃取的 parent-name（即 object id）
-- 邏輯資料表內含 join（實體層的 join）時，Live 連線尚不支援（萃取已存成單一資料表，可以使用）
+- 邏輯資料表內含 join（實體層的 join）：Live 連線與檔案時欄位另記所屬的實體資料表（metadata-record 的
+  parent-name，見 DataField.physical_table），查詢時邏輯資料表是 join 的子查詢；萃取已存成單一資料表
 - 關聯條件只支援欄位之間的比較（以 AND 連接）；含計算的關聯尚不支援
 """
 
@@ -71,12 +72,6 @@ def live_tables(
             return None
         relation = parse_relation(ctx, obj.live, caption)
         if relation is None:
-            return None
-        if relation.kind == "join":
-            ctx.flag(
-                obj.element,
-                f"資料源「{caption}」的邏輯資料表「{obj.caption}」內含 join（實體層），Live 連線尚不支援",
-            )
             return None
         tables.append(LogicalTable(id=obj.id, caption=obj.caption, relation=relation))
     return tables

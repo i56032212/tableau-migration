@@ -22,9 +22,12 @@ from tmig.ir.models import (
     JoinTerm,
     LiveConnection,
     ModelRelation,
+    PivotRelation,
+    ProjectRelation,
     Relation,
     SqlRelation,
     TableRelation,
+    UnionRelation,
 )
 from tmig.sqlgen.sql import ident, literal
 
@@ -78,7 +81,8 @@ def datasource_source(ds: Datasource) -> Source:
         if f.table is not None and f.column is not None and f.calc is None
     }
     from_sql = _relation_sql(relation, custom, columns)
-    names = _relation_names(relation)
+    aliases = relation_aliases(relation)
+    names = list(aliases)
     default = names[0] if len(names) == 1 else None
     projections: list[str] = []
     for data_field in ds.fields:
@@ -87,9 +91,9 @@ def datasource_source(ds: Datasource) -> Source:
         table = data_field.table or default
         if table is None:
             raise SourceError(f"欄位「{data_field.caption}」沒有標明所屬的資料表")
-        if table not in names:
+        if table not in aliases:
             raise SourceError(f"欄位「{data_field.caption}」所屬的資料表「{table}」不在關聯樹中")
-        column = f"{ident(table)}.{ident(data_field.column)}"
+        column = f"{ident(aliases[table])}.{ident(data_field.column)}"
         if data_field.datatype == "datetime" and datetime_columns_vary(connection):
             column = f"CAST({column} AS TIMESTAMP)"
         projections.append(f"{column} AS {ident(data_field.id)}")
@@ -162,8 +166,65 @@ def datetime_columns_vary(connection: object) -> bool:
 
 
 def model_custom_sql(model: ModelRelation) -> list[str]:
-    """Relationship 模型中各邏輯資料表的自訂 SQL，依資料表的順序（佔位資料表的編號）。"""
-    return [t.relation.sql for t in model.tables if isinstance(t.relation, SqlRelation)]
+    """Relationship 模型中各邏輯資料表的自訂 SQL，依資料表的順序（內含 join 時依 join 樹中的順序，
+    即佔位資料表的編號）。"""
+    return [leaf.sql for t in model.tables for leaf in sql_leaves(t.relation)]
+
+
+def sql_leaves(relation: Relation) -> list[SqlRelation]:
+    """關聯樹中的自訂 SQL，依 FROM 子句中的順序。"""
+    if isinstance(relation, JoinRelation):
+        return sql_leaves(relation.left) + sql_leaves(relation.right)
+    if isinstance(relation, PivotRelation | ProjectRelation):
+        return sql_leaves(relation.source)
+    if isinstance(relation, UnionRelation):
+        return [leaf for part in relation.parts for leaf in sql_leaves(part.relation)]
+    return [relation] if isinstance(relation, SqlRelation) else []
+
+
+def relation_aliases(relation: Relation) -> dict[str, str]:
+    """關聯樹中的資料表名稱 → FROM 子句中參照它的別名：資料表、自訂 SQL 是自己；樞紐、聯集與 project
+    是子查詢，裡面的資料表與它自己都以子查詢的別名（它的名稱）參照。"""
+    if isinstance(relation, JoinRelation):
+        return {**relation_aliases(relation.left), **relation_aliases(relation.right)}
+    if isinstance(relation, PivotRelation | ProjectRelation):
+        inner = relation_aliases(relation.source)
+        return {**dict.fromkeys(inner, relation.name), relation.name: relation.name}
+    if isinstance(relation, UnionRelation):
+        inner = {name for part in relation.parts for name in relation_aliases(part.relation)}
+        return {**dict.fromkeys(inner, relation.name), relation.name: relation.name}
+    return {relation.name: relation.name}
+
+
+SQL_TYPES = {
+    "string": "VARCHAR",
+    "integer": "BIGINT",
+    "real": "DOUBLE",
+    "boolean": "BOOLEAN",
+    "date": "DATE",
+    "datetime": "TIMESTAMP",
+    "spatial": "VARCHAR",
+}
+"""IR 的型別 → DuckDB 的型別（樞紐、聯集的欄位一律轉成記下的型別）。"""
+UNION_SOURCES = ("Table Name", "Sheet", "Path")
+"""聯集另加的來源欄位：資料表的名稱、Excel 的工作表、檔案的路徑。"""
+
+
+def from_clause(
+    relation: Relation, custom: list[str], columns: dict[tuple[str, str], str] | None = None
+) -> str:
+    """關聯樹 → FROM 子句（見 _relation_sql）；自訂 SQL 依序加進 custom，佔位資料表的編號接在後面。"""
+    return _relation_sql(relation, custom, columns)
+
+
+def transform_select(
+    relation: PivotRelation | UnionRelation | ProjectRelation,
+    custom: list[str],
+    needed: dict[str, str],
+) -> str:
+    """Relationship 模型的邏輯資料表是樞紐、聯集或 project 時的子查詢（SELECT）：選出 needed 中的欄
+    （欄名 → 型別），自訂 SQL 依序加進 custom。"""
+    return _FromBuilder(relation, custom, {}).transform(relation, needed)
 
 
 SPATIAL_KEY_PREFIX = "__tmig_geo_"
@@ -187,7 +248,19 @@ class _FromBuilder:
     ) -> None:
         self.custom = custom
         self.columns = columns
-        self.leaves = set(_relation_names(relation))
+        self.aliases = relation_aliases(relation)
+        # 空間 join 的形狀只在直接出現在 FROM 中的資料表先算（樞紐、聯集裡的資料表不算）
+        self.leaves = {name for name, alias in self.aliases.items() if name == alias} & set(
+            _relation_names(relation)
+        )
+        self.needed: dict[str, dict[str, str]] = {}
+        """樞紐、聯集與 project 的子查詢要選出的欄：別名 → 欄名 → 型別（欄位與 join 條件用到的）。"""
+        self.transforms = _transform_names(relation)
+        for (table, column), datatype in columns.items():
+            alias = self._transform_alias(table)
+            if alias is not None:
+                self.needed.setdefault(alias, {}).setdefault(column, datatype)
+        self._join_columns(relation)
         self.keys: dict[str, list[tuple[str, str]]] = {}
         """資料表 → 先算好的形狀（欄名、運算式）；範圍是欄名加上 _box。"""
         self.replaced: dict[int, tuple[str, str]] = {}
@@ -241,6 +314,9 @@ class _FromBuilder:
             self.custom.append(relation.sql)
             placeholder = ident(CUSTOM_SQL_PREFIX + str(len(self.custom) - 1))
             return self._keyed(f"{placeholder} AS {ident(relation.name)}", relation.name)
+        if isinstance(relation, PivotRelation | UnionRelation | ProjectRelation):
+            needed = self.needed.get(relation.name, {})
+            return f"({self.transform(relation, needed)}) AS {ident(relation.name)}"
         assert isinstance(relation, JoinRelation)
         keyword = {"inner": "INNER", "left": "LEFT", "right": "RIGHT", "full": "FULL"}[
             relation.join
@@ -251,6 +327,148 @@ class _FromBuilder:
             right = f"({right})"
         conditions = " AND ".join(self._condition(c) for c in relation.on)
         return f"{left} {keyword} JOIN {right} ON {conditions}"
+
+    def _join_columns(self, relation: Relation) -> None:
+        """join 條件用到樞紐、聯集與 project 的欄時，子查詢也要選出那一欄。"""
+        if not isinstance(relation, JoinRelation):
+            return
+        self._join_columns(relation.left)
+        self._join_columns(relation.right)
+        for condition in relation.on:
+            for term in (condition.left, condition.right):
+                refs = [(term.table, term.column)] if term.table and term.column else []
+                if term.formula is not None:
+                    refs += _formula_refs(term.formula)
+                for table, column in refs:
+                    alias = self._transform_alias(str(table))
+                    if alias is not None:
+                        datatype = self.columns.get((str(table), str(column)), "string")
+                        self.needed.setdefault(alias, {}).setdefault(str(column), datatype)
+
+    def _transform_alias(self, table: str) -> str | None:
+        """資料表在樞紐、聯集或 project 的子查詢中（或就是它）時，子查詢的別名。"""
+        alias = self.aliases.get(table)
+        if alias is None or (alias == table and table not in self.transforms):
+            return None
+        return alias
+
+    def transform(
+        self, relation: PivotRelation | UnionRelation | ProjectRelation, needed: dict[str, str]
+    ) -> str:
+        """樞紐、聯集與 project 的子查詢（SELECT，不含別名）：選出 needed 中的欄（依欄名）。"""
+        if isinstance(relation, PivotRelation):
+            return self._pivot(relation, needed)
+        if isinstance(relation, UnionRelation):
+            return self._union(relation, needed)
+        return self._project(relation, needed)
+
+    def _source(self, relation: Relation, needed: dict[str, str]) -> tuple[str, str]:
+        """樞紐、project 的來源：（FROM 中的寫法、參照它的別名）。"""
+        if isinstance(relation, TableRelation | SqlRelation):
+            return self.sql(relation), relation.name
+        if isinstance(relation, PivotRelation | UnionRelation | ProjectRelation):
+            return f"({self.transform(relation, needed)}) AS {ident(relation.name)}", relation.name
+        raise SourceError("樞紐與 project 的來源是 join，尚不支援")
+
+    def _pivot(self, relation: PivotRelation, needed: dict[str, str]) -> str:
+        """欄轉成列：來源的每一列對每個樞紐的欄位各一列（UNION ALL，Null 也保留）。"""
+        pivoted = {c.column for c in relation.columns}
+        keep = {c: t for c, t in needed.items() if c not in (relation.names, relation.values)}
+        if pivoted & set(keep):
+            raise SourceError(
+                f"樞紐「{relation.name}」的欄位 {sorted(pivoted & set(keep))} 已轉成列"
+            )
+        from_sql, alias = self._source(relation.source, keep)
+        kept = [f"{ident(alias)}.{ident(c)} AS {ident(c)}" for c in keep]
+        value_type = SQL_TYPES[relation.datatype]
+        selects = [
+            "SELECT "
+            + ", ".join(
+                [
+                    *kept,
+                    f"{literal(c.label, 'string')} AS {ident(relation.names)}",
+                    f"CAST({ident(alias)}.{ident(c.column)} AS {value_type}) "
+                    f"AS {ident(relation.values)}",
+                ]
+            )
+            + f" FROM {from_sql}"
+            for c in relation.columns
+        ]
+        return " UNION ALL ".join(selects)
+
+    def _union(self, relation: UnionRelation, needed: dict[str, str]) -> str:
+        """資料表上下相接：欄位依名稱對應，沒有這一欄的資料表為 Null；Table Name、Sheet、Path 是來源。"""
+        wanted = dict(needed)
+        if not wanted:
+            wanted = {"Table Name": "string"}  # 只算列數時也要有一欄
+        selects: list[str] = []
+        for part in relation.parts:
+            from_sql = self.sql(part.relation)
+            alias = part.relation.name
+            known = {c.name: c.datatype for c in part.columns} if part.columns is not None else None
+            items: list[str] = []
+            for column, datatype in wanted.items():
+                sql_type = SQL_TYPES[datatype]
+                if column in UNION_SOURCES and (known is None or column not in known):
+                    value = {
+                        "Table Name": part.relation.name,
+                        "Sheet": part.sheet,
+                        "Path": part.path,
+                    }[column]
+                    text = literal(value, "string") if value is not None else "NULL"
+                    items.append(f"CAST({text} AS {sql_type}) AS {ident(column)}")
+                elif known is None or column in known:
+                    items.append(
+                        f"CAST({ident(alias)}.{ident(column)} AS {sql_type}) AS {ident(column)}"
+                    )
+                else:
+                    items.append(f"CAST(NULL AS {sql_type}) AS {ident(column)}")
+            selects.append(f"SELECT {', '.join(items)} FROM {from_sql}")
+        return " UNION ALL ".join(selects)
+
+    def _project(self, relation: ProjectRelation, needed: dict[str, str]) -> str:
+        """在來源上加上計算的欄位（合併不相符的欄位）；來源的欄位照樣帶著。"""
+        computed = {c.name: c for c in relation.columns}
+        source_needed = {c: t for c, t in needed.items() if c not in computed}
+        source_name = relation.source.name if not isinstance(relation.source, JoinRelation) else ""
+        types: dict[tuple[str, str], str] = {}
+        for column in relation.columns:
+            if column.name not in needed:
+                continue
+            for table, ref in _formula_refs(column.formula):
+                datatype = self._source_type(relation.source, str(ref))
+                source_needed.setdefault(str(ref), datatype)
+                types[(str(table), str(ref))] = datatype
+        from_sql, alias = self._source(relation.source, source_needed)
+        items = [f"{ident(alias)}.{ident(c)} AS {ident(c)}" for c in source_needed]
+        for name, column in computed.items():
+            if name not in needed:
+                continue
+            # 公式以 [來源].[欄位] 參照：來源的子查詢以來源的名稱為別名
+            formula = join_formula(
+                column.formula, {**types, **{(source_name, k): v for k, v in source_needed.items()}}
+            )
+            items.append(f"CAST(({formula}) AS {SQL_TYPES[needed[name]]}) AS {ident(name)}")
+        if not items:
+            items = [f"1 AS {ident('__one')}"]
+        return f"SELECT {', '.join(items)} FROM {from_sql}"
+
+    def _source_type(self, relation: Relation, column: str) -> str:
+        """來源中一欄的型別：聯集依各資料表記下的型別（不一致時取能容納所有值的型別），其他為字串。"""
+        if isinstance(relation, UnionRelation):
+            found = {
+                c.datatype
+                for part in relation.parts
+                for c in part.columns or []
+                if c.name == column
+            }
+            return _common_type(found)
+        if isinstance(relation, JoinRelation):
+            return "string"
+        for (table, name), datatype in self.columns.items():
+            if name == column and self.aliases.get(table) == relation.name:
+                return datatype
+        return "string"
 
     def _keyed(self, from_sql: str, name: str) -> str:
         keys = self.keys.get(name)
@@ -265,13 +483,14 @@ class _FromBuilder:
 
     def _condition(self, condition: JoinCondition) -> str:
         if condition.op != "intersects":
-            left, right = _term(condition.left, self.columns), _term(condition.right, self.columns)
+            left = _term(condition.left, self.columns, self.aliases)
+            right = _term(condition.right, self.columns, self.aliases)
             return f"{left} {condition.op} {right}"
         sides: list[tuple[str, str]] = []
         for term in (condition.left, condition.right):
             found = self.replaced.get(id(term))
             if found is None:
-                expression = _term(term, self.columns)
+                expression = _term(term, self.columns, self.aliases)
                 found = (expression, f"{udf.GEO_BOUNDS}({expression})")
             sides.append(found)
         (left, left_box), (right, right_box) = sides
@@ -291,9 +510,14 @@ def spatial_join(
     )
 
 
-def _term(term: JoinTerm, columns: dict[tuple[str, str], str] | None = None) -> str:
+def _term(
+    term: JoinTerm,
+    columns: dict[tuple[str, str], str] | None = None,
+    aliases: dict[str, str] | None = None,
+) -> str:
     if term.table is not None and term.column is not None:
-        return f"{ident(term.table)}.{ident(term.column)}"
+        table = (aliases or {}).get(term.table, term.table)
+        return f"{ident(table)}.{ident(term.column)}"
     if term.formula is not None:
         return f"({join_formula(term.formula, columns or {})})"
     value = term.literal
@@ -302,6 +526,49 @@ def _term(term: JoinTerm, columns: dict[tuple[str, str], str] | None = None) -> 
 
 
 def _relation_names(relation: Relation) -> list[str]:
+    """直接出現在 FROM 中的資料表、自訂 SQL 與子查詢（樞紐、聯集、project）的名稱。"""
     if isinstance(relation, JoinRelation):
         return _relation_names(relation.left) + _relation_names(relation.right)
     return [relation.name]
+
+
+def _transform_names(relation: Relation) -> set[str]:
+    """關聯樹中的樞紐、聯集與 project 的名稱。"""
+    if isinstance(relation, JoinRelation):
+        return _transform_names(relation.left) | _transform_names(relation.right)
+    if isinstance(relation, PivotRelation | ProjectRelation):
+        return {relation.name} | _transform_names(relation.source)
+    if isinstance(relation, UnionRelation):
+        return {relation.name}
+    return set()
+
+
+def _formula_refs(formula: str) -> list[tuple[str, str]]:
+    """公式中以 [資料表].[欄位] 參照的欄位。"""
+    from tmig.formula.ast import FieldRef, walk
+    from tmig.formula.lexer import FormulaSyntaxError
+    from tmig.formula.parser import parse_formula
+
+    try:
+        node = parse_formula(formula)
+    except FormulaSyntaxError:
+        return []
+    return [
+        (n.parts[0], n.parts[1])
+        for n in walk(node)
+        if isinstance(n, FieldRef) and len(n.parts) == 2
+    ]
+
+
+def _common_type(types: set[str]) -> str:
+    """聯集中同名的欄位型別不一致時（例如有的資料表是數字、有的是文字），取能容納所有值的型別；
+    沒有記下型別時為字串。"""
+    if not types:
+        return "string"
+    if len(types) == 1:
+        return next(iter(types))
+    if types <= {"integer", "real"}:
+        return "real"
+    if types <= {"date", "datetime"}:
+        return "datetime"
+    return "string"

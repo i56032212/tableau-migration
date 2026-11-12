@@ -77,10 +77,38 @@ def _check_model(ds: Datasource, errors: list[str]) -> None:
         parent[a] = b
     if len({find(t) for t in tables}) > 1:
         errors.append(f"{where}：有邏輯資料表沒有連到其他資料表")
+    from tmig.ir.models import JoinRelation, PivotRelation, ProjectRelation, Relation, UnionRelation
+
+    def leaves(relation: Relation) -> set[str]:
+        """join 樹中欄位可以參照的資料表名稱（樞紐、聯集與 project 含裡面的資料表）。"""
+        if isinstance(relation, JoinRelation):
+            return leaves(relation.left) | leaves(relation.right)
+        if isinstance(relation, PivotRelation | ProjectRelation):
+            return {relation.name} | leaves(relation.source)
+        if isinstance(relation, UnionRelation):
+            return {relation.name} | {p.relation.name for p in relation.parts}
+        return {relation.name}
+
+    joined = {
+        t.id: leaves(t.relation) for t in model.tables if isinstance(t.relation, JoinRelation)
+    }
     for field in ds.fields:
         if field.column is not None and field.table not in table_set:
             errors.append(
                 f"datasources[{ds.id}].fields[{field.id}]：所屬的資料表「{field.table}」不在模型中"
+            )
+        if field.column is None or field.table not in table_set:
+            continue
+        names = joined.get(field.table)
+        if names is None and field.physical_table is not None:
+            errors.append(
+                f"datasources[{ds.id}].fields[{field.id}]：邏輯資料表「{field.table}」沒有 join，"
+                "不應有 physical_table"
+            )
+        elif names is not None and field.physical_table not in names:
+            errors.append(
+                f"datasources[{ds.id}].fields[{field.id}]：所屬的實體資料表"
+                f"「{field.physical_table}」不在邏輯資料表「{field.table}」的 join 中"
             )
 
 
@@ -91,8 +119,11 @@ def _check_files(ds: Datasource, errors: list[str]) -> None:
         FileConnection,
         JoinRelation,
         ModelRelation,
+        PivotRelation,
+        ProjectRelation,
         Relation,
         TableRelation,
+        UnionRelation,
     )
 
     connection = ds.connection
@@ -108,8 +139,13 @@ def _check_files(ds: Datasource, errors: list[str]) -> None:
         if isinstance(relation, JoinRelation):
             visit(relation.left)
             visit(relation.right)
+        elif isinstance(relation, PivotRelation | ProjectRelation):
+            visit(relation.source)
+        elif isinstance(relation, UnionRelation):
+            for part in relation.parts:
+                visit(part.relation)
         elif not isinstance(relation, TableRelation):
-            errors.append(f"{where}.relation：檔案型資料源只能有資料表與 join")
+            errors.append(f"{where}.relation：檔案型資料源只能有資料表、join、樞紐與聯集")
         elif relation.table != [FILE_SCHEMA, relation.name] or relation.name not in known:
             errors.append(f"{where}.relation：資料表「{relation.name}」沒有對應的檔案")
 

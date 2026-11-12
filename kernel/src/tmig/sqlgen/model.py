@@ -25,8 +25,11 @@
 每個彙總只計算所屬部分的列（見 tmig.sqlgen.query 的 WorksheetQuery.owner_of）；
 一個彙總同時用到多張資料表的欄位時列為不支援。
 
+邏輯資料表內含 join（實體層）：邏輯資料表是 join 樹的子查詢，各欄以欄位 id 為欄名（各實體資料表的同名
+欄位不衝突），之後與一般的資料表相同；join 在邏輯資料表之內先做，關聯再連接邏輯資料表（與 Tableau 相同）。
+
 尚不支援（查詢時列為不支援）：同一個彙總用到多張資料表的欄位、同時用到量值表與其他資料表
-（或多個分支）欄位的篩選、含 LOD 且只能以半連接套用的篩選、邏輯資料表內含 join。
+（或多個分支）欄位的篩選、含 LOD 且只能以半連接套用的篩選。
 """
 
 from __future__ import annotations
@@ -37,13 +40,24 @@ from dataclasses import dataclass, field
 from tmig.ir.models import (
     DataField,
     Datasource,
+    JoinRelation,
     ModelRelation,
+    PivotRelation,
+    ProjectRelation,
     Relation,
     Relationship,
     SqlRelation,
     TableRelation,
+    UnionRelation,
 )
-from tmig.sqlgen.source import CUSTOM_SQL_PREFIX, datetime_columns_vary
+from tmig.sqlgen.source import (
+    CUSTOM_SQL_PREFIX,
+    datetime_columns_vary,
+    from_clause,
+    relation_aliases,
+    sql_leaves,
+    transform_select,
+)
 from tmig.sqlgen.sql import ident
 
 PART_COL = "__part"
@@ -183,10 +197,13 @@ class ModelPlanner:
         self.ds = ds
         self.model = model
         self.tables = {t.id: t for t in model.tables}
-        # 自訂 SQL 的佔位資料表依邏輯資料表的順序編號（與 model_custom_sql 相同），
-        # 不論這次查詢用到哪幾張資料表，編號都不變
-        sql_tables = [t.id for t in model.tables if isinstance(t.relation, SqlRelation)]
-        self.custom_index = {table: i for i, table in enumerate(sql_tables)}
+        # 自訂 SQL 的佔位資料表依邏輯資料表的順序（內含 join 時依 join 樹中的順序）編號（與
+        # model_custom_sql 相同），不論這次查詢用到哪幾張資料表，編號都不變
+        self.custom_index: dict[str, int] = {}
+        count = 0
+        for logical in model.tables:
+            self.custom_index[logical.id] = count
+            count += len(sql_leaves(logical.relation))
         self.alias = {t.id: f"t{i}" for i, t in enumerate(model.tables)}
         self.fields = {f.id: f for f in ds.fields}
         self.columns: dict[str, list[DataField]] = {t.id: [] for t in model.tables}
@@ -318,13 +335,19 @@ class ModelPlanner:
         parts: list[str] = []
         for p_field, op, c_field in self._pairs(parent, rel):
             assert p_field.column is not None and c_field.column is not None
-            left = f"{ident(self.alias[parent])}.{ident(p_field.column)}"
+            left = self._col(parent, p_field)
             if child_alias is not None:
                 right = f"{ident(child_alias)}.{ident(c_field.id)}"
             else:
-                right = f"{ident(self.alias[child])}.{ident(c_field.column)}"
+                right = self._col(child, c_field)
             parts.append(f"{left} {op} {right}")
         return " AND ".join(parts)
+
+    def _col(self, table: str, data_field: DataField) -> str:
+        """邏輯資料表的實體欄位；內含 join 的資料表（子查詢）以欄位 id 為欄名。"""
+        joined = isinstance(self.tables[table].relation, JoinRelation)
+        name = data_field.id if joined else data_field.column or ""
+        return f"{ident(self.alias[table])}.{ident(name)}"
 
     # ------------------------------------------------------------ SQL
 
@@ -336,7 +359,33 @@ class ModelPlanner:
         if isinstance(relation, SqlRelation):
             placeholder = CUSTOM_SQL_PREFIX + str(self.custom_index[table])
             return f"{ident(placeholder)} AS {alias}"
-        raise ModelError(f"邏輯資料表「{self.caption(table)}」內含 join，尚不支援")
+        if isinstance(relation, PivotRelation | UnionRelation | ProjectRelation):
+            # 樞紐、聯集與 project：子查詢依欄名選出這張邏輯資料表的欄位
+            needed = {str(f.column): f.datatype for f in self.columns[table]}
+            custom: list[str] = [""] * self.custom_index[table]
+            return f"({transform_select(relation, custom, needed)}) AS {alias}"
+        assert isinstance(relation, JoinRelation)
+        return f"({self._join_sql(table, relation)}) AS {alias}"
+
+    def _join_sql(self, table: str, relation: JoinRelation) -> str:
+        """內含 join 的邏輯資料表：join 樹的子查詢，各欄以欄位 id 為欄名。"""
+        fields = self.columns[table]
+        missing = [f.caption for f in fields if f.physical_table is None]
+        if missing:
+            raise ModelError(
+                f"邏輯資料表「{self.caption(table)}」的欄位「{missing[0]}」沒有標明所屬的實體資料表"
+            )
+        columns = {(str(f.physical_table), str(f.column)): f.datatype for f in fields}
+        # 之前的資料表的自訂 SQL 佔位：join 樹中的自訂 SQL 接著編號
+        custom: list[str] = [""] * self.custom_index[table]
+        from_sql = from_clause(relation, custom, columns)
+        aliases = relation_aliases(relation)
+        items = [
+            f"{ident(aliases.get(str(f.physical_table), str(f.physical_table)))}."
+            f"{ident(str(f.column))} AS {ident(f.id)}"
+            for f in fields
+        ] or [f"1 AS {ident(ONE_COL)}"]
+        return f"SELECT {', '.join(items)} FROM {from_sql}"
 
     def _items(self, tables: list[str]) -> list[tuple[str, str]]:
         """資料表的實體欄位：（欄位 id、SQL）。BigQuery 的日期時間欄位轉成沒有時區的時間（見
@@ -345,7 +394,7 @@ class ModelPlanner:
         items: list[tuple[str, str]] = []
         for t in tables:
             for f in self.columns[t]:
-                sql = f"{ident(self.alias[t])}.{ident(f.column or '')}"
+                sql = self._col(t, f)
                 if cast and f.datatype == "datetime":
                     sql = f"CAST({sql} AS TIMESTAMP)"
                 items.append((f.id, sql))

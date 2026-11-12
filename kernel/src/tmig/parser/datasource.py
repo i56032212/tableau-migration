@@ -39,11 +39,15 @@ from tmig.ir.models import (
     MemberAlias,
     ModelRelation,
     Parameter,
+    PivotRelation,
+    ProjectRelation,
     PublishedSource,
     Relation,
     SourceColumn,
     SqlRelation,
     TableRelation,
+    UnionPart,
+    UnionRelation,
     Unsupported,
     WeekDay,
 )
@@ -528,13 +532,30 @@ class DatasourceParser:
         tables: dict[str, FileTable],
     ) -> Relation | None:
         """關聯樹中的資料表改成匯入後的資料表（Files.<name>），並記下各資料表的檔案。"""
+        inner = [r for r in children(element) if local_name(r) == "relation"]
         if isinstance(relation, JoinRelation):
-            sides = [r for r in children(element) if local_name(r) == "relation"]
-            left = self._file_relation(relation.left, sides[0], named, tables)
-            right = self._file_relation(relation.right, sides[1], named, tables)
+            left = self._file_relation(relation.left, inner[0], named, tables)
+            right = self._file_relation(relation.right, inner[1], named, tables)
             if left is None or right is None:
                 return None
             return relation.model_copy(update={"left": left, "right": right})
+        if isinstance(relation, PivotRelation | ProjectRelation):
+            source = self._file_relation(relation.source, inner[0], named, tables)
+            return relation.model_copy(update={"source": source}) if source is not None else None
+        if isinstance(relation, UnionRelation):
+            parts: list[UnionPart] = []
+            for part, part_el in zip(relation.parts, inner, strict=True):
+                converted = self._file_relation(part.relation, part_el, named, tables)
+                if converted is None:
+                    return None
+                found = tables[converted.name] if isinstance(converted, TableRelation) else None
+                path = (
+                    self._original_path(part_el, named)
+                    if found and found.format == "text"
+                    else None
+                )
+                parts.append(part.model_copy(update={"relation": converted, "path": path}))
+            return relation.model_copy(update={"parts": parts})
         if not isinstance(relation, TableRelation):
             self.ctx.flag(element, f"資料源「{self.caption}」的檔案中有自訂 SQL，v0 不支援")
             return None
@@ -543,6 +564,18 @@ class DatasourceParser:
             return None
         tables[found.name] = found
         return TableRelation(kind="table", name=relation.name, table=[FILE_SCHEMA, relation.name])
+
+    def _original_path(self, element: etree._Element, named: dict[str, etree._Element]) -> str:
+        """文字檔在作者電腦上的路徑（聯集的 Path 欄的值）：連線的資料夾加上檔名。"""
+        source = named.get(element.get("connection", ""))
+        if source is None:
+            source = next(iter(named.values()))
+        table = strip_brackets(element.get("table", ""))
+        base, sep, ext = table.rpartition("#")
+        filename = f"{base}.{ext}" if sep else table
+        directory = (source.get("directory") or "").rstrip("/\\")
+        slash = "\\" if "\\" in directory else "/"
+        return f"{directory}{slash}{filename}" if directory else filename
 
     def _file_table(
         self, name: str, element: etree._Element, named: dict[str, etree._Element]
@@ -1030,7 +1063,19 @@ class DatasourceParser:
             anchor,
         )
         if found is not None:
+            found.physical_table = self._physical_table(record)
             state.add_field(found)
+
+    def _physical_table(self, record: MetaColumn | None) -> str | None:
+        """Relationship 模型中邏輯資料表內含 join 時，欄位所屬的實體資料表（metadata-record 的
+        parent-name，即 join 樹中資料表的名稱）。"""
+        if record is None or self.model_tables is None:
+            return None
+        logical = object_id_of(record.element)
+        table = next((t for t in self.model_tables if t.id == logical), None)
+        if table is None or not isinstance(table.relation, JoinRelation):
+            return None
+        return strip_brackets(text_of(child(record.element, "parent-name"))) or None
 
     def _field_table(self, state: DsState, record: MetaColumn | None) -> str | None:
         """欄位所屬的資料表：Live 連線為 metadata-record 的 parent-name；
@@ -1179,6 +1224,7 @@ class DatasourceParser:
                 hidden=True,
                 column=physical.get(name, strip_brackets(name)),
                 table=self._field_table(state, record),
+                physical_table=self._physical_table(record),
                 calc=None,
                 source_ref=xpath(column),
             )

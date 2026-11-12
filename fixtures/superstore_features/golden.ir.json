@@ -34,6 +34,7 @@
           "hidden": true,
           "column": "Row ID",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -52,6 +53,7 @@
           "hidden": false,
           "column": "Order ID",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -70,6 +72,7 @@
           "hidden": false,
           "column": "Order Date",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -88,6 +91,7 @@
           "hidden": false,
           "column": "Ship Date",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -106,6 +110,7 @@
           "hidden": false,
           "column": "Ship Mode",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -124,6 +129,7 @@
           "hidden": false,
           "column": "Customer ID",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -142,6 +148,7 @@
           "hidden": false,
           "column": "Customer Name",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -160,6 +167,7 @@
           "hidden": false,
           "column": "Segment",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -178,6 +186,7 @@
           "hidden": false,
           "column": "Country/Region",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -196,6 +205,7 @@
           "hidden": false,
           "column": "City",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -214,6 +224,7 @@
           "hidden": false,
           "column": "State/Province",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -232,6 +243,7 @@
           "hidden": false,
           "column": "Postal Code",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -250,6 +262,7 @@
           "hidden": false,
           "column": "Region",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -268,6 +281,7 @@
           "hidden": false,
           "column": "Product ID",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -286,6 +300,7 @@
           "hidden": false,
           "column": "Category",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -304,6 +319,7 @@
           "hidden": false,
           "column": "Sub-Category",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -322,6 +338,7 @@
           "hidden": false,
           "column": "Product Name",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -340,6 +357,7 @@
           "hidden": false,
           "column": "Sales",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -358,6 +376,7 @@
           "hidden": false,
           "column": "Quantity",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -376,6 +395,7 @@
           "hidden": false,
           "column": "Discount",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -394,6 +414,7 @@
           "hidden": false,
           "column": "Profit",
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": null,
           "aliases": [],
@@ -412,6 +433,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "SUM([Profit])/SUM([Sales])",
             "ast": {
@@ -467,6 +489,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "{FIXED [Region] : SUM([Sales])}",
             "ast": {
@@ -518,6 +541,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "// 該年度銷售占區域全部銷售的比例\r\nSUM([Sales]) / SUM([Calculation_2049003526124437504])",
             "ast": {
@@ -573,6 +597,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "RANK(SUM([Profit]))",
             "ast": {
@@ -615,6 +640,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "AVG({INCLUDE [Order ID] : SUM([Profit])})",
             "ast": {
@@ -672,6 +698,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "IF [Region] IN (\"East\", \"West\") THEN \"Coasts\"\nELSE [Region]\nEND",
             "ast": {
@@ -738,6 +765,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "IF [Ship Mode] IN (\"First Class\", \"Same Day\") THEN \"Fast\"\nELSE \"Other\"\nEND",
             "ast": {
@@ -805,6 +833,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "FLOOR(([Quantity]) / 3) * 3",
             "ast": {
@@ -859,6 +888,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "IF [Region] = [Parameters].[Parameter 1] THEN [Sales] ELSE 0 END",
             "ast": {
@@ -924,6 +954,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "MIN(0)",
             "ast": {
@@ -956,6 +987,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "IF [Key Sub-Categories] THEN [Sales] END",
             "ast": {
@@ -1003,6 +1035,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "{FIXED [Region] : AVG({INCLUDE [Customer Name] : SUM([Sales])})}",
             "ast": {
@@ -1075,6 +1108,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "{EXCLUDE [Category] : MAX({INCLUDE [Order ID] : SUM([Sales])})}",
             "ast": {
@@ -1147,6 +1181,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": {
             "levels": [
@@ -1192,6 +1227,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": {
             "formula": "(NOT ISNULL([Sub-Category]) AND [Sub-Category] IN (\"Chairs\", \"Phones\", \"Storage\"))",
             "ast": {
@@ -1299,6 +1335,7 @@
           "hidden": false,
           "column": null,
           "table": null,
+          "physical_table": null,
           "calc": null,
           "set": {
             "levels": [
