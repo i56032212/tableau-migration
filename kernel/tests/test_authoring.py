@@ -13,6 +13,7 @@ import pytest
 from openpyxl import Workbook
 
 from tmig.authoring import (
+    Calculated,
     add_datasource,
     add_table,
     inspect_file,
@@ -275,6 +276,11 @@ def test_relationship_and_join(book: Path, sources: Path, tmp_path: Path) -> Non
     assert query(ir, sources, out, f["Returned"], f["Sales"]) == {"Yes": 175.5, None: 250.25}
     with pytest.raises(EditError, match="沒有欄位"):
         set_join(ir, ds, "Returns", "left", [(f["Order ID"], "=", "Missing")])
+    # 相交（空間 join）的兩邊要是空間欄位；關聯不能用相交
+    with pytest.raises(EditError, match="兩邊都要是空間欄位"):
+        set_join(ir, ds, "Returns", "left", [(f["Order ID"], "intersects", "Order ID")])
+    with pytest.raises(EditError, match="不能用 Intersects"):
+        set_relationship(ir, ds, people, [(f["Region"], "intersects", f["Region (People)"])])
     # 工作表用到的欄位所在的資料表不能移除；不用之後移除，回到兩張邏輯資料表
     with pytest.raises(EditError, match="用到"):
         remove_table(place(ir, f["Returned"], f["Sales"]), ds, "Returns")
@@ -354,3 +360,63 @@ def test_add_datasource(book: Path, sources: Path, tmp_path: Path) -> None:
         "East": 300,
         "West": 150,
     }
+
+
+def test_spatial_join_in_the_editor(tmp_path: Path) -> None:
+    """資料源分頁的空間 join（Tableau 的 Intersects）：GeoJSON 的行政區與 CSV 的地點以 join 計算
+    MAKEPOINT([Lat], [Lon]) 相交。"""
+    import json
+
+    zones = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"Zone": name},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]],
+                },
+            }
+            for name, x, y in (("A", 120.0, 23.0), ("B", 121.0, 24.0))
+        ],
+    }
+    folder = tmp_path / "sources"
+    (folder / "Data").mkdir(parents=True)
+    (folder / "Data" / "zones.geojson").write_text(json.dumps(zones), encoding="utf-8")
+    (folder / "Data" / "points.csv").write_text(
+        "Name,Lat,Lon,Sales\nP1,23.5,120.5,10\nP2,24.5,121.5,20\nP3,24.2,121.9,5\nP4,0,0,7\n",
+        encoding="utf-8",
+    )
+    ir = new_workbook(
+        "Zones", inspect_file(folder / "Data" / "zones.geojson"), None, "Data/zones.geojson"
+    )
+    ds = ir.datasources[0].id
+    f = ids(ir)
+    points = inspect_file(folder / "Data" / "points.csv")
+    with pytest.raises(EditError, match="兩邊都要是空間欄位"):
+        add_table(
+            ir, ds, points, None, "Data/points.csv", "join", on=[(f["Zone"], "intersects", "Name")]
+        )
+    ir = add_table(
+        ir,
+        ds,
+        points,
+        None,
+        "Data/points.csv",
+        "join",
+        on=[(f["Geometry"], "intersects", Calculated("MAKEPOINT([Lat], [Lon])"))],
+    )
+    relation = ir.datasources[0].connection.relation  # type: ignore[union-attr]
+    assert isinstance(relation, JoinRelation) and relation.on[0].op == "intersects"
+    f = ids(ir)
+    out = tmp_path / "data"
+    assert query(ir, folder, out, f["Zone"], f["Sales"]) == {"A": 10, "B": 25}
+    ir = set_join(
+        ir,
+        ds,
+        "points.csv",
+        "right",
+        [(f["Geometry"], "intersects", Calculated("MAKEPOINT([Lat], [Lon])"))],
+    )
+    assert query(ir, folder, out, f["Zone"], f["Sales"]) == {"A": 10, "B": 25, None: 7}

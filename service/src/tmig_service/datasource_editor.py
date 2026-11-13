@@ -91,7 +91,8 @@ from tmig.ir.models import Relation
 from tmig.package import SOURCES
 from tmig_service.app import Workspace
 
-Comparison = Literal["=", "!=", "<", "<=", ">", ">="]
+Comparison = Literal["=", "!=", "<", "<=", ">", ">=", "intersects"]
+"""條件的比較；intersects 是空間 join（只能用在 join）。"""
 
 
 class FormulaSide(BaseModel):

@@ -30,6 +30,9 @@ import {
 
 const JOINS: Record<JoinType, string> = { inner: "內部", left: "左側", right: "右側", full: "完整外部" };
 const OPS: Comparison[] = ["=", "!=", "<", "<=", ">", ">="];
+/** join 的條件另有空間 join 的「相交」（Tableau 的 Intersects：兩邊都是空間欄位或傳回形狀的 join 計算）。 */
+const JOIN_OPS: Comparison[] = [...OPS, "intersects"];
+const OP_LABELS: Partial<Record<Comparison, string>> = { intersects: "相交" };
 const TYPES: Record<string, string> = {
   string: "字串",
   integer: "整數",
@@ -963,6 +966,7 @@ function JoinEditor({
         editable={editable}
         onChange={setOn}
         calcLabel="建立 Join 計算…"
+        ops={JOIN_OPS}
       />
       {editable && dirty && (
         <button type="button" className="primary" onClick={() => void onSave(right, join, on.filter((c) => sideFilled(c[0]) && sideFilled(c[2])))}>
@@ -1044,6 +1048,7 @@ function Conditions({
   editable,
   onChange,
   calcLabel,
+  ops = OPS,
 }: {
   conditions: Condition[];
   left: ModelField[];
@@ -1052,6 +1057,8 @@ function Conditions({
   onChange: (next: Condition[]) => void;
   /** 「建立計算」的選項名稱（join 計算或關聯計算） */
   calcLabel: string;
+  /** 可選的比較（join 另有空間 join 的相交） */
+  ops?: Comparison[];
 }) {
   const set = (i: number, at: 0 | 1 | 2, value: Side) =>
     onChange(conditions.map((c, k) => (k === i ? (Object.assign([...c], { [at]: value }) as Condition) : c)));
@@ -1062,9 +1069,9 @@ function Conditions({
         <div key={i} className="dse-condition">
           <SidePicker side={c[0]} options={leftOptions} label="左邊的欄位" calcLabel={calcLabel} editable={editable} onChange={(v) => set(i, 0, v)} />
           <select aria-label="比較" value={c[1]} disabled={!editable} onChange={(e) => set(i, 1, e.target.value as Comparison)}>
-            {OPS.map((op) => (
-              <option key={op} value={op}>
-                {op}
+            {ops.map((op) => (
+              <option key={op} value={op} title={op === "intersects" ? "Intersects：空間 join（兩邊都是空間欄位）" : undefined}>
+                {OP_LABELS[op] ?? op}
               </option>
             ))}
           </select>

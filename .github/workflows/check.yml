@@ -41,6 +41,12 @@ jobs:
         run: git diff --exit-code -- web/dist || (echo "web/dist 過期：在 web/ 執行 pnpm build 後提交" && exit 1)
       - name: 安裝 Chromium（端到端測試）
         run: uv run playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - name: 安裝 PostGIS（執行環境內建的 PostgreSQL 的版本；資料庫空間欄位的實跑測試）
+        if: runner.os == 'Linux'
+        run: |
+          version=$(ls /usr/lib/postgresql | sort -V | tail -n 1)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "postgresql-${version}-postgis-3"
       - name: 一鍵檢查
         run: |
           set -o pipefail
@@ -61,7 +67,8 @@ jobs:
           fi
 
   # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL、Spark（Databricks 的引擎；另以 Spark Thrift Server 走
-  # HiveServer2 協定）、MySQL 與 Trino（Docker）實跑；BigQuery 的執行器在模擬器（Docker）實跑。
+  # HiveServer2 協定）、MySQL 與 Trino（Docker）實跑；BigQuery 的執行器在模擬器（Docker）實跑；
+  # 資料庫的空間欄位與空間 join 在 PostGIS、MySQL 實跑，跨資料庫的 join 在 PostgreSQL 實跑。
   # 環境不齊全時直接失敗。執行環境只有約 8 GB 記憶體：Docker 的服務都設上限
   engines:
     runs-on: ubuntu-latest
@@ -79,6 +86,11 @@ jobs:
         run: uv sync --locked --group spark --group services
       - name: 啟動執行環境內建的 MySQL（帳號 root／root）
         run: sudo systemctl start mysql.service
+      - name: 安裝 PostGIS（執行環境內建的 PostgreSQL 的版本）
+        run: |
+          version=$(ls /usr/lib/postgresql | sort -V | tail -n 1)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "postgresql-${version}-postgis-3"
       - name: 啟動 Trino（Docker；測試資料放在 memory catalog；記憶體上限 3 GB）
         run: docker run -d --name trino --memory 3g -p 8080:8080 trinodb/trino:479
       - name: 啟動 BigQuery 模擬器（Docker；goccy/bigquery-emulator，以 ZetaSQL 實作；記憶體上限 1 GB）
@@ -92,7 +104,10 @@ jobs:
           TMIG_TEST_MYSQL: root:root@127.0.0.1:3306
           TMIG_TEST_TRINO: 127.0.0.1:8080
           TMIG_TEST_BIGQUERY: 127.0.0.1:9050
-        run: uv run pytest -q kernel/tests/sqlgen/test_dialect.py kernel/tests/sqlgen/test_engines.py
+        run: >-
+          uv run pytest -q kernel/tests/sqlgen/test_dialect.py kernel/tests/sqlgen/test_engines.py
+          kernel/tests/sqlgen/test_live_spatial.py kernel/tests/data/test_postgis.py
+          kernel/tests/data/test_mysql_spatial.py kernel/tests/data/test_federated.py
       - name: 失敗時列出 Trino 與 BigQuery 模擬器的紀錄
         if: failure()
         run: |

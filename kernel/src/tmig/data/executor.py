@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -56,20 +57,31 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
-def execute(db_path: str | Path, sql: str, attach: dict[str, Path] | None = None) -> QueryResult:
-    """attach：先以唯讀附加的其他 DuckDB 檔（附加的名稱 → 檔案），例如 Data Blending 的次要資料源。"""
+def execute(
+    db_path: str | Path,
+    sql: str,
+    attach: dict[str, Path] | None = None,
+    prepare: Callable[[duckdb.DuckDBPyConnection], None] | None = None,
+) -> QueryResult:
+    """attach：先以唯讀附加的其他 DuckDB 檔（附加的名稱 → 檔案），例如 Data Blending 的次要資料源；
+    prepare：執行前在連線上的準備（例如跨資料庫的次要資料源，見 execute_query）。"""
     path = Path(db_path)
     for item in [path, *(attach or {}).values()]:
         if not item.is_file():
             raise ExecutionError(f"找不到資料檔 {item}；請先執行 tmig import-hyper")
     try:
-        # 用到 ICU 的正規表示式時另開記憶體資料庫附加資料檔（見 tmig.data.udf）
+        # 用到 ICU 的正規表示式（或要在預設的資料庫之外建立資料表）時另開記憶體資料庫附加資料檔
+        # （見 tmig.data.udf）
         connection = (
-            udf.attached(path) if udf.needed(sql) else duckdb.connect(str(path), read_only=True)
+            udf.attached(path)
+            if udf.needed(sql) or prepare is not None
+            else duckdb.connect(str(path), read_only=True)
         )
         with connection as con:
             for alias, other in (attach or {}).items():
                 con.execute(f"ATTACH {string(str(other))} AS {ident(alias)} (READ_ONLY)")
+            if prepare is not None:
+                prepare(con)
             cursor = con.execute(sql)
             description = cursor.description or []
             columns = [d[0] for d in description]
@@ -79,13 +91,26 @@ def execute(db_path: str | Path, sql: str, attach: dict[str, Path] | None = None
     return QueryResult(columns=columns, rows=[tuple(r) for r in rows])
 
 
-def execute_query(db_path: str | Path, query: WorksheetSql) -> QueryResult:
+def execute_query(
+    db_path: str | Path,
+    query: WorksheetSql,
+    fetch: Callable[..., Any] | None = None,
+    cache: Any = None,
+) -> QueryResult:
     """執行一張工作表的查詢（萃取的 DuckDB 檔）：先做查詢附帶的檢查，再執行查詢。
 
-    Data Blending 的次要資料源是同一目錄中以資料源 id 為檔名的 DuckDB 檔。"""
+    Data Blending 的次要資料源是同一目錄中以資料源 id 為檔名的 DuckDB 檔；次要資料源是跨資料庫的 join 時，
+    資料庫的資料表以 fetch 取回（tmig.data.federated.attach_federated，cache 為取回的資料的快取）。"""
     for guard in query.guards:
         check_guard(guard, execute(db_path, guard.sql).rows)
     folder = Path(db_path).parent
+    if query.federated:
+        from tmig.data.federated import attach_secondaries
+
+        def prepare(con: duckdb.DuckDBPyConnection) -> None:
+            attach_secondaries(con, folder, query, fetch, cache)
+
+        return finish(query, execute(db_path, query.sql, None, prepare))
     attach = {alias: folder / f"{ds}.duckdb" for alias, ds in query.attach.items()}
     return finish(query, execute(db_path, query.sql, attach))
 

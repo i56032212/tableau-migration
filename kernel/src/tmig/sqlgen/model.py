@@ -41,12 +41,14 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import NoReturn
 
+from tmig.data import udf
 from tmig.formula.analyze import Target
 from tmig.formula.ast import Call, Lod
 from tmig.ir.models import (
     DataField,
     Datasource,
     JoinRelation,
+    LiveConnection,
     ModelRelation,
     PivotRelation,
     ProjectRelation,
@@ -414,7 +416,7 @@ class ModelPlanner:
         columns = {(str(f.physical_table), str(f.column)): f.datatype for f in fields}
         # 之前的資料表的自訂 SQL 佔位：join 樹中的自訂 SQL 接著編號
         custom: list[str] = [""] * self.custom_index[table]
-        from_sql = from_clause(relation, custom, columns)
+        from_sql = from_clause(relation, custom, columns, self._live)
         aliases = relation_aliases(relation)
         items = [
             f"{ident(aliases.get(str(f.physical_table), str(f.physical_table)))}."
@@ -423,9 +425,13 @@ class ModelPlanner:
         ] or [f"1 AS {ident(ONE_COL)}"]
         return f"SELECT {', '.join(items)} FROM {from_sql}"
 
+    @property
+    def _live(self) -> bool:
+        return isinstance(self.ds.connection, LiveConnection)
+
     def _items(self, tables: list[str]) -> list[tuple[str, str]]:
         """資料表的實體欄位：（欄位 id、SQL）。BigQuery 的日期時間欄位轉成沒有時區的時間（見
-        tmig.sqlgen.source.datetime_columns_vary）。"""
+        tmig.sqlgen.source.datetime_columns_vary）；Live 連線的空間欄位在來源資料庫轉成 WKT。"""
         cast = datetime_columns_vary(self.ds.connection)
         items: list[tuple[str, str]] = []
         for t in tables:
@@ -433,6 +439,8 @@ class ModelPlanner:
                 sql = self._col(t, f)
                 if cast and f.datatype == "datetime":
                     sql = f"CAST({sql} AS TIMESTAMP)"
+                if self._live and f.datatype == "spatial":
+                    sql = f"{udf.GEO_WKT}({sql})"
                 items.append((f.id, sql))
             items += [(f.id, self._computed(t, f)) for f in self.computed[t]]
         return items or [(ONE_COL, "1")]

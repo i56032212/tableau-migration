@@ -721,6 +721,9 @@ class Rewriter:
         if name == udf.GEO_WKT:
             assert isinstance(node, exp.Anonymous)
             return self.wkt(node.expressions[0])
+        if name == udf.GEO_DB_INTERSECTS:
+            assert isinstance(node, exp.Anonymous)
+            return self.intersects(node.expressions[0], node.expressions[1])
         if name in udf.SPATIAL_FUNCTIONS:
             # 空間函式改在 DuckDB 計算（見 localize_spatial）；還在下推的部分時（例如資料表的空間 join）不支援
             raise DialectError(
@@ -791,11 +794,23 @@ class Rewriter:
         geography、Oracle、Snowflake 與 Redshift 的空間欄位）。"""
         raise DialectError(f"{self.name} 的空間欄位尚未支援")
 
-    def _method(self, value: exp.Expr, method: str) -> exp.Expr:
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        """空間 join 的 Intersects，兩邊都是資料庫的空間欄位：該資料庫的空間函式（與 Tableau 的 Live 連線
+        相同在資料庫計算，例如 PostGIS 的 ST_Intersects、SQL Server 的 STIntersects）。"""
+        raise DialectError(f"{self.name} 的空間欄位尚未支援")
+
+    def _method(self, value: exp.Expr, method: str, *args: exp.Expr) -> exp.Expr:
         """欄位的方法（例如 SQL Server 的 [t].[geo].STAsText()）：SQLGlot 沒有這種語法節點。"""
-        self.validate(value)
-        text = value.sql(dialect=SQLGLOT_NAMES[self.dialect], identify=True)
-        return _mark(exp.Var(this=f"{text}.{method}()"))
+        name = SQLGLOT_NAMES[self.dialect]
+        texts = []
+        for node in (value, *args):
+            self.validate(node)
+            texts.append(node.sql(dialect=name, identify=True))
+        return _mark(exp.Var(this=f"{texts[0]}.{method}({', '.join(texts[1:])})"))
+
+    def _method_true(self, value: exp.Expr, method: str, other: exp.Expr) -> exp.Expr:
+        """傳回 1、0 的空間方法（SQL Server、SAP HANA、Teradata 的 a.STIntersects(b) = 1）。"""
+        return _mark(exp.EQ(this=self._method(value, method, other), expression=_num(1)))
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
         raise NotImplementedError
@@ -878,6 +893,9 @@ class PostgresRewriter(Rewriter):
 
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return _fn("ST_AsText", value)  # PostGIS 的 geometry 與 geography；Redshift 的 GEOMETRY
+
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return _fn("ST_Intersects", left, right)
 
     # PostgreSQL 的 ARE：前後查看與反向參照（沒有原子群組與佔有量詞）
     icu_regex = frozenset({"前向查看", "否定前向查看", "後向查看", "否定後向查看", "反向參照"})
@@ -1533,6 +1551,11 @@ class OracleRewriter(Rewriter):
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return _fn("SDO_UTIL.TO_WKTGEOMETRY", value)  # SDO_GEOMETRY → CLOB
 
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        # SDO_ANYINTERACT 運算子要有空間索引；函式的寫法不需要（容許誤差 0.005，Oracle 的慣用值）
+        relate = _fn("SDO_GEOM.RELATE", left, _str("ANYINTERACT"), right, _num(0.005))
+        return _mark(exp.EQ(this=relate, expression=_str("TRUE")))
+
     allowed = frozenset({exp.Median, exp.Mod, exp.IntDiv})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -2016,7 +2039,12 @@ class MySQLRewriter(Rewriter):
     dialect = "mysql"
 
     def wkt(self, value: exp.Expr) -> exp.Expr:
-        return _fn("ST_AsText", value)
+        # MySQL 8 的地理座標系統（例如 SRID 4326）預設依 EPSG 的軸序寫成「緯度 經度」：指定經度在前
+        # （平面的座標系統不受影響）
+        return _fn("ST_AsText", value, _str("axis-order=long-lat"))
+
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return _fn("ST_Intersects", left, right)
 
     icu_regex = ICU_ALL  # MySQL 8 以 ICU 執行
     allowed = frozenset(
@@ -2350,6 +2378,9 @@ class SnowflakeRewriter(Rewriter):
 
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return _fn("ST_ASWKT", value)  # GEOGRAPHY、GEOMETRY
+
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return _fn("ST_INTERSECTS", left, right)
 
     allowed = frozenset(
         {
@@ -2887,6 +2918,9 @@ class BigQueryRewriter(Rewriter):
 
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return _fn("ST_ASTEXT", value)  # GEOGRAPHY
+
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return _fn("ST_INTERSECTS", left, right)
 
     allowed = frozenset(
         {
@@ -3744,6 +3778,9 @@ class TeradataRewriter(OracleRewriter):
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return self._method(value, "ST_AsText")  # ST_Geometry
 
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return self._method_true(left, "ST_Intersects", right)
+
     allowed = frozenset({exp.Median, exp.Mod, exp.IntDiv})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -4384,6 +4421,9 @@ class Db2Rewriter(OracleRewriter):
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return _fn("DB2GSE.ST_AsText", value)
 
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return _mark(exp.EQ(this=_fn("DB2GSE.ST_Intersects", left, right), expression=_num(1)))
+
     allowed = frozenset({exp.Median, exp.Mod, exp.NullSafeEQ, exp.Repeat})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -4810,6 +4850,9 @@ class HanaRewriter(Rewriter):
 
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return self._method(value, "ST_AsWKT")  # ST_GEOMETRY
+
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return self._method_true(left, "ST_Intersects", right)
 
     allowed = frozenset({exp.Median, exp.Year, exp.Month, exp.Boolean})
 
@@ -5315,6 +5358,9 @@ class TSqlRewriter(Rewriter):
 
     def wkt(self, value: exp.Expr) -> exp.Expr:
         return self._method(value, "STAsText")  # geography、geometry
+
+    def intersects(self, left: exp.Expr, right: exp.Expr) -> exp.Expr:
+        return self._method_true(left, "STIntersects", right)
 
     allowed = frozenset(
         {

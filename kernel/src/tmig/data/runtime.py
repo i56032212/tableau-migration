@@ -80,9 +80,12 @@ class DataRuntime:
             with self._executor(connection) as executor:
                 return execute_live(query, executor)
         if isinstance(connection, FileConnection) and is_federated(connection):
-            local = _path(database) if has_local_data(connection) else None
-            return execute_federated(query, local, connection, self.fetch, self.federated)
-        return execute_query(_path(database), query)
+            path = _path(database) if has_local_data(connection) or query.attach else None
+            local = path if has_local_data(connection) else None
+            folder = path.parent if path is not None and query.attach else None
+            return execute_federated(query, local, connection, self.fetch, self.federated, folder)
+        # Data Blending 的次要資料源是跨資料庫的 join 時，資料庫的資料表在查詢時取回
+        return execute_query(_path(database), query, self.fetch, self.federated)
 
     def run_sql(
         self,

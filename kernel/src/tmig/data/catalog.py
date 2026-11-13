@@ -268,7 +268,40 @@ _INTEGER = re.compile(
 )
 
 
-def tableau_type(type_name: str | None, scale: int | None = None) -> DataType:
+SPATIAL_TYPES = frozenset(
+    {
+        "geometry",  # PostGIS、Redshift、SQL Server、Snowflake
+        "geography",  # PostGIS、Redshift、SQL Server、Snowflake、BigQuery
+        "sdo_geometry",  # Oracle
+        "st_geometry",  # SAP HANA、Db2
+        "st_point",
+        "st_linestring",
+        "st_polygon",
+        "st_multipoint",
+        "st_multilinestring",
+        "st_multipolygon",
+        "st_geomcollection",
+    }
+)
+"""資料庫的空間欄位的型別名稱（小寫）。"""
+MYSQL_SPATIAL_TYPES = frozenset(
+    {
+        "point",
+        "linestring",
+        "polygon",
+        "multipoint",
+        "multilinestring",
+        "multipolygon",
+        "geometrycollection",
+        "geomcollection",
+    }
+)
+"""MySQL 的空間型別（PostgreSQL 內建的 point 等幾何型別不是 PostGIS 的空間欄位，只有 MySQL 才算）。"""
+
+
+def tableau_type(
+    type_name: str | None, scale: int | None = None, dialect: str | None = None
+) -> DataType:
     """資料庫的型別名稱 → Tableau 的型別。"""
     text = (type_name or "").strip().lower()
     base = re.sub(r"\(.*$", "", text).strip()
@@ -297,7 +330,7 @@ def tableau_type(type_name: str | None, scale: int | None = None) -> DataType:
         return "date"
     if base.startswith(("timestamp", "datetime", "smalldatetime")):
         return "datetime"
-    if base in ("geometry", "geography"):
+    if base in SPATIAL_TYPES or (dialect == "mysql" and base in MYSQL_SPATIAL_TYPES):
         return "spatial"
     return "string"
 
@@ -311,7 +344,14 @@ def columns_sql(dialect: str, table: Sequence[str]) -> str | None:
     where = f"table_name = {_quote_literal(name)}" + (
         f" AND table_schema = {_quote_literal(schema)}" if schema else ""
     )
-    if dialect in ("postgres", "redshift", "mysql", "snowflake", "duckdb"):
+    if dialect in ("postgres", "redshift"):
+        # PostGIS 的 geometry、geography 是擴充的型別（data_type 為 USER-DEFINED，名稱在 udt_name）
+        return (
+            "SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name "
+            "ELSE data_type END AS data_type, numeric_scale FROM information_schema.columns "
+            f"WHERE {where} ORDER BY ordinal_position"
+        )
+    if dialect in ("mysql", "snowflake", "duckdb"):
         return (
             "SELECT column_name, data_type, numeric_scale FROM information_schema.columns "
             f"WHERE {where} ORDER BY ordinal_position"
@@ -390,6 +430,11 @@ def arrow_type(kind: pa.DataType) -> DataType:
     return "string"
 
 
+EWKB_HEX = re.compile(r"^(?:010[1-7]0000[26AEae]0|00[26AEae]000000[1-7])[0-9A-Fa-f]{8}", re.ASCII)
+"""PostGIS、Redshift 的空間欄位取回的值：含 SRID 的 EWKB 十六進位文字（例如 0101000020E6100000…；位元組順序、
+形狀種類 1～7、可有 Z、M）。沒有 SRID 的 geometry 與 Tableau 相同不算空間欄位。"""
+
+
 def _sampled(fetcher: Fetcher, dialect: str, source: str) -> list[FileColumn]:
     table = fetcher.fetch(sample_sql(dialect, source))
     columns: list[FileColumn] = []
@@ -398,7 +443,13 @@ def _sampled(fetcher: Fetcher, dialect: str, source: str) -> list[FileColumn]:
         if name in seen:
             raise CatalogError(f"欄名「{name}」重複，請在 SQL 中給每一欄不同的名稱")
         seen.add(name)
-        columns.append(FileColumn(name=name, datatype=arrow_type(kind)))
+        datatype = arrow_type(kind)
+        if datatype == "string" and dialect in ("postgres", "redshift"):
+            # 自訂 SQL 選出的 geometry、geography：取回的值是 EWKB 的十六進位文字
+            values = [v for v in table.column(name).to_pylist() if v is not None][:20]
+            if values and all(isinstance(v, str) and EWKB_HEX.match(v) for v in values):
+                datatype = "spatial"
+        columns.append(FileColumn(name=name, datatype=datatype))
     return columns
 
 
@@ -411,9 +462,10 @@ def table_columns(fetcher: Fetcher, dialect: str, table: Sequence[str]) -> list[
         for row in rows:
             name, type_name, scale = [*row.values(), None, None, None][:3]
             scale_value = int(scale) if isinstance(scale, int | float) else None
-            datatype = tableau_type(str(type_name) if type_name is not None else None, scale_value)
-            if datatype == "spatial":
-                continue  # 資料庫的空間欄位在 Live 連線中尚不支援
+            datatype = tableau_type(
+                str(type_name) if type_name is not None else None, scale_value, dialect
+            )
+            # 資料庫的空間欄位：查詢時在資料庫轉成 WKT（tmig_geo_wkt），空間 join 在資料庫計算
             columns.append(FileColumn(name=str(name), datatype=datatype))
         if columns:
             return columns

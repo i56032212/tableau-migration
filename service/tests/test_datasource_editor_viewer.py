@@ -244,3 +244,73 @@ def test_join_in_logical_table(engine: str, tmp_path: Path) -> None:
         assert "Returned" not in {f["caption"] for f in model["fields"]}
         assert errors == []
         browser.close()
+
+
+def test_spatial_join_in_the_editor(engine: str, tmp_path: Path) -> None:
+    """資料源分頁的空間 join：GeoJSON 的行政區 join CSV 的地點，條件改成 Geometry「相交」join 計算
+    MAKEPOINT([Lat], [Lon])（Tableau 的 Intersects）。"""
+    from playwright.sync_api import sync_playwright
+
+    zones = tmp_path / "zones.geojson"
+    zones.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"Zone": name},
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]
+                            ],
+                        },
+                    }
+                    for name, x, y in (("A", 120.0, 23.0), ("B", 121.0, 24.0))
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    points = tmp_path / "points.csv"
+    points.write_text(
+        "Name,Lat,Lon,Sales\nP1,23.5,120.5,10\nP2,24.5,121.5,20\nP3,24.2,121.9,5\nP4,0,0,7\n",
+        encoding="utf-8",
+    )
+    created = call(engine, "/api/desktop/new", {"path": str(zones), "table": None})
+    workbook, datasource = created["document"]["id"], created["datasource"]
+    base = f"/api/edit/{urllib.parse.quote(workbook)}/datasources/{datasource}"
+    model = call(engine, base + "/model")
+    zone = next(f["id"] for f in model["fields"] if f["caption"] == "Zone")
+    call(
+        engine,
+        base + "/tables",
+        {"path": str(points), "how": "join", "on": [[zone, "=", "Name"]]},
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/{urllib.parse.quote(workbook)}/edit-ds/{datasource}")
+        joined = page.locator('.dse-join-right[data-join="points.csv"]')
+        joined.wait_for()
+        joined.get_by_label("左邊的欄位").select_option(label="Geometry")
+        joined.get_by_label("比較").select_option("intersects")
+        assert joined.get_by_label("比較").locator("option:checked").inner_text() == "相交"
+        joined.get_by_label("右邊的欄位").select_option("__calc__")
+        joined.get_by_label("右邊的欄位的計算").fill("MAKEPOINT([Lat], [Lon])")
+        joined.get_by_role("button", name="套用").click()
+        page.wait_for_selector('.ds-editor[data-busy="false"]')
+        # 三個地點在行政區內（P4 不在任何行政區，inner join 不列出）
+        page.wait_for_function(
+            "document.querySelectorAll('.dse-preview .ds-data tbody tr').length === 3"
+        )
+        model = call(engine, base + "/model")
+        (condition,) = model["logical"][0]["relation"]["on"]
+        assert condition["op"] == "intersects"
+        assert condition["right_formula"] == "MAKEPOINT([Lat], [Lon])"
+        assert errors == []
+        browser.close()

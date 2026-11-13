@@ -124,7 +124,8 @@ GEO_NAMES: dict[str, GeoRole] = {
 }
 """欄名（不分大小寫）→ 地理角色：Tableau 依欄名自動給的地理角色。"""
 JoinType = Literal["inner", "left", "right", "full"]
-Comparison = Literal["=", "!=", "<", "<=", ">", ">="]
+Comparison = Literal["=", "!=", "<", "<=", ">", ">=", "intersects"]
+"""條件的比較；intersects 是空間 join（兩邊都是空間欄位或傳回形狀的 join 計算，只能用在 join）。"""
 
 
 @dataclass(frozen=True)
@@ -1527,6 +1528,8 @@ def set_relationship(ir: IR, datasource: str, logical: str, on: list[Condition])
     created: list[DataField] = []
     conditions: list[RelationshipCondition] = []
     for left_side, op, right_side in on:
+        if op == "intersects":
+            raise EditError("關聯的條件不能用 Intersects（空間 join 請用 join）")
         left = _link_side(ds, left_side, rel.left, created, taken)
         right = _link_side(ds, right_side, rel.right, created, taken)
         conditions.append(RelationshipCondition(left=left.id, op=op, right=right.id))
@@ -1920,6 +1923,8 @@ def _relationship_conditions(
     created: list[DataField] = []
     conditions: list[RelationshipCondition] = []
     for left_side, op, right_side in on:
+        if op == "intersects":
+            raise EditError("關聯的條件不能用 Intersects（空間 join 請用 join）")
         existing = _link_side(ds, left_side, parent, created, taken)
         if isinstance(right_side, Calculated):
             pool = ds.model_copy(update={"fields": [*ds.fields, *new_fields]})
@@ -2141,6 +2146,22 @@ def _join_conditions(
             raise EditError(f"「{right_table}」沒有欄位 {parts[0]}")
         return f"{_bracket(right_table)}.{_bracket(column)}"
 
+    def spatial(term: JoinTerm) -> bool:
+        if term.formula is not None:
+            from tmig.sqlgen.source import join_formula_type
+
+            try:
+                return join_formula_type(term.formula, types) == "spatial"
+            except SourceError:
+                return False
+        return types.get((str(term.table), str(term.column))) == "spatial"
+
+    def condition(left: Side, op: Comparison, right: Side) -> JoinCondition:
+        found = JoinCondition(left=term(left, True), op=op, right=term(right, False))
+        if op == "intersects" and not (spatial(found.left) and spatial(found.right)):
+            raise EditError("Intersects（空間 join）的兩邊都要是空間欄位或傳回形狀的 join 計算")
+        return found
+
     def term(side: Side, left: bool) -> JoinTerm:
         if isinstance(side, Calculated):
             text = side.formula.strip()
@@ -2165,10 +2186,7 @@ def _join_conditions(
             raise EditError(f"「{right_table}」沒有欄位 {side}")
         return JoinTerm(table=right_table, column=side)
 
-    return [
-        JoinCondition(left=term(left, True), op=op, right=term(right, False))
-        for left, op, right in on
-    ]
+    return [condition(left, op, right) for left, op, right in on]
 
 
 def join_calc_display(ds: Datasource, owner: str | None, formula: str) -> str:

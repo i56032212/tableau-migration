@@ -115,13 +115,60 @@ def workbook_xml() -> str:
         f"{records(TARGETS[:2], 'Custom SQL Query', 'custom_2')}</metadata-records>",
         graph,
     )
+    # Data Blending 用：只有 Excel 的訂單（主要資料源），與兩個 PostgreSQL 資料庫的 join（沒有檔案）
+    orders = datasource(
+        "federated.orders",
+        "Orders",
+        f"<named-connections>{EXCEL_CONN}</named-connections>{ORDERS_REL}"
+        f"<metadata-records>{records(ORDERS, 'Orders')}</metadata-records>",
+    )
+    pgjoin = datasource(
+        "federated.pgjoin",
+        "orders+targets (Multiple Connections)",
+        f"<named-connections>{SALES_DB}{CRM}</named-connections>"
+        "<relation join='left' type='join'><clause type='join'><expression op='='>"
+        "<expression op='[orders].[region]' /><expression op='[targets].[Region]' />"
+        f"</expression></clause>{sales_rel}{TARGETS_REL}</relation>"
+        f"<metadata-records>{renamed(SALES, 'orders', region='region (orders)')}"
+        f"{records(TARGETS, 'targets')}</metadata-records>",
+    )
     sheets = (
         sheet("Cross Targets", "federated.cross", "Region", "Target")
         + sheet("Cross Sales", "federated.cross", "Region", "Sales")
         + sheet("Two Amount", "federated.twodb", "region", "amount")
         + sheet("Two Target", "federated.twodb", "Region", "Target")
+        + blend_sheet("Blend Cross", "federated.orders", "Sales", "federated.cross", "Target")
+        + blend_sheet("Blend Two", "federated.cross", "Sales", "federated.pgjoin", "amount")
     )
-    return b.workbook(datasource=cross + model, worksheets=sheets)
+    return b.workbook(datasource=cross + model + orders + pgjoin, worksheets=sheets)
+
+
+def blend_sheet(name: str, primary: str, measure: str, secondary: str, other: str) -> str:
+    """Data Blending：主要資料源的 Region 與量值，次要資料源（依同名的 Region 自動連結）的量值。"""
+    return f"""
+    <worksheet name='{name}'>
+      <table>
+        <view>
+          <datasources>
+            <datasource caption='Primary' name='{primary}' />
+            <datasource caption='Secondary' name='{secondary}' />
+          </datasources>
+          <datasource-dependencies datasource='{primary}'>
+            <column-instance column='[Region]' derivation='None' name='[none:Region:nk]' pivot='key' type='nominal' />
+            <column-instance column='[{measure}]' derivation='Sum' name='[sum:{measure}:qk]' pivot='key' type='quantitative' />
+          </datasource-dependencies>
+          <datasource-dependencies datasource='{secondary}'>
+            <column-instance column='[Region]' derivation='None' name='[none:Region:nk]' pivot='key' type='nominal' />
+            <column-instance column='[{other}]' derivation='Sum' name='[sum:{other}:qk]' pivot='key' type='quantitative' />
+          </datasource-dependencies>
+          <aggregation value='true' />
+        </view>
+        <style />
+        <panes><pane><view><breakdown value='auto' /></view><mark class='Bar' /></pane></panes>
+        <rows>[{primary}].[none:Region:nk]</rows>
+        <cols>([{primary}].[sum:{measure}:qk] + [{secondary}].[sum:{other}:qk])</cols>
+      </table>
+    </worksheet>"""
 
 
 @pytest.fixture(scope="module")
@@ -204,7 +251,7 @@ def test_parse(built: tuple[Path, IR]) -> None:
     _, ir = built
     assert ir.unsupported == []
     assert check_references(ir) == []
-    cross, model = ir.datasources
+    cross, model, *_ = ir.datasources
     connection = cross.connection
     assert isinstance(connection, FileConnection) and is_federated(connection)
     assert has_local_data(connection)
@@ -338,3 +385,42 @@ def test_single_database_round_trip(built: tuple[Path, IR]) -> None:
     back = to_federated(live, lambda name: next(t for t in only.tables if t.name == name).columns)
     assert [t.format for t in back.tables] == ["live", "live"]
     assert single_database(back) == live
+
+
+def blended(runtime: DataRuntime, ir: IR, folder: Path, worksheet: str) -> dict[Any, Any]:
+    ws = next(w for w in ir.worksheets if w.name == worksheet)
+    ds = next(d for d in ir.datasources if d.id == ws.datasource)
+    query = worksheet_sql(ir, ws.id)
+    result = runtime.run(query, ds, folder / "data" / f"{ds.id}.duckdb")
+    return {row[0]: tuple(row[1:]) for row in result.rows}
+
+
+def test_blending_with_cross_database_secondary(
+    built: tuple[Path, IR], postgres: dict[str, Any]
+) -> None:
+    """Data Blending 的次要資料源是跨資料庫的 join：次要資料源依連結欄位（Region）彙總後 LEFT JOIN；資料庫的
+    資料表只取次要資料源的查詢用到的欄。"""
+    folder, ir = built
+    blend = next(w for w in ir.worksheets if w.name == "Blend Cross")
+    assert [b.datasource for b in blend.blends] == [ir.datasources[0].id]
+    query = worksheet_sql(ir, blend.id)
+    assert set(query.federated) == set(query.attach) == {"__blend0"}
+    with runtime_for(postgres) as runtime:
+        spy = Spy(runtime)
+        runtime.fetch = spy  # type: ignore[method-assign]
+        # 主要資料源（只有 Excel）：O1 East 100.5、O2 West 200、O3 East 50.25、O4（沒有地區）"n/a"；
+        # 次要資料源：訂單 LEFT JOIN 目標，依地區彙總目標（East 兩張訂單 × 1000）
+        assert blended(runtime, ir, folder, "Blend Cross") == {
+            "East": (150.75, 2000.0),
+            "West": (200.0, 2000.0),
+            None: (None, None),
+        }
+        assert spy.calls == [(CRM_ID, 'SELECT "Region", "Target" FROM "public"."targets"')]
+        # 主要資料源也是跨資料庫的 join，次要資料源是兩個 PostgreSQL 資料庫的 join（沒有檔案）：
+        # 訂單（sales）LEFT JOIN 目標（crm），依目標的地區彙總金額（South 沒有目標，在 Null 之下）
+        assert blended(runtime, ir, folder, "Blend Two") == {
+            "East": (150.75, 15.5),
+            "West": (200.0, 7.0),
+            None: (None, 1.0),
+        }
+        assert (SALES_ID, 'SELECT "region", "amount" FROM "public"."orders"') in spy.calls

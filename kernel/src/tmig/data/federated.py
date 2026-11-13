@@ -8,6 +8,8 @@
 - 取回的資料在 TTL 之內重複使用（預設 60 秒，環境變數 TMIG_FEDERATED_TTL；0 為不重複使用），例如 dashboard
   的各張工作表：同一張資料表要的欄都已取回時直接使用；同時要同一張資料表時只取一次
 - 憑證依各連線的設定（connection_id），與 Live 連線相同
+- Data Blending 的次要資料源是跨資料庫的 join 時，它的資料表以附加的名稱（<別名>.Files.<名稱>）建立在主要資料源
+  的查詢中（attach_federated），資料庫的資料表只取次要資料源的查詢用到的欄
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from tmig.ir.models import (
     remote_tables,
 )
 from tmig.sqlgen.dialect import ParameterValues, to_dialect
-from tmig.sqlgen.query import WorksheetSql
+from tmig.sqlgen.query import FederatedBlend, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX, SQL_TYPES
 from tmig.sqlgen.sql import ident, string
 
@@ -48,18 +50,21 @@ LOCAL = "__tmig_local"
 
 
 def referenced_columns(
-    sqls: Iterable[str], connection: FileConnection
+    sqls: Iterable[str], connection: FileConnection, catalog: str | None = None
 ) -> dict[str, set[str]] | None:
     """查詢用到的資料表與欄（名稱一律小寫）：以 sqlglot 補上欄位的所屬（SELECT * 依記下的欄展開）、去掉 CTE
-    與子查詢中沒有用到的欄之後，各段參照 Files.<名稱> 的欄。有 SELECT * 留下或分析不了時為 None（取全部的欄）。"""
+    與子查詢中沒有用到的欄之後，各段參照 Files.<名稱> 的欄（catalog：Data Blending 附加的名稱，參照
+    <catalog>.Files.<名稱> 的欄）。有 SELECT * 留下或分析不了時為 None（取全部的欄）。"""
     from sqlglot.optimizer.pushdown_projections import pushdown_projections
     from sqlglot.optimizer.qualify import qualify
     from sqlglot.optimizer.scope import traverse_scope
 
-    schema: dict[str, object] = {
-        FILE_SCHEMA: {t.name: {c.name: "VARCHAR" for c in t.columns} for t in connection.tables}
-    }
+    tables_schema = {t.name: {c.name: "VARCHAR" for c in t.columns} for t in connection.tables}
+    schema: dict[str, object] = (
+        {catalog: {FILE_SCHEMA: tables_schema}} if catalog else {FILE_SCHEMA: tables_schema}
+    )
     files = FILE_SCHEMA.casefold()
+    wanted = (catalog or "").casefold()
     found: dict[str, set[str]] = {}
     try:
         for sql in sqls:
@@ -76,7 +81,7 @@ def referenced_columns(
                         for alias, source in scope.sources.items()
                         if isinstance(source, exp.Table)
                         and source.db.casefold() == files
-                        and not source.catalog
+                        and source.catalog.casefold() == wanted
                     }
                     for name in tables.values():
                         found.setdefault(name, set())
@@ -222,53 +227,83 @@ def federated_connection(
     texts = list(sqls)
     con = udf.register(duckdb.connect())
     try:
-        con.execute(f"CREATE SCHEMA {ident(FILE_SCHEMA)}")
-        local = local_tables(connection)
-        if local:
-            if database is None or not database.is_file():
-                raise ExecutionError(f"找不到資料檔 {database}；請先匯入資料源")
-            con.execute(f"ATTACH {string(str(database))} AS {ident(LOCAL)} (READ_ONLY)")
-            for table in local:
-                name = ident(table.name)
-                con.execute(
-                    f"CREATE VIEW {ident(FILE_SCHEMA)}.{name} AS "
-                    f"SELECT * FROM {ident(LOCAL)}.{ident(FILE_SCHEMA)}.{name}"
-                )
-        referenced = referenced_columns(texts, connection) if texts else None
-        for index, table in enumerate(remote_tables(connection)):
-            assert table.connection is not None
-            columns = used_columns(table, referenced)
-            if columns is None:
-                continue  # 查詢沒有用到
-            try:
-                arrow = (
-                    cache.table(table, columns, fetch, parameters)
-                    if cache is not None
-                    else fetch(table.connection, remote_sql(table, columns, parameters))
-                )
-            except ExecutionError:
-                raise
-            except Exception as exc:
-                raise ExecutionError(f"來源資料庫執行失敗（{table.name}）：{exc}") from exc
-            alias = f"__tmig_remote_{index}"
-            con.register(alias, arrow)
-            names = {name.casefold(): name for name in arrow.column_names}
-            items: list[str] = []
-            for column in table.columns:
-                # 沒有取回的欄（查詢用不到，例如 base 中其他的欄位）是同型別的 Null
-                found = names.get(column.name.casefold())
-                value = ident(found) if found is not None else "NULL"
-                items.append(
-                    f"CAST({value} AS {SQL_TYPES[column.datatype]}) AS {ident(column.name)}"
-                )
-            con.execute(
-                f"CREATE VIEW {ident(FILE_SCHEMA)}.{ident(table.name)} AS "
-                f"SELECT {', '.join(items)} FROM {ident(alias)}"
-            )
+        _populate(con, None, database, connection, fetch, cache, texts, parameters)
         return con
     except Exception:
         con.close()
         raise
+
+
+def attach_federated(
+    con: duckdb.DuckDBPyConnection,
+    alias: str,
+    database: Path | None,
+    blend: FederatedBlend,
+    fetch: Fetch,
+    cache: FederatedCache | None = None,
+) -> None:
+    """Data Blending 的次要資料源是跨資料庫的 join：在 con 中建立 <alias>.Files.<名稱>（匯入的檔案在次要資料源
+    的 DuckDB 檔 database，資料庫的資料表只取次要資料源的查詢用到的欄）。con 的預設資料庫要能寫入
+    （記憶體中的資料庫，例如 tmig.data.udf.attached）。"""
+    con.execute(f"ATTACH ':memory:' AS {ident(alias)}")
+    _populate(con, alias, database, blend.connection, fetch, cache, [blend.sql], blend.parameters)
+
+
+def _populate(
+    con: duckdb.DuckDBPyConnection,
+    catalog: str | None,
+    database: Path | None,
+    connection: FileConnection,
+    fetch: Fetch,
+    cache: FederatedCache | None,
+    texts: list[str],
+    parameters: ParameterValues | None,
+) -> None:
+    """建立 [catalog.]Files.<名稱> 的檢視：匯入的檔案（附加 database）與取回的資料庫資料表。"""
+    prefix = f"{ident(catalog)}." if catalog else ""
+    schema = f"{prefix}{ident(FILE_SCHEMA)}"
+    local_name = f"{catalog}{LOCAL}" if catalog else LOCAL
+    con.execute(f"CREATE SCHEMA {schema}")
+    local = local_tables(connection)
+    if local:
+        if database is None or not database.is_file():
+            raise ExecutionError(f"找不到資料檔 {database}；請先匯入資料源")
+        con.execute(f"ATTACH {string(str(database))} AS {ident(local_name)} (READ_ONLY)")
+        for table in local:
+            name = ident(table.name)
+            con.execute(
+                f"CREATE VIEW {schema}.{name} AS "
+                f"SELECT * FROM {ident(local_name)}.{ident(FILE_SCHEMA)}.{name}"
+            )
+    referenced = referenced_columns(texts, connection, catalog) if texts else None
+    for index, table in enumerate(remote_tables(connection)):
+        assert table.connection is not None
+        columns = used_columns(table, referenced)
+        if columns is None:
+            continue  # 查詢沒有用到
+        try:
+            arrow = (
+                cache.table(table, columns, fetch, parameters)
+                if cache is not None
+                else fetch(table.connection, remote_sql(table, columns, parameters))
+            )
+        except ExecutionError:
+            raise
+        except Exception as exc:
+            raise ExecutionError(f"來源資料庫執行失敗（{table.name}）：{exc}") from exc
+        alias = f"__tmig_remote_{catalog}_{index}" if catalog else f"__tmig_remote_{index}"
+        con.register(alias, arrow)
+        names = {name.casefold(): name for name in arrow.column_names}
+        items: list[str] = []
+        for column in table.columns:
+            # 沒有取回的欄（查詢用不到，例如 base 中其他的欄位）是同型別的 Null
+            found = names.get(column.name.casefold())
+            value = ident(found) if found is not None else "NULL"
+            items.append(f"CAST({value} AS {SQL_TYPES[column.datatype]}) AS {ident(column.name)}")
+        con.execute(
+            f"CREATE VIEW {schema}.{ident(table.name)} AS "
+            f"SELECT {', '.join(items)} FROM {ident(alias)}"
+        )
 
 
 def _run(con: duckdb.DuckDBPyConnection, sql: str) -> QueryResult:
@@ -287,26 +322,48 @@ def execute_federated(
     connection: FileConnection,
     fetch: Fetch,
     cache: FederatedCache | None = None,
+    folder: Path | None = None,
 ) -> QueryResult:
     """執行一張工作表的查詢（跨資料庫的 join）：先做查詢附帶的檢查，再執行查詢。Data Blending 的次要資料源
-    是同一目錄中以資料源 id 為檔名的 DuckDB 檔。"""
+    是 folder（省略時為 database 所在的目錄）中以資料源 id 為檔名的 DuckDB 檔；次要資料源也是跨資料庫的 join
+    時，資料庫的資料表在這裡取回（attach_federated）。"""
     sqls = [query.sql, *(g.sql for g in query.guards)]
     con = federated_connection(database, connection, fetch, cache, sqls, query.parameters)
     try:
         for guard in query.guards:
             check_guard(guard, _run(con, guard.sql).rows)
         if query.attach:
-            folder = database.parent if database is not None else None
-            for alias, ds in query.attach.items():
-                if folder is None:
-                    raise ExecutionError("Data Blending 的次要資料源找不到資料檔")
-                other = folder / f"{ds}.duckdb"
-                if not other.is_file():
-                    raise ExecutionError(f"找不到資料檔 {other}；請先匯入資料源")
-                con.execute(f"ATTACH {string(str(other))} AS {ident(alias)} (READ_ONLY)")
+            folder = folder or (database.parent if database is not None else None)
+            if folder is None:
+                raise ExecutionError("Data Blending 的次要資料源找不到資料檔")
+            attach_secondaries(con, folder, query, fetch, cache)
         return finish(query, _run(con, query.sql))
     finally:
         con.close()
+
+
+def attach_secondaries(
+    con: duckdb.DuckDBPyConnection,
+    folder: Path,
+    query: WorksheetSql,
+    fetch: Fetch | None,
+    cache: FederatedCache | None = None,
+) -> None:
+    """Data Blending 的次要資料源：萃取、檔案以唯讀附加 folder 中的 DuckDB 檔；跨資料庫的 join 另外取回
+    資料庫的資料表（attach_federated）。"""
+    for alias, ds in query.attach.items():
+        other = folder / f"{ds}.duckdb"
+        blend = query.federated.get(alias)
+        if blend is None:
+            if not other.is_file():
+                raise ExecutionError(f"找不到資料檔 {other}；請先匯入資料源")
+            con.execute(f"ATTACH {string(str(other))} AS {ident(alias)} (READ_ONLY)")
+            continue
+        if fetch is None:
+            raise ExecutionError(
+                "Data Blending 的次要資料源是跨資料庫的 join，要連到資料庫才能查詢"
+            )
+        attach_federated(con, alias, other, blend, fetch, cache)
 
 
 def execute_federated_sql(
@@ -328,6 +385,8 @@ def execute_federated_sql(
 __all__ = [
     "FederatedCache",
     "Fetch",
+    "attach_federated",
+    "attach_secondaries",
     "execute_federated",
     "execute_federated_sql",
     "federated_connection",

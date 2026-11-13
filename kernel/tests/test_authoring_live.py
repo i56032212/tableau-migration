@@ -142,6 +142,12 @@ def test_catalog(database: Path) -> None:
     assert tableau_type("character varying(20)") == "string"
     assert tableau_type("timestamp with time zone") == "datetime"
     assert tableau_type("decimal(18,0)") == "integer" and tableau_type("bit") == "boolean"
+    # 資料庫的空間欄位：PostGIS、Oracle、SAP HANA、Db2；MySQL 的 point 等只有 MySQL 才算
+    # （PostgreSQL 內建的 point 是幾何型別，不是 PostGIS 的空間欄位）
+    for name in ("geometry", "GEOGRAPHY", "SDO_GEOMETRY", "ST_GEOMETRY", "ST_POINT"):
+        assert tableau_type(name) == "spatial", name
+    assert tableau_type("point", None, "mysql") == "spatial"
+    assert tableau_type("point", None, "postgres") == "string"
     assert CONNECTORS["postgres"].port == 5432 and CONNECTORS["databricks"].secret == "access_token"
 
 

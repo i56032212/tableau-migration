@@ -9,8 +9,10 @@
   維度時，次要資料源的值在這些維度上重複（以連結欄位的層級計算）
 - 連結欄位的 Null 視為相等（與本平台以維度連接的其他地方相同；Tableau 的行為未確認）
 
-次要資料源的萃取在執行前以唯讀附加（WorksheetSql.attach），資料表名稱前加上附加的名稱。尚不支援：
-Live 連線與 Relationship 模型的次要資料源、Live 連線的主要資料源、次要資料源的 Table Calculation，
+次要資料源的萃取在執行前以唯讀附加（WorksheetSql.attach），資料表名稱前加上附加的名稱。次要資料源是
+跨資料庫的 join（檔案＋資料庫、多個資料庫）時，資料庫的資料表在查詢時取回（只取次要資料源的查詢用到的
+欄），與匯入的檔案一起成為附加的資料表（WorksheetSql.federated，見 tmig.data.federated.attach_federated）。
+尚不支援：Live 連線與 Relationship 模型的次要資料源、Live 連線的主要資料源、次要資料源的 Table Calculation，
 以及與總計一起使用。
 """
 
@@ -39,6 +41,7 @@ from tmig.ir.models import (
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import (
+    FederatedBlend,
     OutputColumn,
     QueryError,
     StageNote,
@@ -85,6 +88,7 @@ def blend_sql(
     ctes = [f"{ident(PRIMARY)} AS (\n{main.sql.rstrip()}\n)"]
     joins: list[str] = []
     attach: dict[str, str] = {}
+    federated: dict[str, FederatedBlend] = {}
     extra: list[tuple[str, OutputColumn]] = []
     notes: list[str] = []
     for n, blend in enumerate(ws.blends):
@@ -106,11 +110,6 @@ def blend_sql(
             )
         connection = secondary.connection
         alias = f"__blend{n}"
-        if is_federated(connection):
-            raise QueryError(
-                f"Data Blending：次要資料源「{secondary.caption}」是跨資料庫的 join，尚不支援",
-                unsupported=True,
-            )
         if isinstance(connection, ExtractConnection) and connection.model is None:
             moved = connection.model_copy(update={"table": f"{alias}.{connection.table}"})
         elif isinstance(connection, FileConnection) and not isinstance(
@@ -135,6 +134,11 @@ def blend_sql(
             }
         )
         built = WorksheetQuery(sub, holder.id, state, user).build()
+        if isinstance(connection, FileConnection) and is_federated(connection):
+            # 跨資料庫的 join：資料庫的資料表在執行前取回，與匯入的檔案一起附加
+            federated[alias] = FederatedBlend(
+                connection=connection, sql=built.sql, parameters=built.parameters
+            )
         name = f"__s{n}"
         ctes.append(f"{ident(name)} AS (\n{built.sql.rstrip()}\n)")
         types = {c.key: c.datatype for c in built.columns}
@@ -184,6 +188,7 @@ def blend_sql(
         main=select,
         guards=main.guards,
         attach=attach,
+        federated=federated,
     )
 
 

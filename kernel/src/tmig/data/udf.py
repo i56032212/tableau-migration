@@ -50,6 +50,10 @@ GEO_BOUNDS = "tmig_geo_bounds"
 GEO_WKT = "tmig_geo_wkt"
 """資料庫的空間欄位 → WKT 文字：Live 連線轉譯成該資料庫的函式（PostGIS 的 ST_AsText 等）；DuckDB 中原樣
 （已是 WKT 文字）。不是空間函式（不影響下推）。"""
+GEO_DB_INTERSECTS = "tmig_geo_db_intersects"
+"""Live 連線的空間 join，兩邊都是資料庫的空間欄位：轉譯成該資料庫的 Intersects（PostGIS 的 ST_Intersects、
+SQL Server 的 STIntersects 等），與 Tableau 的 Live 連線相同在資料庫計算。DuckDB 中（取回資料表在本機執行
+時，兩邊已轉成 WKT）與 tmig_geo_intersects 相同。不是空間函式（不影響下推）。"""
 SPATIAL_FUNCTIONS = (
     GEO_COLLECT,
     GEO_POINT,
@@ -61,7 +65,7 @@ SPATIAL_FUNCTIONS = (
     GEO_INTERSECTS,
     GEO_BOUNDS,
 )
-FUNCTIONS = (*REGEX_FUNCTIONS, *SPATIAL_FUNCTIONS, GEO_WKT)
+FUNCTIONS = (*REGEX_FUNCTIONS, *SPATIAL_FUNCTIONS, GEO_WKT, GEO_DB_INTERSECTS)
 
 
 @lru_cache(maxsize=256)
@@ -202,14 +206,15 @@ def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
     for name, func, parameters, result in spatial_functions:
         con.create_function(name, _safe(func), parameters, result, null_handling=HANDLES_NULLS)
     con.create_function(GEO_WKT, _same_text, ["VARCHAR"], "VARCHAR", null_handling=HANDLES_NULLS)
-    con.create_function(
-        GEO_INTERSECTS,
-        _intersects_arrow,
-        ["VARCHAR", "VARCHAR"],
-        "BOOLEAN",
-        type=ARROW,
-        null_handling=HANDLES_NULLS,
-    )
+    for name in (GEO_INTERSECTS, GEO_DB_INTERSECTS):
+        con.create_function(
+            name,
+            _intersects_arrow,
+            ["VARCHAR", "VARCHAR"],
+            "BOOLEAN",
+            type=ARROW,
+            null_handling=HANDLES_NULLS,
+        )
     return con
 
 
@@ -243,6 +248,7 @@ __all__ = [
     "GEO_BOUNDS",
     "GEO_BUFFER",
     "GEO_COLLECT",
+    "GEO_DB_INTERSECTS",
     "GEO_DISTANCE",
     "GEO_INTERSECTS",
     "GEO_LINE",

@@ -5,8 +5,9 @@
 結果與萃取時相同，是 QueryResult。
 
 空間函式（MAKEPOINT 等）在 DuckDB 計算：通常只有之後的部分改在 DuckDB（split 的 localize_spatial）；讀資料表
-的那一段就用到空間函式時（例如 Relationship 模型中邏輯資料表的計算欄位），改為取回查詢用到的資料表（只取
-用到的欄），以原本的名稱交給 DuckDB 執行整段查詢（execute_rows）。
+的那一段就用到空間函式時（例如 join 計算的 MAKEPOINT 與資料庫的空間欄位做空間 join），改為取回查詢用到的
+資料表（只取用到的欄，資料庫的空間欄位轉成 WKT），以原本的名稱交給 DuckDB 執行整段查詢（execute_rows）。
+兩邊都是資料庫空間欄位的空間 join 則與 Tableau 相同在資料庫計算（tmig_geo_db_intersects）。
 """
 
 from __future__ import annotations
@@ -66,10 +67,19 @@ def execute_rows(query: WorksheetSql, executor: Executor) -> QueryResult:
                 con.register(alias, fetch(f"SELECT * FROM {source} AS {ident('t')}", parts))
             elif columns is None or wanted is None:
                 if shapes:
-                    raise DialectError(
-                        f"資料表 {'.'.join(parts)} 的空間欄位用在空間 join 中，Live 連線尚不支援"
+                    # 全部的欄（例如空間 join 先算形狀的子查詢 SELECT *），其中的空間欄位要在來源資料庫
+                    # 轉成 WKT：先取 0 列得到欄名
+                    names = fetch(f"SELECT * FROM {source} WHERE 1 = 0", parts).column_names
+                    lowered = {c.casefold() for c in shapes}
+                    items = ", ".join(
+                        f"{udf.GEO_WKT}({ident(c)}) AS {ident(c)}"
+                        if c.casefold() in lowered
+                        else ident(c)
+                        for c in names
                     )
-                con.register(alias, fetch(f"SELECT * FROM {source}", parts))
+                    con.register(alias, fetch(f"SELECT {items} FROM {source}", parts))
+                else:
+                    con.register(alias, fetch(f"SELECT * FROM {source}", parts))
             else:
                 keep = sorted(wanted or columns)[: None if wanted else 1]
                 # 空間欄位在來源資料庫轉成 WKT 文字（查詢中的 tmig_geo_wkt 在 DuckDB 原樣傳回）
@@ -109,22 +119,38 @@ def execute_rows(query: WorksheetSql, executor: Executor) -> QueryResult:
 
 
 def spatial_columns(sql: str) -> dict[tuple[str, ...], set[str]]:
-    """查詢中以 tmig_geo_wkt 轉換的空間欄位（資料表 → 欄名）。"""
-    from sqlglot.optimizer.scope import traverse_scope
+    """查詢中的資料庫空間欄位（資料表 → 欄名）：以 tmig_geo_wkt 轉換的欄，與空間 join 在資料庫計算的
+    tmig_geo_db_intersects 兩邊的欄（在本機執行時一樣要轉成 WKT）。"""
+    from sqlglot.optimizer.scope import Scope, traverse_scope
+
+    def physical(scope: Scope, alias: str, depth: int = 0) -> tuple[str, ...] | None:
+        """別名所指的實體資料表；子查詢是 SELECT *, … FROM 一張資料表時（例如空間 join 先算形狀的子查詢）
+        往內找。"""
+        source = scope.sources.get(alias)
+        if isinstance(source, exp.Table):
+            return tuple(p for p in (source.catalog, source.db, source.name) if p)
+        if isinstance(source, Scope) and depth < 8 and len(source.sources) == 1:
+            selects = getattr(source.expression, "selects", [])
+            if any(isinstance(e, exp.Star) for e in selects):
+                return physical(source, next(iter(source.sources)), depth + 1)
+        return None
 
     found: dict[tuple[str, ...], set[str]] = {}
     for scope in traverse_scope(sqlglot.parse_one(sql, read="duckdb")):
         tables = {
-            alias: tuple(p for p in (source.catalog, source.db, source.name) if p)
-            for alias, source in scope.sources.items()
-            if isinstance(source, exp.Table)
+            alias: parts for alias in scope.sources if (parts := physical(scope, alias)) is not None
         }
         for call in scope.expression.find_all(exp.Anonymous):
-            if str(call.this).lower() != udf.GEO_WKT or not call.expressions:
+            name = str(call.this).lower()
+            if name == udf.GEO_WKT:
+                arguments = call.expressions[:1]
+            elif name == udf.GEO_DB_INTERSECTS:
+                arguments = call.expressions[:2]
+            else:
                 continue
-            column = call.expressions[0]
-            if isinstance(column, exp.Column) and column.table in tables:
-                found.setdefault(tables[column.table], set()).add(column.name)
+            for column in arguments:
+                if isinstance(column, exp.Column) and column.table in tables:
+                    found.setdefault(tables[column.table], set()).add(column.name)
     return found
 
 

@@ -54,7 +54,8 @@ export type RelationView =
   | { kind: "project"; name: string; source: RelationView };
 
 export type JoinType = "inner" | "left" | "right" | "full";
-export type Comparison = "=" | "!=" | "<" | "<=" | ">" | ">=";
+/** 條件的比較；intersects 是空間 join（只能用在 join）。 */
+export type Comparison = "=" | "!=" | "<" | "<=" | ">" | ">=" | "intersects";
 /** 條件的一邊：欄位（已有的欄位 id；新資料表為欄名），或公式（join 計算、關聯計算）。 */
 export type Side = string | { formula: string };
 /** 條件：已有的欄位 id、比較、新資料表的欄名（關聯為兩邊的欄位 id）；任一邊可以是公式。 */

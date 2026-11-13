@@ -239,6 +239,10 @@ def test_spatial_columns_become_wkt() -> None:
         "snowflake": 'SELECT ST_ASWKT("t"."geo")',
         "bigquery": "SELECT ST_ASTEXT(`t`.`geo`)",
         "hana": 'SELECT "t"."geo".ST_AsWKT()',
+        "teradata": 'SELECT "t"."geo".ST_AsText()',
+        "db2": 'SELECT DB2GSE.ST_ASTEXT("t"."geo")',
+        # MySQL 8 的 SRID 4326 預設緯度在前（依 EPSG 的軸序）
+        "mysql": "SELECT ST_ASTEXT(`t`.`geo`, 'axis-order=long-lat')",
     }
     for dialect, start in expected.items():
         assert to_dialect(sql, dialect).startswith(start), dialect
@@ -294,3 +298,60 @@ def test_rows_fallback_converts_spatial_columns(tmp_path: Any) -> None:
         executor.close()
     expected = spatial.area("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))", "km")
     assert rows["A"] == pytest.approx(expected) and rows["B"] == 0
+
+
+def test_spatial_join_translates_to_the_database_function() -> None:
+    """兩邊都是資料庫空間欄位的空間 join：與 Tableau 的 Live 連線相同在資料庫計算。"""
+    sql = (
+        'SELECT "t"."name" FROM "s"."t" AS "t" INNER JOIN "s"."u" AS "u" '
+        'ON tmig_geo_db_intersects("t"."geo", "u"."area")'
+    )
+    expected = {
+        "postgres": 'ON ST_INTERSECTS("t"."geo", "u"."area")',
+        "redshift": 'ON ST_INTERSECTS("t"."geo", "u"."area")',
+        "tsql": "ON [t].[geo].STIntersects([u].[area]) = 1",
+        "oracle": """ON SDO_GEOM.RELATE("t"."geo", 'ANYINTERACT', "u"."area", 0.005) = 'TRUE'""",
+        "snowflake": 'ON ST_INTERSECTS("t"."geo", "u"."area")',
+        "bigquery": "ON ST_INTERSECTS(`t`.`geo`, `u`.`area`)",
+        "hana": 'ON "t"."geo".ST_Intersects("u"."area") = 1',
+        "teradata": 'ON "t"."geo".ST_Intersects("u"."area") = 1',
+        "db2": 'ON DB2GSE.ST_INTERSECTS("t"."geo", "u"."area") = 1',
+        "mysql": "ON ST_INTERSECTS(`t`.`geo`, `u`.`area`)",
+    }
+    for dialect, end in expected.items():
+        assert to_dialect(sql, dialect).endswith(end), dialect
+    with pytest.raises(DialectError, match="空間欄位尚未支援"):
+        to_dialect(sql, "databricks")
+    # Live 連線的資料源：兩邊都是空間欄位時以 tmig_geo_db_intersects（不是要在 DuckDB 計算的空間函式）
+    columns = [
+        FileColumn(name="name", datatype="string"),
+        FileColumn(name="geo", datatype="spatial"),
+    ]
+    ir = new_live_workbook("Geo", PG, ["public", "points"], None, columns)
+    geo = next(f.id for f in ir.datasources[0].fields if f.caption == "geo")
+    ir = add_live_table(
+        ir,
+        ir.datasources[0].id,
+        ["public", "areas"],
+        None,
+        [FileColumn(name="zone", datatype="string"), FileColumn(name="area", datatype="spatial")],
+        how="join",
+        on=[(geo, "intersects", "area")],
+    )
+    source = datasource_source(ir.datasources[0])
+    assert 'ON tmig_geo_db_intersects("points"."geo", "areas"."area")' in source.from_sql
+    assert "tmig_geo_bounds" not in source.from_sql
+    # 一邊是 join 計算：在 DuckDB 計算，資料庫的空間欄位轉成 WKT
+    ir2 = new_live_workbook("Geo", PG, ["public", "stores"], None, COLUMNS)
+    ir2 = add_live_table(
+        ir2,
+        ir2.datasources[0].id,
+        ["public", "areas"],
+        None,
+        [FileColumn(name="zone", datatype="string"), FileColumn(name="area", datatype="spatial")],
+        how="join",
+        on=[(Calculated("MAKEPOINT([lat], [lon])"), "intersects", "area")],
+    )
+    source = datasource_source(ir2.datasources[0])
+    assert 'tmig_geo_wkt("areas"."area") AS "__tmig_geo_1"' in source.from_sql
+    assert "tmig_geo_intersects" in source.from_sql

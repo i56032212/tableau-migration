@@ -52,6 +52,7 @@ from tmig.ir.models import (
     DataField,
     Datasource,
     FieldUse,
+    FileConnection,
     Filter,
     LiveConnection,
     Marks,
@@ -226,6 +227,18 @@ class Guard:
 
 
 @dataclass
+class FederatedBlend:
+    """Data Blending 的次要資料源是跨資料庫的 join：執行前建立 <附加的名稱>.Files.<名稱>（匯入的檔案在次要
+    資料源的 DuckDB 檔，資料庫的資料表在查詢時取回，見 tmig.data.federated.attach_federated）。"""
+
+    connection: FileConnection
+    sql: str
+    """次要資料源的查詢（只參照它自己的資料表）：資料庫的資料表只取其中用到的欄。"""
+    parameters: dict[str, tuple[Scalar, str]] = field(default_factory=dict)
+    """資料庫的自訂 SQL 中參數的目前值（同 WorksheetSql.parameters）。"""
+
+
+@dataclass
 class WorksheetSql:
     worksheet: str
     sql: str
@@ -245,6 +258,9 @@ class WorksheetSql:
     """Relationship 模型：在比檢視粗的層級彙總時，確認其他資料表不會讓量值重複計算（見 tmig.sqlgen.model）。"""
     attach: dict[str, str] = field(default_factory=dict)
     """Data Blending：執行前以唯讀附加的其他萃取（附加的名稱 → 資料源 id，與主要資料源的 DuckDB 檔同一目錄）。"""
+    federated: dict[str, FederatedBlend] = field(default_factory=dict)
+    """Data Blending 的次要資料源中是跨資料庫的 join 的（附加的名稱 → 連線與查詢）；匯入的檔案仍在 attach 所指的
+    DuckDB 檔。"""
     underlying: str = ""
     """完整資料（基礎資料列）的 SELECT：彙總前的資料列中，仍在檢視中的標記所對應的列（與 main 相同接在 ctes 之後）；
     空的時不支援（例如 Data Blending）。"""

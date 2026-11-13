@@ -80,7 +80,7 @@ def datasource_source(ds: Datasource) -> Source:
         for f in ds.fields
         if f.table is not None and f.column is not None and f.calc is None
     }
-    from_sql = _relation_sql(relation, custom, columns)
+    from_sql = _relation_sql(relation, custom, columns, isinstance(connection, LiveConnection))
     aliases = relation_aliases(relation)
     names = list(aliases)
     default = names[0] if len(names) == 1 else None
@@ -126,12 +126,17 @@ class _JoinScope:
 class _JoinEnv:
     week_start = "sunday"
 
-    def __init__(self, aliases: dict[str, str] | None = None) -> None:
+    def __init__(self, aliases: dict[str, str] | None = None, live: bool = False) -> None:
         self.aliases = aliases or {}
+        self.live = live
 
     def column(self, target: Target) -> str:
         table, column = target.id.split("\x1f", 1)
-        return f"{ident(self.aliases.get(table, table))}.{ident(column)}"
+        sql = f"{ident(self.aliases.get(table, table))}.{ident(column)}"
+        if self.live and target.datatype == "spatial":
+            # Live 連線：資料庫的空間欄位轉成 WKT（空間函式在 DuckDB 計算，見 tmig.data.live）
+            return f"{udf.GEO_WKT}({sql})"
+        return sql
 
     def param(self, target: Target) -> str:
         raise SourceError("join 計算不能用到參數")
@@ -150,10 +155,13 @@ class _JoinEnv:
 
 
 def join_formula(
-    text: str, columns: dict[tuple[str, str], str], aliases: dict[str, str] | None = None
+    text: str,
+    columns: dict[tuple[str, str], str],
+    aliases: dict[str, str] | None = None,
+    live: bool = False,
 ) -> str:
     """join 計算（Tableau 的公式，以 [資料表].[欄位] 參照實體欄位）→ DuckDB 的 SQL；aliases 為資料表
-    在 FROM 子句中的別名（在樞紐、聯集的子查詢中時）。"""
+    在 FROM 子句中的別名（在樞紐、聯集的子查詢中時）；live：Live 連線（資料庫的空間欄位轉成 WKT）。"""
     from tmig.formula.analyze import Analyzer
     from tmig.formula.lexer import FormulaSyntaxError
     from tmig.formula.parser import parse_formula
@@ -162,7 +170,20 @@ def join_formula(
 
     try:
         node = parse_formula(text)
-        return ExprCompiler(Analyzer(_JoinScope(columns)), _JoinEnv(aliases)).row(node)  # type: ignore[arg-type]
+        return ExprCompiler(Analyzer(_JoinScope(columns)), _JoinEnv(aliases, live)).row(node)  # type: ignore[arg-type]
+    except (FormulaSyntaxError, FormulaSemanticError) as exc:
+        raise SourceError(f"join 計算「{text}」：{exc}") from exc
+
+
+def join_formula_type(text: str, columns: dict[tuple[str, str], str]) -> str:
+    """join 計算的結果型別（例如 MAKEPOINT 為 spatial）。"""
+    from tmig.formula.analyze import Analyzer
+    from tmig.formula.lexer import FormulaSyntaxError
+    from tmig.formula.parser import parse_formula
+    from tmig.formula.types import FormulaSemanticError
+
+    try:
+        return Analyzer(_JoinScope(columns)).analyze(parse_formula(text)).datatype  # type: ignore[arg-type]
     except (FormulaSyntaxError, FormulaSemanticError) as exc:
         raise SourceError(f"join 計算「{text}」：{exc}") from exc
 
@@ -220,10 +241,13 @@ UNION_SOURCES = ("Table Name", "Sheet", "Path")
 
 
 def from_clause(
-    relation: Relation, custom: list[str], columns: dict[tuple[str, str], str] | None = None
+    relation: Relation,
+    custom: list[str],
+    columns: dict[tuple[str, str], str] | None = None,
+    live: bool = False,
 ) -> str:
     """關聯樹 → FROM 子句（見 _relation_sql）；自訂 SQL 依序加進 custom，佔位資料表的編號接在後面。"""
-    return _relation_sql(relation, custom, columns)
+    return _relation_sql(relation, custom, columns, live)
 
 
 def transform_select(
@@ -241,22 +265,34 @@ SPATIAL_KEY_PREFIX = "__tmig_geo_"
 
 
 def _relation_sql(
-    relation: Relation, custom: list[str], columns: dict[tuple[str, str], str] | None = None
+    relation: Relation,
+    custom: list[str],
+    columns: dict[tuple[str, str], str] | None = None,
+    live: bool = False,
 ) -> str:
-    """關聯樹 → FROM 子句。columns：各資料表的實體欄位的型別（join 計算的欄位參照用）。"""
-    return _FromBuilder(relation, custom, columns or {}).sql(relation)
+    """關聯樹 → FROM 子句。columns：各資料表的實體欄位的型別（join 計算的欄位參照用）；live：Live 連線。"""
+    return _FromBuilder(relation, custom, columns or {}, live).sql(relation)
 
 
 class _FromBuilder:
     """關聯樹的 FROM 子句。空間 join（Intersects）的兩邊若只用到一張資料表的欄位，形狀與它的範圍在
     那張資料表的子查詢中先算好（SELECT *, 形狀, 範圍）：DuckDB 會在每個候選的配對上重算 join 條件中的
-    運算式，在 join 之前算好時，MAKEPOINT 與範圍每列只算一次。"""
+    運算式，在 join 之前算好時，MAKEPOINT 與範圍每列只算一次。
+
+    Live 連線（live）：兩邊都是資料庫的空間欄位時，與 Tableau 相同以該資料庫的 Intersects 在資料庫計算
+    （tmig_geo_db_intersects，轉譯時換成 PostGIS 的 ST_Intersects 等）；一邊是 join 計算（例如 MAKEPOINT）時
+    在 DuckDB 計算，資料庫的空間欄位轉成 WKT（取回資料表後在本機執行，見 tmig.data.live.execute_rows）。"""
 
     def __init__(
-        self, relation: Relation, custom: list[str], columns: dict[tuple[str, str], str]
+        self,
+        relation: Relation,
+        custom: list[str],
+        columns: dict[tuple[str, str], str],
+        live: bool = False,
     ) -> None:
         self.custom = custom
         self.columns = columns
+        self.live = live
         self.aliases = relation_aliases(relation)
         # 空間 join 的形狀只在直接出現在 FROM 中的資料表先算（樞紐、聯集裡的資料表不算）
         self.leaves = {name for name, alias in self.aliases.items() if name == alias} & set(
@@ -282,18 +318,28 @@ class _FromBuilder:
         self._collect(relation.left)
         self._collect(relation.right)
         for condition in relation.on:
-            if condition.op != "intersects":
+            if condition.op != "intersects" or self._native(condition):
                 continue
             for term in (condition.left, condition.right):
                 leaf = self._leaf(term)
                 if leaf is None:
                     continue
                 shape = f"{SPATIAL_KEY_PREFIX}{len(self.replaced)}"
-                self.keys.setdefault(leaf, []).append((shape, _term(term, self.columns)))
+                expression = _term(term, self.columns, live=self.live)
+                self.keys.setdefault(leaf, []).append((shape, expression))
                 self.replaced[id(term)] = (
                     f"{ident(leaf)}.{ident(shape)}",
                     f"{ident(leaf)}.{ident(shape + '_box')}",
                 )
+
+    def _native(self, condition: JoinCondition) -> bool:
+        """Live 連線的空間 join，兩邊都是資料庫的空間欄位：在資料庫以它的 Intersects 計算。"""
+        return self.live and all(
+            term.table is not None
+            and term.column is not None
+            and self.columns.get((term.table, term.column)) == "spatial"
+            for term in (condition.left, condition.right)
+        )
 
     def _leaf(self, term: JoinTerm) -> str | None:
         """join 條件的一邊只用到的那張資料表（欄位或只參照一張資料表的 join 計算）。"""
@@ -495,11 +541,15 @@ class _FromBuilder:
             left = _term(condition.left, self.columns, self.aliases)
             right = _term(condition.right, self.columns, self.aliases)
             return f"{left} {condition.op} {right}"
+        if self._native(condition):
+            left = _term(condition.left, self.columns, self.aliases)
+            right = _term(condition.right, self.columns, self.aliases)
+            return f"{udf.GEO_DB_INTERSECTS}({left}, {right})"
         sides: list[tuple[str, str]] = []
         for term in (condition.left, condition.right):
             found = self.replaced.get(id(term))
             if found is None:
-                expression = _term(term, self.columns, self.aliases)
+                expression = _term(term, self.columns, self.aliases, self.live)
                 found = (expression, f"{udf.GEO_BOUNDS}({expression})")
             sides.append(found)
         (left, left_box), (right, right_box) = sides
@@ -523,12 +573,17 @@ def _term(
     term: JoinTerm,
     columns: dict[tuple[str, str], str] | None = None,
     aliases: dict[str, str] | None = None,
+    live: bool = False,
 ) -> str:
+    """join 條件的一邊；live：在 DuckDB 計算的空間 join（資料庫的空間欄位轉成 WKT）。"""
     if term.table is not None and term.column is not None:
         table = (aliases or {}).get(term.table, term.table)
-        return f"{ident(table)}.{ident(term.column)}"
+        sql = f"{ident(table)}.{ident(term.column)}"
+        if live and (columns or {}).get((term.table, term.column)) == "spatial":
+            return f"{udf.GEO_WKT}({sql})"
+        return sql
     if term.formula is not None:
-        return f"({join_formula(term.formula, columns or {}, aliases)})"
+        return f"({join_formula(term.formula, columns or {}, aliases, live)})"
     value = term.literal
     kind = "string" if isinstance(value, str) else "real" if isinstance(value, float) else "integer"
     return literal(value, kind)
