@@ -75,6 +75,20 @@ export async function pickDataPath(): Promise<string | null> {
   return path?.trim() || null;
 }
 
+/** 選擇資料夾（萬用字元聯集）；取消時為 null。 */
+export async function pickFolderPath(): Promise<string | null> {
+  const tauri = shell();
+  if (tauri) {
+    try {
+      return await tauri.core.invoke<string | null>("pick_folder_path");
+    } catch (e) {
+      console.warn("選擇資料夾的對話框無法使用，改以輸入路徑", e);
+    }
+  }
+  const path = window.prompt("要搜尋的資料夾的完整路徑");
+  return path?.trim() || null;
+}
+
 /** 新增報表（Tableau 的「連線到資料」）：選擇資料檔，檔案中有多張資料表時選一張，建立後開啟資料源分頁。 */
 export async function newWorkbook(go: Go): Promise<void> {
   const path = await pickDataPath();

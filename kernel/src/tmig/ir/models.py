@@ -426,6 +426,17 @@ class UnionPart(IRModel):
     path: str | None = Field(default=None, description="檔案的路徑（Path 欄的值）")
 
 
+class UnionWildcard(IRModel):
+    """萬用字元聯集（Tableau 的 Wildcard union，<relation type='batch-union'>）的搜尋條件：parts 是依它找到的
+    檔案與工作表（報表封裝或建立時的快照）。"""
+
+    files: str = Field(
+        min_length=1, description="檔名的模式（* 為任意字元，不分大小寫），例如 Superstore - *.xlsx"
+    )
+    sheets: str | None = Field(default=None, description="Excel 工作表名稱的模式；None 為全部")
+    recursive: bool = Field(default=False, description="含子資料夾")
+
+
 class UnionRelation(IRModel):
     """聯集（Tableau 的 union）：資料表上下相接，欄位依名稱對應（沒有這一欄的資料表為 Null）。
     另有來源的欄位：Table Name（資料表的名稱）、Sheet（Excel 的工作表）與 Path（檔案的路徑）。
@@ -434,6 +445,9 @@ class UnionRelation(IRModel):
     kind: Literal["union"]
     name: str = Field(min_length=1)
     parts: list[UnionPart] = Field(min_length=1)
+    wildcard: UnionWildcard | None = Field(
+        default=None, description="萬用字元聯集的搜尋條件；一般的聯集為 None"
+    )
 
 
 class ProjectColumn(IRModel):
@@ -607,6 +621,11 @@ class FileTable(IRModel):
         default=None, description="Excel 的資料範圍，例如 A1:U10195；None 表示整張工作表"
     )
     header: bool = Field(default=True, description="第一列是欄名")
+    interpreted: bool = Field(
+        default=False,
+        description="資料解譯器（Data Interpreter）：範圍中依記下的欄名找標題列（空白的欄名為 F<第幾欄>），"
+        "標題列之前的列（標題、說明）與之後空白的列不算",
+    )
     separator: str = Field(default=",", min_length=1, description="文字檔的分隔字元")
     charset: str = Field(default="UTF-8", min_length=1, description="文字檔的字元集")
     locale: str | None = Field(default=None, description="文字檔的地區設定（數字與日期的寫法）")

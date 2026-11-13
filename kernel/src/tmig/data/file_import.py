@@ -4,7 +4,8 @@
 
 - 欄位依順序對應：欄名取 Tableau 記下的名稱（沒有標題列時為 F1、F2…），型別依 Tableau 判定的型別
 - Excel：.xlsx／.xlsm 以 openpyxl、.xls 以 xlrd 讀取儲存格的值（公式取 Excel 存下的計算結果）；
-  範圍依 Tableau 記下的範圍（gridOrigin），沒有時為整張工作表；範圍尾端全部是空白的列不算
+  範圍依 Tableau 記下的範圍（gridOrigin），沒有時為整張工作表；範圍尾端全部是空白的列不算。資料解譯器
+  （cleaning='yes'）時在範圍中依記下的欄名找標題列，之前的列（標題、說明）與之後空白的列不算
 - 文字檔：依記下的分隔字元、字元集與地區設定解讀；數字的小數點與千分位、日期的寫法依地區設定
 - 空白的值為 Null；不符合型別的值（例如日期欄中的文字）成為 Null，並在匯入結果中列出筆數與例子
 
@@ -354,12 +355,42 @@ def excel_rows(data: bytes, table: FileTable, books: dict[str, Any]) -> list[lis
         grid = _xls_grid(data, table, books)
     else:
         grid = _xlsx_grid(data, table, books)
-    rows = grid[1:] if table.header else grid
     width = len(table.columns)
+    if table.interpreted:
+        header = interpreted_header(grid, table)
+        rows = [(list(r) + [None] * width)[:width] for r in grid[header + 1 :]]
+        return [r for r in rows if not all(v is None or v == "" for v in r)]
+    rows = grid[1:] if table.header else grid
     rows = [(list(r) + [None] * width)[:width] for r in rows]
     while rows and all(v is None or v == "" for v in rows[-1]):
         rows.pop()  # 範圍尾端全部是空白的列
     return rows
+
+
+def interpreted_header(grid: list[list[Any]], table: FileTable) -> int:
+    """資料解譯器的標題列（在 grid 中的位置）：與記下的欄名最相符的一列——欄名相同的格、空白而欄名是
+    F<第幾欄> 的格（Tableau 給空白標題的名稱）；有名稱的欄至少一半相符才算。"""
+    names = [c.name for c in table.columns]
+    named = [n for i, n in enumerate(names) if n != f"F{i + 1}"]
+    best, best_score, best_named = -1, -1, 0
+    for index, row in enumerate(grid):
+        cells = (list(row) + [None] * len(names))[: len(names)]
+        score = matched = 0
+        for position, (name, value) in enumerate(zip(names, cells, strict=True)):
+            text = "" if value is None else _as_text(value).strip()
+            if text and text == name:
+                score += 2
+                matched += 1
+            elif not text and name == f"F{position + 1}":
+                score += 1
+        if score > best_score:
+            best, best_score, best_named = index, score, matched
+    if best < 0 or best_named < max(1, (len(named) + 1) // 2):
+        sample = "、".join(named[:5])
+        raise FileImportError(
+            f"{table.path} 的工作表「{table.sheet}」中找不到資料解譯器的標題列（{sample}）"
+        )
+    return best
 
 
 def _bounds(cells: str | None) -> tuple[int, int, int | None, int | None]:

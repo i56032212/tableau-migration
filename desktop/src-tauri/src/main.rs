@@ -269,6 +269,17 @@ async fn pick_data_path(app: AppHandle) -> Option<String> {
     .flatten()
 }
 
+/// 選擇資料夾（萬用字元聯集搜尋的資料夾）；取消時回傳 null。
+#[tauri::command]
+async fn pick_folder_path(app: AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        path_text(app.dialog().file().set_title("選擇資料夾").blocking_pick_folder())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// 選擇存檔位置（預設為報表套件；匯出時另指定標題、副檔名與檔案類型的名稱）；取消時回傳 null。
 #[tauri::command]
 async fn pick_save_path(
@@ -313,7 +324,12 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| bring_to_front(app)))
         .plugin(tauri_plugin_dialog::init())
         .manage(Engine(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![pick_open_path, pick_data_path, pick_save_path])
+        .invoke_handler(tauri::generate_handler![
+            pick_open_path,
+            pick_data_path,
+            pick_folder_path,
+            pick_save_path
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             build_menu(&handle)?;

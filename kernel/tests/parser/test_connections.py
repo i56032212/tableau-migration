@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from tmig.ir import IR, ExtractConnection, JoinRelation, LiveConnection, SqlRelation, TableRelation
+from tmig.ir import (
+    IR,
+    ExtractConnection,
+    FileConnection,
+    JoinRelation,
+    LiveConnection,
+    SqlRelation,
+    TableRelation,
+)
 from tmig.parser.connections import connection_id
 from tmig.parser.workbook import parse_workbook
 
@@ -256,10 +264,12 @@ def test_unsupported_connections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     excel = "<connection class='excel-direct' filename='orders.xlsx' />"
     ir = parse(tmp_path, live_datasource(excel, table), lenient=True)
     assert ir.datasources[0].connection.kind == "file"
-    # 資料解譯器整理過的工作表與原始檔案的版面不同
+    # 資料解譯器整理過的工作表：匯入時依記下的欄名找出標題列（見 tests/data/test_interpreter_wildcard.py）
     cleaned = "<connection class='excel-direct' cleaning='yes' filename='orders.xlsx' />"
     ir = parse(tmp_path, live_datasource(cleaned, table), lenient=True)
-    assert any("資料解譯器" in r for r in reasons(ir))
+    connection = ir.datasources[0].connection
+    assert isinstance(connection, FileConnection) and reasons(ir) == []
+    assert connection.tables[0].interpreted
 
     unknown = "<connection class='exasol' server='x' />"
     ir = parse(tmp_path, live_datasource(unknown, table), lenient=True)

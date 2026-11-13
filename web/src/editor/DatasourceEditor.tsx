@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { DataGrid } from "../DatasourceView";
-import { pickDataPath, toast } from "../desktop";
+import { pickDataPath, pickFolderPath, toast } from "../desktop";
 import { Modal } from "../Server";
 import type { DatasourcePreview } from "../types";
 import {
@@ -77,6 +77,8 @@ export function DatasourceEditor({
   const [busy, setBusy] = useState(false);
   /** 自訂 SQL 的對話框：name 為 null 時是新增 */
   const [sqlDialog, setSqlDialog] = useState<{ name: string | null; sql: string } | null>(null);
+  /** 萬用字元聯集的對話框（檔案） */
+  const [wildcard, setWildcard] = useState<{ file: string; name: string; format?: string } | null>(null);
 
   useEffect(() => {
     datasourceApi
@@ -200,6 +202,31 @@ export function DatasourceEditor({
               {!file.available && (
                 <p className="muted">{file.error ?? "報表中沒有這個檔案的複本（以「其他檔案…」重新選擇）"}</p>
               )}
+              {model.editable && file.format === "excel" && (
+                <label className="dse-interpreter" title="去掉工作表上面的標題、說明與空白的列，找出標題列（Tableau 的資料解譯器）">
+                  <input
+                    type="checkbox"
+                    checked={!!file.interpreted}
+                    onChange={(e) =>
+                      void change(
+                        () => datasourceApi.setInterpreter(workbook, datasource, file.path, e.target.checked),
+                        e.target.checked ? "已使用資料解譯器" : "已停用資料解譯器",
+                      )
+                    }
+                  />{" "}
+                  使用資料解譯器
+                </label>
+              )}
+              {model.editable && (file.format === "excel" || file.format === "text") && (
+                <button
+                  type="button"
+                  className="link dse-wildcard"
+                  title="資料夾中檔名符合模式的檔案接在這個檔案的資料表下面（Tableau 的萬用字元聯集）"
+                  onClick={() => setWildcard({ file: file.path, name: file.name, format: file.format })}
+                >
+                  萬用字元聯集…
+                </button>
+              )}
               <ul>
                 {(file.tables ?? []).map((t) => (
                   <li key={t.name}>
@@ -215,7 +242,7 @@ export function DatasourceEditor({
                     >
                       ▦ {t.name}
                     </button>
-                    <span className="muted">（{t.rows.toLocaleString()} 列）</span>
+                    <span className="muted">（{t.rows.toLocaleString()} 列{t.interpreted ? "，已解譯" : ""}）</span>
                   </li>
                 ))}
               </ul>
@@ -344,6 +371,14 @@ export function DatasourceEditor({
           }
         />
       )}
+      {wildcard && (
+        <WildcardDialog
+          model={model}
+          file={wildcard}
+          onClose={() => setWildcard(null)}
+          onSubmit={(body) => change(() => datasourceApi.wildcardUnion(workbook, datasource, body), "已建立萬用字元聯集")}
+        />
+      )}
       {sqlDialog && (
         <CustomSqlDialog
           initial={sqlDialog.sql}
@@ -362,6 +397,95 @@ export function DatasourceEditor({
         />
       )}
     </div>
+  );
+}
+
+/** 萬用字元聯集（Tableau 的「萬用字元聯集」）：資料夾、檔名與工作表名稱的模式；符合的檔案複製進報表。 */
+function WildcardDialog({
+  model,
+  file,
+  onClose,
+  onSubmit,
+}: {
+  model: DatasourceModel;
+  file: { file: string; name: string; format?: string };
+  onClose: () => void;
+  onSubmit: (body: { table: string; folder: string; files: string; sheets: string | null; recursive: boolean }) => Promise<boolean>;
+}) {
+  // 可以接上的資料表：這個檔案的資料表（單一資料表或已經是聯集）
+  const targets = useMemo(() => {
+    const found: string[] = [];
+    const visit = (relation: RelationView) => {
+      if (relation.kind === "table") found.push(relation.name);
+      else if (relation.kind === "union") found.push(relation.name);
+      else if (relation.kind === "join") {
+        visit(relation.left);
+        visit(relation.right);
+      }
+    };
+    model.logical.forEach((l) => visit(l.relation));
+    return found;
+  }, [model]);
+  const excel = file.format === "excel";
+  // 預設的模式：檔名中的數字換成 *（例如 Sales 2023.xlsx → Sales *.xlsx）
+  const [files, setFiles] = useState(file.name.replace(/\d+/g, "*").replace(/\*+/g, "*"));
+  const [sheets, setSheets] = useState("");
+  const [folder, setFolder] = useState("");
+  const [recursive, setRecursive] = useState(false);
+  const [table, setTable] = useState(targets[0] ?? "");
+  return (
+    <Modal title={`萬用字元聯集：${file.name}`} onClose={onClose}>
+      <label className="admin-field">
+        接在資料表下面
+        <select aria-label="接在哪張資料表下面" value={table} onChange={(e) => setTable(e.target.value)}>
+          {targets.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="admin-field">
+        搜尋的資料夾（作者電腦上的完整路徑）
+        <span className="dse-folder">
+          <input aria-label="搜尋的資料夾" value={folder} onChange={(e) => setFolder(e.target.value)} />
+          <button type="button" onClick={() => void pickFolderPath().then((path) => path && setFolder(path))}>
+            選擇…
+          </button>
+        </span>
+      </label>
+      <label className="admin-field">
+        檔名的模式（* 為任意字元）
+        <input aria-label="檔名的模式" value={files} onChange={(e) => setFiles(e.target.value)} />
+      </label>
+      {excel && (
+        <label className="admin-field">
+          工作表名稱的模式（空白為全部）
+          <input aria-label="工作表名稱的模式" value={sheets} onChange={(e) => setSheets(e.target.value)} />
+        </label>
+      )}
+      <label>
+        <input type="checkbox" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} /> 包含子資料夾
+      </label>
+      <p className="hint">欄位依名稱對應，另加上 Path（檔案的路徑）{excel ? "與 Sheet" : ""}；符合的檔案複製進報表（建立時的快照）。</p>
+      <div className="dialog-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={!table || !folder.trim() || !files.trim()}
+          onClick={() =>
+            void onSubmit({ table, folder: folder.trim(), files: files.trim(), sheets: sheets.trim() || null, recursive }).then(
+              (ok) => ok && onClose(),
+            )
+          }
+        >
+          聯集
+        </button>
+        <button type="button" onClick={onClose}>
+          取消
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -639,7 +763,11 @@ function RelationTree({
   if (relation.kind === "union") {
     return (
       <div className="dse-union">
-        <div className="dse-label">聯集（{relation.parts.length} 張資料表上下相接）</div>
+        <div className="dse-label">
+          {relation.wildcard
+            ? `萬用字元聯集「${relation.wildcard.files}」${relation.wildcard.sheets ? `／工作表「${relation.wildcard.sheets}」` : ""}（${relation.parts.length} 張資料表）`
+            : `聯集（${relation.parts.length} 張資料表上下相接）`}
+        </div>
         {relation.parts.map((p) => (
           <div key={"name" in p ? p.name : ""} className="dse-table">
             ▦ {"name" in p ? p.name : ""}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import zipfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -88,6 +89,9 @@ from tmig.parser.refs import qualified_parts
 from tmig.parser.sets import IN_OUT, Level, parse_set
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
+from tmig.parser.wildcard import PATH_ATTR as WILDCARD_PATH
+from tmig.parser.wildcard import WildcardError
+from tmig.parser.wildcard import expand as expand_wildcard
 
 METADATA_AGG: dict[str, Aggregation] = {
     "Sum": "sum",
@@ -525,11 +529,15 @@ class DatasourceParser:
         if not named or any(c.get("class") not in FILE_SOURCES for c in named.values()):
             return False, None
         for found in named.values():
-            if found.get("cleaning") == "yes":
+            if found.get("cleaning") == "yes" and found.get("class") != "excel-direct":
                 self.ctx.flag(
-                    found, f"資料源「{self.caption}」使用資料解譯器（Data Interpreter），v0 不支援"
+                    found,
+                    f"資料源「{self.caption}」在 {found.get('class')} 的檔案使用資料解譯器"
+                    "（Data Interpreter），只支援 Excel",
                 )
                 return True, None
+        if not self._expand_wildcards(conn, named):
+            return True, None
         tables: dict[str, FileTable] = {}
         if len(self.objects) > 1:
             # Relationship 模型：每張邏輯資料表一個檔案中的資料表
@@ -558,6 +566,67 @@ class DatasourceParser:
             return True, None
         return True, FileConnection(kind="file", tables=list(tables.values()), relation=relation)
 
+    def _expand_wildcards(self, conn: etree._Element, named: dict[str, etree._Element]) -> bool:
+        """萬用字元聯集（batch-union）展開成一般的聯集（見 tmig.parser.wildcard）：依 .twbx 中符合模式的檔案，
+        每個檔案或工作表一張資料表；具名連線加進 named。無法展開時列入 unsupported，回傳 False。"""
+        found = [r for r in conn.iter("relation") if r.get("type") == "batch-union"]
+        for obj in self.objects:
+            if obj.live is not None:
+                found += [r for r in obj.live.iter("relation") if r.get("type") == "batch-union"]
+        if not found:
+            return True
+        package = self.ctx.package
+        if package.source.suffix.lower() != ".twbx":
+            self.ctx.flag(
+                found[0], f"資料源「{self.caption}」的萬用字元聯集需要 .twbx（含資料的報表）"
+            )
+            return False
+        names = [f.name.replace("\\", "/") for f in package.files]
+        archive = zipfile.ZipFile(package.source)
+        try:
+            for i, element in enumerate(dict.fromkeys(found)):
+                source = named.get(element.get("connection", ""))
+                if source is None and len(named) == 1:
+                    source = next(iter(named.values()))
+                if source is None:
+                    self.ctx.flag(
+                        element, f"資料源「{self.caption}」的萬用字元聯集找不到檔案的連線"
+                    )
+                    return False
+                if source.get("class") == "textscan":
+                    directory = (source.get("directory") or "").replace("\\", "/").rstrip("/")
+                    filename = source.get("filename") or ""
+                    anchor = self._packaged(f"{directory}/{filename}" if directory else filename)
+                else:
+                    anchor = self._packaged(source.get("filename") or "")
+                if anchor is None:
+                    self.ctx.flag(
+                        source, f"資料源「{self.caption}」萬用字元聯集的檔案不在 .twbx 內"
+                    )
+                    return False
+                try:
+                    union, connections = expand_wildcard(
+                        element,
+                        source,
+                        anchor,
+                        names,
+                        lambda name: archive.read(name),
+                        f"wildcard{i}",
+                    )
+                except WildcardError as exc:
+                    self.ctx.flag(element, f"資料源「{self.caption}」：{exc}")
+                    return False
+                parent = element.getparent()
+                assert parent is not None
+                parent.replace(element, union)
+                for obj in self.objects:
+                    if obj.live is element:
+                        obj.live = union
+                named.update(connections)
+        finally:
+            archive.close()
+        return True
+
     def _file_relation(
         self,
         relation: Relation,
@@ -583,7 +652,7 @@ class DatasourceParser:
                 if converted is None:
                     return None
                 found = tables[converted.name] if isinstance(converted, TableRelation) else None
-                path = (
+                path = part_el.get(WILDCARD_PATH) or (
                     self._original_path(part_el, named)
                     if found and found.format == "text"
                     else None
@@ -687,6 +756,8 @@ class DatasourceParser:
             sheet=table[:-1] if table.endswith("$") else table,
             cells=cells if cells and ":" in cells else None,
             header=header,
+            # 資料解譯器：範圍中依欄名找標題列（見 tmig.data.file_import.interpreted_header）
+            interpreted=source.get("cleaning") == "yes",
             columns=columns,
         )
 

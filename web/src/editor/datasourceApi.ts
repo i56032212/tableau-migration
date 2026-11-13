@@ -17,6 +17,8 @@ export interface InspectedTable {
   sheet: string | null;
   layer: string | null;
   rows: number;
+  /** 資料解譯器找出的標題列 */
+  interpreted?: boolean;
   columns: InspectedColumn[];
 }
 
@@ -46,7 +48,7 @@ export type RelationView =
         right_formula?: string | null;
       }[];
     }
-  | { kind: "union"; name: string; parts: RelationView[] }
+  | { kind: "union"; name: string; parts: RelationView[]; wildcard?: { files: string; sheets: string | null; recursive: boolean } | null }
   | { kind: "pivot"; name: string; source: RelationView; columns: string[] }
   | { kind: "project"; name: string; source: RelationView };
 
@@ -79,6 +81,8 @@ export interface ModelFile {
   path: string;
   name: string;
   available: boolean;
+  /** Excel 檔使用資料解譯器 */
+  interpreted?: boolean;
   format?: InspectedFile["format"];
   tables?: InspectedTable[];
   error?: string;
@@ -219,6 +223,20 @@ export const datasourceApi = {
     request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/custom-sql/${part(name)}`, {
       method: "PUT",
       body: JSON.stringify({ sql }),
+    }),
+  setInterpreter: (workbook: string, datasource: string, file: string, enabled: boolean) =>
+    request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/interpreter`, {
+      method: "PUT",
+      body: JSON.stringify({ file, enabled }),
+    }),
+  wildcardUnion: (
+    workbook: string,
+    datasource: string,
+    body: { table: string; folder: string; files: string; sheets: string | null; recursive: boolean },
+  ) =>
+    request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/wildcard-union`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   rename: (workbook: string, datasource: string, caption: string) =>
     request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}`, {

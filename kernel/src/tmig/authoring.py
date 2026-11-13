@@ -13,6 +13,10 @@
   [資料表].[欄位] 參照實體欄位的公式（JoinTerm.formula），關聯計算存成所屬邏輯資料表上隱藏的計算欄位
   （DataField.relationship_calc，公式以欄位的內部名稱參照）；公式中的欄位以顯示名稱（或欄名）書寫
 - 欄位（update_field）：改名（顯示名稱）、隱藏、角色、預設彙總與資料類型（檔案的欄位以新的型別重新匯入）
+- 資料解譯器（inspect_file 的 interpreter、set_interpreter）：Excel 的工作表上面有標題、說明的列時，找出
+  標題列（至少兩格有值、都是文字或整數，下一個有值的列至少一半的欄有值），之前的列與之後空白的列不算
+- 萬用字元聯集（add_wildcard_union）：資料夾中檔名（與 Excel 工作表名稱）符合模式的資料表接在資料表下面，
+  另有 Path（檔案的路徑）與 Sheet；檔案複製進報表（建立時的快照）
 
 所有函式都不改動傳入的 IR，回傳新的 IR；有工作表或計算欄位用到的欄位不能移除、改型別或角色。
 """
@@ -63,6 +67,7 @@ from tmig.ir import (
     UnionColumn,
     UnionPart,
     UnionRelation,
+    UnionWildcard,
     Workbook,
 )
 from tmig.ir.models import Aggregation, GeoRole, Relation
@@ -127,6 +132,8 @@ class InspectedTable:
     rows: int
     sheet: str | None = None
     layer: str | None = None
+    interpreted: bool = False
+    """資料解譯器找出的標題列（Excel）。"""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -134,6 +141,7 @@ class InspectedTable:
             "sheet": self.sheet,
             "layer": self.layer,
             "rows": self.rows,
+            "interpreted": self.interpreted,
             "columns": [c.model_dump(mode="json") for c in self.columns],
         }
 
@@ -169,14 +177,14 @@ class InspectedFile:
         }
 
 
-def inspect_file(path: Path) -> InspectedFile:
-    """檔案的資料表、欄名、型別與列數。"""
+def inspect_file(path: Path, interpreter: bool = False) -> InspectedFile:
+    """檔案的資料表、欄名、型別與列數；interpreter 時 Excel 依資料解譯器找標題列。"""
     suffix = path.suffix.lower()
     if not path.is_file():
         raise EditError(f"找不到檔案：{path}")
     data = path.read_bytes()
     if suffix in EXCEL_SUFFIXES:
-        return InspectedFile(path, "excel", _inspect_excel(path.name, data))
+        return InspectedFile(path, "excel", _inspect_excel(path.name, data, interpreter))
     if suffix in TEXT_SUFFIXES:
         table, separator, charset = _inspect_text(path.name, data)
         return InspectedFile(path, "text", [table], separator, charset)
@@ -187,7 +195,7 @@ def inspect_file(path: Path) -> InspectedFile:
     )
 
 
-def _inspect_excel(name: str, data: bytes) -> list[InspectedTable]:
+def _inspect_excel(name: str, data: bytes, interpreter: bool = False) -> list[InspectedTable]:
     grids: list[tuple[str, list[list[Any]], int]] = []
     if name.lower().endswith(".xls"):
         import xlrd
@@ -236,6 +244,16 @@ def _inspect_excel(name: str, data: bytes) -> list[InspectedTable]:
         book.close()
     tables: list[InspectedTable] = []
     for title, grid, rows in grids:
+        if interpreter:
+            header = interpret_header(grid)
+            if header is not None:
+                body = [r for r in grid[header + 1 :] if not all(_blank(v) for v in r)]
+                columns = _columns(grid[header], body, excel=True)
+                if columns:
+                    tables.append(
+                        InspectedTable(title, columns, len(body), sheet=title, interpreted=True)
+                    )
+                continue
         if not grid or not any(not _blank(v) for v in grid[0]):
             continue  # 空白的工作表
         columns = _columns(grid[0], grid[1:], excel=True)
@@ -244,6 +262,28 @@ def _inspect_excel(name: str, data: bytes) -> list[InspectedTable]:
     if not tables:
         raise EditError(f"{name} 中沒有資料（每張工作表的第一列都是空白）")
     return tables
+
+
+def interpret_header(grid: list[list[Any]]) -> int | None:
+    """資料解譯器（Tableau 的 Data Interpreter）找標題列：第一個至少兩格有值、有值的格都是文字或整數（例如
+    年份）且有值的格數至少是最寬的列的一半，下一個有值的列也至少一半的欄有值的列；找不到時為 None。
+    Tableau 的判斷方式沒有公開，這是推定的規則（以公開報表的來源檔驗證）。"""
+    filled = [sum(not _blank(v) for v in row) for row in grid]
+    widest = max(filled, default=0)
+    for index, row in enumerate(grid):
+        count = filled[index]
+        if count < 2 or count * 2 < widest:
+            continue
+        values = [v for v in row if not _blank(v)]
+        if not all(
+            isinstance(v, str) or (isinstance(v, int) and not isinstance(v, bool)) for v in values
+        ):
+            continue
+        following = next((j for j in range(index + 1, len(grid)) if filled[j] > 0), None)
+        if following is None or filled[following] * 2 < count:
+            continue
+        return index
+    return None
 
 
 def _inspect_text(name: str, data: bytes) -> tuple[InspectedTable, str, str]:
@@ -400,7 +440,12 @@ def file_table(source: InspectedFile, table: str | None, package_path: str, name
     found = source.table(table)
     if source.format == "excel":
         return FileTable(
-            name=name, format="excel", path=package_path, sheet=found.sheet, columns=found.columns
+            name=name,
+            format="excel",
+            path=package_path,
+            sheet=found.sheet,
+            interpreted=found.interpreted,
+            columns=found.columns,
         )
     if source.format == "text":
         return FileTable(
@@ -518,7 +563,23 @@ def set_custom_sql(ir: IR, datasource: str, name: str, sql: str, columns: list[F
         raise EditError("自訂 SQL 是空的")
     if not columns:
         raise EditError("自訂 SQL 沒有傳回任何欄")
-    joined = isinstance(current, JoinRelation)
+    fields = _resync(ir, ds, name, columns, owner, isinstance(current, JoinRelation))
+    changed = _replace_leaf(current, name, relation.model_copy(update={"sql": text}))
+    connection = _with(connection, None, _replace_logical(top, owner, changed))
+    ds = ds.model_copy(update={"connection": connection, "fields": fields})
+    return _validated(_replace_datasource(ir, ds), "修改自訂 SQL 失敗")
+
+
+def _resync(
+    ir: IR,
+    ds: Datasource,
+    name: str,
+    columns: list[FileColumn],
+    owner: str | None,
+    joined: bool,
+) -> list[DataField]:
+    """資料表（自訂 SQL 或檔案的資料表）換成新的欄：名稱相同的欄位沿用（型別依新的欄），新的欄加入成欄位，
+    不再有的欄移除（工作表或其他欄位用到時退回）。回傳資料源的新欄位清單。"""
 
     def mine(f: DataField) -> bool:
         if f.column is None:
@@ -558,10 +619,113 @@ def set_custom_sql(ir: IR, datasource: str, name: str, sql: str, columns: list[F
         new_fields = _fields(taken, added, owner, captions, name if joined else None, label=name)
     else:
         new_fields = _fields(taken, added, name, captions)
-    changed = _replace_leaf(current, name, relation.model_copy(update={"sql": text}))
-    connection = _with(connection, None, _replace_logical(top, owner, changed))
-    ds = ds.model_copy(update={"connection": connection, "fields": [*fields, *new_fields]})
-    return _validated(_replace_datasource(ir, ds), "修改自訂 SQL 失敗")
+    return [*fields, *new_fields]
+
+
+def set_interpreter(ir: IR, datasource: str, path: str, source: InspectedFile) -> IR:
+    """切換 Excel 檔的資料解譯器（Tableau 連線下的「使用資料解譯器」）：source 是依新的設定重新檢查的檔案；
+    檔案中各資料表的欄換成新的欄（名稱相同的欄位沿用）。聯集與樞紐中的資料表不能切換。"""
+    ds = _datasource(ir, datasource)
+    connection = _file_connection(ds)
+    targets = [t for t in connection.tables if t.path == path and t.format == "excel"]
+    if not targets:
+        raise EditError(f"資料源中沒有 Excel 檔 {path}")
+    top = _relation_of(connection)
+    tables = list(connection.tables)
+    fields = list(ds.fields)
+    for target in targets:
+        found = next((t for t in source.tables if t.sheet == target.sheet), None)
+        if found is None:
+            raise EditError(f"{source.path.name} 中沒有工作表「{target.sheet}」")
+        owner, current = _owner_of(top, target.name)
+        if not _plain_leaf(current, target.name):
+            raise EditError(f"「{target.name}」在聯集或樞紐中，不能切換資料解譯器")
+        joined = isinstance(current, JoinRelation)
+        fields = _resync(
+            ir, ds.model_copy(update={"fields": fields}), target.name, found.columns, owner, joined
+        )
+        tables = [
+            t.model_copy(
+                update={
+                    "columns": found.columns,
+                    "interpreted": found.interpreted,
+                    "cells": None,
+                    "header": True,
+                }
+            )
+            if t.name == target.name
+            else t
+            for t in tables
+        ]
+    connection = connection.model_copy(update={"tables": tables})
+    ds = ds.model_copy(update={"connection": connection, "fields": fields})
+    return _validated(_replace_datasource(ir, ds), "切換資料解譯器失敗")
+
+
+def _plain_leaf(relation: Relation, name: str) -> bool:
+    """name 是關聯樹中（只經過 join）的一張資料表。"""
+    if isinstance(relation, TableRelation):
+        return relation.name == name
+    if isinstance(relation, JoinRelation):
+        return _plain_leaf(relation.left, name) or _plain_leaf(relation.right, name)
+    return False
+
+
+@dataclass(frozen=True)
+class WildcardMatch:
+    """萬用字元聯集找到的一張資料表：檢查過的檔案、其中的資料表、報表中的路徑與作者電腦上的路徑。"""
+
+    source: InspectedFile
+    table: str | None
+    package_path: str
+    original: str
+
+
+def add_wildcard_union(
+    ir: IR,
+    datasource: str,
+    table: str,
+    matches: list[WildcardMatch],
+    wildcard: UnionWildcard,
+    original: str | None = None,
+) -> IR:
+    """萬用字元聯集（Tableau 的「萬用字元聯集」）：table（關聯樹中的一張資料表，或已有的聯集）下面接上
+    matches，另有 Path（作者電腦上的路徑；original 是 table 本身的檔案的路徑）與 Sheet、Table Name。"""
+    if not matches:
+        raise EditError(f"「{wildcard.files}」沒有符合的檔案")
+    ds = _datasource(ir, datasource)
+    connection = _file_connection(ds)
+    owner, _ = _owner_of(_relation_of(connection), table)
+    for match in matches:
+        ir = add_table(
+            ir, datasource, match.source, match.table, match.package_path, "union", owner
+        )
+    ds = _datasource(ir, datasource)
+    connection = _file_connection(ds)
+    top = _relation_of(connection)
+    owner, current = _owner_of(top, table)
+    if not isinstance(current, UnionRelation):
+        raise EditError("萬用字元聯集失敗：資料表沒有成為聯集")
+    by_table = {t.name: t for t in connection.tables}
+    originals = {m.package_path: m.original for m in matches}
+    parts = []
+    for part in current.parts:
+        found = by_table.get(part.relation.name)
+        path = originals.get(found.path) if found is not None else None
+        if path is None and found is not None:
+            path = original or found.path
+        parts.append(part.model_copy(update={"path": path}))
+    union = current.model_copy(update={"parts": parts, "wildcard": wildcard})
+    table_ref = owner or union.name
+    fields = list(ds.fields)
+    present = {f.column for f in fields if f.table == table_ref and f.column is not None}
+    if "Path" not in present:
+        taken = _ids(ir)
+        captions = {f.caption.casefold() for f in fields}
+        fields += _fields(taken, [FileColumn(name="Path", datatype="string")], table_ref, captions)
+    connection = _with(connection, None, _replace_logical(top, owner, union))
+    ds = ds.model_copy(update={"connection": connection, "fields": fields})
+    return _validated(_replace_datasource(ir, ds), "萬用字元聯集失敗")
 
 
 def _find_relation(relation: Relation, name: str) -> Relation | None:
@@ -1800,16 +1964,20 @@ __all__ = [
     "Condition",
     "InspectedFile",
     "InspectedTable",
+    "WildcardMatch",
     "add_datasource",
     "add_table",
+    "add_wildcard_union",
     "file_table",
     "inspect_file",
+    "interpret_header",
     "join_calc_display",
     "link_calc_display",
     "new_workbook",
     "pivot",
     "remove_table",
     "rename_datasource",
+    "set_interpreter",
     "set_join",
     "set_relationship",
     "unpivot",

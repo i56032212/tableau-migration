@@ -22,6 +22,9 @@ API（都在 /api/edit/<報表> 下）：
   ``PUT …/custom-sql/<名稱>`` 修改自訂 SQL
 - 條件（``on``）的每一邊可以是 ``{"formula": …}``：join 計算與關聯計算（Tableau 的「建立 Join 計算」
   「建立關聯計算」），公式中的欄位以顯示名稱書寫
+- ``PUT …/interpreter``：``{"file": "Data/…", "enabled": …}`` 切換 Excel 檔的資料解譯器
+- ``POST …/wildcard-union``：``{"table", "folder", "files", "sheets", "recursive"}`` 萬用字元聯集（資料夾中
+  檔名符合模式的檔案複製進報表、接在資料表下面）
 """
 
 from __future__ import annotations
@@ -39,10 +42,12 @@ from tmig.authoring import (
     Calculated,
     Condition,
     InspectedFile,
+    WildcardMatch,
     add_datasource,
     add_live_datasource,
     add_live_table,
     add_table,
+    add_wildcard_union,
     inspect_file,
     join_calc_display,
     link_calc_display,
@@ -50,6 +55,7 @@ from tmig.authoring import (
     remove_table,
     rename_datasource,
     set_custom_sql,
+    set_interpreter,
     set_join,
     set_relationship,
     unpivot,
@@ -68,6 +74,7 @@ from tmig.ir import (
     ProjectRelation,
     SqlRelation,
     UnionRelation,
+    UnionWildcard,
 )
 from tmig.ir.models import Relation
 from tmig.package import SOURCES
@@ -161,6 +168,23 @@ class SqlBody(BaseModel):
     sql: str
 
 
+class InterpreterBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str
+    enabled: bool
+
+
+class WildcardBody(BaseModel):
+    """萬用字元聯集：資料夾（作者電腦上的完整路徑）、檔名與工作表名稱的模式、是否含子資料夾。"""
+
+    model_config = ConfigDict(extra="forbid")
+    table: str
+    folder: str
+    files: str
+    sheets: str | None = None
+    recursive: bool = False
+
+
 class RemoteColumnsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     table: list[str] | None = None
@@ -176,11 +200,19 @@ def local_file(raw: str) -> Path:
     return path
 
 
-def inspect(path: Path) -> InspectedFile:
+def inspect(path: Path, interpreter: bool = False) -> InspectedFile:
     try:
-        return inspect_file(path)
+        return inspect_file(path, interpreter)
     except EditError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+def interpreted_files(ds: Datasource) -> set[str]:
+    """資料源中使用資料解譯器的 Excel 檔（報表中的路徑）。"""
+    connection = ds.connection
+    if not isinstance(connection, FileConnection):
+        return set()
+    return {t.path for t in connection.tables if t.interpreted}
 
 
 def copy_source(directory: Path, source: InspectedFile) -> str:
@@ -201,15 +233,15 @@ def copy_source(directory: Path, source: InspectedFile) -> str:
     return f"{DATA_DIR}/{name}"
 
 
-def packaged_source(directory: Path, path: str) -> InspectedFile:
-    """報表中已有的檔案（sources/Data/…）。"""
+def packaged_source(directory: Path, path: str, interpreter: bool = False) -> InspectedFile:
+    """報表中已有的檔案（sources/Data/…）；interpreter 時 Excel 依資料解譯器找標題列。"""
     root = (directory / SOURCES).resolve()
     found = (root / path).resolve()
     if not found.is_relative_to(root) or not found.is_file():
         raise HTTPException(
             404, f"報表中沒有檔案 {path}（以前存的報表套件沒有存入檔案時，請重新選擇檔案）"
         )
-    return inspect(found)
+    return inspect(found, interpreter)
 
 
 def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
@@ -230,12 +262,18 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
 
     if isinstance(connection, FileConnection):
         root = directory / SOURCES
+        interpreted = interpreted_files(ds)
         for path in dict.fromkeys(t.path for t in connection.tables):
-            entry: dict[str, Any] = {"path": path, "name": Path(path).name, "available": False}
+            entry: dict[str, Any] = {
+                "path": path,
+                "name": Path(path).name,
+                "available": False,
+                "interpreted": path in interpreted,
+            }
             local = root / path
             if local.is_file():
                 try:
-                    found = inspect_file(local)
+                    found = inspect_file(local, path in interpreted)
                     entry.update(
                         available=True,
                         format=found.format,
@@ -355,6 +393,7 @@ def relation_view(
             "kind": "union",
             "name": relation.name,
             "parts": [relation_view(p.relation, display) for p in relation.parts],
+            "wildcard": relation.wildcard.model_dump(mode="json") if relation.wildcard else None,
         }
     if isinstance(relation, PivotRelation):
         return {
@@ -495,7 +534,9 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
             source = inspect(local_file(body.path))
             package_path = copy_source(loaded.directory, source)
         elif body.file:
-            source = packaged_source(loaded.directory, body.file)
+            source = packaged_source(
+                loaded.directory, body.file, body.file in interpreted_files(ds)
+            )
             package_path = body.file
         else:
             raise HTTPException(422, "要指定檔案（path 或 file）")
@@ -517,6 +558,65 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
         )
         ds = next(d for d in ir.datasources if d.id == datasource)
         return model_view(ir, ds, loaded.directory)
+
+    @router.put("/{workbook}/datasources/{datasource}/interpreter")
+    def interpreter_endpoint(
+        workbook: str, datasource: str, body: InterpreterBody, request: Request
+    ) -> dict[str, Any]:
+        """切換 Excel 檔的資料解譯器：依新的設定重新檢查報表中的檔案，資料表的欄換成新的欄。"""
+        loaded = workspace(request).get(workbook)
+        source = packaged_source(loaded.directory, body.file, body.enabled)
+        ir = apply(
+            request,
+            workbook,
+            datasource,
+            lambda ir: set_interpreter(ir, datasource, body.file, source),
+        )
+        return model_view(
+            ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
+        )
+
+    @router.post("/{workbook}/datasources/{datasource}/wildcard-union")
+    def wildcard_endpoint(
+        workbook: str, datasource: str, body: WildcardBody, request: Request
+    ) -> dict[str, Any]:
+        """萬用字元聯集：資料夾中檔名（與工作表名稱）符合模式的資料表複製進報表、接在資料表下面。"""
+        loaded = workspace(request).get(workbook)
+        ds = next((d for d in loaded.ir.datasources if d.id == datasource), None)
+        if ds is None or not isinstance(ds.connection, FileConnection):
+            raise HTTPException(404, f"找不到檔案的資料源 {datasource}")
+        target = next((t for t in ds.connection.tables if t.name == body.table), None)
+        if target is None:
+            # 已經是聯集：以聯集中的第一張資料表為準
+            target = next(
+                (
+                    t
+                    for t in ds.connection.tables
+                    if _in_union(ds.connection.relation, body.table, t)
+                ),
+                None,
+            )
+        if target is None:
+            raise HTTPException(404, f"找不到資料表「{body.table}」")
+        matches, original = wildcard_matches(body, target)
+        copied = [
+            WildcardMatch(m.source, m.table, copy_source(loaded.directory, m.source), m.original)
+            for m in matches
+        ]
+        wildcard = UnionWildcard(
+            files=body.files.strip(),
+            sheets=(body.sheets or "").strip() or None,
+            recursive=body.recursive,
+        )
+        ir = apply(
+            request,
+            workbook,
+            datasource,
+            lambda ir: add_wildcard_union(ir, datasource, body.table, copied, wildcard, original),
+        )
+        return model_view(
+            ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
+        )
 
     @router.get("/{workbook}/datasources/{datasource}/remote-tables")
     def remote_tables_endpoint(
@@ -664,6 +764,54 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
 
 
 __all__ = ["copy_source", "datasource_editor_router", "inspect", "local_file", "model_view"]
+
+
+def _in_union(relation: Any, name: str, table: Any) -> bool:
+    """name 是含有 table 的聯集（萬用字元聯集再加入時，以聯集的名稱指定）。"""
+    if isinstance(relation, ModelRelation):
+        return any(_in_union(t.relation, name, table) for t in relation.tables)
+    if isinstance(relation, UnionRelation):
+        return relation.name == name and any(p.relation.name == table.name for p in relation.parts)
+    return False
+
+
+def wildcard_matches(body: WildcardBody, target: Any) -> tuple[list[WildcardMatch], str | None]:
+    """資料夾中符合模式的資料表（不含目標資料表本身的檔案與工作表）與目標檔案在資料夾中的路徑。"""
+    from tmig.parser.wildcard import matches
+
+    folder = Path(body.folder).expanduser()
+    if not folder.is_absolute() or not folder.is_dir():
+        raise HTTPException(422, f"資料夾必須是完整路徑且存在：{body.folder}")
+    pattern = body.files.strip()
+    if not pattern:
+        raise HTTPException(422, "要輸入檔名的模式，例如 Sales *.xlsx")
+    paths = sorted(
+        folder.rglob("*") if body.recursive else folder.iterdir(), key=lambda p: str(p).casefold()
+    )
+    excel = target.format == "excel"
+    suffixes = (".xlsx", ".xlsm", ".xls") if excel else (".csv", ".tsv", ".txt", ".tab")
+    own_name = Path(target.path).name
+    original: str | None = None
+    found: list[WildcardMatch] = []
+    for path in paths:
+        if (
+            not path.is_file()
+            or path.suffix.lower() not in suffixes
+            or not matches(pattern, path.name)
+        ):
+            continue
+        # 目標的檔案使用資料解譯器時，接上的檔案也使用
+        source = inspect(path, bool(getattr(target, "interpreted", False)))
+        for table in source.tables:
+            if excel and not matches(body.sheets, table.sheet or ""):
+                continue
+            if path.name == own_name and (not excel or table.sheet == target.sheet):
+                original = str(path)  # 目標資料表本身
+                continue
+            found.append(WildcardMatch(source, table.name, "", str(path)))
+    if not found:
+        raise HTTPException(422, f"「{folder}」中沒有其他符合「{pattern}」的檔案")
+    return found, original
 
 
 def desktop_connection(request: Request, key: str) -> LiveConnection:

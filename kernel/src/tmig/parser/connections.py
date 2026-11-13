@@ -37,11 +37,13 @@ from tmig.ir.models import (
     UnionColumn,
     UnionPart,
     UnionRelation,
+    UnionWildcard,
 )
 from tmig.parser.context import ParseContext
 from tmig.parser.ids import slugify, strip_brackets
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import child, children, local_name
+from tmig.parser.wildcard import WILDCARD_ATTRS
 
 UNION_TYPES = frozenset({"string", "integer", "real", "boolean", "date", "datetime", "spatial"})
 """聯集中的資料表記下的欄位型別。"""
@@ -359,7 +361,17 @@ def _union(ctx: ParseContext, element: etree._Element, caption: str) -> UnionRel
     if not parts:
         ctx.flag(element, f"資料源「{caption}」的聯集（union）沒有資料表")
         return None
-    return UnionRelation(kind="union", name=name, parts=parts)
+    files = element.get(WILDCARD_ATTRS[0])
+    wildcard = (
+        UnionWildcard(
+            files=files,
+            sheets=element.get(WILDCARD_ATTRS[1]) or None,
+            recursive=element.get(WILDCARD_ATTRS[2]) == "true",
+        )
+        if files
+        else None
+    )
+    return UnionRelation(kind="union", name=name, parts=parts, wildcard=wildcard)
 
 
 def _project(ctx: ParseContext, element: etree._Element, caption: str) -> ProjectRelation | None:
