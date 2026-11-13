@@ -139,6 +139,7 @@ def workbook_xml() -> str:
         + sheet("Two Target", "federated.twodb", "Region", "Target")
         + blend_sheet("Blend Cross", "federated.orders", "Sales", "federated.cross", "Target")
         + blend_sheet("Blend Two", "federated.cross", "Sales", "federated.pgjoin", "amount")
+        + blend_sheet("Blend Model", "federated.orders", "Sales", "federated.twodb", "amount")
     )
     return b.workbook(datasource=cross + model + orders + pgjoin, worksheets=sheets)
 
@@ -424,3 +425,21 @@ def test_blending_with_cross_database_secondary(
             None: (None, 1.0),
         }
         assert (SALES_ID, 'SELECT "region", "amount" FROM "public"."orders"') in spy.calls
+
+
+def test_blending_with_relationship_model_secondary(
+    built: tuple[Path, IR], postgres: dict[str, Any]
+) -> None:
+    """次要資料源是 Relationship 模型（兩個 PostgreSQL 資料庫的 orders 與自訂 SQL）：與 Tableau 相同另外查詢，
+    依連結欄位（自訂 SQL 的 Region）以關聯的語意彙總 amount，再與主要資料源合併。"""
+    folder, ir = built
+    blend = next(w for w in ir.worksheets if w.name == "Blend Model")
+    query = worksheet_sql(ir, blend.id)
+    assert [stage.name for stage in query.stages] == ["__p", "__s0"]
+    with runtime_for(postgres) as runtime:
+        # 依關聯：East 15.5、West 7；South 的訂單沒有對應的地區（Null，連結欄位的 Null 視為相等）
+        assert blended(runtime, ir, folder, "Blend Model") == {
+            "East": (150.75, 15.5),
+            "West": (200.0, 7.0),
+            None: (None, 1.0),
+        }

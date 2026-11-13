@@ -942,35 +942,30 @@ def _blends(view: etree._Element | None, names: list[str], used: list[str]) -> b
 
 
 def _blending_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:
-    """Data Blending 已支援主要與次要資料源都是嵌入式萃取、次要資料源只用量值的工作表；其他資料源
-    （Live 連線、Published Data Source）混合時仍不支援。"""
+    """Data Blending 已支援次要資料源只用量值的工作表：主要與次要資料源可以是萃取、檔案、跨資料庫的 join 或
+    Live 連線（Live 連線與 Tableau 相同各自查詢後合併）；Published Data Source 要先下載 .tdsx 併入報表。"""
     blended = [w for w in r.worksheets if w.blending]
+    title = "Data Blending（Published Data Source 須先併入報表）"
     if not blended:
         return Check(
-            key="no_blending",
-            title="Data Blending（主要與次要資料源須為嵌入式萃取）",
-            status="pass",
-            detail="每張工作表只用一個資料源",
+            key="no_blending", title=title, status="pass", detail="每張工作表只用一個資料源"
         )
     by_name = {d.name: d for d in dss}
-    others = sorted(
+    published = sorted(
         {
             by_name[name].caption
             for w in blended
             for name in w.datasources
-            if name in by_name and (by_name[name].published or not by_name[name].data_in_hyper)
+            if name in by_name and by_name[name].published
         }
     )
     detail = f"用到 Blending 的工作表：{_quote([w.name for w in blended])}"
-    if others:
-        detail += f"；不是嵌入式萃取的資料源：{_quote(others)}"
+    if published:
+        detail += f"；Published Data Source：{_quote(published)}"
     else:
         detail += "（次要資料源只支援彙總的量值，解析時另列不支援的用法）"
     return Check(
-        key="no_blending",
-        title="Data Blending（主要與次要資料源須為嵌入式萃取）",
-        status="fail" if others else "warn",
-        detail=detail,
+        key="no_blending", title=title, status="fail" if published else "warn", detail=detail
     )
 
 
@@ -990,7 +985,7 @@ def _grade(r: CensusReport) -> tuple[Grade, list[str]]:
 
     b_reasons: list[str] = []
     if blending and _blending_supported(r):
-        b_reasons.append("Data Blending（嵌入式萃取）")
+        b_reasons.append("Data Blending")
     if r.lod:
         b_reasons.append("LOD：" + "、".join(f"{k} {v}" for k, v in r.lod.items()))
     quick = sum(len(w.table_calcs) for w in r.worksheets)

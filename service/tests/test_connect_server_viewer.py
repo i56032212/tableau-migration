@@ -308,3 +308,60 @@ def test_join_calculation(engine: str, tmp_path: Path) -> None:
         page.get_by_role("alert").filter(has_text="沒有欄位").wait_for()
         assert errors == []
         browser.close()
+
+
+def test_blend_live_primary_with_excel_secondary(dsn: str, engine: str, tmp_path: Path) -> None:
+    """Data Blending：主要資料源是 PostgreSQL（Live），次要資料源是 Excel 的目標；編輯器放上 Excel 的量值即混合
+    （以同名的 region 連結），各自查詢後在本機合併。"""
+    params = dict(part.split("=", 1) for part in dsn.split())
+    created = call(
+        engine,
+        "/api/desktop/connections",
+        {
+            "dbclass": "postgres",
+            "server": params["host"],
+            "port": int(params["port"]),
+            "database": params["dbname"],
+            "schema": "shop",
+            "user": params["user"],
+            "password": "pw",
+        },
+    )
+    key = created["connection"]["id"]
+    opened = call(
+        engine, "/api/desktop/new-live", {"connection": key, "table_path": ["shop", "orders"]}
+    )
+    workbook, primary = opened["document"]["id"], opened["datasource"]
+    book = Workbook()
+    sheet = book.active
+    assert sheet is not None
+    sheet.title = "Targets"
+    sheet.append(["region", "target"])
+    for row in (["East", 300], ["West", 150], ["North", 99]):
+        sheet.append(row)
+    path = tmp_path / "Targets.xlsx"
+    book.save(path)
+    wb = urllib.parse.quote(workbook)
+    secondary = call(
+        engine, f"/api/edit/{wb}/datasources", {"path": str(path), "table": "Targets"}
+    )["datasource"]
+    f = {x["caption"]: x["id"] for x in model(engine, workbook, primary)["fields"]}
+    g = {x["caption"]: x["id"] for x in model(engine, workbook, secondary)["fields"]}
+    worksheet = call(engine, f"/api/edit/{wb}/worksheets/ws_1")["worksheet"]
+    worksheet.update(
+        datasource=primary,
+        rows=[{"field": f["region"]}],
+        columns=[{"field": f["sales"], "agg": "sum"}, {"field": g["target"], "agg": "sum"}],
+    )
+    saved = call(engine, f"/api/edit/{wb}/worksheets/ws_1", {"worksheet": worksheet}, "PUT")[
+        "worksheet"
+    ]
+    assert [b["datasource"] for b in saved["blends"]] == [secondary]
+    body = call(engine, f"/api/workbooks/{wb}/worksheets/ws_1/render", {})
+    rows = {row[0]: tuple(row[1:]) for row in body["table"]["rows"]}
+    # North 只在次要資料源中，不出現；South 沒有目標
+    assert rows == {
+        "East": ("150.75", "300"),
+        "South": ("75", "Null"),
+        "West": ("200", "150"),
+    }

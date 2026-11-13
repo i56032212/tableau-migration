@@ -68,7 +68,8 @@ jobs:
 
   # 第三階段 N2：轉譯後的 SQL 在 PostgreSQL、Spark（Databricks 的引擎；另以 Spark Thrift Server 走
   # HiveServer2 協定）、MySQL 與 Trino（Docker）實跑；BigQuery 的執行器在模擬器（Docker）實跑；
-  # 資料庫的空間欄位與空間 join 在 PostGIS、MySQL 實跑，跨資料庫的 join 在 PostgreSQL 實跑。
+  # 資料庫的空間欄位與空間 join 在 PostGIS、MySQL 實跑，跨資料庫的 join 在 PostgreSQL 實跑，Live 連線的
+  # Data Blending 在 PostgreSQL 與 MySQL 實跑。
   # 環境不齊全時直接失敗。執行環境只有約 8 GB 記憶體：Docker 的服務都設上限
   engines:
     runs-on: ubuntu-latest
@@ -106,8 +107,9 @@ jobs:
           TMIG_TEST_BIGQUERY: 127.0.0.1:9050
         run: >-
           uv run pytest -q kernel/tests/sqlgen/test_dialect.py kernel/tests/sqlgen/test_engines.py
-          kernel/tests/sqlgen/test_live_spatial.py kernel/tests/data/test_postgis.py
-          kernel/tests/data/test_mysql_spatial.py kernel/tests/data/test_federated.py
+          kernel/tests/sqlgen/test_live_spatial.py kernel/tests/sqlgen/test_blend_live.py
+          kernel/tests/data/test_postgis.py kernel/tests/data/test_mysql_spatial.py
+          kernel/tests/data/test_federated.py
       - name: 失敗時列出 Trino 與 BigQuery 模擬器的紀錄
         if: failure()
         run: |

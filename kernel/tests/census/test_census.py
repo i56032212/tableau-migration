@@ -233,8 +233,21 @@ def test_cross_datasource_filters_are_not_blending(tmp_path: Path) -> None:
 
     sheets = blended(rows=b.ref("none:Region:nk"), cols=target_ref("sum:Target:qk"))
     xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheets)
-    (sheet,) = run_census(b.write_twb(tmp_path, xml, "blended.twb")).worksheets
+    report = run_census(b.write_twb(tmp_path, xml, "blended.twb"))
+    (sheet,) = report.worksheets
     assert sheet.blending
+    assert statuses(report)["no_blending"] == "warn"
+    # 次要資料源是 Live 連線（PostgreSQL）：與 Tableau 相同各自查詢後合併，已支援
+    live = targets_datasource().replace(
+        "<connection class='textscan' directory='C:/data' filename='targets.csv' />",
+        "<connection class='postgres' dbname='crm' port='5432' server='pg.example.com' "
+        "username='reader' />",
+    )
+    live = live[: live.index("<extract ")] + live[live.index("</extract>") + len("</extract>") :]
+    xml = b.workbook(b.extract_datasource() + live, worksheets=sheets)
+    report = run_census(b.write_twb(tmp_path, xml, "blended_live.twb"))
+    assert report.worksheets[0].blending
+    assert statuses(report)["no_blending"] == "warn"
 
 
 # ---------------------------------------------------------------- 報告

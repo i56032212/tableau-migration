@@ -9,11 +9,16 @@
   維度時，次要資料源的值在這些維度上重複（以連結欄位的層級計算）
 - 連結欄位的 Null 視為相等（與本平台以維度連接的其他地方相同；Tableau 的行為未確認）
 
-次要資料源的萃取在執行前以唯讀附加（WorksheetSql.attach），資料表名稱前加上附加的名稱。次要資料源是
-跨資料庫的 join（檔案＋資料庫、多個資料庫）時，資料庫的資料表在查詢時取回（只取次要資料源的查詢用到的
-欄），與匯入的檔案一起成為附加的資料表（WorksheetSql.federated，見 tmig.data.federated.attach_federated）。
-尚不支援：Live 連線與 Relationship 模型的次要資料源、Live 連線的主要資料源、次要資料源的 Table Calculation，
-以及與總計一起使用。
+都在本機的資料源（萃取、檔案、跨資料庫的 join）在同一段 DuckDB 查詢中混合：次要資料源的萃取在執行前以唯讀
+附加（WorksheetSql.attach），資料表名稱前加上附加的名稱；次要資料源是跨資料庫的 join（檔案＋資料庫、多個
+資料庫）時，資料庫的資料表在查詢時取回（只取次要資料源的查詢用到的欄），與匯入的檔案一起成為附加的資料表
+（WorksheetSql.federated，見 tmig.data.federated.attach_federated）。
+
+主要或次要資料源是 Live 連線、或次要資料源是 Relationship 模型時，與 Tableau 相同各資料源分開查詢
+（WorksheetSql.stages：Live 連線在各自的資料庫彙總，Relationship 模型依模型的規則），結果在本機依連結欄位
+合併（tmig.data.executor.combine，由 tmig.data.runtime.DataRuntime 執行）。
+
+尚不支援：次要資料源的 Table Calculation，以及與總計一起使用。
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from tmig.ir.models import (
     MEASURE_NAMES,
     MEASURE_VALUES,
     Blend,
+    Datasource,
     ExtractConnection,
     FieldUse,
     FileConnection,
@@ -41,6 +47,7 @@ from tmig.ir.models import (
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import (
+    BlendStage,
     FederatedBlend,
     OutputColumn,
     QueryError,
@@ -78,23 +85,29 @@ def blend_sql(
             raise QueryError(
                 "Data Blending：次要資料源的欄位套用 Table Calculation 尚不支援", unsupported=True
             )
-    if isinstance(datasources[ws.datasource].connection, LiveConnection):
-        raise QueryError("Data Blending：主要資料源為 Live 連線尚不支援", unsupported=True)
+    primary = datasources[ws.datasource]
+    blends = [
+        (n, blend, [u for u in used if owners[u.field] is blend])
+        for n, blend in enumerate(ws.blends)
+    ]
+    blends = [(n, blend, uses) for n, blend, uses in blends if uses]
+    # 主要或次要資料源有 Live 連線（或次要資料源是 Relationship 模型）：各資料源分開查詢，結果在本機合併
+    staged = isinstance(primary.connection, LiveConnection) or any(
+        separate(datasources[blend.datasource]) for _, blend, _ in blends
+    )
 
     query = WorksheetQuery(primary_ir, ws.id, state, user)
     query.row_number = ROW
     main = query.build()
     dims = [c for c in main.columns if c.role == "dimension" and c.use is not None]
     ctes = [f"{ident(PRIMARY)} AS (\n{main.sql.rstrip()}\n)"]
+    stages = [BlendStage(PRIMARY, primary, main)] if staged else []
     joins: list[str] = []
     attach: dict[str, str] = {}
     federated: dict[str, FederatedBlend] = {}
     extra: list[tuple[str, OutputColumn]] = []
     notes: list[str] = []
-    for n, blend in enumerate(ws.blends):
-        uses = [u for u in used if owners[u.field] is blend]
-        if not uses:
-            continue
+    for n, blend, uses in blends:
         secondary = datasources[blend.datasource]
         pairs: list[tuple[OutputColumn, FieldUse]] = []
         for column in dims:
@@ -108,39 +121,28 @@ def blend_sql(
                 f"Data Blending：檢視中沒有與次要資料源「{secondary.caption}」的連結欄位",
                 unsupported=True,
             )
-        connection = secondary.connection
         alias = f"__blend{n}"
-        if isinstance(connection, ExtractConnection) and connection.model is None:
-            moved = connection.model_copy(update={"table": f"{alias}.{connection.table}"})
-        elif isinstance(connection, FileConnection) and not isinstance(
-            connection.relation, ModelRelation
-        ):
-            # 檔案型資料源：關聯樹中的資料表加上附加的名稱
-            moved = connection.model_copy(
-                update={"relation": _attached_relation(connection.relation, alias)}
-            )
-        else:
-            raise QueryError(
-                f"Data Blending：次要資料源「{secondary.caption}」為 Live 連線或 Relationship 模型，"
-                "尚不支援",
-                unsupported=True,
-            )
-        attached = secondary.model_copy(update={"connection": moved})
+        source = secondary if staged else _attached(secondary, alias)
         holder = _secondary_worksheet(ws, secondary.id, [f for _, f in pairs], uses)
         sub = ir.model_copy(
             update={
-                "datasources": [attached if d.id == secondary.id else d for d in ir.datasources],
+                "datasources": [source if d.id == secondary.id else d for d in ir.datasources],
                 "worksheets": [holder],
             }
         )
         built = WorksheetQuery(sub, holder.id, state, user).build()
-        if isinstance(connection, FileConnection) and is_federated(connection):
-            # 跨資料庫的 join：資料庫的資料表在執行前取回，與匯入的檔案一起附加
-            federated[alias] = FederatedBlend(
-                connection=connection, sql=built.sql, parameters=built.parameters
-            )
         name = f"__s{n}"
-        ctes.append(f"{ident(name)} AS (\n{built.sql.rstrip()}\n)")
+        connection = secondary.connection
+        if staged:
+            stages.append(BlendStage(name, secondary, built))
+        else:
+            if isinstance(connection, FileConnection) and is_federated(connection):
+                # 跨資料庫的 join：資料庫的資料表在執行前取回，與匯入的檔案一起附加
+                federated[alias] = FederatedBlend(
+                    connection=connection, sql=built.sql, parameters=built.parameters
+                )
+            ctes.append(f"{ident(name)} AS (\n{built.sql.rstrip()}\n)")
+            attach[alias] = secondary.id
         types = {c.key: c.datatype for c in built.columns}
         conditions = [
             _link_condition(
@@ -152,13 +154,15 @@ def blend_sql(
             for column, found in pairs
         ]
         joins.append(f"LEFT JOIN {ident(name)} ON {' AND '.join(conditions)}")
-        attach[alias] = secondary.id
         for column in built.columns:
             if column.role == "measure":
                 extra.append((name, column))
+        where = ""
+        if staged:
+            where = "在它的資料庫" if isinstance(connection, LiveConnection) else "另外查詢、"
         notes.append(
-            f"次要資料源「{secondary.caption}」以 {', '.join(use_key(f) for _, f in pairs)} 彙總後"
-            "依連結欄位 LEFT JOIN"
+            f"次要資料源「{secondary.caption}」{where}以 {', '.join(use_key(f) for _, f in pairs)} "
+            "彙總後依連結欄位 LEFT JOIN"
         )
 
     shown = [c for c in main.columns if c.role != "sort"]
@@ -171,6 +175,26 @@ def blend_sql(
         + "\n".join(joins)
         + f"\nORDER BY {ident(PRIMARY)}.{ident(ROW)}"
     )
+    columns = [*shown, *(c for _, c in extra), *sorts]
+    if staged:
+        notes.insert(
+            0,
+            "各資料源分開查詢（Live 連線在各自的資料庫），結果在本機依連結欄位合併（與 Tableau 相同）",
+        )
+        plan = [*main.plan, StageNote(8, [], [f"Data Blending：{text}" for text in notes])]
+        text = "\n".join(
+            f"-- {stage.name}：{stage.datasource.caption}\n{stage.query.sql.rstrip()}\n"
+            for stage in stages
+        )
+        return WorksheetSql(
+            worksheet=ws.id,
+            sql=f"{text}-- Data Blending：依連結欄位合併各資料源的結果\n{select}\n",
+            columns=columns,
+            plan=plan,
+            state=main.state,
+            main=select,
+            stages=stages,
+        )
     sql = (
         "WITH "
         + ",\n".join(ctes)
@@ -182,7 +206,7 @@ def blend_sql(
     return WorksheetSql(
         worksheet=ws.id,
         sql=sql,
-        columns=[*shown, *(c for _, c in extra), *sorts],
+        columns=columns,
         plan=plan,
         state=main.state,
         main=select,
@@ -190,6 +214,40 @@ def blend_sql(
         attach=attach,
         federated=federated,
     )
+
+
+def separate(datasource: Datasource) -> bool:
+    """次要資料源要分開查詢：Live 連線（在它的資料庫彙總）與 Relationship 模型（依模型的規則各自查詢）。"""
+    connection = datasource.connection
+    if isinstance(connection, LiveConnection):
+        return True
+    if isinstance(connection, ExtractConnection):
+        return connection.model is not None
+    return isinstance(connection.relation, ModelRelation)
+
+
+def _attached(secondary: Datasource, alias: str) -> Datasource:
+    """次要資料源的資料表改成附加的 DuckDB 檔中的資料表（與主要資料源在同一段查詢中）。"""
+    connection = secondary.connection
+    if isinstance(connection, ExtractConnection) and connection.model is None:
+        moved: ExtractConnection | FileConnection = connection.model_copy(
+            update={"table": f"{alias}.{connection.table}"}
+        )
+    elif (
+        isinstance(connection, FileConnection)
+        and connection.relation is not None
+        and not isinstance(connection.relation, ModelRelation)
+    ):
+        # 檔案型資料源（含跨資料庫的 join）：關聯樹中的資料表加上附加的名稱
+        moved = connection.model_copy(
+            update={"relation": _attached_relation(connection.relation, alias)}
+        )
+    else:  # pragma: no cover - separate() 的資料源分開查詢
+        raise QueryError(
+            f"Data Blending：次要資料源「{secondary.caption}」不能與主要資料源一起查詢",
+            unsupported=True,
+        )
+    return secondary.model_copy(update={"connection": moved})
 
 
 def _attached_relation(relation: Relation, alias: str) -> Relation:
@@ -316,4 +374,4 @@ def _with(ir: IR, ws: Worksheet) -> IR:
     return ir.model_copy(update={"worksheets": [ws if w.id == ws.id else w for w in ir.worksheets]})
 
 
-__all__ = ["blend_sql"]
+__all__ = ["blend_sql", "separate"]

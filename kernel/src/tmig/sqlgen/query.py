@@ -239,6 +239,16 @@ class FederatedBlend:
 
 
 @dataclass
+class BlendStage:
+    """Data Blending 分開執行的一段：主要資料源的查詢（name 為 __p）或一個次要資料源依連結欄位彙總的查詢
+    （__s0、__s1…），在 datasource 自己的來源執行（Live 連線下推到它的資料庫），結果以 name 的資料表交給合併。"""
+
+    name: str
+    datasource: Datasource
+    query: WorksheetSql
+
+
+@dataclass
 class WorksheetSql:
     worksheet: str
     sql: str
@@ -261,6 +271,10 @@ class WorksheetSql:
     federated: dict[str, FederatedBlend] = field(default_factory=dict)
     """Data Blending 的次要資料源中是跨資料庫的 join 的（附加的名稱 → 連線與查詢）；匯入的檔案仍在 attach 所指的
     DuckDB 檔。"""
+    stages: list[BlendStage] = field(default_factory=list)
+    """Data Blending 的主要或次要資料源有 Live 連線（或次要資料源是 Relationship 模型）時：與 Tableau 相同，各資料源
+    的查詢分開執行（Live 連線在各自的資料庫），結果再依連結欄位合併（main 在 DuckDB 以各段的 name 參照結果）。
+    sql 只是說明用（各段的 SQL），要以 tmig.data.runtime.DataRuntime 執行。"""
     underlying: str = ""
     """完整資料（基礎資料列）的 SELECT：彙總前的資料列中，仍在檢視中的標記所對應的列（與 main 相同接在 ctes 之後）；
     空的時不支援（例如 Data Blending）。"""
@@ -3372,7 +3386,9 @@ __all__ = [
     "PUSHDOWN_BOUNDARY",
     "STAGES",
     "SUBTOTAL",
+    "BlendStage",
     "CteDef",
+    "FederatedBlend",
     "Guard",
     "OutputColumn",
     "PreviewColumn",

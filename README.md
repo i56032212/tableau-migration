@@ -40,7 +40,7 @@ Relationship 模型（見「Relationship 模型」）；公開報表盤點中符
 Project、workbook、view 權限開放（見「權限」）；匯入之後 Project、權限、使用者與群組在新平台上管理（見「站台管理」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
 PDF、PNG 寄出訂閱（見「排程與訂閱」），排程、萃取更新與訂閱也在新平台上管理，使用者可以自己訂閱（見「排程管理」）、建立資料警示（見「資料警示」），Published Data Source 也發布到新平台、報表共用伺服器上的萃取（見「伺服器上的資料源」）；檢視器有復原、自訂檢視、下載交叉資料表與資料、留言與我的最愛（見「檢視者的工具」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
 一份報表可以有多個資料源（各工作表用各自的資料源，網址參數套用到所有資料源中同名的欄位）；同一張工作表混用多個資料源的
-Data Blending 支援主要資料源是萃取、檔案或跨資料庫的 join，次要資料源是萃取、檔案或跨資料庫的 join、只用量值的工作表（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
+Data Blending 支援主要與次要資料源是萃取、檔案、跨資料庫的 join 或 Live 連線（次要資料源也可以是 Relationship 模型）、次要資料源只用量值的工作表（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
 不會生效，盤點時列為不符合起步條件（見「依檢視者的身分連線」）。以 156 份公開報表重新盤點：放寬多個資料源後 12 份
 轉為符合起步條件；28 份要求檢視者輸入自己的資料庫帳號（Tableau Server Insights、TabMon 等連到 Tableau 資料庫的範例）
 改列為不符合，3 份以 Windows 整合驗證連線列為需注意。
@@ -344,12 +344,16 @@ Tableau 2020.2 起多表資料源預設的 Relationship 模型（邏輯資料表
 - 次要資料源的萃取在查詢前以唯讀附加（ATTACH，與主要資料源的 DuckDB 檔同一目錄）
 - 次要資料源是跨資料庫的 join（檔案＋資料庫、多個資料庫）時，資料庫的資料表在查詢時取回（只取次要資料源依連結欄位彙總
   時用到的欄，TTL 之內重複使用），與匯入的檔案一起附加；主要資料源是萃取、檔案或跨資料庫的 join 都可以
+- 主要或次要資料源是 **Live 連線**、或次要資料源是 **Relationship 模型**時，與 Tableau 相同各資料源分開查詢：主要資料源
+  照常查詢（Live 連線下推到它的資料庫），次要資料源依連結欄位在它自己的資料庫彙總（例如主要資料源在 PostgreSQL、次要
+  資料源在 MySQL），結果在本機依連結欄位 LEFT JOIN。以臨時的 PostgreSQL 與 MySQL 實跑：依地區連結、在未連結的維度上
+  重複、以年連結、自訂關聯，在主要／次要資料源是 PostgreSQL、MySQL 或萃取的五種組合下，結果與兩個都是萃取時相同；
+  次要資料源是兩個 PostgreSQL 資料庫的 Relationship 模型、桌面版的 Live 連線混合 Excel 的目標也實跑比對
 - 桌面版編輯器：資料窗格可以切換瀏覽其他資料源，把其他資料源的量值放到檢視上即混合（沿用其他工作表的連結，否則以名稱相同的
   維度連結），移走後不再混合；空白的工作表放上的第一個欄位決定主要資料源。「取代主要資料源」以欄位名稱對應換掉主要資料源
 
-尚不支援（解析時列入 unsupported）：次要資料源的維度、篩選與 Table Calculation、Live 連線或 Relationship 模型的次要資料源、
-Live 連線的主要資料源、與總計或小計一起使用；計算欄位中參照次要資料源的欄位（`[Targets].[Target]`）也不支援。
-連結欄位的 Null 視為相等。
+尚不支援（解析時列入 unsupported）：次要資料源的維度、篩選與 Table Calculation、與總計或小計一起使用；計算欄位中參照
+次要資料源的欄位（`[Targets].[Target]`）也不支援。連結欄位的 Null 視為相等。
 
 ### 跨資料源篩選
 
@@ -1301,7 +1305,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
 合併集合（XML 的寫法尚未在公開報表中看到）、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
-Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、
+Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及與總計一起使用）、
 標題中的 Table Calculation 值、
 故事點記下的其他狀態（範圍篩選、排序、欄列架的變更、註解等）、
 取消彙總的叢集與以維度分群、Teradata 的彙總中的 RANDOM()、

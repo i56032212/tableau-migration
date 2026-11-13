@@ -32,6 +32,8 @@ from tmig.sqlgen.sql import ident
 
 def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
     """執行一張工作表的查詢（兩段式）；讀資料表的那一段就用到空間函式時改以 execute_rows 執行。"""
+    if query.stages:
+        raise ExecutionError("Data Blending 的各資料源要以 DataRuntime 分開執行")
     try:
         return _execute_split(query, executor)
     except DialectError:

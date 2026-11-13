@@ -327,6 +327,8 @@ def execute_federated(
     """執行一張工作表的查詢（跨資料庫的 join）：先做查詢附帶的檢查，再執行查詢。Data Blending 的次要資料源
     是 folder（省略時為 database 所在的目錄）中以資料源 id 為檔名的 DuckDB 檔；次要資料源也是跨資料庫的 join
     時，資料庫的資料表在這裡取回（attach_federated）。"""
+    if query.stages:
+        raise ExecutionError("Data Blending 的各資料源要以 DataRuntime 分開執行")
     sqls = [query.sql, *(g.sql for g in query.guards)]
     con = federated_connection(database, connection, fetch, cache, sqls, query.parameters)
     try:
