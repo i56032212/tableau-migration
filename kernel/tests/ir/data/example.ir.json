@@ -43,6 +43,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -65,6 +66,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -87,6 +89,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -109,6 +112,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -131,6 +135,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
@@ -157,6 +162,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -183,6 +189,7 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         }
       ],

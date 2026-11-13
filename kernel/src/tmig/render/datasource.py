@@ -149,7 +149,8 @@ def datasource_summary(ds: Datasource, parameters: Sequence[Parameter] = ()) -> 
         "model": model is not None,
         "tables": tables,
         "relationships": relationships,
-        "fields": [_field(f, model, names, params) for f in ds.fields],
+        # 關聯計算只用在關聯條件（條件中以公式顯示）
+        "fields": [_field(f, model, names, params) for f in ds.fields if not f.relationship_calc],
         "filters": [
             {"id": flt.id, "stage": flt.stage, "text": describe_filter(flt, fields)}
             for flt in ds.filters

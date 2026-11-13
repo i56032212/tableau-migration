@@ -60,6 +60,8 @@ from tmig_service.app import Workspace, create_app
 from tmig_service.auth import Authenticator, AuthSettings
 from tmig_service.credentials import CredentialStore, default_credentials
 from tmig_service.datasource_editor import datasource_editor_router
+from tmig_service.desktop_connections import SETTINGS_FILE as CONNECTIONS_FILE
+from tmig_service.desktop_connections import DesktopConnections, connections_router
 from tmig_service.desktop_remote import (
     CALLBACK_PATH,
     SETTINGS_FILE,
@@ -224,6 +226,17 @@ class NewRequest(BaseModel):
     name: str | None = None
 
 
+class NewLiveRequest(BaseModel):
+    """連到資料庫的新報表：connection 為連線代號（連線對話框建立的），table_path 或 sql 二擇一。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection: str
+    table_path: list[str] | None = None
+    sql: str | None = None
+    name: str | None = None
+
+
 class SaveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -333,6 +346,39 @@ def desktop_router(documents: Documents) -> APIRouter:
             documents.remove(document.id)
             workspace(request).forget(document.id)
             raise HTTPException(422, f"無法以 {source.path.name} 建立報表：{exc}") from exc
+        document.name = ir.workbook.name
+        document.modified = True
+        documents.update(document)
+        opened = _opened(document, workspace(request), already_open=False)
+        opened["datasource"] = ir.datasources[0].id
+        opened["worksheet"] = ir.worksheets[0].id
+        return opened
+
+    @router.post("/new-live")
+    def new_live_document(body: NewLiveRequest, request: Request) -> dict[str, Any]:
+        """連到資料庫的新報表（Tableau 的「連線到伺服器」）：一張資料表或自訂 SQL；資料留在資料庫中，
+        查詢時下推（Live 連線）。"""
+        from tmig.authoring import new_live_workbook
+        from tmig.edit import EditError
+        from tmig.ir import save_ir
+        from tmig_service.datasource_editor import desktop_connection, remote_columns
+
+        connection = desktop_connection(request, body.connection)
+        columns = remote_columns(request, connection, body.table_path, body.sql)
+        default = body.table_path[-1] if body.table_path else "自訂 SQL"
+        stem = (body.name or "").strip() or default
+        document, directory = documents.create_named(stem, connection.server or "", "new")
+        try:
+            ir = new_live_workbook(stem, connection, body.table_path, body.sql, columns)
+            save_ir(ir, directory / "golden.ir.json")
+            workspace(request).get(document.id)
+        except EditError as exc:
+            documents.remove(document.id)
+            raise HTTPException(422, str(exc)) from exc
+        except Exception as exc:
+            documents.remove(document.id)
+            workspace(request).forget(document.id)
+            raise HTTPException(422, f"無法建立報表：{exc}") from exc
         document.name = ir.workbook.name
         document.modified = True
         documents.update(document)
@@ -483,12 +529,10 @@ def create_desktop_app(
     credentials：權杖存放處（預設為認證管理員）；opener：開啟系統瀏覽器（登入伺服器用）。"""
     documents = Documents(workspace)
     folder = settings_dir or workspace.parent
-    remote = Remote(
-        folder / SETTINGS_FILE,
-        credentials or default_credentials(folder),
-        opener,
-        client_factory,
-    )
+    store = credentials or default_credentials(folder)
+    remote = Remote(folder / SETTINGS_FILE, store, opener, client_factory)
+    connections = DesktopConnections(folder / CONNECTIONS_FILE, store)
+    connections.restore()
     app = create_app(
         workspace,
         web_dist,
@@ -498,9 +542,12 @@ def create_desktop_app(
             remote_router(remote, documents, _opened),
             editor_router(on_change=documents.mark_modified),
             datasource_editor_router(on_change=documents.mark_modified),
+            connections_router(lambda request: request.app.state.connections),
         ],
     )
     app.state.documents = documents
+    app.state.connections = connections
+    app.state.runtime.add_configs(connections.configs())
     app.add_middleware(DesktopGuard, token=token)
     return app
 

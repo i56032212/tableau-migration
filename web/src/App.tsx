@@ -24,6 +24,7 @@ import {
   openDialog,
   addDatasource,
   addDatasourceFrom,
+  connectServer,
   createWorkbook,
   newWorkbook,
   openDocument,
@@ -44,6 +45,7 @@ import {
 import { SessionGate, UserBar } from "./Session";
 import { setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
+import { ConnectServerDialog } from "./editor/ConnectServer";
 import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
 import { DashboardEditor } from "./editor/DashboardEditor";
 import { Editor } from "./editor/Editor";
@@ -168,6 +170,8 @@ function DesktopCommands() {
   if (dialog.kind === "publish-datasource")
     return <PublishDatasourceDialog workbook={dialog.workbook} datasource={dialog.datasource} onClose={close} />;
   if (dialog.kind === "open-server") return <OpenFromServerDialog onClose={close} go={navigate} />;
+  if (dialog.kind === "connect-server")
+    return <ConnectServerDialog workbook={dialog.workbook} onClose={close} go={navigate} />;
   if (dialog.kind === "choose-table") {
     const chosen = dialog;
     return (
@@ -261,6 +265,15 @@ function Home({ me }: { me: Me }) {
             新增報表（連線到資料）…
           </button>
         )}
+        {desktop && (
+          <button
+            type="button"
+            onClick={() => connectServer(null)}
+            title="連線到資料庫（PostgreSQL、SQL Server、Oracle、Snowflake 等）建立新的報表"
+          >
+            新增報表（連線到伺服器）…
+          </button>
+        )}
         {!desktop && me.user?.admin && <Link to="/admin">站台管理</Link>}
         {subscriptions !== null && (
           <Link to="/subscriptions">我的訂閱{subscriptions ? `（${subscriptions}）` : ""}</Link>
@@ -310,7 +323,7 @@ function Home({ me }: { me: Me }) {
       {workbooks?.length === 0 && (
         <p>
           {desktop
-            ? "還沒有開啟的報表：按「開啟檔案…」（Ctrl+O）開啟 Tableau 的 .twbx、.twb，或報表套件 .tmigx；或按「新增報表（連線到資料）…」（Ctrl+N）以 Excel、文字檔建立新的報表。"
+            ? "還沒有開啟的報表：按「開啟檔案…」（Ctrl+O）開啟 Tableau 的 .twbx、.twb，或報表套件 .tmigx；或按「新增報表（連線到資料）…」（Ctrl+N）以 Excel、文字檔建立新的報表，「新增報表（連線到伺服器）…」以資料庫建立。"
             : me.mode === "none"
               ? "fixtures 中沒有報表。"
               : "沒有可以檢視的報表；請向報表的擁有者申請權限。"}
@@ -643,6 +656,11 @@ function WorkbookPage({
         {me.mode === "desktop" && (datasource || editingDatasource) && (
           <button type="button" onClick={() => void addDatasource(workbook, navigate)}>
             新增資料源…
+          </button>
+        )}
+        {me.mode === "desktop" && (datasource || editingDatasource) && (
+          <button type="button" title="以資料庫的資料表或自訂 SQL 新增資料源" onClick={() => connectServer(workbook)}>
+            連線到伺服器…
           </button>
         )}
         {(dashboard || worksheet || story) && (

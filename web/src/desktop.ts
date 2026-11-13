@@ -17,7 +17,9 @@ export type DesktopDialog =
   | { kind: "publish"; workbook: string }
   | { kind: "publish-datasource"; workbook: string; datasource?: string }
   /** 新增報表或資料源：選擇資料檔中的資料表（workbook 為 null 時是新的報表） */
-  | { kind: "choose-table"; title: string; path: string; tables: InspectedTable[]; workbook: string | null };
+  | { kind: "choose-table"; title: string; path: string; tables: InspectedTable[]; workbook: string | null }
+  /** 連線到伺服器（資料庫）：workbook 為 null 時建立新的報表，否則加入新的資料源 */
+  | { kind: "connect-server"; workbook: string | null };
 export const DIALOG_EVENT = "tmig:desktop-dialog";
 /** 報表的定義在檢視器之外改變了（例如報表改用發布的資料源）：畫面重新載入報表。 */
 export const CHANGED_EVENT = "tmig:workbook-changed";
@@ -98,6 +100,11 @@ export async function createWorkbook(path: string, table: string, go: Go): Promi
     toast(`無法建立報表：${(e as Error).message}`, "error");
     return false;
   }
+}
+
+/** 連線到伺服器（Tableau 的「連線＞到伺服器」）：資料庫的連線對話框；workbook 為 null 時建立新的報表。 */
+export function connectServer(workbook: string | null): void {
+  openDialog({ kind: "connect-server", workbook });
 }
 
 /** 報表加上新的資料源（Tableau 的「資料＞新增資料源」）。 */
@@ -217,7 +224,8 @@ export function currentWorkbook(): string | null {
   return parts[0] === "w" && parts[1] ? parts[1] : null;
 }
 
-/** 外殼的選單（開啟、儲存、另存新檔、關閉報表；伺服器的登入、從伺服器開啟、發布報表與資料源、登出）呼叫的入口。 */
+/** 外殼的選單（新增報表、連線到伺服器、開啟、儲存、另存新檔、關閉報表；伺服器的登入、從伺服器開啟、發布報表與
+ * 資料源、登出）呼叫的入口。 */
 export function installMenuCommands(go: Go): void {
   const withWorkbook = (run: (workbook: string) => Promise<void>) => () => {
     const workbook = currentWorkbook();
@@ -228,6 +236,7 @@ export function installMenuCommands(go: Go): void {
   (window as unknown as { tmigDesktop?: Record<string, () => Promise<void>> }).tmigDesktop = {
     open: () => openDocument(go),
     newWorkbook: () => newWorkbook(go),
+    connectServer: async () => connectServer(null),
     save: withWorkbook((wb) => saveDocument(wb, false)),
     saveAs: withWorkbook((wb) => saveDocument(wb, true)),
     close: withWorkbook((wb) => closeDocument(wb, go)),

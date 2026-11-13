@@ -710,10 +710,28 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
   數字也是字串）；文字檔自動判斷分隔字元（逗號、分號、Tab、直線）與字元集（UTF-8、Big5、Latin-1），依 en_US
   的寫法判斷數字與日期，只有 true／false 是布林值。數字為量值（預設總和），其他為維度；欄名是 Country、State、
   City、Postal Code、Latitude、Longitude 等時給地理角色（緯度、經度預設平均，其他地理欄位是維度）
+- **連線到伺服器**（檔案選單與首頁的「新增報表（連線到伺服器）…」，已開啟的報表以工具列的「連線到伺服器…」
+  加入資料源）：選資料庫的類型（PostgreSQL、SQL Server、MySQL、Oracle、Snowflake、Redshift、Databricks、
+  Spark SQL、Presto／Trino、Athena、BigQuery、Teradata、Hive、Impala、Db2、SAP HANA），輸入伺服器、連接埠、
+  資料庫（Oracle 為服務名稱、BigQuery 為專案）、結構描述與帳號登入；登入後列出資料表與檢視（可換結構描述、
+  搜尋），選一張或輸入**自訂 SQL**（「檢查欄位」在資料庫執行，取前 200 列判斷型別）。資料留在資料庫（Live
+  連線），查詢時才連線。**密碼不寫進報表與設定檔**：設定檔（設定資料夾的 `connections.toml`）只記
+  `${TMIG_DB_<連線代號>}`，密碼只在本機引擎的記憶體中，勾選「記住密碼」時另存在作業系統的認證管理員
+  （Windows 的 Credential Manager）、下次啟動讀回；也可以改用自己設定的環境變數。已建立的連線列在對話框上面，
+  可以直接使用、重新登入或刪除。發布到伺服器後由伺服器的連線設定檔提供伺服器用的帳號（建議唯讀的服務帳號）
+- **資料庫的資料源**：左邊列出資料庫中的資料表（加入的方式與檔案相同：關聯、join、聯集）與「新增自訂 SQL…」；
+  自訂 SQL 可以「編輯 SQL…」，名稱相同的欄位保留（含名稱、角色與計算的參照）、新的欄加入、不在查詢中的欄位
+  移除（有工作表或計算用到時不能移除）；樞紐在資料庫中以 UNION ALL 計算
 - **加入資料表**（左邊連線中的資料表，或「其他檔案…」）：預設以**關聯**成為另一張邏輯資料表（條件預設為名稱
   相同的欄，可用 =、≠、<、≤、>、≥ 與多個條件）；也可以在邏輯資料表中 **join**（內部、左側、右側、完整外部）或
   **聯集**（欄位依名稱對應，另有 Table Name，Excel 另有 Sheet、文字檔另有 Path）。join 的類型與條件、關聯的
   條件可以修改；最後加入的 join、聯集的一張與邏輯資料表可以移除（只在這張資料表中的欄位一併移除）
+- **Join 計算與關聯計算**：條件的任一邊選「建立 Join 計算…」或「建立關聯計算…」改成輸入公式（以欄位的顯示
+  名稱書寫，例如 `LOWER([Region])`）。join 計算存成以 `[資料表].[欄位]` 參照實體欄位的公式（與 Tableau 的
+  寫法相同），只能用到那一邊的資料表；關聯計算存成所屬邏輯資料表上隱藏的計算欄位（`DataField.relationship_calc`，
+  公式以欄位的內部名稱參照，改名後仍有效），只能用到那一張邏輯資料表的欄位，不能彙總、用 LOD 或參數；不再用到時
+  自動移除。從 Tableau 開啟的報表中，關聯條件寫成公式（`<expression op='DATETRUNC(&apos;month&apos;,[ORDER_TS])' />`，
+  見 Tableau Server 處理過的報表）時同樣轉成關聯計算
 - **樞紐**：欄位清單中勾選同一張資料表的欄，「樞紐所選的欄位」轉成 Pivot Field Names、Pivot Field Values；
   可以移除樞紐
 - **欄位**：改名、隱藏、角色（維度／量值）與資料類型（檔案的欄位以新的型別重新匯入，不符合的值成為 Null）；
@@ -721,13 +739,16 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
   Relationship 模型點選邏輯資料表切換
 - **檔案的複本**：連線的檔案複製進報表（`Data/<檔名>`，與 Tableau 封裝的 .twbx 相同），報表套件中存在
   `sources/` 之下；每次變更後以 DuckDB 重新匯入。再開啟報表套件、驗證（`tmig verify`）與發布都由這份複本匯入
-- API（`/api/edit/<報表>/…`）：`POST inspect-file`、`POST datasources`（新增資料源）、
-  `GET datasources/<資料源>/model`、`POST …/tables`（加入資料表）、`DELETE …/tables/<資料表>`、
-  `PUT …/joins/<資料表>`、`PUT …/relationships/<邏輯資料表>`、`POST …/pivot`、`DELETE …/pivot/<名稱>`、
-  `PUT …/fields/<欄位>`、`PUT datasources/<資料源>`（改名）；桌面版另有 `POST /api/desktop/inspect` 與
-  `POST /api/desktop/new`
-- 限制：只能連線到檔案；從 Tableau 開啟的報表中，Live 連線與萃取的資料源只能改資料源的名稱與欄位的名稱、隱藏、
-  角色（連線與資料表沿用原本的定義）；資料解譯器、萬用字元聯集、join 計算與關聯計算、自訂 SQL 不支援
+- API（`/api/edit/<報表>/…`）：`POST inspect-file`、`POST datasources`（新增資料源：檔案，或 `connection` 與
+  `table_path`／`sql`）、`GET datasources/<資料源>/model`、`POST …/tables`（加入資料表）、`DELETE …/tables/<資料表>`、
+  `PUT …/joins/<資料表>`、`PUT …/relationships/<邏輯資料表>`（條件的一邊可以是 `{"formula": …}`）、
+  `POST …/pivot`、`DELETE …/pivot/<名稱>`、`PUT …/fields/<欄位>`、`PUT datasources/<資料源>`（改名）、
+  `GET …/remote-tables`、`POST …/remote-columns`、`PUT …/custom-sql/<名稱>`；桌面版另有 `POST /api/desktop/inspect`、
+  `POST /api/desktop/new`、`POST /api/desktop/new-live` 與連線的 `GET /api/desktop/connectors`、
+  `GET|POST /api/desktop/connections`、`POST …/connections/<連線>/sign-in`、`DELETE …/connections/<連線>`、
+  `GET …/connections/<連線>/tables`、`POST …/connections/<連線>/columns`（`tmig_service.desktop_connections`、
+  `tmig.data.catalog`）
+- 限制：萃取與已發布的資料源只能改資料源的名稱與欄位的名稱、隱藏、角色（連線與資料表沿用原本的定義）
 
 ## 發布與版本
 

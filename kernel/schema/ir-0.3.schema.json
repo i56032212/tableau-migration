@@ -1777,6 +1777,12 @@
           "description": "註解（Tableau 的「預設屬性＞註解」）：資料窗格的提示",
           "title": "Comment"
         },
+        "relationship_calc": {
+          "default": false,
+          "description": "關聯計算（Tableau 2020.2 起關聯條件的一邊可以是公式）：只用在 Relationship 模型的關聯條件，table 為所屬的邏輯資料表，公式只能用到這張資料表的欄位；資料窗格不顯示",
+          "title": "Relationship Calc",
+          "type": "boolean"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,

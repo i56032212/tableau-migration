@@ -15,6 +15,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pyarrow as pa
+
 from tmig.data.executor import QueryResult, execute, execute_query
 from tmig.data.live import execute_live, execute_remote
 from tmig.data.sources import (
@@ -47,6 +49,22 @@ class DataRuntime:
             if self._configs is None:
                 self._configs = load_connections()
             return self._configs
+
+    def add_configs(self, configs: dict[str, ConnectionConfig]) -> None:
+        """加入（或換掉）連線設定，例如桌面版在「連線到伺服器」建立的連線；已開啟的同一個連線關閉，
+        下次以新的設定重新連線。"""
+        with self._lock:
+            if self._configs is None:
+                self._configs = load_connections()
+            self._configs.update(configs)
+            stale = [self._executors.pop(key) for key in configs if key in self._executors]
+        for executor in stale:
+            _close(executor)
+
+    def fetch(self, connection: LiveConnection, sql: str) -> pa.Table:
+        """在來源資料庫執行一段（該方言的）SQL，例如列出資料表、自訂 SQL 的欄位。"""
+        with self._executor(connection) as executor:
+            return executor.fetch(sql)
 
     def run(self, query: WorksheetSql, datasource: Datasource, database: Database) -> QueryResult:
         """執行一張工作表的查詢（萃取或 Live）。"""

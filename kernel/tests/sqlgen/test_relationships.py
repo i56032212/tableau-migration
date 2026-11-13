@@ -508,8 +508,9 @@ def test_calculated_relationship_unsupported(tmp_path: Path) -> None:
     calculated = "<expression op='UPPER'><expression op='[Cust ID]' /></expression>"
     xml = datasource()
     assert xml.count(plain) == 1
+    # 運算式樹的寫法（不是寫在 op 中的公式）仍不支援；公式的寫法見 tests/data/test_relationship_calcs.py
     reasons = unsupported_reasons(tmp_path, xml.replace(plain, calculated))
-    assert any("關聯條件不是欄位比較" in r for r in reasons)
+    assert any("關聯條件不是欄位的比較" in r for r in reasons)
 
 
 # ---------------------------------------------------------------- 引擎

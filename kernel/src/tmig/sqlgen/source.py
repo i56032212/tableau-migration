@@ -123,9 +123,12 @@ class _JoinScope:
 class _JoinEnv:
     week_start = "sunday"
 
+    def __init__(self, aliases: dict[str, str] | None = None) -> None:
+        self.aliases = aliases or {}
+
     def column(self, target: Target) -> str:
         table, column = target.id.split("\x1f", 1)
-        return f"{ident(table)}.{ident(column)}"
+        return f"{ident(self.aliases.get(table, table))}.{ident(column)}"
 
     def param(self, target: Target) -> str:
         raise SourceError("join 計算不能用到參數")
@@ -143,8 +146,11 @@ class _JoinEnv:
         raise SourceError("join 計算不能用到 Table Calculation")
 
 
-def join_formula(text: str, columns: dict[tuple[str, str], str]) -> str:
-    """join 計算（Tableau 的公式，以 [資料表].[欄位] 參照實體欄位）→ DuckDB 的 SQL。"""
+def join_formula(
+    text: str, columns: dict[tuple[str, str], str], aliases: dict[str, str] | None = None
+) -> str:
+    """join 計算（Tableau 的公式，以 [資料表].[欄位] 參照實體欄位）→ DuckDB 的 SQL；aliases 為資料表
+    在 FROM 子句中的別名（在樞紐、聯集的子查詢中時）。"""
     from tmig.formula.analyze import Analyzer
     from tmig.formula.lexer import FormulaSyntaxError
     from tmig.formula.parser import parse_formula
@@ -153,7 +159,7 @@ def join_formula(text: str, columns: dict[tuple[str, str], str]) -> str:
 
     try:
         node = parse_formula(text)
-        return ExprCompiler(Analyzer(_JoinScope(columns)), _JoinEnv()).row(node)  # type: ignore[arg-type]
+        return ExprCompiler(Analyzer(_JoinScope(columns)), _JoinEnv(aliases)).row(node)  # type: ignore[arg-type]
     except (FormulaSyntaxError, FormulaSemanticError) as exc:
         raise SourceError(f"join 計算「{text}」：{exc}") from exc
 
@@ -519,7 +525,7 @@ def _term(
         table = (aliases or {}).get(term.table, term.table)
         return f"{ident(table)}.{ident(term.column)}"
     if term.formula is not None:
-        return f"({join_formula(term.formula, columns or {})})"
+        return f"({join_formula(term.formula, columns or {}, aliases)})"
     value = term.literal
     kind = "string" if isinstance(value, str) else "real" if isinstance(value, float) else "integer"
     return literal(value, kind)

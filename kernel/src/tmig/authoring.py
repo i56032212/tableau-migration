@@ -9,7 +9,9 @@
   Latitude、Longitude 等時給地理角色
 - 資料模型（add_table、remove_table、set_join、set_relationship、pivot、unpivot）：與 Tableau 2020.2 起的
   資料來源分頁相同，第二張資料表預設以關聯（Relationship）加入成另一張邏輯資料表；也可以在邏輯資料表中
-  join、聯集（union）或把欄樞紐（pivot）成列
+  join、聯集（union）或把欄樞紐（pivot）成列。條件的一邊可以是公式（Calculated）：join 計算存成以
+  [資料表].[欄位] 參照實體欄位的公式（JoinTerm.formula），關聯計算存成所屬邏輯資料表上隱藏的計算欄位
+  （DataField.relationship_calc，公式以欄位的內部名稱參照）；公式中的欄位以顯示名稱（或欄名）書寫
 - 欄位（update_field）：改名（顯示名稱）、隱藏、角色、預設彙總與資料類型（檔案的欄位以新的型別重新匯入）
 
 所有函式都不改動傳入的 IR，回傳新的 IR；有工作表或計算欄位用到的欄位不能移除、改型別或角色。
@@ -49,12 +51,14 @@ from tmig.ir import (
     JoinCondition,
     JoinRelation,
     JoinTerm,
+    LiveConnection,
     LogicalTable,
     ModelRelation,
     PivotColumn,
     PivotRelation,
     Relationship,
     RelationshipCondition,
+    SqlRelation,
     TableRelation,
     UnionColumn,
     UnionPart,
@@ -63,6 +67,8 @@ from tmig.ir import (
 )
 from tmig.ir.models import Aggregation, GeoRole, Relation
 
+CUSTOM_SQL = "Custom SQL Query"
+"""自訂 SQL 在關聯樹中的名稱（與 Tableau 相同，重複時加上序號）。"""
 DATA_DIR = "Data"
 """檔案在報表中的資料夾：FileTable.path 為 Data/<檔名>（與 .twbx 相同的寫法）。"""
 SAMPLE_ROWS = 10_000
@@ -95,6 +101,18 @@ GEO_NAMES: dict[str, GeoRole] = {
 """欄名（不分大小寫）→ 地理角色：Tableau 依欄名自動給的地理角色。"""
 JoinType = Literal["inner", "left", "right", "full"]
 Comparison = Literal["=", "!=", "<", "<=", ">", ">="]
+
+
+@dataclass(frozen=True)
+class Calculated:
+    """join 或關聯條件的一邊是公式（Tableau 的 join 計算、關聯計算）；欄位以顯示名稱或欄名參照。"""
+
+    formula: str
+
+
+Side = str | Calculated
+"""條件的一邊：欄位 id（新資料表的一邊為欄名），或公式。"""
+Condition = tuple[Side, Comparison, Side]
 
 
 # ---------------------------------------------------------------- 檢查檔案
@@ -423,6 +441,157 @@ def add_datasource(
     return _validated(updated, "新增資料源失敗"), ds
 
 
+# ---------------------------------------------------------------- 資料庫（Live 連線）
+
+
+def live_datasource(
+    taken: set[str],
+    connection: LiveConnection,
+    table: list[str] | None,
+    sql: str | None,
+    columns: list[FileColumn],
+) -> Datasource:
+    """連到資料庫的資料源（Tableau 的「連線到伺服器」）：一張資料表或自訂 SQL。connection 是連線本身
+    （relation 會換成這張資料表），憑證不在其中（依 connection_id 由連線設定檔提供）。"""
+    new = _live_new_table(None, table, sql, columns)
+    caption = f"{new.name} ({connection.database})" if connection.database else new.name
+    ds_id = _fresh(taken, "ds_" + _slug(caption))
+    fields = _fields(taken | {ds_id}, new.columns, new.name, set())
+    return Datasource(
+        id=ds_id,
+        name=f"federated.{secrets.token_hex(14)}",
+        caption=caption,
+        connection=connection.model_copy(update={"relation": new.relation}),
+        settings=DatasourceSettings(week_start="sunday"),
+        fields=fields,
+        source_ref=EDITOR_REF,
+    )
+
+
+def new_live_workbook(
+    name: str,
+    connection: LiveConnection,
+    table: list[str] | None,
+    sql: str | None,
+    columns: list[FileColumn],
+) -> IR:
+    """連到資料庫的新報表：一個資料源與空白的「工作表 1」。"""
+    ds = live_datasource(set(), connection, table, sql, columns)
+    workbook = Workbook(
+        id="wb_" + (re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "report"),
+        name=name.strip() or "報表",
+        tableau_version=None,
+        source_ref=EDITOR_REF,
+    )
+    ir = IR(ir_version=IR_VERSION, workbook=workbook, datasources=[ds])  # type: ignore[arg-type]
+    ir, _ = add_worksheet(ir, None, ds.id)
+    return ir
+
+
+def add_live_datasource(
+    ir: IR,
+    connection: LiveConnection,
+    table: list[str] | None,
+    sql: str | None,
+    columns: list[FileColumn],
+) -> tuple[IR, Datasource]:
+    """報表加上連到資料庫的資料源。"""
+    ds = live_datasource(_ids(ir), connection, table, sql, columns)
+    updated = ir.model_copy(update={"datasources": [*ir.datasources, ds]})
+    return _validated(updated, "新增資料源失敗"), ds
+
+
+def set_custom_sql(ir: IR, datasource: str, name: str, sql: str, columns: list[FileColumn]) -> IR:
+    """修改自訂 SQL（Tableau 的「編輯自訂 SQL 查詢」）：沿用名稱相同的欄位（型別依新的查詢），新的欄
+    加入成欄位；不再有的欄移除（工作表或其他欄位用到時退回）。"""
+    ds = _datasource(ir, datasource)
+    connection = _editable(ds)
+    if not isinstance(connection, LiveConnection):
+        raise EditError("只有資料庫的資料源有自訂 SQL")
+    top = _relation_of(connection)
+    owner, current = _owner_of(top, name)
+    relation = _find_relation(current, name)
+    if not isinstance(relation, SqlRelation):
+        raise EditError(f"「{name}」不是自訂 SQL")
+    text = sql.strip().rstrip(";").strip()
+    if not text:
+        raise EditError("自訂 SQL 是空的")
+    if not columns:
+        raise EditError("自訂 SQL 沒有傳回任何欄")
+    joined = isinstance(current, JoinRelation)
+
+    def mine(f: DataField) -> bool:
+        if f.column is None:
+            return False
+        if f.physical_table is not None:
+            return f.physical_table == name
+        return f.table == (owner or name) if not joined or owner is None else False
+
+    own = {str(f.column): f for f in ds.fields if mine(f)}
+    by_name = {c.name: c for c in columns}
+    removed = [f for column, f in own.items() if column not in by_name]
+    _check_unused(ir, ds, removed)
+    fields: list[DataField] = []
+    for f in ds.fields:
+        if f in removed:
+            continue
+        found = by_name.get(str(f.column)) if mine(f) else None
+        if found is not None and found.datatype != f.datatype:
+            numeric = found.datatype in ("integer", "real")
+            role = (
+                f.role
+                if numeric == (f.datatype in ("integer", "real"))
+                else ("measure" if numeric else "dimension")
+            )
+            f = f.model_copy(
+                update={
+                    "datatype": found.datatype,
+                    "role": role,
+                    "default_agg": _measure_agg(found.datatype, f.geo_role, role),
+                }
+            )
+        fields.append(f)
+    taken = _ids(ir)
+    captions = {f.caption.casefold() for f in fields}
+    added = [c for c in columns if c.name not in own]
+    if owner is not None:
+        new_fields = _fields(taken, added, owner, captions, name if joined else None, label=name)
+    else:
+        new_fields = _fields(taken, added, name, captions)
+    changed = _replace_leaf(current, name, relation.model_copy(update={"sql": text}))
+    connection = _with(connection, None, _replace_logical(top, owner, changed))
+    ds = ds.model_copy(update={"connection": connection, "fields": [*fields, *new_fields]})
+    return _validated(_replace_datasource(ir, ds), "修改自訂 SQL 失敗")
+
+
+def _find_relation(relation: Relation, name: str) -> Relation | None:
+    """關聯樹中名稱為 name 的資料表、自訂 SQL（或聯集、樞紐）。"""
+    if getattr(relation, "name", None) == name:
+        return relation
+    if isinstance(relation, JoinRelation):
+        return _find_relation(relation.left, name) or _find_relation(relation.right, name)
+    if isinstance(relation, PivotRelation):
+        return _find_relation(relation.source, name)
+    return None
+
+
+def _replace_leaf(relation: Relation, name: str, replacement: Relation) -> Relation:
+    if getattr(relation, "name", None) == name:
+        return replacement
+    if isinstance(relation, JoinRelation):
+        return relation.model_copy(
+            update={
+                "left": _replace_leaf(relation.left, name, replacement),
+                "right": _replace_leaf(relation.right, name, replacement),
+            }
+        )
+    if isinstance(relation, PivotRelation):
+        return relation.model_copy(
+            update={"source": _replace_leaf(relation.source, name, replacement)}
+        )
+    return relation
+
+
 def _ids(ir: IR) -> set[str]:
     from tmig.edit import _all_ids
 
@@ -522,7 +691,7 @@ def add_table(
     how: Literal["relationship", "join", "union"] = "relationship",
     target: str | None = None,
     join: JoinType = "inner",
-    on: list[tuple[str, Comparison, str]] | None = None,
+    on: list[Condition] | None = None,
 ) -> IR:
     """資料源加上檔案中的一張資料表：
 
@@ -532,16 +701,100 @@ def add_table(
 
     on：條件（已有的欄位 id、比較、新資料表的欄名）；relationship 與 join 至少要一個條件。"""
     ds = _datasource(ir, datasource)
-    connection = _file_connection(ds)
+    connection = _editable(ds)
+    if not isinstance(connection, FileConnection):
+        raise EditError(f"資料源「{ds.caption}」連到資料庫，不能加入檔案中的資料表")
     found = source.table(table)
     name = _table_name(connection, found.name)
     added = file_table(source, table, package_path, name)
+    new = NewTable(
+        name,
+        TableRelation(kind="table", name=name, table=[FILE_SCHEMA, name]),
+        list(added.columns),
+        added,
+    )
+    return _add_table(ir, ds, new, how, target, join, on)
+
+
+@dataclass(frozen=True)
+class NewTable:
+    """要加入資料源的資料表：關聯樹中的名稱、關聯（檔案為 [Files, 名稱]，資料庫為限定名稱或自訂 SQL）、
+    欄位，以及檔案的 FileTable（資料庫為 None）。"""
+
+    name: str
+    relation: TableRelation | SqlRelation
+    columns: list[FileColumn]
+    file: FileTable | None = None
+
+
+def add_live_table(
+    ir: IR,
+    datasource: str,
+    table: list[str] | None,
+    sql: str | None,
+    columns: list[FileColumn],
+    how: Literal["relationship", "join", "union"] = "relationship",
+    target: str | None = None,
+    join: JoinType = "inner",
+    on: list[Condition] | None = None,
+) -> IR:
+    """資料庫（Live 連線）的資料源加上一張資料表（table：限定名稱的各段）或自訂 SQL；欄位由呼叫端
+    從資料庫取得（tmig.data.catalog）。加入的方式與條件同 add_table；自訂 SQL 不能聯集。"""
+    ds = _datasource(ir, datasource)
+    connection = _editable(ds)
+    if not isinstance(connection, LiveConnection):
+        raise EditError(f"資料源「{ds.caption}」不是資料庫的連線")
+    new = _live_new_table(connection, table, sql, columns)
+    if how == "union" and not isinstance(new.relation, TableRelation):
+        raise EditError("自訂 SQL 不能聯集")
+    return _add_table(ir, ds, new, how, target, join, on)
+
+
+def _live_new_table(
+    connection: LiveConnection | None,
+    table: list[str] | None,
+    sql: str | None,
+    columns: list[FileColumn],
+) -> NewTable:
+    if not columns:
+        raise EditError("資料表沒有欄位")
+    if (table is None) == (sql is None):
+        raise EditError("要指定資料表或自訂 SQL 其中之一")
+    if table is not None:
+        if not table or any(not part for part in table):
+            raise EditError("資料表的名稱不正確")
+        base = table[-1]
+        name = _table_name(connection, base) if connection is not None else base
+        relation: TableRelation | SqlRelation = TableRelation(
+            kind="table", name=name, table=list(table)
+        )
+    else:
+        text = (sql or "").strip().rstrip(";").strip()
+        if not text:
+            raise EditError("自訂 SQL 是空的")
+        name = _table_name(connection, CUSTOM_SQL) if connection is not None else CUSTOM_SQL
+        relation = SqlRelation(kind="sql", name=name, sql=text)
+    return NewTable(name, relation, list(columns))
+
+
+def _add_table(
+    ir: IR,
+    ds: Datasource,
+    new: NewTable,
+    how: Literal["relationship", "join", "union"],
+    target: str | None,
+    join: JoinType,
+    on: list[Condition] | None,
+) -> IR:
+    connection = _editable(ds)
+    name = new.name
     if how != "union" and not on:
         raise EditError("要指定關聯或 join 的條件（兩邊的欄位）")
-    tables = [*connection.tables, added]
+    tables = [*_tables(connection), *([new.file] if new.file is not None else [])]
     taken = _ids(ir)
     captions = {f.caption.casefold() for f in ds.fields}
-    model = connection.relation if isinstance(connection.relation, ModelRelation) else None
+    top = _relation_of(connection)
+    model = top if isinstance(top, ModelRelation) else None
     if how == "relationship":
         if model is None:
             ds, first = _to_model(ds, taken)
@@ -549,16 +802,15 @@ def add_table(
         else:
             logicals, relationships = list(model.tables), list(model.relationships)
         logical_id = _fresh(taken, _slug(name) + "_" + secrets.token_hex(4))
-        new_fields = _fields(taken, added.columns, logical_id, captions, label=name)
+        new_fields = _fields(taken, new.columns, logical_id, captions, label=name)
         parent = target or logicals[0].id
         if parent not in {t.id for t in logicals}:
             raise EditError(f"找不到邏輯資料表 {parent}")
-        links = _relationship_conditions(ds, parent, new_fields, added, on or [])
-        logical = LogicalTable(
-            id=logical_id,
-            caption=name,
-            relation=TableRelation(kind="table", name=name, table=[FILE_SCHEMA, name]),
+        links, calcs = _relationship_conditions(
+            ds, parent, new_fields, logical_id, name, on or [], taken
         )
+        new_fields = [*new_fields, *calcs]
+        logical = LogicalTable(id=logical_id, caption=name, relation=new.relation)
         built = ModelRelation(
             kind="model",
             tables=[*logicals, logical],
@@ -567,39 +819,33 @@ def add_table(
                 Relationship(left=parent, right=logical_id, on=links),
             ],
         )
-        connection = connection.model_copy(update={"tables": tables, "relation": built})
+        connection = _with(connection, tables, built)
         ds = ds.model_copy(update={"connection": connection, "fields": [*ds.fields, *new_fields]})
         return _validated(_replace_datasource(ir, ds), "加入資料表失敗")
     # join、union：在一張邏輯資料表（或整個資料源）之內
     logical = _logical(model, target)
-    current = logical.relation if logical is not None else connection.relation
+    current = logical.relation if logical is not None else top
     assert not isinstance(current, ModelRelation)
     owner = logical.id if logical is not None else None
     if how == "join":
-        new_fields = _fields(taken, added.columns, owner or name, captions, name if owner else None)
-        conditions: list[JoinCondition] = []
-        for field_id, op, column in on or []:
-            existing = _field(ds, field_id)
-            if not _in_relation(existing, owner):
-                raise EditError(f"欄位「{existing.caption}」不在要 join 的資料表中")
-            if column not in {c.name for c in added.columns}:
-                raise EditError(f"「{name}」沒有欄位 {column}")
+        new_fields = _fields(taken, new.columns, owner or name, captions, name if owner else None)
+        first_join = owner is not None and not isinstance(current, JoinRelation)
+
+        def left_table(f: DataField) -> str | None:
             # Relationship 模型中還沒有 join 的邏輯資料表：欄位所屬的是它的資料表（或聯集、樞紐）
-            left_table = (
-                _single_name(current)
-                if owner is not None and not isinstance(current, JoinRelation)
-                else _physical_of(existing)
-            )
-            conditions.append(
-                JoinCondition(
-                    left=JoinTerm(table=left_table, column=existing.column),
-                    op=op,
-                    right=JoinTerm(table=name, column=column),
-                )
-            )
-        right = TableRelation(kind="table", name=name, table=[FILE_SCHEMA, name])
+            return _single_name(current) if first_join else _physical_of(f)
+
+        conditions = _join_conditions(
+            [f for f in ds.fields if _in_relation(f, owner)],
+            left_table,
+            name,
+            {c.name: c.datatype for c in new.columns},
+            {f.caption: str(f.column) for f in new_fields},
+            on or [],
+            "要 join 的資料表",
+        )
         relation: Relation = JoinRelation(
-            kind="join", join=join, left=current, right=right, on=conditions
+            kind="join", join=join, left=current, right=new.relation, on=conditions
         )
         fields = list(ds.fields)
         if owner is not None and not isinstance(current, JoinRelation):
@@ -612,12 +858,9 @@ def add_table(
             ]
         ds = ds.model_copy(update={"fields": [*fields, *new_fields]})
     else:
-        relation, ds = _union(ds, current, owner, added, taken)
-    connection = connection.model_copy(
-        update={
-            "tables": tables,
-            "relation": _replace_logical(connection.relation, owner, relation),
-        }
+        relation, ds = _union(ds, current, owner, new, taken)
+    connection = _with(
+        connection, tables, _replace_logical(_relation_of(connection), owner, relation)
     )
     ds = ds.model_copy(update={"connection": connection})
     return _validated(_replace_datasource(ir, ds), "加入資料表失敗")
@@ -627,27 +870,45 @@ def _union(
     ds: Datasource,
     current: Relation,
     owner: str | None,
-    added: FileTable,
+    new: NewTable,
     taken: set[str],
 ) -> tuple[Relation, Datasource]:
     """在資料表下面接上另一張資料表：欄位依名稱對應，另加 Table Name（Excel 另有 Sheet、文字檔另有 Path）。"""
-    connection = _file_connection(ds)
-    by_name = {t.name: t for t in connection.tables}
+    connection = _editable(ds)
+    by_name = {t.name: t for t in _tables(connection)}
+    live = isinstance(connection, LiveConnection)
     if isinstance(current, UnionRelation):
         union = current
         parts = [*current.parts]
-    elif isinstance(current, TableRelation) and current.name in by_name:
-        first = by_name[current.name]
+    elif isinstance(current, TableRelation) and (current.name in by_name or live):
+        if live:
+            # 資料庫的資料表：欄位取自資料源中這張資料表的欄位
+            own = [
+                f for f in ds.fields if f.column is not None and _belongs(f, owner, current.name)
+            ]
+            first_part = UnionPart(
+                relation=current,
+                columns=[UnionColumn(name=str(f.column), datatype=f.datatype) for f in own],
+            )
+        else:
+            first_part = _part(current, by_name[current.name])
         union = UnionRelation(
             kind="union",
             name=_union_name(ds, current.name),
-            parts=[_part(current, first)],
+            parts=[first_part],
         )
         parts = list(union.parts)
     else:
         raise EditError("只有單一資料表（或已經是聯集）才能再接上其他資料表")
-    new_part = _part(
-        TableRelation(kind="table", name=added.name, table=[FILE_SCHEMA, added.name]), added
+    if not isinstance(new.relation, TableRelation):
+        raise EditError("自訂 SQL 不能聯集")
+    new_part = (
+        _part(new.relation, new.file)
+        if new.file is not None
+        else UnionPart(
+            relation=new.relation,
+            columns=[UnionColumn(name=c.name, datatype=c.datatype) for c in new.columns],
+        )
     )
     parts.append(new_part)
     union = union.model_copy(update={"parts": parts})
@@ -664,11 +925,11 @@ def _union(
         ]
     present = {f.column for f in fields if f.table == table_ref and f.column is not None}
     captions = {f.caption.casefold() for f in fields}
-    extra: list[FileColumn] = [c for c in added.columns if c.name not in present]
+    extra: list[FileColumn] = [c for c in new.columns if c.name not in present]
     sources = ["Table Name"]
-    formats = {by_name[p.relation.name].format for p in parts if p.relation.name in by_name} | {
-        added.format
-    }
+    formats = {by_name[p.relation.name].format for p in parts if p.relation.name in by_name} | (
+        {new.file.format} if new.file is not None else set()
+    )
     if "excel" in formats:
         sources.insert(0, "Sheet")
     if "text" in formats:
@@ -708,7 +969,7 @@ def _part(relation: TableRelation, table: FileTable) -> UnionPart:
 
 def _union_name(ds: Datasource, first: str) -> str:
     base = f"{first}+"
-    names = _relation_names(_file_connection(ds).relation)
+    names = _relation_names(_relation_of(_editable(ds)))
     name, n = base, 1
     while name in names:
         n += 1
@@ -720,8 +981,8 @@ def remove_table(ir: IR, datasource: str, table: str) -> IR:
     """移除資料表（最後加入的 join、聯集的一張，或 Relationship 模型的一張邏輯資料表）；它的欄位不能
     有工作表或計算欄位用到。table：關聯樹中的資料表名稱或邏輯資料表 id。"""
     ds = _datasource(ir, datasource)
-    connection = _file_connection(ds)
-    top = connection.relation
+    connection = _editable(ds)
+    top = _relation_of(connection)
     if isinstance(top, ModelRelation) and table in {t.id for t in top.tables}:
         return _remove_logical(ir, ds, top, table)
     owner, relation = _owner_of(top, table)
@@ -784,10 +1045,8 @@ def remove_table(ir: IR, datasource: str, table: str) -> IR:
             ]
     else:
         raise EditError(f"找不到可以移除的資料表「{table}」")
-    tables = [t for t in connection.tables if t.name != table]
-    connection = connection.model_copy(
-        update={"tables": tables, "relation": _replace_logical(top, owner, replacement)}
-    )
+    tables = [t for t in _tables(connection) if t.name != table]
+    connection = _with(connection, tables, _replace_logical(top, owner, replacement))
     ds = ds.model_copy(update={"connection": connection, "fields": fields})
     return _validated(_replace_datasource(ir, ds), "移除資料表失敗")
 
@@ -797,15 +1056,17 @@ def _remove_logical(ir: IR, ds: Datasource, model: ModelRelation, logical: str) 
     if len(edges) > 1:
         raise EditError("這張邏輯資料表還連著其他資料表，先移除它們")
     removed = [f for f in ds.fields if f.table == logical]
-    _check_unused(ir, ds, [f for f in removed if f.column is not None])
-    _check_unused(ir, ds, [f for f in removed if f.column is None])
+    # 關聯計算隨著關聯移除（只用到所屬資料表的欄位）
+    plain = ds.model_copy(update={"fields": [f for f in ds.fields if not f.relationship_calc]})
+    _check_unused(ir, plain, [f for f in removed if f.column is not None])
+    _check_unused(ir, plain, [f for f in removed if f.column is None and not f.relationship_calc])
     gone = next(t for t in model.tables if t.id == logical)
     tables = [t for t in model.tables if t.id != logical]
     relationships = [r for r in model.relationships if logical not in (r.left, r.right)]
     fields = [f for f in ds.fields if f not in removed]
-    connection = _file_connection(ds)
+    connection = _editable(ds)
     leaves = _leaf_names(gone.relation)
-    file_tables = [t for t in connection.tables if t.name not in leaves]
+    file_tables = [t for t in _tables(connection) if t.name not in leaves]
     if len(tables) == 1:
         # 只剩一張邏輯資料表：不再是 Relationship 模型
         (only,) = tables
@@ -813,9 +1074,9 @@ def _remove_logical(ir: IR, ds: Datasource, model: ModelRelation, logical: str) 
         fields = [_from_model(f, only) for f in fields]
     else:
         relation = model.model_copy(update={"tables": tables, "relationships": relationships})
-    connection = connection.model_copy(update={"tables": file_tables, "relation": relation})
+    connection = _with(connection, file_tables, relation)
     ds = ds.model_copy(update={"connection": connection, "fields": fields})
-    return _validated(_replace_datasource(ir, ds), "移除資料表失敗")
+    return _validated(_replace_datasource(ir, _without_stale_links(ds)), "移除資料表失敗")
 
 
 def set_join(
@@ -823,46 +1084,39 @@ def set_join(
     datasource: str,
     table: str,
     join: JoinType,
-    on: list[tuple[str, Comparison, str]],
+    on: list[Condition],
 ) -> IR:
-    """改變資料表 join 的方式與條件（條件：已有的欄位 id、比較、這張資料表的欄名）。"""
+    """改變資料表 join 的方式與條件（條件：已有的欄位 id 或 join 計算、比較、這張資料表的欄名或
+    join 計算）。"""
     ds = _datasource(ir, datasource)
-    connection = _file_connection(ds)
-    owner, relation = _owner_of(connection.relation, table)
+    connection = _editable(ds)
+    owner, relation = _owner_of(_relation_of(connection), table)
     if not isinstance(relation, JoinRelation) or _single_name(relation.right) != table:
         raise EditError(f"「{table}」不是 join 的資料表")
     if not on:
         raise EditError("join 至少要一個條件")
-    columns = {f.column for f in ds.fields if _physical_of(f) == table and _in_relation(f, owner)}
-    conditions: list[JoinCondition] = []
-    for field_id, op, column in on:
-        existing = _field(ds, field_id)
-        if _physical_of(existing) == table or not _in_relation(existing, owner):
-            raise EditError(f"欄位「{existing.caption}」不在 join 的另一邊")
-        if column not in columns:
-            raise EditError(f"「{table}」沒有欄位 {column}")
-        conditions.append(
-            JoinCondition(
-                left=JoinTerm(table=_physical_of(existing), column=existing.column),
-                op=op,
-                right=JoinTerm(table=table, column=column),
-            )
-        )
-    changed = relation.model_copy(update={"join": join, "on": conditions})
-    connection = connection.model_copy(
-        update={"relation": _replace_logical(connection.relation, owner, changed)}
+    right = [f for f in ds.fields if _physical_of(f) == table and _in_relation(f, owner)]
+    conditions = _join_conditions(
+        [f for f in ds.fields if _in_relation(f, owner) and _physical_of(f) != table],
+        _physical_of,
+        table,
+        {str(f.column): f.datatype for f in right},
+        {f.caption: str(f.column) for f in right},
+        on,
+        "join 的另一邊",
     )
+    changed = relation.model_copy(update={"join": join, "on": conditions})
+    connection = _with(connection, None, _replace_logical(_relation_of(connection), owner, changed))
     ds = ds.model_copy(update={"connection": connection})
     return _validated(_replace_datasource(ir, ds), "修改 join 失敗")
 
 
-def set_relationship(
-    ir: IR, datasource: str, logical: str, on: list[tuple[str, Comparison, str]]
-) -> IR:
-    """改變邏輯資料表的關聯條件（條件：另一張資料表的欄位 id、比較、這張資料表的欄位 id）。"""
+def set_relationship(ir: IR, datasource: str, logical: str, on: list[Condition]) -> IR:
+    """改變邏輯資料表的關聯條件（條件：另一張資料表的欄位 id 或關聯計算、比較、這張資料表的欄位 id 或
+    關聯計算）；不再用到的關聯計算一併移除。"""
     ds = _datasource(ir, datasource)
-    connection = _file_connection(ds)
-    model = connection.relation
+    connection = _editable(ds)
+    model = _relation_of(connection)
     if not isinstance(model, ModelRelation):
         raise EditError("資料源不是 Relationship 模型")
     index = next((i for i, r in enumerate(model.relationships) if r.right == logical), None)
@@ -871,27 +1125,26 @@ def set_relationship(
     rel = model.relationships[index]
     if not on:
         raise EditError("關聯至少要一個條件")
+    taken = _ids(ir)
+    created: list[DataField] = []
     conditions: list[RelationshipCondition] = []
-    for left_id, op, right_id in on:
-        left, right = _field(ds, left_id), _field(ds, right_id)
-        if left.table != rel.left or right.table != rel.right:
-            raise EditError(f"欄位「{left.caption}」「{right.caption}」不是這個關聯兩邊的資料表")
+    for left_side, op, right_side in on:
+        left = _link_side(ds, left_side, rel.left, created, taken)
+        right = _link_side(ds, right_side, rel.right, created, taken)
         conditions.append(RelationshipCondition(left=left.id, op=op, right=right.id))
     relationships = list(model.relationships)
     relationships[index] = rel.model_copy(update={"on": conditions})
-    connection = connection.model_copy(
-        update={"relation": model.model_copy(update={"relationships": relationships})}
-    )
-    ds = ds.model_copy(update={"connection": connection})
-    return _validated(_replace_datasource(ir, ds), "修改關聯失敗")
+    connection = _with(connection, None, model.model_copy(update={"relationships": relationships}))
+    ds = ds.model_copy(update={"connection": connection, "fields": [*ds.fields, *created]})
+    return _validated(_replace_datasource(ir, _without_stale_links(ds)), "修改關聯失敗")
 
 
 def pivot(ir: IR, datasource: str, table: str, columns: list[str]) -> IR:
     """把資料表的幾個欄樞紐成列（Tableau 資料來源分頁的「樞紐」）：Pivot Field Names 是欄名、
     Pivot Field Values 是值；被樞紐的欄位不能有工作表或計算欄位用到。"""
     ds = _datasource(ir, datasource)
-    connection = _file_connection(ds)
-    owner, relation = _owner_of(connection.relation, table)
+    connection = _editable(ds)
+    owner, relation = _owner_of(_relation_of(connection), table)
     if not isinstance(relation, TableRelation):
         raise EditError("只有單一資料表可以樞紐")
     by_column = {
@@ -905,7 +1158,7 @@ def pivot(ir: IR, datasource: str, table: str, columns: list[str]) -> IR:
     from tmig.sqlgen.source import _common_type
 
     datatype = _common_type(types)
-    names = _relation_names(connection.relation)
+    names = _relation_names(_relation_of(connection))
     name, n = "Pivot", 1
     while name in names:
         n += 1
@@ -933,9 +1186,7 @@ def pivot(ir: IR, datasource: str, table: str, columns: list[str]) -> IR:
     )
     added[0] = added[0].model_copy(update={"role": "dimension", "default_agg": None})
     fields = [f for f in ds.fields if f not in pivoted] + added
-    connection = connection.model_copy(
-        update={"relation": _replace_logical(connection.relation, owner, changed)}
-    )
+    connection = _with(connection, None, _replace_logical(_relation_of(connection), owner, changed))
     ds = ds.model_copy(update={"connection": connection, "fields": fields})
     return _validated(_replace_datasource(ir, ds), "樞紐失敗")
 
@@ -943,8 +1194,8 @@ def pivot(ir: IR, datasource: str, table: str, columns: list[str]) -> IR:
 def unpivot(ir: IR, datasource: str, name: str) -> IR:
     """移除樞紐：被樞紐的欄恢復成欄位；樞紐產生的兩個欄位不能有工作表或計算欄位用到。"""
     ds = _datasource(ir, datasource)
-    connection = _file_connection(ds)
-    owner, relation = _owner_of(connection.relation, name)
+    connection = _editable(ds)
+    owner, relation = _owner_of(_relation_of(connection), name)
     if not isinstance(relation, PivotRelation):
         raise EditError(f"「{name}」不是樞紐")
     ref = owner or name
@@ -953,16 +1204,18 @@ def unpivot(ir: IR, datasource: str, name: str) -> IR:
     ]
     _check_unused(ir, ds, generated)
     source = relation.source
-    by_name = {t.name: t for t in connection.tables}
-    columns = by_name[source.name].columns if source.name in by_name else []
+    by_name = {t.name: t for t in _tables(connection)}
+    if source.name in by_name:
+        columns = by_name[source.name].columns
+    else:
+        # 資料庫的資料表：被樞紐的欄以樞紐的型別恢復
+        columns = [FileColumn(name=c.column, datatype=relation.datatype) for c in relation.columns]
     restored_columns = [c for c in columns if c.name in {p.column for p in relation.columns}]
     taken = _ids(ir)
     captions = {f.caption.casefold() for f in ds.fields if f not in generated}
     restored = _fields(taken, restored_columns, owner or source.name, captions)
     fields = [f for f in ds.fields if f not in generated] + restored
-    connection = connection.model_copy(
-        update={"relation": _replace_logical(connection.relation, owner, source)}
-    )
+    connection = _with(connection, None, _replace_logical(_relation_of(connection), owner, source))
     ds = ds.model_copy(update={"connection": connection, "fields": fields})
     return _validated(_replace_datasource(ir, ds), "移除樞紐失敗")
 
@@ -1058,10 +1311,41 @@ def rename_datasource(ir: IR, datasource: str, caption: str) -> IR:
 def _file_connection(ds: Datasource) -> FileConnection:
     connection = ds.connection
     if not isinstance(connection, FileConnection):
-        raise EditError(
-            f"資料源「{ds.caption}」不是檔案的資料源（Live 連線與萃取尚不能在這裡編輯）"
-        )
+        raise EditError(f"資料源「{ds.caption}」不是檔案的資料源")
     return connection
+
+
+def _editable(ds: Datasource) -> FileConnection | LiveConnection:
+    """可以編輯資料表的資料源：檔案，或資料庫的 Live 連線（萃取與已發布的資料源不行）。"""
+    connection = ds.connection
+    if isinstance(connection, FileConnection):
+        return connection
+    if isinstance(connection, LiveConnection) and connection.relation is not None:
+        return connection
+    raise EditError(
+        f"資料源「{ds.caption}」是萃取或已發布的資料源，資料表在原本的連線中，不能在這裡編輯"
+    )
+
+
+def _tables(connection: FileConnection | LiveConnection) -> list[FileTable]:
+    return list(connection.tables) if isinstance(connection, FileConnection) else []
+
+
+def _relation_of(connection: FileConnection | LiveConnection) -> Any:
+    relation = connection.relation
+    if relation is None:
+        raise EditError("資料源沒有資料表")
+    return relation
+
+
+def _with(
+    connection: FileConnection | LiveConnection, tables: list[FileTable] | None, relation: Any
+) -> FileConnection | LiveConnection:
+    """換掉連線的關聯樹（檔案另有資料表的清單）。"""
+    update: dict[str, Any] = {"relation": relation}
+    if isinstance(connection, FileConnection) and tables is not None:
+        update["tables"] = tables
+    return connection.model_copy(update=update)
 
 
 def _field(ds: Datasource, field_id: str) -> DataField:
@@ -1087,9 +1371,11 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "x"
 
 
-def _table_name(connection: FileConnection, base: str) -> str:
+def _table_name(connection: FileConnection | LiveConnection, base: str) -> str:
     """關聯樹中的資料表名稱不重複（同一個檔案加入兩次時加上序號）。"""
-    names = {t.name for t in connection.tables} | _relation_names(connection.relation)
+    names = {t.name for t in _tables(connection)} | (
+        _relation_names(connection.relation) if connection.relation is not None else set()
+    )
     name, n = base, 1
     while name in names:
         n += 1
@@ -1187,8 +1473,7 @@ def _belongs(f: DataField, owner: str | None, table: str) -> bool:
 
 def _to_model(ds: Datasource, taken: set[str]) -> tuple[Datasource, LogicalTable]:
     """單一的資料表（或 join、聯集、樞紐）改成 Relationship 模型的第一張邏輯資料表。"""
-    connection = _file_connection(ds)
-    relation = connection.relation
+    relation = _relation_of(_editable(ds))
     assert not isinstance(relation, ModelRelation)
     caption = relation.name if not isinstance(relation, JoinRelation) else _leftmost(relation)
     logical_id = _fresh(taken, _slug(caption) + "_" + secrets.token_hex(4))
@@ -1226,21 +1511,282 @@ def _relationship_conditions(
     ds: Datasource,
     parent: str,
     new_fields: list[DataField],
-    added: FileTable,
-    on: list[tuple[str, Comparison, str]],
-) -> list[RelationshipCondition]:
+    logical_id: str,
+    table: str,
+    on: list[Condition],
+    taken: set[str],
+) -> tuple[list[RelationshipCondition], list[DataField]]:
+    """新的邏輯資料表的關聯條件（已有資料表的欄位 id 或關聯計算、比較、新資料表的欄名或關聯計算）；
+    另回傳新建的關聯計算欄位。"""
     by_column = {f.column: f for f in new_fields}
+    created: list[DataField] = []
     conditions: list[RelationshipCondition] = []
-    for field_id, op, column in on:
-        existing = _field(ds, field_id)
-        if existing.table != parent or existing.column is None:
-            raise EditError(f"欄位「{existing.caption}」不在要關聯的資料表中")
-        if column not in by_column:
-            raise EditError(f"「{added.name}」沒有欄位 {column}")
-        conditions.append(
-            RelationshipCondition(left=existing.id, op=op, right=by_column[column].id)
-        )
-    return conditions
+    for left_side, op, right_side in on:
+        existing = _link_side(ds, left_side, parent, created, taken)
+        if isinstance(right_side, Calculated):
+            pool = ds.model_copy(update={"fields": [*ds.fields, *new_fields]})
+            other = _link_calc(pool, logical_id, right_side.formula, created, taken, table)
+        else:
+            if right_side not in by_column:
+                raise EditError(f"「{table}」沒有欄位 {right_side}")
+            other = by_column[right_side]
+        conditions.append(RelationshipCondition(left=existing.id, op=op, right=other.id))
+    return conditions, created
+
+
+def _link_side(
+    ds: Datasource, side: Side, table: str, created: list[DataField], taken: set[str]
+) -> DataField:
+    """關聯條件的一邊：table 的欄位（實體欄位或已有的關聯計算），或公式（關聯計算）。"""
+    if not isinstance(side, Calculated):
+        found = _field(ds, side)
+        if found.table != table or (found.column is None and not found.relationship_calc):
+            raise EditError(f"欄位「{found.caption}」不在要關聯的資料表中")
+        return found
+    return _link_calc(ds, table, side.formula, created, taken)
+
+
+def _link_calc(
+    ds: Datasource,
+    table: str,
+    formula: str,
+    created: list[DataField],
+    taken: set[str],
+    label: str | None = None,
+) -> DataField:
+    """關聯計算：公式只能用到 table 的實體欄位，存成以欄位內部名稱參照的隱藏計算欄位；同一張資料表的同一個
+    公式共用一個欄位。"""
+    from tmig.formula.analyze import Analyzer
+    from tmig.formula.lexer import FormulaSyntaxError
+    from tmig.formula.parser import parse_formula
+    from tmig.formula.types import FormulaSemanticError
+    from tmig.ir.models import Calc
+    from tmig.ir.scope import DatasourceScope
+
+    text = formula.strip()
+    if not text:
+        raise EditError("關聯計算的公式是空的")
+    pool = [*ds.fields, *created]
+    own = [f for f in pool if f.table == table and f.column is not None]
+    caption = label or _logical_caption(ds, table)
+
+    def canonical(parts: tuple[str, ...]) -> str | None:
+        if len(parts) != 1:
+            raise EditError(f"關聯計算只能用到「{caption}」的欄位（不能用 {'.'.join(parts)}）")
+        (name,) = parts
+        found = _named(own, name)
+        if found is None:
+            raise EditError(f"關聯計算只能用到「{caption}」的欄位（沒有 [{name}]）")
+        return found.name
+
+    try:
+        stored = _rewrite_refs(text, canonical)
+        node = parse_formula(stored)
+        info = Analyzer(DatasourceScope(ds.name, pool, [])).analyze(node)
+    except (FormulaSyntaxError, FormulaSemanticError) as exc:
+        raise EditError(f"關聯計算「{text}」有誤：{getattr(exc, 'message', exc)}") from exc
+    if info.level not in ("row", "const") or info.has_lod:
+        raise EditError("關聯計算不能彙總、用到 LOD 或 Table Calculation")
+    if info.level == "const":
+        raise EditError("關聯計算要用到資料表的欄位")
+    if info.datatype not in ("string", "integer", "real", "boolean", "date", "datetime"):
+        raise EditError(f"關聯計算的結果不能是 {info.datatype}")
+    for f in pool:
+        if f.relationship_calc and f.table == table and f.calc and f.calc.formula == stored:
+            return f
+    count = 1 + max(
+        (
+            int(m.group(1))
+            for f in pool
+            if (m := re.match(r"\[Relationship Calculation (\d+)\]$", f.name))
+        ),
+        default=0,
+    )
+    made = DataField(
+        id=_fresh(taken, f"f_relationship_calc_{count}"),
+        name=f"[Relationship Calculation {count}]",
+        caption=text,
+        role="dimension",
+        datatype=info.datatype,  # type: ignore[arg-type]
+        hidden=True,
+        calc=Calc(formula=stored),
+        table=table,
+        relationship_calc=True,
+        source_ref=EDITOR_REF,
+    )
+    created.append(made)
+    return made
+
+
+def _logical_caption(ds: Datasource, table: str) -> str:
+    relation = getattr(ds.connection, "relation", None)
+    if isinstance(relation, ModelRelation):
+        return next((t.caption for t in relation.tables if t.id == table), table)
+    return table
+
+
+def _named(fields: list[DataField], name: str) -> DataField | None:
+    """公式中的 [名稱]：顯示名稱、內部名稱或欄名（依序）。"""
+    for match in (
+        lambda f: f.caption == name,
+        lambda f: f.name == _bracket(name),
+        lambda f: f.column == name,
+    ):
+        found = [f for f in fields if match(f)]
+        if len(found) == 1:
+            return found[0]
+    return None
+
+
+def _bracket(name: str) -> str:
+    return "[" + name.replace("]", "]]") + "]"
+
+
+def _rewrite_refs(formula: str, replace: Any) -> str:
+    """改寫公式中的欄位參照：replace（參照的各段 → 新的寫法；None 不變）。"""
+    from tmig.formula.lexer import tokenize
+
+    tokens = tokenize(formula)
+    out: list[str] = []
+    last = 0
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.kind != "field":
+            i += 1
+            continue
+        parts = [token.value]
+        end = token
+        if (
+            i + 2 < len(tokens)
+            and tokens[i + 1].kind == "punct"
+            and tokens[i + 1].value == "."
+            and tokens[i + 2].kind == "field"
+        ):
+            parts.append(tokens[i + 2].value)
+            end = tokens[i + 2]
+            i += 2
+        new = replace(tuple(parts))
+        if new is not None:
+            out.append(formula[last : token.pos])
+            out.append(new)
+            last = end.pos + len(end.text)
+        i += 1
+    out.append(formula[last:])
+    return "".join(out)
+
+
+def link_calc_display(ds: Datasource, data_field: DataField) -> str:
+    """關聯計算以顯示名稱參照欄位的公式（資料源分頁顯示、修改用）。"""
+    if data_field.calc is None:
+        return data_field.caption
+    by_name = {f.name: f for f in ds.fields}
+
+    def shown(parts: tuple[str, ...]) -> str | None:
+        found = by_name.get(_bracket(parts[0])) if len(parts) == 1 else None
+        return _bracket(found.caption) if found is not None else None
+
+    try:
+        return _rewrite_refs(data_field.calc.formula, shown)
+    except ValueError:
+        return data_field.calc.formula
+
+
+def _without_stale_links(ds: Datasource) -> Datasource:
+    """移除沒有關聯用到的關聯計算欄位。"""
+    relation = getattr(ds.connection, "relation", None)
+    used = (
+        {fid for rel in relation.relationships for c in rel.on for fid in (c.left, c.right)}
+        if isinstance(relation, ModelRelation)
+        else set()
+    )
+    kept = [f for f in ds.fields if not f.relationship_calc or f.id in used]
+    return ds if len(kept) == len(ds.fields) else ds.model_copy(update={"fields": kept})
+
+
+def _join_conditions(
+    left_fields: list[DataField],
+    left_table: Any,
+    right_table: str,
+    right_columns: dict[str, str],
+    right_captions: dict[str, str],
+    on: list[Condition],
+    other_side: str,
+) -> list[JoinCondition]:
+    """join 的條件：左邊是已有的欄位（id）或 join 計算，右邊是新資料表的欄名或 join 計算。join 計算的
+    欄位以顯示名稱或欄名書寫，存成 [資料表].[欄位]。"""
+    from tmig.sqlgen.source import SourceError, join_formula
+
+    types: dict[tuple[str, str], str] = {(right_table, c): t for c, t in right_columns.items()}
+    for f in left_fields:
+        table = left_table(f)
+        if table is not None and f.column is not None:
+            types[(str(table), f.column)] = f.datatype
+
+    def left_ref(parts: tuple[str, ...]) -> str | None:
+        if len(parts) == 2:
+            if (parts[0], parts[1]) in types and parts[0] != right_table:
+                return None
+            raise EditError(f"join 計算不能用到 {'.'.join(parts)}")
+        found = _named(left_fields, parts[0])
+        if found is None or found.column is None:
+            raise EditError(f"join 計算中的 [{parts[0]}] 不在{other_side}")
+        return f"{_bracket(str(left_table(found)))}.{_bracket(found.column)}"
+
+    def right_ref(parts: tuple[str, ...]) -> str | None:
+        if len(parts) == 2:
+            if parts[0] == right_table and parts[1] in right_columns:
+                return None
+            raise EditError(f"join 計算不能用到 {'.'.join(parts)}")
+        column = right_captions.get(parts[0], parts[0])
+        if column not in right_columns:
+            raise EditError(f"「{right_table}」沒有欄位 {parts[0]}")
+        return f"{_bracket(right_table)}.{_bracket(column)}"
+
+    def term(side: Side, left: bool) -> JoinTerm:
+        if isinstance(side, Calculated):
+            text = side.formula.strip()
+            if not text:
+                raise EditError("join 計算的公式是空的")
+            try:
+                stored = _rewrite_refs(text, left_ref if left else right_ref)
+                join_formula(stored, types)
+            except EditError:
+                raise
+            except SourceError as exc:
+                raise EditError(str(exc)) from exc
+            except ValueError as exc:
+                raise EditError(f"join 計算「{text}」有誤：{getattr(exc, 'message', exc)}") from exc
+            return JoinTerm(formula=stored)
+        if left:
+            existing = next((f for f in left_fields if f.id == side), None)
+            if existing is None or existing.column is None:
+                raise EditError(f"欄位 {side} 不在{other_side}")
+            return JoinTerm(table=left_table(existing), column=existing.column)
+        if side not in right_columns:
+            raise EditError(f"「{right_table}」沒有欄位 {side}")
+        return JoinTerm(table=right_table, column=side)
+
+    return [
+        JoinCondition(left=term(left, True), op=op, right=term(right, False))
+        for left, op, right in on
+    ]
+
+
+def join_calc_display(ds: Datasource, owner: str | None, formula: str) -> str:
+    """join 計算以顯示名稱參照欄位的公式（[資料表].[欄位] → [顯示名稱]，資料源分頁顯示、修改用）。"""
+    columns = {
+        (str(_physical_of(f)), str(f.column)): f for f in ds.fields if _in_relation(f, owner)
+    }
+
+    def shown(parts: tuple[str, ...]) -> str | None:
+        found = columns.get((parts[0], parts[1])) if len(parts) == 2 else None
+        return _bracket(found.caption) if found is not None else None
+
+    try:
+        return _rewrite_refs(formula, shown)
+    except ValueError:
+        return formula
 
 
 def _check_unused(ir: IR, ds: Datasource, fields: list[DataField]) -> None:
@@ -1250,12 +1796,16 @@ def _check_unused(ir: IR, ds: Datasource, fields: list[DataField]) -> None:
 
 __all__ = [
     "DATA_DIR",
+    "Calculated",
+    "Condition",
     "InspectedFile",
     "InspectedTable",
     "add_datasource",
     "add_table",
     "file_table",
     "inspect_file",
+    "join_calc_display",
+    "link_calc_display",
     "new_workbook",
     "pivot",
     "remove_table",

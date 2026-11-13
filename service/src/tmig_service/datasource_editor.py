@@ -16,6 +16,12 @@ API（都在 /api/edit/<報表> 下）：
 - ``POST /datasources/<資料源>/pivot``、``DELETE /datasources/<資料源>/pivot/<名稱>``
 - ``PUT  /datasources/<資料源>/fields/<欄位>``：顯示名稱、隱藏、角色、預設彙總、資料類型
 - ``PUT  /datasources/<資料源>``：資料源的名稱
+- 資料庫的資料源（Live 連線，桌面版的「連線到伺服器」）：``POST /datasources`` 與 ``POST …/tables``
+  改送 ``connection``（連線代號）與 ``table_path``（資料表的限定名稱）或 ``sql``（自訂 SQL）；
+  ``GET …/remote-tables`` 列出資料庫中的資料表，``POST …/remote-columns`` 資料表或自訂 SQL 的欄位，
+  ``PUT …/custom-sql/<名稱>`` 修改自訂 SQL
+- 條件（``on``）的每一邊可以是 ``{"formula": …}``：join 計算與關聯計算（Tableau 的「建立 Join 計算」
+  「建立關聯計算」），公式中的欄位以顯示名稱書寫
 """
 
 from __future__ import annotations
@@ -30,13 +36,20 @@ from pydantic import BaseModel, ConfigDict
 
 from tmig.authoring import (
     DATA_DIR,
+    Calculated,
+    Condition,
     InspectedFile,
     add_datasource,
+    add_live_datasource,
+    add_live_table,
     add_table,
     inspect_file,
+    join_calc_display,
+    link_calc_display,
     pivot,
     remove_table,
     rename_datasource,
+    set_custom_sql,
     set_join,
     set_relationship,
     unpivot,
@@ -49,9 +62,11 @@ from tmig.ir import (
     Datasource,
     FileConnection,
     JoinRelation,
+    LiveConnection,
     ModelRelation,
     PivotRelation,
     ProjectRelation,
+    SqlRelation,
     UnionRelation,
 )
 from tmig.ir.models import Relation
@@ -61,15 +76,38 @@ from tmig_service.app import Workspace
 Comparison = Literal["=", "!=", "<", "<=", ">", ">="]
 
 
+class FormulaSide(BaseModel):
+    """條件的一邊是公式（join 計算、關聯計算）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    formula: str
+
+
+SideBody = str | FormulaSide
+ConditionBody = tuple[SideBody, Comparison, SideBody]
+
+
+def conditions(on: list[ConditionBody]) -> list[Condition]:
+    def side(value: SideBody) -> str | Calculated:
+        return Calculated(value.formula) if isinstance(value, FormulaSide) else value
+
+    return [(side(a), op, side(b)) for a, op, b in on]
+
+
 class PathBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str
 
 
 class NewDatasourceBody(BaseModel):
+    """新的資料源：檔案（path、table），或資料庫的連線（connection 與 table_path 或 sql）。"""
+
     model_config = ConfigDict(extra="forbid")
-    path: str
+    path: str | None = None
     table: str | None = None
+    connection: str | None = None
+    table_path: list[str] | None = None
+    sql: str | None = None
 
 
 class AddTableBody(BaseModel):
@@ -79,21 +117,23 @@ class AddTableBody(BaseModel):
     path: str | None = None
     file: str | None = None
     table: str | None = None
+    table_path: list[str] | None = None
+    sql: str | None = None
     how: Literal["relationship", "join", "union"] = "relationship"
     target: str | None = None
     join: Literal["inner", "left", "right", "full"] = "inner"
-    on: list[tuple[str, Comparison, str]] = []
+    on: list[ConditionBody] = []
 
 
 class JoinBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     join: Literal["inner", "left", "right", "full"]
-    on: list[tuple[str, Comparison, str]]
+    on: list[ConditionBody]
 
 
 class RelationshipBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    on: list[tuple[str, Comparison, str]]
+    on: list[ConditionBody]
 
 
 class PivotBody(BaseModel):
@@ -114,6 +154,17 @@ class FieldBody(BaseModel):
 class CaptionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     caption: str
+
+
+class SqlBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sql: str
+
+
+class RemoteColumnsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    table: list[str] | None = None
+    sql: str | None = None
 
 
 def local_file(raw: str) -> Path:
@@ -164,11 +215,19 @@ def packaged_source(directory: Path, path: str) -> InspectedFile:
 def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
     """資料源分頁的資料模型：檔案（與其中可以加入的資料表）、邏輯資料表（關聯樹）、關聯與欄位。"""
     connection = ds.connection
-    editable = isinstance(connection, FileConnection)
+    live = isinstance(connection, LiveConnection) and connection.relation is not None
+    editable = isinstance(connection, FileConnection) or live
     files: list[dict[str, Any]] = []
     logical: list[dict[str, Any]] = []
     relationships: list[dict[str, Any]] = []
     fields = {f.id: f for f in ds.fields}
+
+    def link_formula(field_id: str) -> str | None:
+        found = fields.get(field_id)
+        return (
+            link_calc_display(ds, found) if found is not None and found.relationship_calc else None
+        )
+
     if isinstance(connection, FileConnection):
         root = directory / SOURCES
         for path in dict.fromkeys(t.path for t in connection.tables):
@@ -185,6 +244,7 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
                 except EditError as exc:
                     entry["error"] = str(exc)
             files.append(entry)
+    if isinstance(connection, FileConnection | LiveConnection) and connection.relation is not None:
         top = connection.relation
         if isinstance(top, ModelRelation):
             for table in top.tables:
@@ -192,7 +252,10 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
                     {
                         "id": table.id,
                         "caption": table.caption,
-                        "relation": relation_view(table.relation),
+                        "relation": relation_view(
+                            table.relation,
+                            lambda text, owner=table.id: join_calc_display(ds, owner, text),
+                        ),
                     }
                 )
             for rel in top.relationships:
@@ -211,17 +274,38 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
                                 "right_caption": fields[c.right].caption
                                 if c.right in fields
                                 else c.right,
+                                # 關聯計算：以顯示名稱參照欄位的公式
+                                "left_formula": link_formula(c.left),
+                                "right_formula": link_formula(c.right),
                             }
                             for c in rel.on
                         ],
                     }
                 )
         else:
-            assert top is not None
-            logical.append({"id": None, "caption": ds.caption, "relation": relation_view(top)})
+            logical.append(
+                {
+                    "id": None,
+                    "caption": ds.caption,
+                    "relation": relation_view(top, lambda text: join_calc_display(ds, None, text)),
+                }
+            )
+    server = (
+        {
+            "connection_id": connection.connection_id,
+            "dbclass": connection.dbclass,
+            "server": connection.server,
+            "port": connection.port,
+            "database": connection.database,
+            "schema": connection.schema_name,
+        }
+        if isinstance(connection, LiveConnection)
+        else None
+    )
     return {
         "datasource": {"id": ds.id, "caption": ds.caption, "kind": connection.kind},
         "editable": editable,
+        "connection": server,
         "files": files,
         "logical": logical,
         "relationships": relationships,
@@ -239,22 +323,29 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
                 "calc": f.calc.formula if f.calc is not None else None,
             }
             for f in ds.fields
+            if not f.relationship_calc
         ],
     }
 
 
-def relation_view(relation: Relation) -> dict[str, Any]:
+def relation_view(
+    relation: Relation, display: Callable[[str], str] | None = None
+) -> dict[str, Any]:
+    """關聯樹；display 把 join 計算的公式改寫成以顯示名稱參照欄位（省略時原樣）。"""
+    shown = display or (lambda text: text)
     if isinstance(relation, JoinRelation):
         return {
             "kind": "join",
             "join": relation.join,
-            "left": relation_view(relation.left),
-            "right": relation_view(relation.right),
+            "left": relation_view(relation.left, display),
+            "right": relation_view(relation.right, display),
             "on": [
                 {
                     "left": [c.left.table, c.left.column],
                     "op": c.op,
                     "right": [c.right.table, c.right.column],
+                    "left_formula": shown(c.left.formula) if c.left.formula else None,
+                    "right_formula": shown(c.right.formula) if c.right.formula else None,
                 }
                 for c in relation.on
             ],
@@ -263,17 +354,23 @@ def relation_view(relation: Relation) -> dict[str, Any]:
         return {
             "kind": "union",
             "name": relation.name,
-            "parts": [relation_view(p.relation) for p in relation.parts],
+            "parts": [relation_view(p.relation, display) for p in relation.parts],
         }
     if isinstance(relation, PivotRelation):
         return {
             "kind": "pivot",
             "name": relation.name,
-            "source": relation_view(relation.source),
+            "source": relation_view(relation.source, display),
             "columns": [c.column for c in relation.columns],
         }
     if isinstance(relation, ProjectRelation):
-        return {"kind": "project", "name": relation.name, "source": relation_view(relation.source)}
+        return {
+            "kind": "project",
+            "name": relation.name,
+            "source": relation_view(relation.source, display),
+        }
+    if isinstance(relation, SqlRelation):
+        return {"kind": "sql", "name": relation.name, "sql": relation.sql}
     return {"kind": relation.kind, "name": relation.name}
 
 
@@ -322,14 +419,28 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
     @router.post("/{workbook}/datasources")
     def new_datasource(workbook: str, body: NewDatasourceBody, request: Request) -> dict[str, Any]:
         loaded = workspace(request).get(workbook)
-        source = inspect(local_file(body.path))
-        package_path = copy_source(loaded.directory, source)
         created: dict[str, str] = {}
+        if body.connection is not None:
+            connection = desktop_connection(request, body.connection)
+            columns = remote_columns(request, connection, body.table_path, body.sql)
 
-        def change(ir: IR) -> IR:
-            updated, ds = add_datasource(ir, source, body.table, package_path)
-            created["id"] = ds.id
-            return updated
+            def change(ir: IR) -> IR:
+                updated, ds = add_live_datasource(
+                    ir, connection, body.table_path, body.sql, columns
+                )
+                created["id"] = ds.id
+                return updated
+
+        else:
+            if not body.path:
+                raise HTTPException(422, "要指定檔案（path）或資料庫的連線（connection）")
+            source = inspect(local_file(body.path))
+            package_path = copy_source(loaded.directory, source)
+
+            def change(ir: IR) -> IR:
+                updated, ds = add_datasource(ir, source, body.table, package_path)
+                created["id"] = ds.id
+                return updated
 
         space = workspace(request)
         try:
@@ -355,6 +466,31 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
         workbook: str, datasource: str, body: AddTableBody, request: Request
     ) -> dict[str, Any]:
         loaded = workspace(request).get(workbook)
+        ds = next((d for d in loaded.ir.datasources if d.id == datasource), None)
+        if ds is None:
+            raise HTTPException(404, f"找不到資料源 {datasource}")
+        if isinstance(ds.connection, LiveConnection):
+            connection = ds.connection
+            columns = remote_columns(request, connection, body.table_path, body.sql)
+            ir = apply(
+                request,
+                workbook,
+                None,
+                lambda ir: add_live_table(
+                    ir,
+                    datasource,
+                    body.table_path,
+                    body.sql,
+                    columns,
+                    body.how,
+                    body.target,
+                    body.join,
+                    conditions(body.on),
+                ),
+            )
+            return model_view(
+                ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
+            )
         if body.path:
             source = inspect(local_file(body.path))
             package_path = copy_source(loaded.directory, source)
@@ -376,11 +512,54 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
                 body.how,
                 body.target,
                 body.join,
-                list(body.on),
+                conditions(body.on),
             ),
         )
         ds = next(d for d in ir.datasources if d.id == datasource)
         return model_view(ir, ds, loaded.directory)
+
+    @router.get("/{workbook}/datasources/{datasource}/remote-tables")
+    def remote_tables_endpoint(
+        workbook: str, datasource: str, request: Request, schema: str | None = None
+    ) -> dict[str, Any]:
+        """資料庫的資料源：資料庫中可以加入的資料表（schema 省略時為連線預設的結構描述）。"""
+        connection = live_connection(request, workbook, datasource)
+        return {"tables": list_remote_tables(request, connection, schema)}
+
+    @router.post("/{workbook}/datasources/{datasource}/remote-columns")
+    def remote_columns_endpoint(
+        workbook: str, datasource: str, body: RemoteColumnsBody, request: Request
+    ) -> dict[str, Any]:
+        """資料庫的資料源：資料表或自訂 SQL 的欄位（加入資料表前選擇關聯、join 的欄位）。"""
+        connection = live_connection(request, workbook, datasource)
+        columns = remote_columns(request, connection, body.table, body.sql)
+        return {"columns": [c.model_dump(mode="json") for c in columns]}
+
+    @router.put("/{workbook}/datasources/{datasource}/custom-sql/{name}")
+    def custom_sql_endpoint(
+        workbook: str, datasource: str, name: str, body: SqlBody, request: Request
+    ) -> dict[str, Any]:
+        loaded = workspace(request).get(workbook)
+        connection = live_connection(request, workbook, datasource)
+        columns = remote_columns(request, connection, None, body.sql)
+        ir = apply(
+            request,
+            workbook,
+            None,
+            lambda ir: set_custom_sql(ir, datasource, name, body.sql, columns),
+        )
+        return model_view(
+            ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
+        )
+
+    def live_connection(request: Request, workbook: str, datasource: str) -> LiveConnection:
+        loaded = workspace(request).get(workbook)
+        ds = next((d for d in loaded.ir.datasources if d.id == datasource), None)
+        if ds is None:
+            raise HTTPException(404, f"找不到資料源 {datasource}")
+        if not isinstance(ds.connection, LiveConnection):
+            raise HTTPException(422, f"資料源「{ds.caption}」不是資料庫的連線")
+        return ds.connection
 
     @router.delete("/{workbook}/datasources/{datasource}/tables/{table}")
     def remove_table_endpoint(
@@ -401,7 +580,7 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
             request,
             workbook,
             datasource,
-            lambda ir: set_join(ir, datasource, table, body.join, list(body.on)),
+            lambda ir: set_join(ir, datasource, table, body.join, conditions(body.on)),
         )
         return model_view(
             ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
@@ -416,7 +595,7 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
             request,
             workbook,
             None,
-            lambda ir: set_relationship(ir, datasource, logical, list(body.on)),
+            lambda ir: set_relationship(ir, datasource, logical, conditions(body.on)),
         )
         return model_view(
             ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
@@ -485,3 +664,47 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
 
 
 __all__ = ["copy_source", "datasource_editor_router", "inspect", "local_file", "model_view"]
+
+
+def desktop_connection(request: Request, key: str) -> LiveConnection:
+    """桌面版的連線（連線對話框建立的）：沒有資料表的 LiveConnection。"""
+    registry = getattr(request.app.state, "connections", None)
+    if registry is None:
+        raise HTTPException(404, "只有桌面版可以連線到資料庫")
+    return registry.connection(key)
+
+
+def remote_columns(
+    request: Request, connection: LiveConnection, table: list[str] | None, sql: str | None
+) -> Any:
+    from tmig_service.desktop_connections import remote_columns as columns
+
+    return columns(request, connection, table, sql)
+
+
+def list_remote_tables(
+    request: Request, connection: LiveConnection, schema: str | None
+) -> list[dict[str, Any]]:
+    from tmig.data.catalog import CatalogError, list_tables
+    from tmig.data.sources import SourceConnectionError
+
+    runtime = request.app.state.runtime
+    dialect = connection.dialect
+    if dialect is None:
+        raise HTTPException(422, f"不支援的連線類型 {connection.dbclass}")
+
+    class _Fetcher:
+        def fetch(self, sql: str) -> Any:
+            return runtime.fetch(connection, sql)
+
+    try:
+        found = list_tables(
+            _Fetcher(), dialect, connection.database, schema or connection.schema_name
+        )
+    except CatalogError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except SourceConnectionError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(422, f"無法列出資料表：{exc}") from exc
+    return [t.to_json() for t in found]

@@ -530,6 +530,8 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .dse-conditions { display: flex; flex-direction: column; gap: 4px; }
 .dse-condition { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 .dse-condition select, .dse-join-type select { font: inherit; font-size: 12px; padding: 1px 4px; max-width: 220px; }
+.dse-calc { display: inline-flex; align-items: center; gap: 2px; }
+.dse-calc-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding: 1px 4px; min-width: 180px; border: 1px solid var(--accent); border-radius: 3px; }
 .dse-relationships { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .dse-relationship { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .dse-field-grid input.dse-field-caption { font: inherit; border: 1px solid transparent; background: transparent; padding: 1px 4px; min-width: 160px; }
@@ -544,9 +546,36 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .dse-files > button.dse-other { font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
 .dse-logical-head button:disabled { color: var(--ink); cursor: default; }
 .data-pane .ds-edit-link { align-self: flex-start; font-size: 12px; }
+.dse-server .dse-schema { display: flex; gap: 4px; margin: 6px 0 4px; }
+.dse-server .dse-schema input, .dse-server .dse-search { font: inherit; font-size: 12px; padding: 1px 4px; min-width: 0; flex: 1; }
+.dse-server .dse-search { width: 100%; box-sizing: border-box; }
+.dse-server ul { max-height: 40vh; overflow-y: auto; }
+.dse-sql button { font-size: 12px; }
 @media (max-width: 760px) {
   .dse-body { grid-template-columns: 1fr; }
 }
+
+/* 連線到伺服器（資料庫）：已建立的連線、新的連線與資料表或自訂 SQL */
+.connect-server { display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+.connect-server[data-busy="true"] { cursor: progress; }
+.connect-server h3 { font-size: 14px; margin: 0 0 6px; }
+.cs-saved ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cs-connection { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; }
+.cs-connection-name { flex: 1; min-width: 200px; overflow-wrap: anywhere; }
+.cs-sign-in { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cs-sign-in input[type="password"] { font: inherit; padding: 2px 6px; }
+.cs-connection button, .cs-sign-in button, .cs-filter button, .cs-mode + .dse-label button, .connect-server .dse-label button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; font: inherit; }
+.cs-connection button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.cs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 12px; }
+.cs-options { display: flex; flex-direction: column; gap: 4px; }
+.cs-picker { display: flex; flex-direction: column; gap: 8px; }
+.cs-picker-head { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; overflow-wrap: anywhere; }
+.cs-mode { display: flex; gap: 16px; }
+.cs-filter { display: flex; gap: 6px; flex-wrap: wrap; }
+.cs-filter input { font: inherit; padding: 2px 6px; }
+.cs-tables { max-height: 44vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; }
+textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--line); border-radius: 4px; resize: vertical; }
+.cs-checked { overflow-wrap: anywhere; }
 
 /* 資料窗格的欄位選單：群組、集合、數值分組、別名與預設屬性的對話框 */
 .group-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 8px 0; }

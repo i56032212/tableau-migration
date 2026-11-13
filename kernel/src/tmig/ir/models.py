@@ -280,6 +280,11 @@ class DataField(IRModel):
     comment: str | None = Field(
         default=None, description="註解（Tableau 的「預設屬性＞註解」）：資料窗格的提示"
     )
+    relationship_calc: bool = Field(
+        default=False,
+        description="關聯計算（Tableau 2020.2 起關聯條件的一邊可以是公式）：只用在 Relationship 模型的"
+        "關聯條件，table 為所屬的邏輯資料表，公式只能用到這張資料表的欄位；資料窗格不顯示",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")

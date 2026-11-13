@@ -5,19 +5,25 @@ import { pickDataPath, toast } from "../desktop";
 import { Modal } from "../Server";
 import type { DatasourcePreview } from "../types";
 import {
+  connectionsApi,
   datasourceApi,
   type Comparison,
   type Condition,
   type DatasourceModel,
+  type InspectedColumn,
   type InspectedTable,
   type JoinType,
   type LogicalView,
   type ModelField,
   type RelationView,
+  type RemoteTable,
+  type Side,
+  sideFilled,
 } from "./datasourceApi";
 
-// 資料源分頁的編輯（Tableau Desktop 的「資料來源」分頁）：左邊是連線的檔案與其中的資料表，中間是邏輯資料表
-// 與關聯（雙擊邏輯資料表看到的 join、聯集、樞紐），下面是欄位（改名、隱藏、資料類型、角色）與資料的預覽。
+// 資料源分頁的編輯（Tableau Desktop 的「資料來源」分頁）：左邊是連線的檔案與其中的資料表（資料庫的連線為
+// 資料庫中的資料表與「新增自訂 SQL」），中間是邏輯資料表與關聯（雙擊邏輯資料表看到的 join、聯集、樞紐），
+// 下面是欄位（改名、隱藏、資料類型、角色）與資料的預覽。
 
 const JOINS: Record<JoinType, string> = { inner: "內部", left: "左側", right: "右側", full: "完整外部" };
 const OPS: Comparison[] = ["=", "!=", "<", "<=", ">", ">="];
@@ -36,9 +42,18 @@ interface Source {
   /** 報表中已有的檔案（Data/…）或作者電腦上的新檔案 */
   file?: string;
   path?: string;
+  /** 資料庫的資料表或自訂 SQL */
+  remote?: { table_path: string[] } | { sql: string };
   name: string;
   tables: InspectedTable[];
 }
+
+/** 資料庫的資料表（列數不明，rows 為 -1）。 */
+function remoteTable(name: string, columns: InspectedColumn[]): InspectedTable {
+  return { name, sheet: null, layer: null, rows: -1, columns };
+}
+
+const CUSTOM_SQL = "Custom SQL Query";
 
 export function DatasourceEditor({
   workbook,
@@ -60,6 +75,8 @@ export function DatasourceEditor({
   const [selected, setSelected] = useState<string[]>([]);
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
+  /** 自訂 SQL 的對話框：name 為 null 時是新增 */
+  const [sqlDialog, setSqlDialog] = useState<{ name: string | null; sql: string } | null>(null);
 
   useEffect(() => {
     datasourceApi
@@ -120,6 +137,19 @@ export function DatasourceEditor({
     }
   };
 
+  /** 加入資料庫的資料表：先取得欄位（選擇關聯、join 的欄位）。 */
+  const addRemote = async (table: RemoteTable) => {
+    try {
+      const columns = await datasourceApi.remoteColumns(workbook, datasource, { table: table.path });
+      setAdding({
+        source: { remote: { table_path: table.path }, name: table.path.join("."), tables: [remoteTable(table.name, columns)] },
+        table: table.name,
+      });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+
   if (error) return <div className="placeholder error">無法開啟資料源：{error}</div>;
   if (!model) return <div className="placeholder">載入中…</div>;
   const fields = model.fields;
@@ -148,11 +178,20 @@ export function DatasourceEditor({
         </button>
       </header>
       {!model.editable && (
-        <p className="hint">這個資料源不是檔案的資料源（Live 連線或萃取），只能修改資料源的名稱與欄位的名稱、隱藏、角色。</p>
+        <p className="hint">這個資料源是萃取（或連線沒有資料表的定義），只能修改資料源的名稱與欄位的名稱、隱藏、角色。</p>
       )}
       <div className="dse-body">
         <aside className="dse-files" aria-label="連線">
           <h2>連線</h2>
+          {model.connection && (
+            <LivePane
+              workbook={workbook}
+              datasource={datasource}
+              model={model}
+              onAdd={(t) => void addRemote(t)}
+              onCustomSql={() => setSqlDialog({ name: null, sql: "" })}
+            />
+          )}
           {model.files.map((file) => (
             <div key={file.path} className="dse-file">
               <div className="dse-file-name" title={file.path}>
@@ -182,7 +221,7 @@ export function DatasourceEditor({
               </ul>
             </div>
           ))}
-          {model.editable && (
+          {model.editable && !model.connection && (
             <button type="button" className="dse-other" onClick={() => void otherFile()}>
               其他檔案…
             </button>
@@ -202,6 +241,7 @@ export function DatasourceEditor({
                 workbook={workbook}
                 datasource={datasource}
                 removable={model.logical.length > 1}
+                onEditSql={(name, sql) => setSqlDialog({ name, sql })}
               />
             ))}
           </div>
@@ -292,17 +332,201 @@ export function DatasourceEditor({
           onSubmit={(body) =>
             change(
               () =>
-                datasourceApi.addTable(workbook, datasource, {
-                  ...body,
-                  file: adding.source.file,
-                  path: adding.source.path,
-                }),
+                datasourceApi.addTable(
+                  workbook,
+                  datasource,
+                  adding.source.remote
+                    ? { ...body, table: null, ...adding.source.remote }
+                    : { ...body, file: adding.source.file, path: adding.source.path },
+                ),
               "已加入資料表",
             )
           }
         />
       )}
+      {sqlDialog && (
+        <CustomSqlDialog
+          initial={sqlDialog.sql}
+          editing={sqlDialog.name}
+          check={(sql) => datasourceApi.remoteColumns(workbook, datasource, { sql })}
+          onClose={() => setSqlDialog(null)}
+          onSubmit={async (sql, columns) => {
+            if (sqlDialog.name === null) {
+              setSqlDialog(null);
+              setAdding({ source: { remote: { sql }, name: "自訂 SQL", tables: [remoteTable(CUSTOM_SQL, columns)] }, table: CUSTOM_SQL });
+              return true;
+            }
+            const name = sqlDialog.name;
+            return change(() => datasourceApi.setCustomSql(workbook, datasource, name, sql), "已修改自訂 SQL");
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** 資料庫的連線：伺服器與資料庫、結構描述中的資料表（點選加入）與「新增自訂 SQL」。 */
+function LivePane({
+  workbook,
+  datasource,
+  model,
+  onAdd,
+  onCustomSql,
+}: {
+  workbook: string;
+  datasource: string;
+  model: DatasourceModel;
+  onAdd: (table: RemoteTable) => void;
+  onCustomSql: () => void;
+}) {
+  const connection = model.connection;
+  const [label, setLabel] = useState<string | null>(null);
+  const [schema, setSchema] = useState(connection?.schema ?? "");
+  const [tables, setTables] = useState<RemoteTable[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const load = useCallback(
+    (wanted: string | null) => {
+      setLoadError(null);
+      datasourceApi
+        .remoteTables(workbook, datasource, wanted)
+        .then((r) => setTables(r.tables))
+        .catch((e: Error) => {
+          setTables([]);
+          setLoadError(e.message);
+        });
+    },
+    [workbook, datasource],
+  );
+  useEffect(() => load(connection?.schema ?? null), [load, connection?.schema]);
+  useEffect(() => {
+    if (!connection) return;
+    connectionsApi
+      .connectors()
+      .then((all) => setLabel(all.find((c) => c.dbclass === connection.dbclass)?.label ?? null))
+      .catch(() => setLabel(null));
+  }, [connection]);
+  if (!connection) return null;
+  const query = search.trim().toLowerCase();
+  const shown = (tables ?? []).filter((t) => !query || t.path.join(".").toLowerCase().includes(query));
+  return (
+    <div className="dse-file dse-server" data-connection={connection.connection_id}>
+      <div className="dse-file-name">{label ?? connection.dbclass}</div>
+      <div className="muted">{[connection.server, connection.database].filter(Boolean).join("／")}</div>
+      <div className="dse-schema">
+        <input aria-label="結構描述" placeholder="結構描述" value={schema} onChange={(e) => setSchema(e.target.value)} />
+        <button type="button" className="dse-other" onClick={() => load(schema.trim() || null)}>
+          重新整理
+        </button>
+      </div>
+      <input type="search" className="dse-search" aria-label="搜尋資料表" placeholder="搜尋資料表" value={search} onChange={(e) => setSearch(e.target.value)} />
+      {loadError && (
+        <p className="error">
+          {loadError}
+          <br />
+          <span className="muted">（還沒登入這個連線時，請從「連線到伺服器…」登入）</span>
+        </p>
+      )}
+      {tables === null && !loadError && <p className="muted">載入中…</p>}
+      <ul>
+        {shown.map((t) => (
+          <li key={t.path.join(".")}>
+            <button
+              type="button"
+              className="link dse-add"
+              data-table={t.path.join(".")}
+              disabled={!model.editable}
+              title="加入這張資料表"
+              onClick={() => onAdd(t)}
+            >
+              {t.kind === "view" ? "◫" : "▦"} {t.name}
+            </button>
+            {t.kind === "view" && <span className="muted">（檢視）</span>}
+          </li>
+        ))}
+      </ul>
+      {model.editable && (
+        <button type="button" className="dse-other" onClick={onCustomSql}>
+          新增自訂 SQL…
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 新增或修改自訂 SQL：先檢查欄位（在資料庫執行，取前幾列判斷型別）。 */
+function CustomSqlDialog({
+  initial,
+  editing,
+  check,
+  onClose,
+  onSubmit,
+}: {
+  initial: string;
+  editing: string | null;
+  check: (sql: string) => Promise<InspectedColumn[]>;
+  onClose: () => void;
+  onSubmit: (sql: string, columns: InspectedColumn[]) => Promise<boolean>;
+}) {
+  const [sql, setSql] = useState(initial);
+  const [columns, setColumns] = useState<InspectedColumn[] | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const verify = async (): Promise<InspectedColumn[] | null> => {
+    setBusy(true);
+    setCheckError(null);
+    try {
+      const found = await check(sql);
+      setColumns(found);
+      return found;
+    } catch (e) {
+      setCheckError((e as Error).message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={editing ? `編輯自訂 SQL：${editing}` : "新增自訂 SQL"} onClose={onClose} wide>
+      <textarea
+        className="cs-sql"
+        aria-label="自訂 SQL"
+        spellCheck={false}
+        rows={10}
+        value={sql}
+        onChange={(e) => {
+          setSql(e.target.value);
+          setColumns(null);
+        }}
+      />
+      {checkError && <p className="error">{checkError}</p>}
+      {columns && (
+        <p className="muted dse-columns">欄位：{columns.map((c) => `${c.name}（${TYPES[c.datatype] ?? c.datatype}）`).join("、")}</p>
+      )}
+      {editing && <p className="hint">欄位依名稱對應：名稱相同的欄位保留（含名稱、角色與計算的參照），新的欄加入，不在查詢中的欄位移除（有參照時不能移除）。</p>}
+      <div className="dialog-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || !sql.trim()}
+          onClick={() =>
+            void (async () => {
+              const found = columns ?? (await verify());
+              if (!found) return;
+              if (await onSubmit(sql, found)) onClose();
+            })()
+          }
+        >
+          {editing ? "套用" : "下一步"}
+        </button>
+        <button type="button" disabled={busy || !sql.trim()} onClick={() => void verify()}>
+          檢查欄位
+        </button>
+        <button type="button" onClick={onClose}>
+          取消
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -326,6 +550,7 @@ function LogicalCard({
   workbook,
   datasource,
   removable,
+  onEditSql,
 }: {
   logical: LogicalView;
   model: DatasourceModel;
@@ -335,6 +560,7 @@ function LogicalCard({
   workbook: string;
   datasource: string;
   removable: boolean;
+  onEditSql: (name: string, sql: string) => void;
 }) {
   const fields = model.fields.filter((f) => (logical.id ? f.table === logical.id : true) && f.column !== null);
   return (
@@ -363,6 +589,7 @@ function LogicalCard({
         onRemove={(name) => void onChange(() => datasourceApi.removeTable(workbook, datasource, name), "已移除資料表")}
         onUnpivot={(name) => void onChange(() => datasourceApi.unpivot(workbook, datasource, name), "已移除樞紐")}
         onSetJoin={(table, join, on) => onChange(() => datasourceApi.setJoin(workbook, datasource, table, join, on), "已修改 join")}
+        onEditSql={onEditSql}
       />
     </div>
   );
@@ -375,6 +602,7 @@ function RelationTree({
   onRemove,
   onUnpivot,
   onSetJoin,
+  onEditSql,
 }: {
   relation: RelationView;
   fields: ModelField[];
@@ -382,15 +610,29 @@ function RelationTree({
   onRemove: (name: string) => void;
   onUnpivot: (name: string) => void;
   onSetJoin: (table: string, join: JoinType, on: Condition[]) => Promise<boolean>;
+  onEditSql: (name: string, sql: string) => void;
 }) {
-  if (relation.kind === "table" || relation.kind === "sql") {
+  const nested = { fields, editable, onRemove, onUnpivot, onSetJoin, onEditSql };
+  if (relation.kind === "sql") {
+    return (
+      <div className="dse-table dse-sql" data-sql={relation.name}>
+        ▦ {relation.name}
+        {editable && (
+          <button type="button" className="link" onClick={() => onEditSql(relation.name, relation.sql)}>
+            編輯 SQL…
+          </button>
+        )}
+      </div>
+    );
+  }
+  if (relation.kind === "table") {
     return <div className="dse-table">▦ {relation.name}</div>;
   }
   if (relation.kind === "join") {
     return (
       <div className="dse-join">
-        <RelationTree relation={relation.left} fields={fields} editable={editable} onRemove={onRemove} onUnpivot={onUnpivot} onSetJoin={onSetJoin} />
-        <JoinEditor relation={relation} fields={fields} editable={editable} onSave={onSetJoin} onRemove={onRemove} />
+        <RelationTree relation={relation.left} {...nested} />
+        <JoinEditor relation={relation} fields={fields} editable={editable} onSave={onSetJoin} onRemove={onRemove} onEditSql={onEditSql} />
       </div>
     );
   }
@@ -401,6 +643,11 @@ function RelationTree({
         {relation.parts.map((p) => (
           <div key={"name" in p ? p.name : ""} className="dse-table">
             ▦ {"name" in p ? p.name : ""}
+            {p.kind === "sql" && editable && (
+              <button type="button" className="link" onClick={() => onEditSql(p.name, p.sql)}>
+                編輯 SQL…
+              </button>
+            )}
             {editable && relation.parts.length > 1 && "name" in p && (
               <button type="button" className="link danger-link" onClick={() => onRemove(p.name)}>
                 移除
@@ -414,7 +661,7 @@ function RelationTree({
   if (relation.kind === "pivot") {
     return (
       <div className="dse-pivot">
-        <RelationTree relation={relation.source} fields={fields} editable={editable} onRemove={onRemove} onUnpivot={onUnpivot} onSetJoin={onSetJoin} />
+        <RelationTree relation={relation.source} {...nested} />
         <div className="dse-label">
           樞紐：{relation.columns.join("、")}
           {editable && (
@@ -435,20 +682,25 @@ function JoinEditor({
   editable,
   onSave,
   onRemove,
+  onEditSql,
 }: {
   relation: Extract<RelationView, { kind: "join" }>;
   fields: ModelField[];
   editable: boolean;
   onSave: (table: string, join: JoinType, on: Condition[]) => Promise<boolean>;
   onRemove: (name: string) => void;
+  onEditSql?: (name: string, sql: string) => void;
 }) {
   const right = "name" in relation.right ? relation.right.name : "";
+  const rightSql = relation.right.kind === "sql" ? relation.right.sql : null;
   const inRight = (f: ModelField) => (f.physical_table ?? f.table) === right;
   const leftFields = fields.filter((f) => !inRight(f));
   const rightColumns = fields.filter(inRight).map((f) => f.column ?? "");
   const initial: Condition[] = relation.on.map((c) => {
     const left = leftFields.find((f) => f.column === c.left[1] && (f.physical_table ?? f.table) === c.left[0]) ?? leftFields.find((f) => f.column === c.left[1]);
-    return [left?.id ?? "", c.op as Comparison, c.right[1]];
+    const leftSide: Side = c.left_formula ? { formula: c.left_formula } : (left?.id ?? "");
+    const rightSide: Side = c.right_formula ? { formula: c.right_formula } : (c.right[1] ?? "");
+    return [leftSide, c.op as Comparison, rightSide];
   });
   const [join, setJoin] = useState<JoinType>(relation.join);
   const [on, setOn] = useState<Condition[]>(initial);
@@ -464,6 +716,11 @@ function JoinEditor({
           ))}
         </select>
         <span className="dse-table">▦ {right}</span>
+        {editable && rightSql !== null && onEditSql && (
+          <button type="button" className="link" onClick={() => onEditSql(right, rightSql)}>
+            編輯 SQL…
+          </button>
+        )}
         {editable && (
           <button type="button" className="link danger-link" onClick={() => onRemove(right)}>
             移除
@@ -476,13 +733,78 @@ function JoinEditor({
         right={rightColumns.map((c) => ({ value: c, label: c }))}
         editable={editable}
         onChange={setOn}
+        calcLabel="建立 Join 計算…"
       />
       {editable && dirty && (
-        <button type="button" className="primary" onClick={() => void onSave(right, join, on.filter((c) => c[0] && c[2]))}>
+        <button type="button" className="primary" onClick={() => void onSave(right, join, on.filter((c) => sideFilled(c[0]) && sideFilled(c[2])))}>
           套用
         </button>
       )}
     </div>
+  );
+}
+
+const CALC = "__calc__";
+
+/** 條件的一邊：選欄位，或「建立計算…」改成輸入公式（Tableau 的 join 計算、關聯計算）。 */
+function SidePicker({
+  side,
+  options,
+  label,
+  calcLabel,
+  editable,
+  onChange,
+}: {
+  side: Side;
+  options: { value: string; label: string }[];
+  label: string;
+  calcLabel: string;
+  editable: boolean;
+  onChange: (side: Side) => void;
+}) {
+  if (typeof side !== "string") {
+    return (
+      <span className="dse-calc">
+        <input
+          aria-label={`${label}的計算`}
+          className="dse-calc-input"
+          spellCheck={false}
+          placeholder="例如 LEFT([欄位], 3)"
+          value={side.formula}
+          disabled={!editable}
+          onChange={(e) => onChange({ formula: e.target.value })}
+        />
+        {editable && (
+          <button type="button" className="link" title="改回欄位" aria-label={`${label}改回欄位`} onClick={() => onChange("")}>
+            ↺
+          </button>
+        )}
+      </span>
+    );
+  }
+  return (
+    <select
+      aria-label={label}
+      value={side}
+      disabled={!editable}
+      onChange={(e) => {
+        if (e.target.value !== CALC) {
+          onChange(e.target.value);
+          return;
+        }
+        // 以目前選的欄位開始公式（與 Tableau 相同）
+        const current = options.find((o) => o.value === side);
+        onChange({ formula: current ? `[${current.label.replace(/（.*）$/, "").replace(/]/g, "]]")}]` : "" });
+      }}
+    >
+      <option value="">（欄位）</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+      {editable && <option value={CALC}>{calcLabel}</option>}
+    </select>
   );
 }
 
@@ -492,42 +814,32 @@ function Conditions({
   right,
   editable,
   onChange,
+  calcLabel,
 }: {
   conditions: Condition[];
   left: ModelField[];
   right: { value: string; label: string }[];
   editable: boolean;
   onChange: (next: Condition[]) => void;
+  /** 「建立計算」的選項名稱（join 計算或關聯計算） */
+  calcLabel: string;
 }) {
-  const set = (i: number, at: 0 | 1 | 2, value: string) =>
+  const set = (i: number, at: 0 | 1 | 2, value: Side) =>
     onChange(conditions.map((c, k) => (k === i ? (Object.assign([...c], { [at]: value }) as Condition) : c)));
+  const leftOptions = left.map((f) => ({ value: f.id, label: f.caption }));
   return (
     <div className="dse-conditions">
       {conditions.map((c, i) => (
         <div key={i} className="dse-condition">
-          <select aria-label="左邊的欄位" value={c[0]} disabled={!editable} onChange={(e) => set(i, 0, e.target.value)}>
-            <option value="">（欄位）</option>
-            {left.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.caption}
-              </option>
-            ))}
-          </select>
-          <select aria-label="比較" value={c[1]} disabled={!editable} onChange={(e) => set(i, 1, e.target.value)}>
+          <SidePicker side={c[0]} options={leftOptions} label="左邊的欄位" calcLabel={calcLabel} editable={editable} onChange={(v) => set(i, 0, v)} />
+          <select aria-label="比較" value={c[1]} disabled={!editable} onChange={(e) => set(i, 1, e.target.value as Comparison)}>
             {OPS.map((op) => (
               <option key={op} value={op}>
                 {op}
               </option>
             ))}
           </select>
-          <select aria-label="右邊的欄位" value={c[2]} disabled={!editable} onChange={(e) => set(i, 2, e.target.value)}>
-            <option value="">（欄位）</option>
-            {right.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+          <SidePicker side={c[2]} options={right} label="右邊的欄位" calcLabel={calcLabel} editable={editable} onChange={(v) => set(i, 2, v)} />
           {editable && conditions.length > 1 && (
             <button type="button" className="link danger-link" aria-label="移除條件" onClick={() => onChange(conditions.filter((_, k) => k !== i))}>
               ×
@@ -557,7 +869,11 @@ function RelationshipRow({
   rightCaption: string;
   onSave: (on: Condition[]) => Promise<boolean>;
 }) {
-  const initial: Condition[] = relationship.on.map((c) => [c.left, c.op as Comparison, c.right]);
+  const initial: Condition[] = relationship.on.map((c) => [
+    c.left_formula ? { formula: c.left_formula } : c.left,
+    c.op as Comparison,
+    c.right_formula ? { formula: c.right_formula } : c.right,
+  ]);
   const [on, setOn] = useState<Condition[]>(initial);
   const dirty = JSON.stringify(on) !== JSON.stringify(initial);
   const left = fields.filter((f) => f.table === relationship.left && f.column !== null);
@@ -569,9 +885,9 @@ function RelationshipRow({
       <div>
         <span className="ds-link">{leftCaption}</span> ⟷ <span className="ds-link">{rightCaption}</span>
       </div>
-      <Conditions conditions={on} left={left} right={right} editable onChange={setOn} />
+      <Conditions conditions={on} left={left} right={right} editable onChange={setOn} calcLabel="建立關聯計算…" />
       {dirty && (
-        <button type="button" className="primary" onClick={() => void onSave(on.filter((c) => c[0] && c[2]))}>
+        <button type="button" className="primary" onClick={() => void onSave(on.filter((c) => sideFilled(c[0]) && sideFilled(c[2])))}>
           套用
         </button>
       )}
@@ -682,7 +998,9 @@ function AddTableDialog({
   const [on, setOn] = useState<Condition[]>(() => guess());
   useEffect(() => setOn(guess()), [table, target]); // eslint-disable-line react-hooks/exhaustive-deps
   const needs = how !== "union";
-  const valid = !needs || on.some((c) => c[0] && c[2]);
+  const valid = !needs || on.some((c) => sideFilled(c[0]) && sideFilled(c[2]));
+  /** 自訂 SQL 不能聯集（與 Tableau 相同） */
+  const ways = (Object.keys(HOW) as (keyof typeof HOW)[]).filter((h) => !(h === "union" && source.remote && "sql" in source.remote));
   return (
     <Modal title={`加入資料表：${source.name}`} onClose={onClose} wide>
       <label className="admin-field">
@@ -690,14 +1008,15 @@ function AddTableDialog({
         <select aria-label="要加入的資料表" value={table} onChange={(e) => setTable(e.target.value)}>
           {source.tables.map((t) => (
             <option key={t.name} value={t.name}>
-              {t.name}（{t.rows.toLocaleString()} 列）
+              {t.name}
+              {t.rows >= 0 ? `（${t.rows.toLocaleString()} 列）` : ""}
             </option>
           ))}
         </select>
       </label>
       <fieldset className="dse-how">
         <legend>加入的方式</legend>
-        {(Object.keys(HOW) as (keyof typeof HOW)[]).map((h) => (
+        {ways.map((h) => (
           <label key={h}>
             <input type="radio" name="how" value={h} checked={how === h} onChange={() => setHow(h)} /> {HOW[h]}
           </label>
@@ -736,17 +1055,24 @@ function AddTableDialog({
             right={columns.map((c) => ({ value: c.name, label: `${c.name}（${TYPES[c.datatype] ?? c.datatype}）` }))}
             editable
             onChange={setOn}
+            calcLabel={how === "relationship" ? "建立關聯計算…" : "建立 Join 計算…"}
           />
         </>
       )}
-      {how === "union" && <p className="hint">欄位依名稱對應，另加上 Table Name（Excel 另有 Sheet、文字檔另有 Path）。</p>}
+      {how === "union" && (
+        <p className="hint">
+          {source.remote ? "欄位依名稱對應，另加上 Table Name。" : "欄位依名稱對應，另加上 Table Name（Excel 另有 Sheet、文字檔另有 Path）。"}
+        </p>
+      )}
       <div className="dialog-actions">
         <button
           type="button"
           className="primary"
           disabled={!valid}
           onClick={() =>
-            void onSubmit({ table, how, target, join, on: needs ? on.filter((c) => c[0] && c[2]) : [] }).then((ok) => ok && onClose())
+            void onSubmit({ table, how, target, join, on: needs ? on.filter((c) => sideFilled(c[0]) && sideFilled(c[2])) : [] }).then(
+              (ok) => ok && onClose(),
+            )
           }
         >
           加入

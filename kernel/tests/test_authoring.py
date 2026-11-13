@@ -248,7 +248,7 @@ def test_relationship_and_join(book: Path, sources: Path, tmp_path: Path) -> Non
         "Cid": 75,
     }
     ir = set_relationship(ir, ds, people, [(f["Region"], "=", f["Region (People)"])])
-    with pytest.raises(EditError, match="不是這個關聯兩邊"):
+    with pytest.raises(EditError, match="不在要關聯的資料表中"):
         set_relationship(ir, ds, people, [(f["Manager"], "=", f["Region"])])
     # 邏輯資料表 Orders 中 inner join Returns：只有退貨的訂單
     orders = model.tables[0].id

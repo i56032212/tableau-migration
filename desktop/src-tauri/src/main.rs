@@ -154,6 +154,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
                 .accelerator("CmdOrCtrl+N")
                 .build(app)?,
         )
+        .item(&MenuItemBuilder::with_id("connect_server", "新增報表（連線到伺服器）…").build(app)?)
         .item(&MenuItemBuilder::with_id("open", "開啟…").accelerator("CmdOrCtrl+O").build(app)?)
         .item(&MenuItemBuilder::with_id("save", "儲存").accelerator("CmdOrCtrl+S").build(app)?)
         .item(
@@ -188,6 +189,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
 fn menu_action(app: &AppHandle, id: &str) {
     let script = match id {
         "new_workbook" => "window.tmigDesktop && window.tmigDesktop.newWorkbook()",
+        "connect_server" => "window.tmigDesktop && window.tmigDesktop.connectServer()",
         "open" => "window.tmigDesktop && window.tmigDesktop.open()",
         "save" => "window.tmigDesktop && window.tmigDesktop.save()",
         "save_as" => "window.tmigDesktop && window.tmigDesktop.saveAs()",

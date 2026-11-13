@@ -77,7 +77,8 @@ def catalog(ir: IR) -> dict[str, Any]:
             {
                 "id": ds.id,
                 "caption": ds.caption,
-                "fields": [_field_entry(f) for f in ds.fields],
+                # 關聯計算只用在關聯條件，資料窗格不顯示
+                "fields": [_field_entry(f) for f in ds.fields if not f.relationship_calc],
                 "hierarchies": [h.model_dump(mode="json") for h in ds.hierarchies],
                 "geo": ds.geo.model_dump(mode="json") if ds.geo is not None else None,
             }

@@ -28,6 +28,9 @@
 邏輯資料表內含 join（實體層）：邏輯資料表是 join 樹的子查詢，各欄以欄位 id 為欄名（各實體資料表的同名
 欄位不衝突），之後與一般的資料表相同；join 在邏輯資料表之內先做，關聯再連接邏輯資料表（與 Tableau 相同）。
 
+關聯計算（關聯條件的一邊是公式，DataField.relationship_calc）：在所屬的邏輯資料表上以公式計算的欄，
+與實體欄位一樣用在連接條件與去重；公式只能用到這張資料表的實體欄位。
+
 尚不支援（查詢時列為不支援）：同一個彙總用到多張資料表的欄位、同時用到量值表與其他資料表
 （或多個分支）欄位的篩選、含 LOD 且只能以半連接套用的篩選。
 """
@@ -36,7 +39,10 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import NoReturn
 
+from tmig.formula.analyze import Target
+from tmig.formula.ast import Call, Lod
 from tmig.ir.models import (
     DataField,
     Datasource,
@@ -214,6 +220,17 @@ class ModelPlanner:
         for rel in model.relationships:
             self.edges[rel.left].append((rel.right, rel))
             self.edges[rel.right].append((rel.left, rel))
+        # 關聯計算：關聯條件用到的計算欄位，在所屬的邏輯資料表上計算
+        linked = {fid for rel in model.relationships for c in rel.on for fid in (c.left, c.right)}
+        self.computed: dict[str, list[DataField]] = {t.id: [] for t in model.tables}
+        for data_field in ds.fields:
+            if (
+                data_field.id in linked
+                and data_field.column is None
+                and data_field.calc is not None
+                and data_field.table in self.computed
+            ):
+                self.computed[data_field.table].append(data_field)
 
     def caption(self, table: str) -> str:
         return self.tables[table].caption
@@ -334,7 +351,6 @@ class ModelPlanner:
         """父資料表與子資料表的連接條件；child_alias 為子資料表的去重結果（以欄位 id 參照）。"""
         parts: list[str] = []
         for p_field, op, c_field in self._pairs(parent, rel):
-            assert p_field.column is not None and c_field.column is not None
             left = self._col(parent, p_field)
             if child_alias is not None:
                 right = f"{ident(child_alias)}.{ident(c_field.id)}"
@@ -344,10 +360,30 @@ class ModelPlanner:
         return " AND ".join(parts)
 
     def _col(self, table: str, data_field: DataField) -> str:
-        """邏輯資料表的實體欄位；內含 join 的資料表（子查詢）以欄位 id 為欄名。"""
+        """邏輯資料表的實體欄位；內含 join 的資料表（子查詢）以欄位 id 為欄名。關聯計算為公式的 SQL。"""
+        if data_field.column is None:
+            return self._computed(table, data_field)
         joined = isinstance(self.tables[table].relation, JoinRelation)
-        name = data_field.id if joined else data_field.column or ""
+        name = data_field.id if joined else data_field.column
         return f"{ident(self.alias[table])}.{ident(name)}"
+
+    def _computed(self, table: str, data_field: DataField) -> str:
+        """關聯計算的 SQL：公式中的欄位是這張邏輯資料表的實體欄位。"""
+        from tmig.formula.analyze import Analyzer
+        from tmig.formula.lexer import FormulaSyntaxError
+        from tmig.formula.parser import parse_formula
+        from tmig.formula.types import FormulaSemanticError
+        from tmig.ir.scope import DatasourceScope
+        from tmig.sqlgen.expr import ExprCompiler
+
+        if data_field.calc is None or data_field.table != table:
+            raise ModelError(f"「{data_field.caption}」不是「{self.caption(table)}」的欄位")
+        try:
+            node = parse_formula(data_field.calc.formula)
+            analyzer = Analyzer(DatasourceScope.for_datasource(self.ds, []))
+            return "(" + ExprCompiler(analyzer, _LinkEnv(self, table)).row(node) + ")"
+        except (FormulaSyntaxError, FormulaSemanticError) as exc:
+            raise ModelError(f"關聯計算「{data_field.calc.formula}」：{exc}") from exc
 
     # ------------------------------------------------------------ SQL
 
@@ -398,6 +434,7 @@ class ModelPlanner:
                 if cast and f.datatype == "datetime":
                     sql = f"CAST({sql} AS TIMESTAMP)"
                 items.append((f.id, sql))
+            items += [(f.id, self._computed(t, f)) for f in self.computed[t]]
         return items or [(ONE_COL, "1")]
 
     def _projections(self, tables: list[str]) -> list[str]:
@@ -494,7 +531,7 @@ class ModelPlanner:
         children = [c for c in order[1:] if tree[c][0] == measure]
         subtrees = {c: self._subtree(c, tree) for c in children}
         items = self._items([measure])
-        in_base = {f.id for f in self.columns[measure]}
+        in_base = {f.id for f in [*self.columns[measure], *self.computed[measure]]}
         joins: list[str] = []
         branches: list[Branch] = []
         notes: list[str] = []
@@ -575,6 +612,43 @@ class _Built:
     from_clause: str
     order: list[str]
     notes: list[str]
+
+
+class _LinkEnv:
+    """關聯計算的公式：欄位是邏輯資料表的實體欄位；不能用參數、彙總、LOD 與 Table Calculation。"""
+
+    week_start = "sunday"
+
+    def __init__(self, planner: ModelPlanner, table: str) -> None:
+        self.planner = planner
+        self.table = table
+
+    def column(self, target: Target) -> str:
+        found = self.planner.fields.get(target.id)
+        if found is None or found.table != self.table or found.column is None:
+            caption = found.caption if found is not None else target.id
+            raise ModelError(
+                f"關聯計算只能用到「{self.planner.caption(self.table)}」的欄位（「{caption}」不是）"
+            )
+        return self.planner._col(self.table, found)
+
+    def _reject(self) -> NoReturn:
+        raise ModelError("關聯計算不能用到參數、彙總、LOD 或 Table Calculation")
+
+    def param(self, target: Target) -> str:
+        self._reject()
+
+    def param_value(self, target: Target) -> object:
+        self._reject()
+
+    def lod(self, node: Lod) -> str:
+        self._reject()
+
+    def aggregate(self, node: Call) -> str:
+        self._reject()
+
+    def table_calc(self, node: Call) -> str:
+        self._reject()
 
 
 __all__ = [
