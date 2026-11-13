@@ -247,6 +247,10 @@ class WorkbookParser:
             state = DatasourceParser(ctx, ds_el).parse()
             if state is not None:
                 ctx.datasources[state.name] = state
+        # 引用其他資料源欄位的計算欄位（Data Blending）：資料源都解析完後才分析
+        ctx.datasources_parsed = True
+        for state in ctx.datasources.values():
+            analyze_calcs(ctx, state)
 
         self._shared_views(child(root, "shared-views"))
         # 篩選動作的 id 先配發：工作表上的動作篩選要參照它

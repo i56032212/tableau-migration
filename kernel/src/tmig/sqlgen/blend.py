@@ -18,16 +18,27 @@
 （WorksheetSql.stages：Live 連線在各自的資料庫彙總，Relationship 模型依模型的規則），結果在本機依連結欄位
 合併（tmig.data.executor.combine，由 tmig.data.runtime.DataRuntime 執行）。
 
-尚不支援：次要資料源的 Table Calculation，以及與總計一起使用。
+主要資料源中引用次要資料源欄位的計算欄位（例如 SUM([Sales]) / SUM([Targets].[Target])）拆成各資料源各自彙總的
+部分與合併後的運算（_CalcSplit）；次要資料源的維度以 ATTR 彙總（文字欄位對到多個值時為 *）。
+
+尚不支援：次要資料源的篩選與 Table Calculation，以及與總計一起使用。
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from tmig.formula.analyze import Analyzer, Target
+from tmig.formula.ast import Call, FieldRef, Lod, Node, map_children, walk
+from tmig.formula.types import FormulaSemanticError
+from tmig.formula.unparse import to_formula
 from tmig.ir.models import (
     IR,
     MEASURE_NAMES,
     MEASURE_VALUES,
     Blend,
+    Calc,
+    DataField,
     Datasource,
     ExtractConnection,
     FieldUse,
@@ -44,6 +55,7 @@ from tmig.ir.models import (
     Worksheet,
     is_federated,
 )
+from tmig.ir.scope import DatasourceScope
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import (
@@ -74,26 +86,50 @@ def blend_sql(
     for blend in ws.blends:
         for data_field in datasources[blend.datasource].fields:
             owners[data_field.id] = blend
-    primary_ws = _primary_worksheet(ws, owners)
-    primary_ir = _with(ir, primary_ws)
+    primary = datasources[ws.datasource]
     view = _view_uses(ws)
+    # 主要資料源中引用次要資料源欄位的計算欄位：拆成各資料源各自彙總的部分，合併後再計算
+    split = _CalcSplit(ir, primary, owners, datasources)
+    calcs = [u for u in _unique(view) if split.blended(u.field)]
+    for use in calcs:
+        if use.table_calc is not None or use.agg is not None or use.date is not None:
+            raise QueryError(
+                "Data Blending：引用次要資料源欄位的計算欄位不能再彙總或套用 Table Calculation",
+                unsupported=True,
+            )
+        split.add(use)
+    hidden = {u.field for u in calcs}
+    primary_ws = _primary_worksheet(ws, {**owners, **dict.fromkeys(hidden, ws.blends[0])})
+    primary_ws = split.primary_worksheet(primary_ws)
+    if any(f'"{field_id}"' in primary_ws.model_dump_json() for field_id in hidden):
+        raise QueryError(
+            "Data Blending：引用次要資料源欄位的計算欄位只能放在欄列架與標記卡上"
+            "（篩選、排序、參考線等尚不支援）",
+            unsupported=True,
+        )
+    primary = split.primary
+    primary_ir = _with(
+        ir.model_copy(
+            update={"datasources": [primary if d.id == primary.id else d for d in ir.datasources]}
+        ),
+        primary_ws,
+    )
     used = _unique([u for u in view if u.field in owners])
-    if not used:
+    if not used and not calcs:
         return WorksheetQuery(primary_ir, ws.id, state, user).build()
     for use in used:
         if use.table_calc is not None:
             raise QueryError(
                 "Data Blending：次要資料源的欄位套用 Table Calculation 尚不支援", unsupported=True
             )
-    primary = datasources[ws.datasource]
     blends = [
-        (n, blend, [u for u in used if owners[u.field] is blend])
+        (n, blend, [u for u in used if owners[u.field] is blend], split.uses(blend.datasource))
         for n, blend in enumerate(ws.blends)
     ]
-    blends = [(n, blend, uses) for n, blend, uses in blends if uses]
+    blends = [(n, blend, uses, parts) for n, blend, uses, parts in blends if uses or parts]
     # 主要或次要資料源有 Live 連線（或次要資料源是 Relationship 模型）：各資料源分開查詢，結果在本機合併
     staged = isinstance(primary.connection, LiveConnection) or any(
-        separate(datasources[blend.datasource]) for _, blend, _ in blends
+        separate(datasources[blend.datasource]) for _, blend, _, _ in blends
     )
 
     query = WorksheetQuery(primary_ir, ws.id, state, user)
@@ -107,8 +143,8 @@ def blend_sql(
     federated: dict[str, FederatedBlend] = {}
     extra: list[tuple[str, OutputColumn]] = []
     notes: list[str] = []
-    for n, blend, uses in blends:
-        secondary = datasources[blend.datasource]
+    for n, blend, uses, parts in blends:
+        secondary = split.secondary(blend.datasource)
         pairs: list[tuple[OutputColumn, FieldUse]] = []
         for column in dims:
             assert column.use is not None
@@ -122,8 +158,32 @@ def blend_sql(
                 unsupported=True,
             )
         alias = f"__blend{n}"
+        # 次要資料源的維度（ATTR）：連結欄位的一個值對到多個值時顯示 *（與 Tableau 相同；文字欄位）
+        starred: dict[str, FieldUse] = {}
+        by_id = {f.id: f for f in secondary.fields}
+        for index, use in enumerate(uses):
+            data_field = by_id[use.field]
+            if use.agg != "attr" or use.date is not None or data_field.datatype != "string":
+                continue
+            own = f"[{_strip_brackets(data_field.name).replace(']', ']]')}]"
+            star = DataField(
+                id=f"blend_attr_{n}_{index}",
+                name=f"[blend_attr_{n}_{index}]",
+                caption=data_field.caption,
+                role="measure",
+                datatype="string",
+                calc=Calc(
+                    formula=f"IF MIN({own}) = MAX({own}) THEN MIN({own}) "
+                    f"ELSEIF COUNT({own}) > 0 THEN '*' END",
+                    level="aggregate",
+                ),
+                source_ref="/blend",
+            )
+            secondary = _with_field(secondary, star)
+            uses[index] = FieldUse(field=star.id, continuous=False)
+            starred[star.id] = use
         source = secondary if staged else _attached(secondary, alias)
-        holder = _secondary_worksheet(ws, secondary.id, [f for _, f in pairs], uses)
+        holder = _secondary_worksheet(ws, secondary.id, [f for _, f in pairs], [*uses, *parts])
         sub = ir.model_copy(
             update={
                 "datasources": [source if d.id == secondary.id else d for d in ir.datasources],
@@ -154,9 +214,17 @@ def blend_sql(
             for column, found in pairs
         ]
         joins.append(f"LEFT JOIN {ident(name)} ON {' AND '.join(conditions)}")
+        part_keys = {use_key(u) for u in parts}
         for column in built.columns:
-            if column.role == "measure":
-                extra.append((name, column))
+            located = f"{ident(name)}.{ident(column.key)}"
+            if column.key in part_keys:
+                split.located(column.key, name)
+            elif column.key in starred:
+                original = starred[column.key]
+                shown_as = OutputColumn(use_key(original), column.role, "string", original)
+                extra.append((located, shown_as))
+            elif column.role == "measure":
+                extra.append((located, column))
         where = ""
         if staged:
             where = "在它的資料庫" if isinstance(connection, LiveConnection) else "另外查詢、"
@@ -165,17 +233,27 @@ def blend_sql(
             "彙總後依連結欄位 LEFT JOIN"
         )
 
-    shown = [c for c in main.columns if c.role != "sort"]
+    for key in split.primary_keys():
+        split.located(key, PRIMARY)
+    shown = [c for c in main.columns if c.role != "sort" and c.key not in split.primary_keys()]
     sorts = [c for c in main.columns if c.role == "sort" and c.key != ROW]
+    computed = split.outputs(query)
     outputs = [f"{ident(PRIMARY)}.{ident(c.key)}" for c in shown]
-    outputs += [f"{ident(name)}.{ident(c.key)}" for name, c in extra]
+    outputs += [f"{located} AS {ident(c.key)}" for located, c in extra]
+    outputs += [f"{sql} AS {ident(c.key)}" for sql, c in computed]
     outputs += [f"{ident(PRIMARY)}.{ident(c.key)}" for c in sorts]
+    if computed:
+        notes.append(
+            "引用次要資料源欄位的計算欄位："
+            + "、".join(f"「{data_field.caption}」" for _, data_field, _ in split.calcs)
+            + " 各資料源各自彙總後，在合併的結果上計算"
+        )
     select = (
         f"SELECT {', '.join(outputs)}\nFROM {ident(PRIMARY)}\n"
         + "\n".join(joins)
         + f"\nORDER BY {ident(PRIMARY)}.{ident(ROW)}"
     )
-    columns = [*shown, *(c for _, c in extra), *sorts]
+    columns = [*shown, *(c for _, c in extra), *(c for _, c in computed), *sorts]
     if staged:
         notes.insert(
             0,
@@ -214,6 +292,281 @@ def blend_sql(
         attach=attach,
         federated=federated,
     )
+
+
+PART_PREFIX = "blend_part_"
+"""引用次要資料源欄位的計算欄位拆出的部分（各資料源各自彙總的運算式）：暫時的計算欄位 id 的前綴。"""
+
+
+@dataclass
+class _Part:
+    datasource: str
+    field: DataField
+    use: FieldUse
+    source: str | None = None
+    """合併時所在的查詢（__p 或 __s0…）。"""
+
+
+class _CalcSplit:
+    """主要資料源中引用次要資料源欄位的計算欄位（例如 SUM([Sales]) / SUM([Targets].[Target])）：與 Tableau 相同，
+    彙總的部分在各自的資料源計算（主要資料源依檢視的層級，次要資料源依連結欄位的層級），合併後再算其餘的運算。
+
+    公式拆成只用到一個資料源的彙總運算式（成為那個資料源暫時的計算欄位，隨它的查詢算出）與外面的運算
+    （四則、IF、ZN 等，在合併的 SELECT 中以各部分的欄算出）。同一個彙總中同時用到兩個資料源的欄位不支援。"""
+
+    def __init__(
+        self,
+        ir: IR,
+        primary: Datasource,
+        owners: dict[str, Blend],
+        datasources: dict[str, Datasource],
+    ) -> None:
+        self.owners = owners
+        self.datasources = dict(datasources)
+        self.primary = primary
+        self.own = {f.id: f for f in primary.fields}
+        others = [datasources[b] for b in dict.fromkeys(o.datasource for o in owners.values())]
+        self.scope = DatasourceScope.for_datasource(primary, ir.parameters, others)
+        self.analyzer = Analyzer(self.scope)
+        self.parts: dict[tuple[str, str], _Part] = {}
+        self.calcs: list[tuple[FieldUse, DataField, Node]] = []
+        self._blended: dict[str, bool] = {}
+
+    # ------------------------------------------------------------ 判斷
+
+    def blended(self, field_id: str) -> bool:
+        """主要資料源的計算欄位（展開引用的計算欄位後）用到次要資料源的欄位。"""
+        found = self._blended.get(field_id)
+        if found is None:
+            data_field = self.own.get(field_id)
+            found = False
+            if data_field is not None and data_field.calc is not None:
+                try:
+                    node = self.analyzer.calc_ast(self.scope.target(field_id))
+                    found = any(side != self.primary.id for side in self._sides(node))
+                except (FormulaSemanticError, KeyError):
+                    found = False
+            self._blended[field_id] = found
+        return found
+
+    def _sides(self, node: Node) -> set[str]:
+        """運算式用到的資料源（id）；引用的計算欄位一併展開。"""
+        found: set[str] = set()
+        for item in walk(node):
+            if not isinstance(item, FieldRef):
+                continue
+            target = self.analyzer.resolve(item)
+            if target.kind == "param":
+                continue
+            if target.id in self.owners:
+                found.add(self.owners[target.id].datasource)
+            elif target.formula is not None:
+                found |= self._sides(self.analyzer.calc_ast(target))
+            else:
+                found.add(self.primary.id)
+        return found
+
+    # ------------------------------------------------------------ 拆開
+
+    def add(self, use: FieldUse) -> None:
+        data_field = self.own[use.field]
+        try:
+            node = self._split(self.analyzer.calc_ast(self.scope.target(use.field)))
+        except FormulaSemanticError as exc:
+            raise QueryError(f"計算欄位「{data_field.caption}」：{exc.message}") from exc
+        self.calcs.append((use, data_field, node))
+
+    def _split(self, node: Node) -> Node:
+        sides = self._sides(node)
+        info = self.analyzer.analyze(node)
+        if not sides or info.level == "const":
+            return node
+        if info.level == "tc":
+            raise QueryError(
+                "Data Blending：引用次要資料源欄位的計算欄位中的 Table Calculation 尚不支援",
+                unsupported=True,
+            )
+        if len(sides) == 1:
+            (side,) = sides
+            if info.level == "agg":
+                # 次要資料源只算彙總本身：外面的運算（例如 ZN）在合併後計算，次要資料源沒有對應的列時
+                # ZN(SUM([Targets].[Target])) 是 0（與 Tableau 相同）
+                whole = (
+                    side == self.primary.id or isinstance(node, FieldRef) or self._aggregate(node)
+                )
+                return (
+                    self._part(side, node, info.datatype)
+                    if whole
+                    else map_children(node, self._split)
+                )
+            if side != self.primary.id:
+                raise QueryError(
+                    "Data Blending：計算欄位中次要資料源的欄位要先彙總（例如 SUM、ATTR）"
+                )
+            return node
+        if isinstance(node, FieldRef):
+            # 引用的計算欄位本身同時用到兩個資料源：展開
+            return self._split(self.analyzer.calc_ast(self.analyzer.resolve(node)))
+        if isinstance(node, Lod):
+            raise QueryError(
+                "Data Blending：LOD 運算式中同時用到主要與次要資料源的欄位，尚不支援",
+                unsupported=True,
+            )
+        if self._aggregate(node):
+            assert isinstance(node, Call)
+            raise QueryError(
+                f"Data Blending：{node.name} 中同時用到主要與次要資料源的欄位"
+                "（各資料源的欄位要各自彙總），尚不支援",
+                unsupported=True,
+            )
+        return map_children(node, self._split)
+
+    def _aggregate(self, node: Node) -> bool:
+        """彙總函式的呼叫（參數不是彙總的運算式）。"""
+        return isinstance(node, Call) and not any(
+            self.analyzer.analyze(arg).level == "agg" for arg in node.args
+        )
+
+    def _part(self, side: str, node: Node, datatype: str) -> Node:
+        if side != self.primary.id:
+            node = self._localize(node)
+        text = to_formula(node)
+        part = self.parts.get((side, text))
+        if part is None:
+            field_id = f"{PART_PREFIX}{len(self.parts)}"
+            data_field = DataField(
+                id=field_id,
+                name=f"[{field_id}]",
+                caption=field_id,
+                role="measure",
+                datatype=datatype,  # type: ignore[arg-type]
+                calc=Calc(formula=text, level="aggregate"),
+                source_ref="/blend",
+            )
+            part = _Part(side, data_field, FieldUse(field=field_id, continuous=True))
+            self.parts[(side, text)] = part
+            if side == self.primary.id:
+                self.primary = _with_field(self.primary, data_field)
+            else:
+                self.datasources[side] = _with_field(self.datasources[side], data_field)
+        return FieldRef(node.pos, (part.field.id,))
+
+    def _localize(self, node: Node) -> Node:
+        """次要資料源的運算式：[資料源].[欄位] 改成它自己的欄位名稱（在次要資料源中計算）。"""
+        if isinstance(node, FieldRef):
+            target = self.analyzer.resolve(node)
+            if target.id in self.owners:
+                secondary = self.datasources[self.owners[target.id].datasource]
+                name = next(f.name for f in secondary.fields if f.id == target.id)
+                return FieldRef(node.pos, (_strip_brackets(name),))
+            return node
+        return map_children(node, self._localize)
+
+    # ------------------------------------------------------------ 各資料源的查詢
+
+    def secondary(self, datasource: str) -> Datasource:
+        return self.datasources[datasource]
+
+    def uses(self, datasource: str) -> list[FieldUse]:
+        return [p.use for p in self.parts.values() if p.datasource == datasource]
+
+    def primary_keys(self) -> set[str]:
+        return {use_key(u) for u in self.uses(self.primary.id)}
+
+    def primary_worksheet(self, ws: Worksheet) -> Worksheet:
+        """主要資料源的查詢另外算出它的各部分（放在工具提示上：不影響檢視的層級）。"""
+        parts = self.uses(self.primary.id)
+        if not parts:
+            return ws
+        marks = ws.marks.model_copy(update={"tooltip": [*ws.marks.tooltip, *parts]})
+        return ws.model_copy(update={"marks": marks})
+
+    def located(self, key: str, source: str) -> None:
+        for part in self.parts.values():
+            if use_key(part.use) == key:
+                part.source = source
+
+    # ------------------------------------------------------------ 合併後的運算
+
+    def outputs(self, query: WorksheetQuery) -> list[tuple[str, OutputColumn]]:
+        """各計算欄位在合併的 SELECT 中的 SQL 與輸出欄。"""
+        from tmig.sqlgen.expr import ExprCompiler
+
+        if not self.calcs:
+            return []
+        missing = [
+            p.field.calc.formula for p in self.parts.values() if p.source is None and p.field.calc
+        ]
+        if missing:
+            raise QueryError(
+                f"Data Blending：計算欄位的部分 {missing[0]} 沒有算出", unsupported=True
+            )
+        compiler = ExprCompiler(Analyzer(_MergeScope(self)), _MergeEnv(self, query))  # type: ignore[arg-type]
+        found: list[tuple[str, OutputColumn]] = []
+        for use, data_field, node in self.calcs:
+            try:
+                sql = compiler.row(node)
+                datatype = compiler.analyzer.analyze(node).datatype
+            except FormulaSemanticError as exc:
+                raise QueryError(f"計算欄位「{data_field.caption}」：{exc.message}") from exc
+            column = OutputColumn(
+                key=use_key(use),
+                role="measure",
+                datatype="real" if datatype == "null" else datatype,
+                use=use,
+            )
+            found.append((sql, column))
+        return found
+
+
+class _MergeScope:
+    """合併後的運算：各部分是合併結果中的欄，其餘（參數）依主要資料源。"""
+
+    def __init__(self, split: _CalcSplit) -> None:
+        self.split = split
+        self.parts = {p.field.id: p for p in split.parts.values()}
+
+    def lookup(self, parts: tuple[str, ...]) -> Target | None:
+        if len(parts) == 1 and parts[0] in self.parts:
+            data_field = self.parts[parts[0]].field
+            return Target("field", data_field.id, data_field.datatype, "measure")
+        found = self.split.scope.lookup(parts)
+        return found if found is not None and found.kind == "param" else None
+
+
+class _MergeEnv:
+    def __init__(self, split: _CalcSplit, query: WorksheetQuery) -> None:
+        self.parts = {p.field.id: p for p in split.parts.values()}
+        self.query = query
+        self.week_start = query.week_start
+
+    def column(self, target: Target) -> str:
+        part = self.parts[target.id]
+        assert part.source is not None
+        return f"{ident(part.source)}.{ident(use_key(part.use))}"
+
+    def param(self, target: Target) -> str:
+        return self.query.param_sql(target.id)
+
+    def param_value(self, target: Target) -> object:
+        return self.query.param_value(target.id)
+
+    def lod(self, node: object) -> str:
+        raise QueryError("Data Blending：合併後不能計算 LOD 運算式")
+
+    def aggregate(self, node: object) -> str:
+        raise QueryError("Data Blending：合併後不能再彙總")
+
+    def table_calc(self, node: object) -> str:
+        raise QueryError("Data Blending：合併後的 Table Calculation 尚不支援", unsupported=True)
+
+
+def _with_field(datasource: Datasource, data_field: DataField) -> Datasource:
+    return datasource.model_copy(update={"fields": [*datasource.fields, data_field]})
+
+
+def _strip_brackets(name: str) -> str:
+    return name[1:-1].replace("]]", "]") if name.startswith("[") and name.endswith("]") else name
 
 
 def separate(datasource: Datasource) -> bool:

@@ -59,7 +59,7 @@ from tmig.ir.models import (
     Unsupported,
     WeekDay,
 )
-from tmig.ir.scope import DatasourceScope
+from tmig.ir.scope import DatasourceScope, ForeignSource
 from tmig.ir.setformula import level_expr
 from tmig.parser.connections import DIALECTS, EXECUTABLE, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
@@ -1866,10 +1866,30 @@ def _check_set(
     state.levels[data_field.id] = "row"
 
 
+def _foreign_refs(state: DsState, formula: str) -> bool:
+    """公式以 [資料源].[欄位] 引用其他資料源的欄位。"""
+    from tmig.formula.ast import walk
+    from tmig.ir.scope import TABLE_OWNER
+
+    try:
+        node = parse_formula(formula)
+    except FormulaSyntaxError:
+        return False
+    own = {"Parameters", TABLE_OWNER, state.name.strip("[]"), state.caption}
+    return any(
+        isinstance(n, FieldRef) and len(n.parts) == 2 and n.parts[0] not in own for n in walk(node)
+    )
+
+
 def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
     """以公式引擎分析計算欄位：補上語法樹（附解析出的 id）與計算層級。"""
     resolve_definitions(ctx, state)
-    scope = DatasourceScope(state.name, state.fields, ctx.parameters)
+    others = [
+        ForeignSource(other.name, other.caption, other.fields, other.levels)
+        for other in ctx.datasources.values()
+        if other is not state
+    ]
+    scope = DatasourceScope(state.name, state.fields, ctx.parameters, others)
     analyzer = Analyzer(scope)
     state.analyzer = analyzer
     for data_field in state.fields:
@@ -1883,6 +1903,8 @@ def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
             info = analyzer.target_info(target)
             node = analyzer.calc_ast(target)
         except FormulaSemanticError as exc:
+            if not ctx.datasources_parsed and _foreign_refs(state, data_field.calc.formula):
+                continue  # 引用還沒解析的資料源：資料源都解析完後再分析
             state.levels[data_field.id] = None
             entry = Unsupported(
                 source_ref=data_field.source_ref,

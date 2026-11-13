@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from tmig.formula.analyze import Analyzer, Target
+from tmig.formula.types import Level
 from tmig.ir.models import IR, DataField, Datasource, Parameter
 
 
@@ -16,13 +18,71 @@ TABLE_OWNER = "__tableau_internal_object_id__"
 """邏輯資料表的筆數欄位在公式中的前綴（[__tableau_internal_object_id__].[資料表 id]）。"""
 
 
+FOREIGN_LEVELS: dict[str | None, Level] = {
+    None: "row",
+    "row": "row",
+    "lod": "row",
+    "aggregate": "agg",
+}
+"""其他資料源的欄位在公式中的層級（Table Calculation 的計算欄位不能引用）。"""
+
+
+@dataclass(frozen=True)
+class ForeignSource:
+    """其他資料源（Data Blending 的次要資料源）：公式以 [資料源].[欄位] 引用它的欄位（資料源以內部名稱或
+    顯示名稱書寫）。levels：計算欄位 id → 計算層級（省略時依欄位的 calc.level）。"""
+
+    name: str
+    caption: str
+    fields: Sequence[DataField]
+    levels: Mapping[str, str | None] | None = None
+
+    def targets(self) -> dict[str, Target]:
+        found: dict[str, Target] = {}
+        captions: dict[str, Target] = {}
+        for field in self.fields:
+            if field.calc is None:
+                level: str | None = None
+            elif self.levels is not None:
+                if self.levels.get(field.id) is None:
+                    continue  # 公式無法分析
+                level = self.levels[field.id]
+            else:
+                level = field.calc.level
+                if level is None:
+                    continue
+            if level not in FOREIGN_LEVELS:
+                continue
+            target = Target(
+                "field", field.id, field.datatype, field.role, None, FOREIGN_LEVELS[level]
+            )
+            found[_strip(field.name)] = target
+            captions.setdefault(field.caption, target)
+        return {**captions, **found}
+
+
 class DatasourceScope:
-    """公式中的參照：[欄位內部名稱或顯示名稱]、[Parameters].[參數內部名稱或顯示名稱]、[資料源].[欄位]。"""
+    """公式中的參照：[欄位內部名稱或顯示名稱]、[Parameters].[參數內部名稱或顯示名稱]、[資料源].[欄位]
+    （others 中其他資料源的欄位，見 ForeignSource）。"""
 
     def __init__(
-        self, ds_name: str, fields: Sequence[DataField], parameters: Sequence[Parameter]
+        self,
+        ds_name: str,
+        fields: Sequence[DataField],
+        parameters: Sequence[Parameter],
+        others: Sequence[ForeignSource] = (),
     ) -> None:
         self.ds_name = _strip(ds_name)
+        self._others: dict[str, dict[str, Target]] = {}
+        self.foreign: dict[str, str] = {}
+        """其他資料源的欄位 id → 資料源的內部名稱。"""
+        for other in others:
+            targets = other.targets()
+            for key in (other.caption, _strip(other.name)):
+                if key != self.ds_name:
+                    self._others[key] = targets
+            for target in targets.values():
+                self.foreign[target.id] = other.name
         self._fields: dict[str, Target] = {}
         self._captions: dict[str, Target] = {}
         self._by_id: dict[str, Target] = {}
@@ -43,12 +103,24 @@ class DatasourceScope:
             self._params[_strip(param.name)] = target
             self._params.setdefault(param.caption, target)
             self._by_id[param.id] = target
+        for targets in self._others.values():
+            for target in targets.values():
+                self._by_id.setdefault(target.id, target)
 
     @classmethod
     def for_datasource(
-        cls, datasource: Datasource, parameters: Sequence[Parameter]
+        cls,
+        datasource: Datasource,
+        parameters: Sequence[Parameter],
+        others: Sequence[Datasource] = (),
     ) -> DatasourceScope:
-        return cls(datasource.name, datasource.fields, parameters)
+        """others：公式可以引用的其他資料源（Data Blending）。"""
+        return cls(
+            datasource.name,
+            datasource.fields,
+            parameters,
+            [ForeignSource(d.name, d.caption, d.fields) for d in others if d.id != datasource.id],
+        )
 
     def lookup(self, parts: tuple[str, ...]) -> Target | None:
         if len(parts) == 2:
@@ -59,7 +131,7 @@ class DatasourceScope:
                 # 邏輯資料表的筆數欄位，例如 COUNT([__tableau_internal_object_id__].[Orders_A1B2…])
                 return self._fields.get(_strip(f"[{TABLE_OWNER}].[{name.replace(']', ']]')}]"))
             if owner != self.ds_name:
-                return None
+                return self._others.get(owner, {}).get(name)
             parts = (name,)
         if len(parts) != 1:
             return None
@@ -70,6 +142,37 @@ class DatasourceScope:
         return self._by_id[target_id]
 
 
+def calc_references(fields: Mapping[str, DataField], field_id: str) -> set[str]:
+    """計算欄位引用的其他資料源欄位（id）：語法樹（calc.ast）中不在 fields 裡的欄位，引用的計算欄位一併展開。
+    Data Blending 中引用次要資料源欄位的計算欄位用。"""
+    found: set[str] = set()
+    seen: set[str] = set()
+
+    def visit(item: object) -> None:
+        if isinstance(item, list):
+            for value in item:
+                visit(value)
+        elif isinstance(item, dict):
+            if item.get("node") == "field" and item.get("target") == "field":
+                expand(str(item.get("id")))
+            for value in item.values():
+                visit(value)
+
+    def expand(current: str) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        data_field = fields.get(current)
+        if data_field is None:
+            found.add(current)
+        elif data_field.calc is not None and data_field.calc.ast is not None:
+            visit(data_field.calc.ast)
+
+    expand(field_id)
+    found.discard(field_id)
+    return found
+
+
 def analyzer_for(ir: IR, datasource_id: str) -> Analyzer:
     datasource = next(ds for ds in ir.datasources if ds.id == datasource_id)
-    return Analyzer(DatasourceScope.for_datasource(datasource, ir.parameters))
+    return Analyzer(DatasourceScope.for_datasource(datasource, ir.parameters, ir.datasources))

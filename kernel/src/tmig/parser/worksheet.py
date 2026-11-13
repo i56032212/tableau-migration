@@ -71,6 +71,7 @@ from tmig.ir.models import (
     VisualTotal,
     Worksheet,
 )
+from tmig.ir.scope import calc_references
 from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
 from tmig.parser.context import (
     DsState,
@@ -816,12 +817,15 @@ class SheetParser:
             use = use_from_instance(secondary, inst)
         if isinstance(use, str):
             return use
-        if not is_aggregate(secondary, use) or secondary.levels.get(use.field) == "table_calc":
+        if secondary.levels.get(use.field) == "table_calc":
             caption = secondary.field_by_id(use.field).caption
             return (
-                f"次要資料源「{secondary.caption}」的「{caption}」不是彙總的量值："
-                "Data Blending v0 只支援次要資料源的量值"
+                f"次要資料源「{secondary.caption}」的「{caption}」是 Table Calculation："
+                "Data Blending 尚不支援次要資料源的 Table Calculation"
             )
+        if not is_aggregate(secondary, use):
+            # 次要資料源的維度：與 Tableau 相同以 ATTR 彙總（連結欄位的每個值只有一個值時是那個值，否則是 *）
+            use = use.model_copy(update={"agg": "attr", "continuous": False})
         self.uses[cache] = use
         return use
 
@@ -937,9 +941,15 @@ class SheetParser:
             if u.field in primary_ids and u.field not in SPECIAL_FIELDS and not self._is_measure(u)
         ]
         blends: list[Blend] = []
+        # 主要資料源中引用次要資料源欄位的計算欄位（例如 SUM([Sales]) / SUM([Targets].[Target])）也算用到
+        own = {f.id: f for f in self.ds.fields}
+        referenced: set[str] = set()
+        for use in uses:
+            if use.field in own and own[use.field].calc is not None:
+                referenced |= calc_references(own, use.field)
         for name, secondary in self.secondaries.items():
             ids = {f.id for f in secondary.fields}
-            if not any(u.field in ids for u in uses):
+            if not any(u.field in ids for u in uses) and not (referenced & ids):
                 continue
             label = f"工作表「{self.name}」混合次要資料源「{secondary.caption}」（Data Blending）"
             if totals:

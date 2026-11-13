@@ -53,6 +53,9 @@ class Target:
     role: Literal["dimension", "measure", "param"]
     formula: str | None = None
     """計算欄位的公式；一般欄位與參數為 None。"""
+    level: Level | None = None
+    """已知的計算層級（其他資料源的欄位：Data Blending 中引用的次要資料源欄位，公式在它自己的資料源分析）；
+    設定時不再分析 formula。"""
 
 
 class Scope(Protocol):
@@ -95,6 +98,8 @@ class Analyzer:
     def target_info(self, target: Target, pos: int = 0) -> Info:
         if target.kind == "param":
             return Info(target.datatype, "const")
+        if target.level is not None:
+            return Info(target.datatype, target.level)
         if target.formula is None:
             return Info(target.datatype, "row")
         cached = self._fields.get(target.id)

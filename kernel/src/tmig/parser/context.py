@@ -193,6 +193,8 @@ class ParseContext:
     """動態參數（<column default-value-field=… source-field=…>）：資料源解析完後才對應到欄位。"""
     tooltip_refs: list[TooltipRef] = field(default_factory=list)
     """工具提示中的工作表（Viz in Tooltip），依工作表解析的順序。"""
+    datasources_parsed: bool = False
+    """所有資料源都解析完了：之前引用其他資料源欄位的計算欄位（Data Blending）先不分析。"""
     broken_calcs: list[tuple[str, Unsupported]] = field(default_factory=list)
     """公式有錯誤的計算欄位（欄位 id、不支援的紀錄）：沒有用到的最後改列為略過。"""
     story_names: set[str] = field(default_factory=set)

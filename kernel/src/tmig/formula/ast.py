@@ -126,6 +126,38 @@ def children(node: Node) -> Iterator[Node]:
             yield expr
 
 
+def map_children(node: Node, fn: Callable[[Node], Node]) -> Node:
+    """直接子節點各自換成 fn 的結果（節點不可變，回傳新的節點）。"""
+    from dataclasses import replace
+
+    match node:
+        case LiteralNode() | FieldRef():
+            return node
+        case Unary(operand=operand):
+            return replace(node, operand=fn(operand))
+        case Binary(left=left, right=right):
+            return replace(node, left=fn(left), right=fn(right))
+        case InList(operand=operand, values=values):
+            return replace(node, operand=fn(operand), values=tuple(fn(v) for v in values))
+        case Call(args=args):
+            return replace(node, args=tuple(fn(a) for a in args))
+        case If(branches=branches, else_=else_):
+            return replace(
+                node,
+                branches=tuple((fn(c), fn(t)) for c, t in branches),
+                else_=fn(else_) if else_ is not None else None,
+            )
+        case Case(subject=subject, whens=whens, else_=else_):
+            return replace(
+                node,
+                subject=fn(subject),
+                whens=tuple((fn(w), fn(t)) for w, t in whens),
+                else_=fn(else_) if else_ is not None else None,
+            )
+        case Lod(dims=dims, expr=expr):
+            return replace(node, dims=tuple(fn(d) for d in dims), expr=fn(expr))
+
+
 def walk(node: Node) -> Iterator[Node]:
     """前序走訪所有節點。"""
     yield node

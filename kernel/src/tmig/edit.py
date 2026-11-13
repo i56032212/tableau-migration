@@ -44,7 +44,7 @@ from tmig.ir import (
 )
 from tmig.ir.integrity import check_references
 from tmig.ir.models import GeoAlias, GeoRole, GeoSettings
-from tmig.ir.scope import DatasourceScope
+from tmig.ir.scope import DatasourceScope, ForeignSource, calc_references
 from tmig.render.palettes import PALETTES
 
 EDITOR_REF = "/editor"
@@ -208,7 +208,9 @@ def check_formula(
         source_ref=EDITOR_REF,
     )
     fields = [f for f in ds.fields if f.id != probe_id] + [probe]
-    scope = DatasourceScope(ds.name, fields, ir.parameters)
+    # 其他資料源的欄位以 [資料源].[欄位] 引用（Data Blending：例如 SUM([Sales]) / SUM([Targets].[Target])）
+    others = [ForeignSource(d.name, d.caption, d.fields) for d in ir.datasources if d.id != ds.id]
+    scope = DatasourceScope(ds.name, fields, ir.parameters, others)
     analyzer = Analyzer(scope)
     target = scope.target(probe_id)
     try:
@@ -623,10 +625,34 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
     if used and not any(owner.get(f) == primary for f in referenced):
         primary = owner[used[0].field]
     order: list[str] = []
+    own = {f.id: f for f in _datasource(ir, primary).fields} if used else {}
     for use in used:
         ds = owner[use.field]
         if ds != primary and ds not in order:
             order.append(ds)
+        if ds == primary and own[use.field].calc is not None:
+            # 引用其他資料源欄位的計算欄位（例如 SUM([Sales]) / SUM([Targets].[Target])）
+            for other in sorted(calc_references(own, use.field)):
+                if other in owner and owner[other] not in order:
+                    order.append(owner[other])
+    # 次要資料源的維度：與 Tableau 相同以 ATTR 彙總（連結欄位的每個值只有一個值時是那個值，否則是 *）
+    plain = {
+        use.field
+        for use in used
+        if owner[use.field] != primary
+        and use.agg is None
+        and use.table_calc is None
+        and not _secondary_measure(_datasource(ir, owner[use.field]), use)
+        and _level_of(_datasource(ir, owner[use.field]), use.field) != "table_calc"
+    }
+    if plain:
+        sheet = _as_attributes(sheet, plain)
+        used = [
+            u.model_copy(update={"agg": "attr", "continuous": False})
+            if u.field in plain and u.agg is None
+            else u
+            for u in used
+        ]
     existing = {b.datasource: b for b in sheet.blends}
     blends: list[Blend] = []
     for ds_id in order:
@@ -652,6 +678,39 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
     if primary == sheet.datasource and blends == sheet.blends:
         return sheet
     return sheet.model_copy(update={"datasource": primary, "blends": blends})
+
+
+def _level_of(ds: Datasource, field_id: str) -> str | None:
+    found = next((f for f in ds.fields if f.id == field_id), None)
+    return found.calc.level if found is not None and found.calc is not None else None
+
+
+def _as_attributes(sheet: Worksheet, fields: set[str]) -> Worksheet:
+    """欄列架與標記卡上這些欄位（次要資料源的維度）改成 ATTR。"""
+
+    def one(use: FieldUse | None) -> FieldUse | None:
+        if use is None or use.field not in fields or use.agg is not None:
+            return use
+        return use.model_copy(update={"agg": "attr", "continuous": False})
+
+    def many(uses: list[FieldUse]) -> list[FieldUse]:
+        return [u for u in (one(x) for x in uses) if u is not None]
+
+    def card(marks: Marks) -> Marks:
+        update: dict[str, Any] = {
+            name: one(getattr(marks, name)) for name in ("color", "size", "shape", "angle", "path")
+        }
+        update |= {name: many(getattr(marks, name)) for name in ("label", "detail", "tooltip")}
+        return marks.model_copy(update=update)
+
+    return sheet.model_copy(
+        update={
+            "rows": many(sheet.rows),
+            "columns": many(sheet.columns),
+            "marks": card(sheet.marks),
+            "panes": [p.model_copy(update={"marks": card(p.marks)}) for p in sheet.panes],
+        }
+    )
 
 
 def _field_refs(node: Any) -> set[str]:

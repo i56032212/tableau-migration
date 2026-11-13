@@ -261,3 +261,33 @@ def test_staged_queries_need_the_runtime(folder: Path, tmp_path: Path) -> None:
         execute_query(folder / f"{ws.datasource}.duckdb", query)
     # 兩個都是萃取時仍在同一段 DuckDB 查詢中混合
     assert worksheet_sql(parse(tmp_path, folder, sheet), ws.id).stages == []
+
+
+def test_calcs_and_secondary_dimensions(runtime: DataRuntime, folder: Path, tmp_path: Path) -> None:
+    """引用次要資料源欄位的計算欄位（實績 ÷ 目標）與次要資料源的維度（ATTR，多個值時為 *）：各部分在各自的
+    資料庫彙總，合併後再計算，與都是萃取時相同。"""
+    from ..parser import builder as b
+    from ..parser.builder import instance
+    from .test_blend import ATTAINMENT, BLEND_CALCS, GAP
+
+    year_text = b.calc(
+        "Calculation_year", "Year Text", "STR(YEAR([Order Date]))", "string", "dimension"
+    )
+    year = instance("[Calculation_year]", "None", "[none:Calculation_year:nk]")
+    sheet = blended(
+        rows=f"({ref('none:Region:nk')} / {target_ref('none:Calculation_year:nk')})",
+        cols=f"({ref('usr:Calculation_att:qk')} + {ref('usr:Calculation_gap:qk')})",
+        instances=[REGION, ATTAINMENT, GAP],
+        secondary=[year],
+    )
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS, secondary_columns=year_text)
+    assert ir.unsupported == []
+    ids = fields(ir)
+    expected = run_all(runtime, ir, folder)
+    key = f"attr({ids['Targets.Year Text']})"
+    assert {r[ids["Region"]]: (r[key], r[ids["Attainment"]], r[ids["Gap"]]) for r in expected} == {
+        "East": ("*", 350.0 / 400.0, 50.0),
+        "North": (None, None, -60.0),
+        "South": ("2024", 2.0, 0.0),
+        "West": ("2023", 800.0 / 900.0, 100.0),
+    }

@@ -53,3 +53,31 @@ def test_positions_and_resolver() -> None:
         "id": "x_sales",
     }
     assert data["right"]["ref"] == "[Parameters].[Top N]"
+
+
+def test_unparse_round_trip() -> None:
+    """語法樹 → 公式文字（tmig.formula.unparse）再解析，語法樹相同。"""
+    import json
+    from pathlib import Path
+
+    from tmig.formula.lexer import FormulaSyntaxError
+    from tmig.formula.parser import parse_formula
+    from tmig.formula.sexpr import to_sexpr
+    from tmig.formula.unparse import to_formula
+
+    corpus = json.loads((Path(__file__).parent / "corpus.json").read_text(encoding="utf-8"))
+    extra = [
+        "IF [a] = 'it''s' THEN #2024-01-05# ELSEIF NOT [b] THEN NULL ELSE -[c] END",
+        "CASE [x] WHEN 1 THEN {FIXED [d], YEAR([e]) : SUM([f])} ELSE { MAX([f]) } END",
+        "[Parameters].[Top N] IN (1, 2.5, TRUE)",
+    ]
+    checked = 0
+    known = [item["formula"] for item in corpus["cases"] if "formula" in item]
+    for formula in [*known, *extra]:
+        try:
+            node = parse_formula(formula)
+        except FormulaSyntaxError:
+            continue
+        assert to_sexpr(parse_formula(to_formula(node))) == to_sexpr(node), formula
+        checked += 1
+    assert checked >= 60

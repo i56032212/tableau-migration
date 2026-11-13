@@ -46,7 +46,7 @@ def target_ref(inst: str) -> str:
     return f"[{TARGETS}].[{inst}]"
 
 
-def targets_datasource() -> str:
+def targets_datasource(columns: str = "") -> str:
     def records(parent: str) -> str:
         return (
             "<metadata-records>"
@@ -80,6 +80,7 @@ def targets_datasource() -> str:
         </connection>
       </extract>
       <aliases enabled='yes' />
+      {columns}
     </datasource>"""
 
 
@@ -124,10 +125,21 @@ def folder(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("blend")
 
 
-def parse(tmp_path: Path, folder: Path, sheet: str, extra: str = "") -> IR:
-    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheet, extra=extra)
+def parse(
+    tmp_path: Path,
+    folder: Path,
+    sheet: str,
+    extra: str = "",
+    columns: str = "",
+    secondary_columns: str = "",
+) -> IR:
+    xml = b.workbook(
+        b.extract_datasource(columns) + targets_datasource(secondary_columns),
+        worksheets=sheet,
+        extra=extra,
+    )
     ir = parse_workbook(b.write_twb(tmp_path, xml))
-    for ds, rows, columns in (
+    for ds, rows, table_columns in (
         (ir.datasources[0].id, ROWS, None),
         (ir.datasources[1].id, TARGET_ROWS, TARGET_COLUMNS),
     ):
@@ -136,7 +148,7 @@ def parse(tmp_path: Path, folder: Path, sheet: str, extra: str = "") -> IR:
             continue
         with duckdb.connect(str(path)) as con:
             con.execute('CREATE SCHEMA "Extract"')
-            if columns is None:
+            if table_columns is None:
                 con.execute(
                     'CREATE TABLE "Extract"."Extract" ("Region" VARCHAR, "Category" VARCHAR, '
                     '"Order ID" VARCHAR, "Order Date" DATE, "Sales" DOUBLE, "Profit" DOUBLE, '
@@ -290,16 +302,6 @@ def test_render_uses_the_secondary_caption(tmp_path: Path, folder: Path) -> None
 
 
 def test_unsupported_blends_are_flagged(tmp_path: Path, folder: Path) -> None:
-    # 次要資料源的維度
-    sheet = blended(
-        rows=target_ref("none:Region:nk"),
-        cols=ref("sum:Sales:qk"),
-        secondary=[TARGET_REGION],
-    )
-    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheet)
-    ir = parse_workbook(b.write_twb(tmp_path, xml))
-    assert any("不是彙總的量值" in u.reason for u in ir.unsupported)
-
     # 檢視中沒有連結欄位
     sheet = blended(
         rows=ref("none:Category:nk"),
@@ -347,10 +349,15 @@ def test_editor_adds_and_removes_blends(tmp_path: Path, folder: Path) -> None:
     ir, saved = replace_worksheet(ir, ws)
     assert saved.blends == []
 
-    # 次要資料源的維度不能放上
+    # 次要資料源的維度：以 ATTR 彙總（與 Tableau 相同）
     region = FieldUse(field=ids["Targets.Region"])
-    with pytest.raises(EditError, match="彙總的量值"):
-        replace_worksheet(ir, ws.model_copy(update={"columns": [region]}))
+    area = FieldUse(field=ids["Targets.Area"])
+    ir2, saved = replace_worksheet(ir, ws.model_copy(update={"rows": [*ws.rows, area]}))
+    assert (saved.rows[-1].field, saved.rows[-1].agg) == (ids["Targets.Area"], "attr")
+    assert [b.datasource for b in saved.blends] == [ir.datasources[1].id]
+    found = {r[ids["Region"]]: r[f"attr({ids['Targets.Area']})"] for r in run(ir2, folder)}
+    assert found == {"East": "East", "North": None, "South": "South", "West": "West"}
+    assert EditError is not None
 
     # 空白的工作表放上其他資料源的欄位：那個資料源成為主要資料源（不混合）
     empty = ws.model_copy(
@@ -554,3 +561,135 @@ def test_related_global_filter_and_control(tmp_path: Path, folder: Path) -> None
     control = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "filter")
     assert control.worksheet == by_name["Orders"].id
     assert control.field == FieldUse(field=ids["Region"])
+
+
+ATTAINMENT = instance("[Calculation_att]", "User", "[usr:Calculation_att:qk]", "quantitative")
+GAP = instance("[Calculation_gap]", "User", "[usr:Calculation_gap:qk]", "quantitative")
+BLEND_CALCS = (
+    b.calc("Calculation_att", "Attainment", f"SUM([Sales]) / SUM([{TARGETS}].[Target])")
+    + b.calc("Calculation_profit", "Margin", "SUM([Profit]) / SUM([Sales])")
+    # 引用其他計算欄位（主要資料源的彙總、另一個混合的計算欄位）、參數以外的常數與 IF、ZN
+    + b.calc(
+        "Calculation_gap",
+        "Gap",
+        f"IF [Calculation_att] >= 1 THEN 0 ELSE ZN(SUM([{TARGETS}].[Target])) - SUM([Sales]) END"
+        " + 0 * [Calculation_profit]",
+    )
+)
+
+
+def test_calc_referencing_secondary_fields(tmp_path: Path, folder: Path) -> None:
+    """主要資料源的計算欄位引用次要資料源的欄位（實績 ÷ 目標）：各資料源各自彙總，合併後再計算。"""
+    sheet = blended(
+        rows=ref("none:Region:nk"),
+        cols=f"({ref('usr:Calculation_att:qk')} + {ref('usr:Calculation_gap:qk')})",
+        instances=[REGION, ATTAINMENT, GAP],
+    )
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS)
+    assert ir.unsupported == []
+    assert check_references(ir) == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    # 檢視中沒有直接放次要資料源的欄位，仍是 Data Blending
+    assert [blend.datasource for blend in ws.blends] == [ir.datasources[1].id]
+    attainment = next(f for f in ir.datasources[0].fields if f.caption == "Attainment")
+    assert attainment.calc is not None and attainment.calc.level == "aggregate"
+    rows = {r[ids["Region"]]: (r[ids["Attainment"]], r[ids["Gap"]]) for r in run(ir, folder)}
+    assert rows == {
+        "East": (350.0 / 400.0, 50.0),
+        "North": (None, -60.0),  # 沒有目標：比值為 Null，ZN 把目標當成 0
+        "South": (2.0, 0.0),
+        "West": (800.0 / 900.0, 100.0),
+    }
+    query = worksheet_sql(ir, ws.id)
+    assert [c.key for c in query.columns][:3] == [ids["Region"], ids["Attainment"], ids["Gap"]]
+    assert all("blend_part_" not in c.key for c in query.columns)
+    rendered = build_spec(
+        ir, ws.id, query.columns, execute_query(folder / f"{ws.datasource}.duckdb", query)
+    )
+    assert rendered.spec is not None, rendered.unsupported
+
+
+def test_calc_mixing_datasources_inside_an_aggregate_is_unsupported(
+    tmp_path: Path, folder: Path
+) -> None:
+    calcs = b.calc("Calculation_att", "Bad", f"SUM([Sales] * [{TARGETS}].[Target])")
+    sheet = blended(
+        rows=ref("none:Region:nk"),
+        cols=ref("usr:Calculation_att:qk"),
+        instances=[REGION, ATTAINMENT],
+    )
+    ir = parse(tmp_path, folder, sheet, columns=calcs)
+    with pytest.raises(QueryError, match="同時用到主要與次要資料源"):
+        worksheet_sql(ir, ir.worksheets[0].id)
+
+
+def test_secondary_dimensions_are_attributes(tmp_path: Path, folder: Path) -> None:
+    """次要資料源的維度：與 Tableau 相同以 ATTR 彙總，連結欄位的一個值對到一個值時顯示它，多個值時顯示 *，
+    沒有對應的列時是 Null；不增加標記。"""
+    year_text = b.calc(
+        "Calculation_year", "Year Text", "STR(YEAR([Order Date]))", "string", "dimension"
+    )
+    area = instance("[Area]", "None", "[none:Area:nk]")
+    year = instance("[Calculation_year]", "None", "[none:Calculation_year:nk]")
+    date = instance("[Order Date]", "None", "[none:Order Date:ok]", "ordinal")
+    sheet = blended(
+        rows=(
+            f"({ref('none:Region:nk')} / {target_ref('none:Area:nk')} / "
+            f"{target_ref('none:Calculation_year:nk')} / {target_ref('none:Order Date:ok')})"
+        ),
+        cols=ref("sum:Sales:qk"),
+        secondary=[area, year, date],
+    )
+    ir = parse(tmp_path, folder, sheet, secondary_columns=year_text)
+    assert ir.unsupported == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    assert [(u.field, u.agg) for u in ws.rows[1:]] == [
+        (ids["Targets.Area"], "attr"),
+        (ids["Targets.Year Text"], "attr"),
+        (ids["Targets.Order Date"], "attr"),
+    ]
+    keys = [f"attr({ids[name]})" for name in ("Targets.Area", "Targets.Year Text")]
+    date_key = f"attr({ids['Targets.Order Date']})"
+    rows = {r[ids["Region"]]: (r[keys[0]], r[keys[1]], r[date_key]) for r in run(ir, folder)}
+    assert rows == {
+        "East": ("East", "*", None),  # 2023 與 2024 兩年的目標：文字顯示 *，日期等其他型別為 Null
+        "North": (None, None, None),
+        "South": ("South", "2024", dt.date(2024, 1, 1)),
+        "West": ("West", "2023", dt.date(2023, 1, 1)),
+    }
+    query = worksheet_sql(ir, ws.id)
+    rendered = build_spec(
+        ir, ws.id, query.columns, execute_query(folder / f"{ws.datasource}.duckdb", query)
+    )
+    assert rendered.spec is not None, rendered.unsupported
+    column = next(c for c, key in rendered.spec["usermeta"]["measures"].items() if key == keys[1])
+    labels = {v["c0"]: v[f"{column}_label"] for v in rendered.spec["data"]["values"]}
+    assert labels["East"] == "*" and labels["West"] == "2023"
+
+
+def test_editor_calc_referencing_another_datasource(tmp_path: Path, folder: Path) -> None:
+    """編輯器：計算欄位以 [資料源的顯示名稱].[欄位] 引用其他資料源的欄位，放到檢視上即混合。"""
+    from tmig.edit import EditError, replace_worksheet, upsert_calc
+
+    sheet = worksheet(
+        "Plain", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+    )
+    ir = parse(tmp_path, folder, sheet)
+    ids = fields(ir)
+    primary = ir.datasources[0].id
+    ir, created = upsert_calc(ir, primary, "Attainment", "SUM([Sales]) / SUM([Targets].[Target])")
+    assert created.calc is not None and created.calc.level == "aggregate"
+    # 次要資料源的欄位要先彙總
+    with pytest.raises(EditError, match="公式有誤"):
+        upsert_calc(ir, primary, "Bad", "SUM([Sales]) / [Targets].[Target]")
+    ws = ir.worksheets[0]
+    edited = ws.model_copy(update={"columns": [FieldUse(field=created.id, continuous=True)]})
+    ir, saved = replace_worksheet(ir, edited)
+    assert [blend.datasource for blend in saved.blends] == [ir.datasources[1].id]
+    rows = {r[ids["Region"]]: r[created.id] for r in run(ir, folder)}
+    assert rows == {"East": 0.875, "North": None, "South": 2.0, "West": 800.0 / 900.0}
+    # 移走後不再混合
+    ir, saved = replace_worksheet(ir, ws)
+    assert saved.blends == []
