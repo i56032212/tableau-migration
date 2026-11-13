@@ -200,7 +200,7 @@ function Connection({ connection }: { connection: DatasourceConnection }) {
   const items: [string, string | number | null | undefined][] =
     connection.kind === "file"
       ? [
-          ["類型", connection.type],
+          ["類型", connection.federated ? `${connection.type}（跨資料庫的 join）` : connection.type],
           ["檔案", connection.files?.join("、")],
         ]
       : connection.kind === "extract"
@@ -235,6 +235,12 @@ function Connection({ connection }: { connection: DatasourceConnection }) {
       {connection.kind === "live" && connection.supported === false && (
         <p className="error">這個連線類型尚不支援查詢</p>
       )}
+      {connection.connections?.map((c) => (
+        <div key={c.connection_id} className="ds-federated">
+          <h3>資料庫：{c.type}</h3>
+          <Connection connection={c} />
+        </div>
+      ))}
       {connection.source && (
         <>
           <h3>萃取的來源</h3>

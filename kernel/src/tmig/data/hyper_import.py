@@ -30,7 +30,15 @@ from typing import Any
 
 import duckdb
 
-from tmig.ir.models import IR, DataField, ExtractConnection, FileConnection, TableRelation
+from tmig.ir.models import (
+    IR,
+    DataField,
+    ExtractConnection,
+    FileConnection,
+    TableRelation,
+    has_local_data,
+    local_tables,
+)
 from tmig.parser.workbook import parse_workbook
 
 NUMERIC_TAGS = frozenset({"BIG_INT", "INT", "SMALL_INT", "NUMERIC", "DOUBLE", "FLOAT"})
@@ -462,7 +470,11 @@ def import_sources(
     archive = FolderArchive(Path(sources))
     results: list[DatasourceImport] = []
     for ds in ir.datasources:
-        if isinstance(ds.connection, FileConnection) and (only is None or ds.id in only):
+        if (
+            isinstance(ds.connection, FileConnection)
+            and has_local_data(ds.connection)
+            and (only is None or ds.id in only)
+        ):
             results.append(_import_files(archive, target, ds))
     return results
 
@@ -475,7 +487,7 @@ def _import_files(archive: Any, target: Path, ds: Any) -> DatasourceImport:
     out_path = target / f"{ds.id}.duckdb"
     tables = import_file_tables(archive, connection, out_path)
     digest = hashlib.sha256()
-    paths = list(dict.fromkeys(t.path for t in connection.tables))
+    paths = list(dict.fromkeys(t.path for t in local_tables(connection)))
     for path in paths:
         digest.update(read_member(archive, path))
     result = DatasourceImport(
@@ -506,7 +518,9 @@ def import_workbook(
         work = Path(tmp)
         for ds in workbook_ir.datasources:
             if isinstance(ds.connection, FileConnection):
-                results.append(_import_files(archive, target, ds))
+                if has_local_data(ds.connection):
+                    # 跨資料庫的 join 只有資料庫的資料表時沒有要匯入的檔案
+                    results.append(_import_files(archive, target, ds))
                 continue
             if not isinstance(ds.connection, ExtractConnection):
                 continue  # Live 連線的資料在來源資料庫，不在 .twbx 內

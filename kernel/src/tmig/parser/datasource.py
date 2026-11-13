@@ -13,8 +13,10 @@ from tmig.formula.ast import FieldRef, to_json
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
+from tmig.ir.federation import single_database
 from tmig.ir.models import (
     FILE_SCHEMA,
+    LIVE_PATH_PREFIX,
     Aggregation,
     Allowed,
     AllowedAll,
@@ -59,7 +61,7 @@ from tmig.ir.models import (
 )
 from tmig.ir.scope import DatasourceScope
 from tmig.ir.setformula import level_expr
-from tmig.parser.connections import DIALECTS, live_connection, parse_relation
+from tmig.parser.connections import DIALECTS, EXECUTABLE, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import (
     FilterParser,
@@ -356,6 +358,8 @@ class DatasourceParser:
         self.original_names: dict[str, str] = {}
         """變更了資料類型的欄位：隱藏的原始欄位名稱 → 原本的欄位名稱（萃取的 metadata-record 以它為名）。"""
         """Relationship 模型的邏輯資料表（N6）；不是模型時為 None。"""
+        self.remote: dict[str, LiveConnection] = {}
+        """跨資料庫的 join：資料庫的具名連線（名稱 → 沒有資料表的 LiveConnection）。"""
 
     def parse(self) -> DsState | None:
         ctx, el = self.ctx, self.el
@@ -417,6 +421,11 @@ class DatasourceParser:
             return None
         if self.model_tables is not None and not self._attach_model(state):
             return None
+        if isinstance(state.connection, FileConnection):
+            # 跨資料庫的 join 只用到同一個資料庫（例如沒有用到的連線）：一般的 Live 連線
+            single = single_database(state.connection)
+            if single is not None:
+                state.connection = single
         if via_extract:
             self._attach_refresh(state, conn, data_conn)
         analyze_calcs(ctx, state)
@@ -521,13 +530,21 @@ class DatasourceParser:
 
     def _files(self, conn: etree._Element) -> tuple[bool, FileConnection | None]:
         """Excel、文字檔且沒有萃取（檔案型連線）：每張資料表的檔案與 Tableau 讀到的欄名、型別。
-        回傳（是否為檔案型連線, 連線）；不支援的寫法列入 unsupported，連線為 None。"""
+        回傳（是否為檔案型連線, 連線）；不支援的寫法列入 unsupported，連線為 None。
+
+        跨資料庫的 join（多個具名連線，其中有資料庫）也是檔案型連線：資料庫的資料表與自訂 SQL 在查詢時
+        取回、與檔案在本機合併（FileTable 的 format 為 live，見 tmig.data.federated）。"""
         named: dict[str, etree._Element] = {}
         for nc in descendants(conn, "named-connection"):
             for found in children(nc, "connection"):
                 named[nc.get("name", "")] = found
-        if not named or any(c.get("class") not in FILE_SOURCES for c in named.values()):
+        if not named:
             return False, None
+        databases = {k: c for k, c in named.items() if c.get("class") not in FILE_SOURCES}
+        if databases and len(named) == 1:
+            return False, None  # 單一資料庫：Live 連線
+        if databases and not self._remote_connections(databases):
+            return True, None
         for found in named.values():
             if found.get("cleaning") == "yes" and found.get("class") != "excel-direct":
                 self.ctx.flag(
@@ -565,6 +582,15 @@ class DatasourceParser:
         if relation is None:
             return True, None
         return True, FileConnection(kind="file", tables=list(tables.values()), relation=relation)
+
+    def _remote_connections(self, databases: dict[str, etree._Element]) -> bool:
+        """跨資料庫的 join 中的資料庫連線（記在 self.remote）；有不支援的連線類型時列入 unsupported。"""
+        for key, element in databases.items():
+            live = live_connection(self.ctx, element, None, self.caption)
+            if live is None or live.dialect is None or live.dialect not in EXECUTABLE:
+                return False  # live_connection 已列入 unsupported
+            self.remote[key] = live
+        return True
 
     def _expand_wildcards(self, conn: etree._Element, named: dict[str, etree._Element]) -> bool:
         """萬用字元聯集（batch-union）展開成一般的聯集（見 tmig.parser.wildcard）：依 .twbx 中符合模式的檔案，
@@ -659,6 +685,26 @@ class DatasourceParser:
                 )
                 parts.append(part.model_copy(update={"relation": converted, "path": path}))
             return relation.model_copy(update={"parts": parts})
+        if isinstance(relation, SqlRelation) and element.get("connection", "") in self.remote:
+            # 跨資料庫的 join：資料庫的自訂 SQL 在查詢時取回整段的結果
+            columns = self._file_columns(relation.name, child(element, "columns"))
+            if not columns:
+                self.ctx.flag(
+                    element, f"資料源「{self.caption}」的自訂 SQL「{relation.name}」沒有欄位資訊"
+                )
+                return None
+            live = self.remote[element.get("connection", "")]
+            tables[relation.name] = FileTable(
+                name=relation.name,
+                format="live",
+                path=LIVE_PATH_PREFIX + live.connection_id,
+                connection=live,
+                sql=relation.sql,
+                columns=columns,
+            )
+            return TableRelation(
+                kind="table", name=relation.name, table=[FILE_SCHEMA, relation.name]
+            )
         if not isinstance(relation, TableRelation):
             self.ctx.flag(element, f"資料源「{self.caption}」的檔案中有自訂 SQL，v0 不支援")
             return None
@@ -696,6 +742,21 @@ class DatasourceParser:
             self.ctx.flag(element, f"資料源「{self.caption}」的資料表「{name}」沒有欄位資訊")
             return None
         header = (columns_el.get("header") if columns_el is not None else None) != "no"
+        live = self.remote.get(element.get("connection", ""))
+        if live is not None:
+            # 跨資料庫的 join：資料庫的資料表（欄依 metadata-record）在查詢時取回用到的欄
+            parts = qualified_parts(element.get("table", ""))
+            if not parts:
+                self.ctx.flag(element, f"資料源「{self.caption}」的資料表 {table} 無法解析")
+                return None
+            return FileTable(
+                name=name,
+                format="live",
+                path=LIVE_PATH_PREFIX + live.connection_id,
+                connection=live,
+                table=parts,
+                columns=columns,
+            )
         if source.get("class") in ("hyper", "dataengine"):
             dbname = (source.get("dbname") or "").replace("\\", "/")
             path = self._packaged(dbname)
@@ -783,16 +844,14 @@ class DatasourceParser:
         return [column for _, column in sorted(found, key=lambda item: item[0])]
 
     def _live(self, conn: etree._Element) -> LiveConnection | None:
-        """Live 連線（N1）：資料在來源資料庫，查詢時下推；只支援單一具名連線（不跨資料庫）。"""
+        """Live 連線（N1）：資料在來源資料庫，查詢時下推；單一具名連線（多個連線為跨資料庫的 join，見
+        _files）。"""
         named = children(child(conn, "named-connections"), "named-connection")
         data = [c for nc in named for c in children(nc, "connection")]
         if not data and conn.get("class") not in (None, "federated"):
             data = [conn]  # 舊版檔案：連線直接寫在 <connection> 上
         if len(data) != 1:
-            self.ctx.flag(
-                conn,
-                f"資料源「{self.caption}」有 {len(data)} 個具名連線（跨資料庫的關聯）尚不支援",
-            )
+            self.ctx.flag(conn, f"資料源「{self.caption}」沒有可用的連線設定")
             return None
         if len(self.objects) > 1:
             # Relationship 模型：邏輯資料表在 object-graph，關聯待欄位解析後補上

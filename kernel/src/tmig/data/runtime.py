@@ -3,6 +3,8 @@
 - 萃取：DuckDB 檔（呼叫端提供路徑，例如 <報表目錄>/data/<資料源 id>.duckdb）
 - Live：兩段式執行（tmig.data.live）；連線依連線設定檔（tmig.data.sources）開啟，之後重複使用，
   同一個連線一次只執行一段查詢
+- 跨資料庫的 join（檔案型資料源中有資料庫的資料表）：各資料庫的資料表取回後與匯入的檔案在本機的 DuckDB
+  合併（tmig.data.federated）；取回的資料在 TTL 之內重複使用
 
 查詢服務、tmig verify 與 tmig query 都透過這裡執行查詢。
 """
@@ -18,6 +20,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from tmig.data.executor import QueryResult, execute, execute_query
+from tmig.data.federated import FederatedCache, execute_federated, execute_federated_sql
 from tmig.data.live import execute_live, execute_remote
 from tmig.data.sources import (
     ConnectionConfig,
@@ -26,7 +29,7 @@ from tmig.data.sources import (
     load_connections,
     open_executor,
 )
-from tmig.ir.models import Datasource, LiveConnection
+from tmig.ir.models import Datasource, FileConnection, LiveConnection, has_local_data, is_federated
 from tmig.sqlgen.dialect import ParameterValues
 from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import datasource_source
@@ -41,6 +44,8 @@ class DataRuntime:
         self._executors: dict[str, Executor] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._lock = threading.Lock()
+        self.federated = FederatedCache()
+        """跨資料庫的 join 取回的資料庫資料（TTL 之內重複使用）。"""
 
     @property
     def configs(self) -> dict[str, ConnectionConfig]:
@@ -60,6 +65,8 @@ class DataRuntime:
             stale = [self._executors.pop(key) for key in configs if key in self._executors]
         for executor in stale:
             _close(executor)
+        if stale:
+            self.federated.clear()  # 換了連線（例如另一個帳號）：先前取回的資料不再使用
 
     def fetch(self, connection: LiveConnection, sql: str) -> pa.Table:
         """在來源資料庫執行一段（該方言的）SQL，例如列出資料表、自訂 SQL 的欄位。"""
@@ -72,6 +79,9 @@ class DataRuntime:
         if isinstance(connection, LiveConnection):
             with self._executor(connection) as executor:
                 return execute_live(query, executor)
+        if isinstance(connection, FileConnection) and is_federated(connection):
+            local = _path(database) if has_local_data(connection) else None
+            return execute_federated(query, local, connection, self.fetch, self.federated)
         return execute_query(_path(database), query)
 
     def run_sql(
@@ -90,6 +100,11 @@ class DataRuntime:
             custom = datasource_source(datasource).custom_sql
             with self._executor(connection) as executor:
                 return execute_remote(sql, executor, custom, parameters)
+        if isinstance(connection, FileConnection) and is_federated(connection):
+            local = _path(database) if has_local_data(connection) else None
+            return execute_federated_sql(
+                sql, local, connection, self.fetch, self.federated, parameters
+            )
         return execute(_path(database), sql)
 
     @contextmanager

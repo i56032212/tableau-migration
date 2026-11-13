@@ -673,6 +673,10 @@ export interface DatasourceConnection {
   kind: "extract" | "live" | "file";
   /** 檔案型資料源（Excel、文字檔）在 .twbx 內的檔案 */
   files?: string[];
+  /** 跨資料庫的 join：檔案型資料源中也有資料庫的資料表 */
+  federated?: boolean;
+  /** 跨資料庫的 join 中各資料庫的連線 */
+  connections?: DatasourceConnection[];
   /** 連線類型的顯示名稱，例如「Tableau 萃取（Hyper）」「PostgreSQL」 */
   type: string;
   file?: string;

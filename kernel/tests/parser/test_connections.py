@@ -331,7 +331,18 @@ def test_unsupported_connections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         f"<named-connection caption='db2' name='db.2'>{DATABRICKS}</named-connection></named-connections>",
     )
     ir = parse(tmp_path, two, lenient=True)
-    assert any("跨資料庫的關聯" in r for r in reasons(ir))
+    # 兩個具名連線（跨資料庫的 join，見 tests/data/test_federated.py）但只用到一個資料庫：一般的 Live 連線
+    assert reasons(ir) == []
+    conn = ir.datasources[0].connection
+    assert isinstance(conn, LiveConnection) and conn.dbclass == "oracle"
+    assert conn.relation == TableRelation(kind="table", name="ORDERS", table=["SALES", "ORDERS"])
+    # 跨資料庫的 join 中有不支援的連線類型
+    unknown = two.replace(
+        "name='ORDERS' table='[SALES].[ORDERS]'", "name='ORDERS' table='[ORDERS]'"
+    )
+    unknown = unknown.replace(DATABRICKS, "<connection class='exasol' server='x' />")
+    ir = parse(tmp_path, unknown, lenient=True)
+    assert any("連線類型 exasol 尚不支援" in r for r in reasons(ir))
 
 
 def test_viewer_identity_settings_are_unsupported(tmp_path: Path) -> None:

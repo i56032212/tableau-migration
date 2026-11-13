@@ -134,6 +134,17 @@ def _check_files(ds: Datasource, errors: list[str]) -> None:
     if len(set(names)) != len(names):
         errors.append(f"{where}.tables：資料表名稱重複")
     known = set(names)
+    for table in connection.tables:
+        # 跨資料庫的 join：資料庫的資料表要有連線，與資料表的限定名稱或自訂 SQL 其中之一
+        remote = table.format == "live"
+        if remote and (table.connection is None or (table.table is None) == (table.sql is None)):
+            errors.append(
+                f"{where}.tables：資料庫的資料表「{table.name}」要有連線與資料表或自訂 SQL 其中之一"
+            )
+        if not remote and (table.connection is not None or table.sql is not None):
+            errors.append(f"{where}.tables：檔案的資料表「{table.name}」不能有資料庫的連線")
+        if remote and table.connection is not None and table.connection.relation is not None:
+            errors.append(f"{where}.tables：資料庫的資料表「{table.name}」的連線不能有資料表")
 
     def visit(relation: Relation) -> None:
         if isinstance(relation, JoinRelation):

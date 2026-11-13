@@ -32,8 +32,9 @@ export interface InspectedFile {
 }
 
 export type RelationView =
-  | { kind: "table"; name: string }
-  | { kind: "sql"; name: string; sql: string }
+  /** connection：跨資料庫的 join 中資料庫的資料表所在的連線 */
+  | { kind: "table"; name: string; connection?: string }
+  | { kind: "sql"; name: string; sql: string; connection?: string }
   | {
       kind: "join";
       join: JoinType;
@@ -121,10 +122,13 @@ export interface ModelConnection {
 }
 
 export interface DatasourceModel {
-  datasource: { id: string; caption: string; kind: string };
+  /** federated：跨資料庫的 join（檔案的資料源中也有資料庫的資料表） */
+  datasource: { id: string; caption: string; kind: string; federated?: boolean };
   editable: boolean;
   /** 資料庫的資料源（檔案、萃取時為 null） */
   connection: ModelConnection | null;
+  /** 資料庫的連線：Live 連線本身，或跨資料庫的 join 中的各資料庫 */
+  connections: ModelConnection[];
   files: ModelFile[];
   logical: LogicalView[];
   relationships: RelationshipView[];
@@ -146,6 +150,8 @@ export interface AddTableRequest {
   table_path?: string[];
   /** 資料庫的自訂 SQL */
   sql?: string;
+  /** 資料庫的資料表所在的連線（省略時為資料源的資料庫）：另一個連線時成為跨資料庫的 join */
+  connection?: string;
   how: "relationship" | "join" | "union";
   target?: string | null;
   join?: JoinType;
@@ -210,11 +216,16 @@ export const datasourceApi = {
       method: "POST",
       body: JSON.stringify({ connection, ...source }),
     }),
-  remoteTables: (workbook: string, datasource: string, schema?: string | null) =>
-    request<{ tables: RemoteTable[] }>(
-      `${edit(workbook)}/datasources/${part(datasource)}/remote-tables${schema ? `?schema=${encodeURIComponent(schema)}` : ""}`,
-    ),
-  remoteColumns: (workbook: string, datasource: string, source: { table?: string[]; sql?: string }) =>
+  remoteTables: (workbook: string, datasource: string, schema?: string | null, connection?: string | null) => {
+    const query = new URLSearchParams();
+    if (schema) query.set("schema", schema);
+    if (connection) query.set("connection", connection);
+    const text = query.toString();
+    return request<{ tables: RemoteTable[] }>(
+      `${edit(workbook)}/datasources/${part(datasource)}/remote-tables${text ? `?${text}` : ""}`,
+    );
+  },
+  remoteColumns: (workbook: string, datasource: string, source: { table?: string[]; sql?: string; connection?: string | null }) =>
     request<{ columns: InspectedColumn[] }>(`${edit(workbook)}/datasources/${part(datasource)}/remote-columns`, {
       method: "POST",
       body: JSON.stringify(source),

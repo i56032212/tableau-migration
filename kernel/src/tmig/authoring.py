@@ -17,6 +17,10 @@
   標題列（至少兩格有值、都是文字或整數，下一個有值的列至少一半的欄有值），之前的列與之後空白的列不算
 - 萬用字元聯集（add_wildcard_union）：資料夾中檔名（與 Excel 工作表名稱）符合模式的資料表接在資料表下面，
   另有 Path（檔案的路徑）與 Sheet；檔案複製進報表（建立時的快照）
+- 跨資料庫的 join（Tableau 的 cross-database join）：檔案的資料源加上資料庫的資料表（add_live_table 指定
+  connection），或資料庫的資料源加上檔案、另一個資料庫的資料表（先以 federate 改成跨資料庫的 join）；
+  資料庫的資料表在查詢時取回、與檔案在本機合併（tmig.data.federated）。移除資料表後只剩同一個資料庫時改回
+  一般的 Live 連線
 
 所有函式都不改動傳入的 IR，回傳新的 IR；有工作表或計算欄位用到的欄位不能移除、改型別或角色。
 """
@@ -46,6 +50,7 @@ from tmig.ir import (
     FILE_SCHEMA,
     IR,
     IR_VERSION,
+    LIVE_PATH_PREFIX,
     DataField,
     Datasource,
     DatasourceSettings,
@@ -60,6 +65,7 @@ from tmig.ir import (
     ModelRelation,
     PivotColumn,
     PivotRelation,
+    ProjectRelation,
     Relationship,
     RelationshipCondition,
     SqlRelation,
@@ -70,6 +76,7 @@ from tmig.ir import (
     UnionWildcard,
     Workbook,
 )
+from tmig.ir.federation import map_leaves, single_database, to_federated
 from tmig.ir.models import Aggregation, GeoRole, Relation
 
 CUSTOM_SQL = "Custom SQL Query"
@@ -551,8 +558,8 @@ def set_custom_sql(ir: IR, datasource: str, name: str, sql: str, columns: list[F
     加入成欄位；不再有的欄移除（工作表或其他欄位用到時退回）。"""
     ds = _datasource(ir, datasource)
     connection = _editable(ds)
-    if not isinstance(connection, LiveConnection):
-        raise EditError("只有資料庫的資料源有自訂 SQL")
+    if isinstance(connection, FileConnection):
+        return _set_remote_sql(ir, ds, connection, name, sql, columns)
     top = _relation_of(connection)
     owner, current = _owner_of(top, name)
     relation = _find_relation(current, name)
@@ -566,6 +573,34 @@ def set_custom_sql(ir: IR, datasource: str, name: str, sql: str, columns: list[F
     fields = _resync(ir, ds, name, columns, owner, isinstance(current, JoinRelation))
     changed = _replace_leaf(current, name, relation.model_copy(update={"sql": text}))
     connection = _with(connection, None, _replace_logical(top, owner, changed))
+    ds = ds.model_copy(update={"connection": connection, "fields": fields})
+    return _validated(_replace_datasource(ir, ds), "修改自訂 SQL 失敗")
+
+
+def _set_remote_sql(
+    ir: IR,
+    ds: Datasource,
+    connection: FileConnection,
+    name: str,
+    sql: str,
+    columns: list[FileColumn],
+) -> IR:
+    """跨資料庫的 join 中資料庫的自訂 SQL：換掉 SQL 與欄。"""
+    found = next((t for t in connection.tables if t.name == name), None)
+    if found is None or found.sql is None:
+        raise EditError(f"「{name}」不是自訂 SQL")
+    text = sql.strip().rstrip(";").strip()
+    if not text:
+        raise EditError("自訂 SQL 是空的")
+    if not columns:
+        raise EditError("自訂 SQL 沒有傳回任何欄")
+    owner, current = _owner_of(_relation_of(connection), name)
+    fields = _resync(ir, ds, name, columns, owner, isinstance(current, JoinRelation))
+    tables = [
+        t.model_copy(update={"sql": text, "columns": list(columns)}) if t.name == name else t
+        for t in connection.tables
+    ]
+    connection = connection.model_copy(update={"tables": tables})
     ds = ds.model_copy(update={"connection": connection, "fields": fields})
     return _validated(_replace_datasource(ir, ds), "修改自訂 SQL 失敗")
 
@@ -865,9 +900,12 @@ def add_table(
 
     on：條件（已有的欄位 id、比較、新資料表的欄名）；relationship 與 join 至少要一個條件。"""
     ds = _datasource(ir, datasource)
+    if isinstance(_editable(ds), LiveConnection):
+        # 資料庫的資料源加上檔案：改成跨資料庫的 join
+        ir = federate(ir, datasource)
+        ds = _datasource(ir, datasource)
     connection = _editable(ds)
-    if not isinstance(connection, FileConnection):
-        raise EditError(f"資料源「{ds.caption}」連到資料庫，不能加入檔案中的資料表")
+    assert isinstance(connection, FileConnection)
     found = source.table(table)
     name = _table_name(connection, found.name)
     added = file_table(source, table, package_path, name)
@@ -901,17 +939,143 @@ def add_live_table(
     target: str | None = None,
     join: JoinType = "inner",
     on: list[Condition] | None = None,
+    connection: LiveConnection | None = None,
 ) -> IR:
-    """資料庫（Live 連線）的資料源加上一張資料表（table：限定名稱的各段）或自訂 SQL；欄位由呼叫端
-    從資料庫取得（tmig.data.catalog）。加入的方式與條件同 add_table；自訂 SQL 不能聯集。"""
+    """資料源加上資料庫的一張資料表（table：限定名稱的各段）或自訂 SQL；欄位由呼叫端從資料庫取得
+    （tmig.data.catalog）。加入的方式與條件同 add_table；自訂 SQL 不能聯集。
+
+    connection：資料表所在的連線。省略（或與資料源的 Live 連線相同）時是同一個資料庫；檔案的資料源或另一個
+    資料庫時成為跨資料庫的 join（資料庫的資料源先以 federate 轉換）。"""
     ds = _datasource(ir, datasource)
-    connection = _editable(ds)
-    if not isinstance(connection, LiveConnection):
-        raise EditError(f"資料源「{ds.caption}」不是資料庫的連線")
-    new = _live_new_table(connection, table, sql, columns)
-    if how == "union" and not isinstance(new.relation, TableRelation):
+    current = _editable(ds)
+    same = isinstance(current, LiveConnection) and (
+        connection is None or connection.connection_id == current.connection_id
+    )
+    if same:
+        assert isinstance(current, LiveConnection)
+        new = _live_new_table(current, table, sql, columns)
+        if how == "union" and not isinstance(new.relation, TableRelation):
+            raise EditError("自訂 SQL 不能聯集")
+        return _add_table(ir, ds, new, how, target, join, on)
+    if connection is None:
+        raise EditError(f"資料源「{ds.caption}」是檔案的資料源，要指定資料庫的連線")
+    if connection.dialect is None:
+        raise EditError(f"不支援的連線類型 {connection.dbclass}")
+    if isinstance(current, LiveConnection):
+        ir = federate(ir, datasource)
+        ds = _datasource(ir, datasource)
+    files = _editable(ds)
+    assert isinstance(files, FileConnection)
+    new = _remote_new_table(files, connection, table, sql, columns)
+    if how == "union" and new.file is not None and new.file.sql is not None:
         raise EditError("自訂 SQL 不能聯集")
     return _add_table(ir, ds, new, how, target, join, on)
+
+
+def _remote_new_table(
+    files: FileConnection,
+    connection: LiveConnection,
+    table: list[str] | None,
+    sql: str | None,
+    columns: list[FileColumn],
+) -> NewTable:
+    """跨資料庫的 join 中資料庫的資料表：關聯樹中為 Files.<名稱>，查詢時從資料庫取回。"""
+    plain = _live_new_table(None, table, sql, columns)
+    name = _table_name(files, plain.name)
+    relation = plain.relation
+    remote = FileTable(
+        name=name,
+        format="live",
+        path=LIVE_PATH_PREFIX + connection.connection_id,
+        connection=connection.model_copy(update={"relation": None}),
+        table=list(relation.table) if isinstance(relation, TableRelation) else None,
+        sql=relation.sql if isinstance(relation, SqlRelation) else None,
+        columns=list(columns),
+    )
+    return NewTable(
+        name,
+        TableRelation(kind="table", name=name, table=[FILE_SCHEMA, name]),
+        list(columns),
+        remote,
+    )
+
+
+def leaf_relations(relation: Any) -> list[TableRelation | SqlRelation]:
+    """關聯樹中的資料表與自訂 SQL（依出現的順序）。"""
+    found: list[TableRelation | SqlRelation] = []
+
+    def keep(leaf: TableRelation | SqlRelation) -> Relation:
+        found.append(leaf)
+        return leaf
+
+    map_leaves(relation, keep)
+    return found
+
+
+def federate(ir: IR, datasource: str, columns: dict[str, list[FileColumn]] | None = None) -> IR:
+    """資料庫（Live 連線）的資料源改成跨資料庫的 join，之後可以加入檔案或其他資料庫的資料表：原本的資料表與
+    自訂 SQL 成為資料庫的資料表（查詢時取回）。columns：各資料表（關聯樹中的名稱）的欄，由呼叫端從資料庫
+    取得；沒有提供的資料表取自資料源的欄位。已經是檔案的資料源時原樣回傳。"""
+    ds = _datasource(ir, datasource)
+    connection = _editable(ds)
+    if isinstance(connection, FileConnection):
+        return ir
+    if connection.dialect is None:
+        raise EditError(f"不支援的連線類型 {connection.dbclass}")
+
+    def of(name: str) -> list[FileColumn]:
+        if columns is not None and columns.get(name):
+            return list(columns[name])
+        return _leaf_columns(ds, connection, name)
+
+    try:
+        federated = to_federated(connection, of)
+    except ValueError as exc:
+        raise EditError(str(exc)) from exc
+    ds = ds.model_copy(update={"connection": federated})
+    return _validated(_replace_datasource(ir, ds), "改成跨資料庫的 join 失敗")
+
+
+def _leaf_columns(ds: Datasource, connection: LiveConnection, name: str) -> list[FileColumn]:
+    """資料表的欄（沒有從資料庫取得時）：聯集中的資料表依記下的欄，其他依屬於它的欄位。"""
+    top = _relation_of(connection)
+    owner, current = _owner_of(top, name)
+    for relation in _walk(current):
+        if isinstance(relation, UnionRelation):
+            for part in relation.parts:
+                if part.relation.name == name and part.columns:
+                    return [FileColumn(name=c.name, datatype=c.datatype) for c in part.columns]
+        if isinstance(relation, PivotRelation) and relation.source.name == name:
+            raise EditError(f"資料表「{name}」已樞紐，請先登入資料庫再加入其他連線的資料表")
+    joined = isinstance(current, JoinRelation)
+    found: dict[str, FileColumn] = {}
+    for f in ds.fields:
+        if f.column is None or f.calc is not None:
+            continue
+        if f.physical_table is not None:
+            mine = f.physical_table == name
+        else:
+            mine = f.table == (owner or name) if not joined or owner is None else False
+        if mine:
+            found.setdefault(f.column, FileColumn(name=f.column, datatype=f.datatype))
+    return list(found.values())
+
+
+def _walk(relation: Relation) -> list[Relation]:
+    if isinstance(relation, JoinRelation):
+        return [relation, *_walk(relation.left), *_walk(relation.right)]
+    if isinstance(relation, PivotRelation | ProjectRelation):
+        return [relation, *_walk(relation.source)]
+    return [relation]
+
+
+def _settle(ds: Datasource) -> Datasource:
+    """跨資料庫的 join 只剩同一個資料庫的資料表（沒有檔案）時改回一般的 Live 連線（整段查詢下推到資料庫）。"""
+    connection = ds.connection
+    if not isinstance(connection, FileConnection):
+        return ds
+    single = single_database(connection)
+    return ds if single is None else ds.model_copy(update={"connection": single})
 
 
 def _live_new_table(
@@ -1066,6 +1230,12 @@ def _union(
         raise EditError("只有單一資料表（或已經是聯集）才能再接上其他資料表")
     if not isinstance(new.relation, TableRelation):
         raise EditError("自訂 SQL 不能聯集")
+    # 跨資料庫的 join：聯集的資料表要在同一個連線（同一個資料庫，或都是檔案）
+    sources = {
+        _source_of(by_name[p.relation.name]) for p in parts if p.relation.name in by_name
+    } | ({_source_of(new.file)} if new.file is not None else set())
+    if len(sources) > 1:
+        raise EditError("聯集的資料表要在同一個連線（同一個資料庫，或都是檔案）")
     new_part = (
         _part(new.relation, new.file)
         if new.file is not None
@@ -1120,6 +1290,13 @@ def _union(
         for f in [*fields, *new_fields]
     ]
     return union, ds.model_copy(update={"fields": merged})
+
+
+def _source_of(table: FileTable) -> str:
+    """資料表所在的連線：資料庫的連線代號，檔案一律為 file。"""
+    if table.format == "live" and table.connection is not None:
+        return table.connection.connection_id
+    return "file"
 
 
 def _part(relation: TableRelation, table: FileTable) -> UnionPart:
@@ -1211,7 +1388,7 @@ def remove_table(ir: IR, datasource: str, table: str) -> IR:
         raise EditError(f"找不到可以移除的資料表「{table}」")
     tables = [t for t in _tables(connection) if t.name != table]
     connection = _with(connection, tables, _replace_logical(top, owner, replacement))
-    ds = ds.model_copy(update={"connection": connection, "fields": fields})
+    ds = _settle(ds.model_copy(update={"connection": connection, "fields": fields}))
     return _validated(_replace_datasource(ir, ds), "移除資料表失敗")
 
 
@@ -1239,7 +1416,7 @@ def _remove_logical(ir: IR, ds: Datasource, model: ModelRelation, logical: str) 
     else:
         relation = model.model_copy(update={"tables": tables, "relationships": relationships})
     connection = _with(connection, file_tables, relation)
-    ds = ds.model_copy(update={"connection": connection, "fields": fields})
+    ds = _settle(ds.model_copy(update={"connection": connection, "fields": fields}))
     return _validated(_replace_datasource(ir, _without_stale_links(ds)), "移除資料表失敗")
 
 

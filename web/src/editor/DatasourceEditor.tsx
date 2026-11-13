@@ -4,6 +4,7 @@ import { DataGrid } from "../DatasourceView";
 import { pickDataPath, pickFolderPath, toast } from "../desktop";
 import { Modal } from "../Server";
 import type { DatasourcePreview } from "../types";
+import { PickConnectionDialog } from "./ConnectServer";
 import {
   connectionsApi,
   datasourceApi,
@@ -14,6 +15,7 @@ import {
   type InspectedTable,
   type JoinType,
   type LogicalView,
+  type ModelConnection,
   type ModelField,
   type RelationView,
   type RemoteTable,
@@ -23,7 +25,8 @@ import {
 
 // 資料源分頁的編輯（Tableau Desktop 的「資料來源」分頁）：左邊是連線的檔案與其中的資料表（資料庫的連線為
 // 資料庫中的資料表與「新增自訂 SQL」），中間是邏輯資料表與關聯（雙擊邏輯資料表看到的 join、聯集、樞紐），
-// 下面是欄位（改名、隱藏、資料類型、角色）與資料的預覽。
+// 下面是欄位（改名、隱藏、資料類型、角色）與資料的預覽。「加入連線」可以再加上檔案或另一個資料庫：不同連線的
+// 資料表在本機合併（跨資料庫的 join）。
 
 const JOINS: Record<JoinType, string> = { inner: "內部", left: "左側", right: "右側", full: "完整外部" };
 const OPS: Comparison[] = ["=", "!=", "<", "<=", ">", ">="];
@@ -44,8 +47,15 @@ interface Source {
   path?: string;
   /** 資料庫的資料表或自訂 SQL */
   remote?: { table_path: string[] } | { sql: string };
+  /** 資料庫的資料表所在的連線 */
+  connection?: string;
   name: string;
   tables: InspectedTable[];
+}
+
+/** 連線的顯示名稱：資料庫的類型與資料庫（或伺服器）。 */
+function connectionLabel(connection: ModelConnection, label?: string | null): string {
+  return [label ?? connection.dbclass, connection.database ?? connection.server].filter(Boolean).join("／");
 }
 
 /** 資料庫的資料表（列數不明，rows 為 -1）。 */
@@ -75,8 +85,18 @@ export function DatasourceEditor({
   const [selected, setSelected] = useState<string[]>([]);
   const [version, setVersion] = useState(0);
   const [busy, setBusy] = useState(false);
-  /** 自訂 SQL 的對話框：name 為 null 時是新增 */
-  const [sqlDialog, setSqlDialog] = useState<{ name: string | null; sql: string } | null>(null);
+  /** 自訂 SQL 的對話框：name 為 null 時是新增；connection 為資料庫的連線 */
+  const [sqlDialog, setSqlDialog] = useState<{ name: string | null; sql: string; connection?: string } | null>(null);
+  /** 「加入連線＞資料庫」選了、還沒有加入資料表的連線 */
+  const [extra, setExtra] = useState<ModelConnection[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    connectionsApi
+      .connectors()
+      .then((all) => setLabels(Object.fromEntries(all.map((c) => [c.dbclass, c.label]))))
+      .catch(() => setLabels({}));
+  }, []);
   /** 萬用字元聯集的對話框（檔案） */
   const [wildcard, setWildcard] = useState<{ file: string; name: string; format?: string } | null>(null);
 
@@ -139,12 +159,17 @@ export function DatasourceEditor({
     }
   };
 
-  /** 加入資料庫的資料表：先取得欄位（選擇關聯、join 的欄位）。 */
-  const addRemote = async (table: RemoteTable) => {
+  /** 加入資料庫的資料表：先取得欄位（選擇關聯、join 的欄位）。connection：資料表所在的連線。 */
+  const addRemote = async (table: RemoteTable, connection: string) => {
     try {
-      const columns = await datasourceApi.remoteColumns(workbook, datasource, { table: table.path });
+      const columns = await datasourceApi.remoteColumns(workbook, datasource, { table: table.path, connection });
       setAdding({
-        source: { remote: { table_path: table.path }, name: table.path.join("."), tables: [remoteTable(table.name, columns)] },
+        source: {
+          remote: { table_path: table.path },
+          connection,
+          name: table.path.join("."),
+          tables: [remoteTable(table.name, columns)],
+        },
         table: table.name,
       });
     } catch (e) {
@@ -156,6 +181,16 @@ export function DatasourceEditor({
   if (!model) return <div className="placeholder">載入中…</div>;
   const fields = model.fields;
   const logicalCaption = (id: string) => model.logical.find((l) => l.id === id)?.caption ?? id;
+  const connections = model.connections ?? (model.connection ? [model.connection] : []);
+  const known = new Set(connections.map((c) => c.connection_id));
+  const panes = [...connections, ...extra.filter((c) => !known.has(c.connection_id))];
+  const sourceLabel = (id: string) => {
+    const found = panes.find((c) => c.connection_id === id);
+    return found ? connectionLabel(found, labels[found.dbclass]) : id;
+  };
+  const kindLabel = model.datasource.federated
+    ? "跨資料庫"
+    : ({ extract: "萃取", file: "檔案", live: "即時" }[model.datasource.kind] ?? model.datasource.kind);
 
   return (
     <div className="ds-editor" data-datasource={datasource} data-busy={busy ? "true" : "false"}>
@@ -172,8 +207,8 @@ export function DatasourceEditor({
           }}
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
-        <span className={`ds-badge ${model.datasource.kind}`}>
-          {{ extract: "萃取", file: "檔案", live: "即時" }[model.datasource.kind] ?? model.datasource.kind}
+        <span className={`ds-badge ${model.datasource.kind}`} title={model.datasource.federated ? "不同連線的資料表在本機合併" : undefined}>
+          {kindLabel}
         </span>
         <button type="button" className="primary" onClick={onOpenSheet}>
           前往工作表
@@ -185,15 +220,18 @@ export function DatasourceEditor({
       <div className="dse-body">
         <aside className="dse-files" aria-label="連線">
           <h2>連線</h2>
-          {model.connection && (
+          {panes.map((c) => (
             <LivePane
+              key={c.connection_id}
               workbook={workbook}
               datasource={datasource}
               model={model}
-              onAdd={(t) => void addRemote(t)}
-              onCustomSql={() => setSqlDialog({ name: null, sql: "" })}
+              connection={c}
+              label={labels[c.dbclass] ?? null}
+              onAdd={(t) => void addRemote(t, c.connection_id)}
+              onCustomSql={() => setSqlDialog({ name: null, sql: "", connection: c.connection_id })}
             />
-          )}
+          ))}
           {model.files.map((file) => (
             <div key={file.path} className="dse-file">
               <div className="dse-file-name" title={file.path}>
@@ -248,10 +286,16 @@ export function DatasourceEditor({
               </ul>
             </div>
           ))}
-          {model.editable && !model.connection && (
-            <button type="button" className="dse-other" onClick={() => void otherFile()}>
-              其他檔案…
-            </button>
+          {model.editable && (
+            <div className="dse-add-connection" role="group" aria-label="加入連線">
+              <span className="muted">加入連線：</span>
+              <button type="button" className="dse-other" onClick={() => void otherFile()}>
+                {model.files.length ? "其他檔案…" : "檔案…"}
+              </button>
+              <button type="button" className="dse-other" onClick={() => setPicking(true)}>
+                資料庫…
+              </button>
+            </div>
           )}
         </aside>
         <section className="dse-canvas" aria-label="資料表">
@@ -268,7 +312,8 @@ export function DatasourceEditor({
                 workbook={workbook}
                 datasource={datasource}
                 removable={model.logical.length > 1}
-                onEditSql={(name, sql) => setSqlDialog({ name, sql })}
+                onEditSql={(name, sql, connection) => setSqlDialog({ name, sql, connection })}
+                sourceLabel={model.datasource.federated ? sourceLabel : undefined}
               />
             ))}
           </div>
@@ -363,11 +408,29 @@ export function DatasourceEditor({
                   workbook,
                   datasource,
                   adding.source.remote
-                    ? { ...body, table: null, ...adding.source.remote }
+                    ? { ...body, table: null, ...adding.source.remote, connection: adding.source.connection }
                     : { ...body, file: adding.source.file, path: adding.source.path },
                 ),
               "已加入資料表",
             )
+          }
+        />
+      )}
+      {picking && (
+        <PickConnectionDialog
+          onClose={() => setPicking(false)}
+          onPick={(entry) =>
+            setExtra((all) => [
+              ...all.filter((c) => c.connection_id !== entry.id),
+              {
+                connection_id: entry.id,
+                dbclass: entry.dbclass,
+                server: entry.server,
+                port: entry.port,
+                database: entry.database,
+                schema: entry.schema,
+              },
+            ])
           }
         />
       )}
@@ -383,12 +446,20 @@ export function DatasourceEditor({
         <CustomSqlDialog
           initial={sqlDialog.sql}
           editing={sqlDialog.name}
-          check={(sql) => datasourceApi.remoteColumns(workbook, datasource, { sql })}
+          check={(sql) => datasourceApi.remoteColumns(workbook, datasource, { sql, connection: sqlDialog.connection })}
           onClose={() => setSqlDialog(null)}
           onSubmit={async (sql, columns) => {
             if (sqlDialog.name === null) {
               setSqlDialog(null);
-              setAdding({ source: { remote: { sql }, name: "自訂 SQL", tables: [remoteTable(CUSTOM_SQL, columns)] }, table: CUSTOM_SQL });
+              setAdding({
+                source: {
+                  remote: { sql },
+                  connection: sqlDialog.connection,
+                  name: "自訂 SQL",
+                  tables: [remoteTable(CUSTOM_SQL, columns)],
+                },
+                table: CUSTOM_SQL,
+              });
               return true;
             }
             const name = sqlDialog.name;
@@ -494,18 +565,22 @@ function LivePane({
   workbook,
   datasource,
   model,
+  connection,
+  label,
   onAdd,
   onCustomSql,
 }: {
   workbook: string;
   datasource: string;
   model: DatasourceModel;
+  /** 資料源中的資料庫，或「加入連線＞資料庫」選的連線 */
+  connection: ModelConnection;
+  label: string | null;
   onAdd: (table: RemoteTable) => void;
   onCustomSql: () => void;
 }) {
-  const connection = model.connection;
-  const [label, setLabel] = useState<string | null>(null);
-  const [schema, setSchema] = useState(connection?.schema ?? "");
+  const id = connection.connection_id;
+  const [schema, setSchema] = useState(connection.schema ?? "");
   const [tables, setTables] = useState<RemoteTable[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -513,24 +588,16 @@ function LivePane({
     (wanted: string | null) => {
       setLoadError(null);
       datasourceApi
-        .remoteTables(workbook, datasource, wanted)
+        .remoteTables(workbook, datasource, wanted, id)
         .then((r) => setTables(r.tables))
         .catch((e: Error) => {
           setTables([]);
           setLoadError(e.message);
         });
     },
-    [workbook, datasource],
+    [workbook, datasource, id],
   );
-  useEffect(() => load(connection?.schema ?? null), [load, connection?.schema]);
-  useEffect(() => {
-    if (!connection) return;
-    connectionsApi
-      .connectors()
-      .then((all) => setLabel(all.find((c) => c.dbclass === connection.dbclass)?.label ?? null))
-      .catch(() => setLabel(null));
-  }, [connection]);
-  if (!connection) return null;
+  useEffect(() => load(connection.schema ?? null), [load, connection.schema]);
   const query = search.trim().toLowerCase();
   const shown = (tables ?? []).filter((t) => !query || t.path.join(".").toLowerCase().includes(query));
   return (
@@ -548,7 +615,7 @@ function LivePane({
         <p className="error">
           {loadError}
           <br />
-          <span className="muted">（還沒登入這個連線時，請從「連線到伺服器…」登入）</span>
+          <span className="muted">（還沒登入這個連線時，請從「加入連線：資料庫…」登入）</span>
         </p>
       )}
       {tables === null && !loadError && <p className="muted">載入中…</p>}
@@ -675,6 +742,7 @@ function LogicalCard({
   datasource,
   removable,
   onEditSql,
+  sourceLabel,
 }: {
   logical: LogicalView;
   model: DatasourceModel;
@@ -684,7 +752,9 @@ function LogicalCard({
   workbook: string;
   datasource: string;
   removable: boolean;
-  onEditSql: (name: string, sql: string) => void;
+  onEditSql: (name: string, sql: string, connection?: string) => void;
+  /** 跨資料庫的 join：資料表所在的連線的名稱 */
+  sourceLabel?: (connection: string) => string;
 }) {
   const fields = model.fields.filter((f) => (logical.id ? f.table === logical.id : true) && f.column !== null);
   return (
@@ -714,9 +784,16 @@ function LogicalCard({
         onUnpivot={(name) => void onChange(() => datasourceApi.unpivot(workbook, datasource, name), "已移除樞紐")}
         onSetJoin={(table, join, on) => onChange(() => datasourceApi.setJoin(workbook, datasource, table, join, on), "已修改 join")}
         onEditSql={onEditSql}
+        sourceLabel={sourceLabel}
       />
     </div>
   );
+}
+
+/** 跨資料庫的 join：資料表所在的連線（檔案的資料表沒有）。 */
+function SourceTag({ connection, label }: { connection?: string; label?: (connection: string) => string }) {
+  if (!connection || !label) return null;
+  return <span className="muted dse-source">（{label(connection)}）</span>;
 }
 
 function RelationTree({
@@ -727,6 +804,7 @@ function RelationTree({
   onUnpivot,
   onSetJoin,
   onEditSql,
+  sourceLabel,
 }: {
   relation: RelationView;
   fields: ModelField[];
@@ -734,15 +812,17 @@ function RelationTree({
   onRemove: (name: string) => void;
   onUnpivot: (name: string) => void;
   onSetJoin: (table: string, join: JoinType, on: Condition[]) => Promise<boolean>;
-  onEditSql: (name: string, sql: string) => void;
+  onEditSql: (name: string, sql: string, connection?: string) => void;
+  sourceLabel?: (connection: string) => string;
 }) {
-  const nested = { fields, editable, onRemove, onUnpivot, onSetJoin, onEditSql };
+  const nested = { fields, editable, onRemove, onUnpivot, onSetJoin, onEditSql, sourceLabel };
   if (relation.kind === "sql") {
     return (
       <div className="dse-table dse-sql" data-sql={relation.name}>
         ▦ {relation.name}
+        <SourceTag connection={relation.connection} label={sourceLabel} />
         {editable && (
-          <button type="button" className="link" onClick={() => onEditSql(relation.name, relation.sql)}>
+          <button type="button" className="link" onClick={() => onEditSql(relation.name, relation.sql, relation.connection)}>
             編輯 SQL…
           </button>
         )}
@@ -750,13 +830,26 @@ function RelationTree({
     );
   }
   if (relation.kind === "table") {
-    return <div className="dse-table">▦ {relation.name}</div>;
+    return (
+      <div className="dse-table" data-table={relation.name}>
+        ▦ {relation.name}
+        <SourceTag connection={relation.connection} label={sourceLabel} />
+      </div>
+    );
   }
   if (relation.kind === "join") {
     return (
       <div className="dse-join">
         <RelationTree relation={relation.left} {...nested} />
-        <JoinEditor relation={relation} fields={fields} editable={editable} onSave={onSetJoin} onRemove={onRemove} onEditSql={onEditSql} />
+        <JoinEditor
+          relation={relation}
+          fields={fields}
+          editable={editable}
+          onSave={onSetJoin}
+          onRemove={onRemove}
+          onEditSql={onEditSql}
+          sourceLabel={sourceLabel}
+        />
       </div>
     );
   }
@@ -771,8 +864,9 @@ function RelationTree({
         {relation.parts.map((p) => (
           <div key={"name" in p ? p.name : ""} className="dse-table">
             ▦ {"name" in p ? p.name : ""}
+            {(p.kind === "sql" || p.kind === "table") && <SourceTag connection={p.connection} label={sourceLabel} />}
             {p.kind === "sql" && editable && (
-              <button type="button" className="link" onClick={() => onEditSql(p.name, p.sql)}>
+              <button type="button" className="link" onClick={() => onEditSql(p.name, p.sql, p.connection)}>
                 編輯 SQL…
               </button>
             )}
@@ -811,16 +905,20 @@ function JoinEditor({
   onSave,
   onRemove,
   onEditSql,
+  sourceLabel,
 }: {
   relation: Extract<RelationView, { kind: "join" }>;
   fields: ModelField[];
   editable: boolean;
   onSave: (table: string, join: JoinType, on: Condition[]) => Promise<boolean>;
   onRemove: (name: string) => void;
-  onEditSql?: (name: string, sql: string) => void;
+  onEditSql?: (name: string, sql: string, connection?: string) => void;
+  sourceLabel?: (connection: string) => string;
 }) {
   const right = "name" in relation.right ? relation.right.name : "";
   const rightSql = relation.right.kind === "sql" ? relation.right.sql : null;
+  const rightConnection =
+    relation.right.kind === "sql" || relation.right.kind === "table" ? relation.right.connection : undefined;
   const inRight = (f: ModelField) => (f.physical_table ?? f.table) === right;
   const leftFields = fields.filter((f) => !inRight(f));
   const rightColumns = fields.filter(inRight).map((f) => f.column ?? "");
@@ -843,9 +941,12 @@ function JoinEditor({
             </option>
           ))}
         </select>
-        <span className="dse-table">▦ {right}</span>
+        <span className="dse-table" data-table={right}>
+          ▦ {right}
+          <SourceTag connection={rightConnection} label={sourceLabel} />
+        </span>
         {editable && rightSql !== null && onEditSql && (
-          <button type="button" className="link" onClick={() => onEditSql(right, rightSql)}>
+          <button type="button" className="link" onClick={() => onEditSql(right, rightSql, rightConnection)}>
             編輯 SQL…
           </button>
         )}

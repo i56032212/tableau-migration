@@ -19,7 +19,14 @@ from tmig.data.sources import (
     open_executor,
     probe_sql,
 )
-from tmig.ir import IR, ExtractConnection, FileConnection, LiveConnection, load_ir
+from tmig.ir import (
+    IR,
+    ExtractConnection,
+    FileConnection,
+    LiveConnection,
+    load_ir,
+    source_connections,
+)
 from tmig.parser.workbook import parse_workbook
 
 DBCLASS_DRIVERS = {
@@ -106,7 +113,13 @@ def collect(irs: Iterable[IR]) -> dict[str, FoundConnection]:
             connection = ds.connection
             label = ir.workbook.name
             if isinstance(connection, FileConnection):
-                continue  # 檔案在 .twbx 內，不需要連線設定
+                # 檔案在 .twbx 內，不需要連線設定；跨資料庫的 join 中的資料庫要
+                for remote in source_connections(connection):
+                    entry = found.setdefault(remote.connection_id, FoundConnection(remote))
+                    joined = f"{label}（跨資料庫的 join）"
+                    if joined not in entry.workbooks:
+                        entry.workbooks.append(joined)
+                continue
             if isinstance(connection, ExtractConnection):
                 if connection.source is None or connection.refresh is None:
                     continue

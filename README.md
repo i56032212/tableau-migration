@@ -231,6 +231,27 @@ Excel、文字檔（CSV 等）沒有萃取時不是連到資料庫：匯入時�
 - 都可以是 Relationship 模型的邏輯資料表、與其他資料表 join，資料源分頁列出它們的來源與說明。XML 依公開報表
   （2020.4 的樞紐與萬用字元聯集、2019.1 的聯集與合併的欄位）
 
+**跨資料庫的 join**（Tableau 的 cross-database join：資料源有多個連線，例如 Excel 與 SQL Server、兩個不同的資料庫，
+`kernel/src/tmig/data/federated.py`）：與 Tableau 相同，各連線的資料取到本機、在本機的引擎（DuckDB）中合併。檔案在匯入時
+讀進資料源的 DuckDB 檔；資料庫的資料表與自訂 SQL（IR 中為 `FileTable.format = "live"`，帶著它的連線）在查詢時取回：資料表
+只取查詢用到的欄（以 SQLGlot 分析 CTE 中真正用到的欄）、查詢沒有用到的資料表不取（例如 Relationship 模型中檢視沒有用到的
+邏輯資料表），自訂 SQL 取整段的結果（參數代入目前值）；之後整段查詢與檔案的資料源相同在 DuckDB 執行。取回的資料在 TTL
+之內重複使用（預設 60 秒，環境變數 `TMIG_FEDERATED_TTL`，0 為不重複使用；dashboard 的各張工作表要的欄都已取回時直接使用，
+同時要同一張資料表時只取一次）。join、關聯、join 計算與關聯計算、樞紐都可以跨連線；聯集要在同一個連線（與 Tableau 相同）。
+各資料庫的憑證依連線代號由連線設定檔提供（`tmig connections template` 列出，標示「跨資料庫的 join」），與 Live 連線相同。
+只用到同一個資料庫的資料源（例如沒有用到的連線）是一般的 Live 連線，整段查詢下推。Data Blending 的次要資料源是跨資料庫的
+join 時尚不支援。以臨時的 PostgreSQL 實跑（Excel＋PostgreSQL 的 LEFT JOIN、兩個 PostgreSQL 資料庫的 Relationship 模型與
+含參數的自訂 SQL）比對。
+
+**空間函式**（MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA、INTERSECTS）在 Live 連線與萃取相同在 DuckDB 計算（球面的
+計算與 Tableau 相同，見「地圖」）：用到空間函式的 CTE 與之後依賴它的 CTE 改在 DuckDB 執行，之前的部分（資料源的資料列與
+資料源篩選之前）下推到來源資料庫、只取用到的欄；讀資料表的那一段就用到空間函式時（例如 join 計算中的 DISTANCE），取回
+查詢讀的每張資料表（只取用到的欄）、以原本的名稱交給 DuckDB 執行整段查詢。資料庫的**空間欄位**（Tableau 2021.2 支援的
+PostGIS 的 geometry、geography，SQL Server 的 geography，Oracle 的 SDO_GEOMETRY，Snowflake 的 GEOGRAPHY 與 Redshift 的
+GEOMETRY；另有 MySQL、BigQuery、SAP HANA、Teradata、Db2）在來源資料庫轉成 WKT 文字（`ST_AsText`、`STAsText()`、
+`SDO_UTIL.TO_WKTGEOMETRY`、`ST_ASWKT` 等）。以臨時的 PostgreSQL 實跑（距離、BUFFER 的面積、點與線、資料源篩選與 join
+計算中的距離）比對；空間欄位的轉換只有轉譯快照（測試環境沒有 PostGIS）。
+
 「實跑」是公式的每個函式與兩份 fixture 的每張工作表 × 每組篩選都在該資料庫執行，與預期結果比對；「模擬」是轉譯後的
 SQL 以 SQLGlot 轉回 DuckDB、該資料庫特有的函式依官方文件的語意模擬後執行同樣的比對，並有轉譯快照
 （`fixtures/*/sql/<方言>/`）供審核，仍待實機驗證。與 Tableau 直接連該資料庫時相同，字串的比較與排序依資料庫的定序
@@ -747,6 +768,11 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
   公式以欄位的內部名稱參照，改名後仍有效），只能用到那一張邏輯資料表的欄位，不能彙總、用 LOD 或參數；不再用到時
   自動移除。從 Tableau 開啟的報表中，關聯條件寫成公式（`<expression op='DATETRUNC(&apos;month&apos;,[ORDER_TS])' />`，
   見 Tableau Server 處理過的報表）時同樣轉成關聯計算
+- **加入連線**（左邊連線清單下的「加入連線：檔案…／資料庫…」）：檔案的資料源可以再連到資料庫（已建立的連線，或在
+  對話框中新的連線、登入），資料庫的資料源可以再加上檔案或另一個資料庫：不同連線的資料表以關聯或 join 合併
+  （**跨資料庫的 join**，資料源標示「跨資料庫」，邏輯資料表中的資料表標示所在的連線，見「Live 連線」）。資料庫的資料源
+  第一次加入其他連線的資料表時，原本的資料表與自訂 SQL 改成跨資料庫的 join 中資料庫的資料表（欄從資料庫取得）；移除後
+  只剩同一個資料庫時改回一般的 Live 連線。跨資料庫的 join 中資料庫的欄位也可以變更資料類型（取回後轉換）
 - **樞紐**：欄位清單中勾選同一張資料表的欄，「樞紐所選的欄位」轉成 Pivot Field Names、Pivot Field Values；
   可以移除樞紐
 - **資料解譯器**（Excel 檔下的「使用資料解譯器」）：工作表上面有標題、說明的列時找出標題列（至少兩格有值、都是文字
@@ -1037,7 +1063,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   自訂的 WMS、Mapbox 背景地圖尚不支援（以內建的底圖呈現）；密度圖依色彩分組、地圖上的趨勢線與參考區間尚未畫出。
   標籤重疊的判斷依工作表在 dashboard 上的大小估計。空間資料：基準面之間的轉換（例如 TWD67、OSGB 1936 到 WGS84）
   尚未計算（TWD97、NAD83 等與 WGS84 的差距在 1 公尺左右）；BUFFER 只支援點（Tableau 2021.2 的範圍）；
-  Esri File Geodatabase、MapInfo 與 Live 連線（PostGIS、SQL Server 等）的空間資料尚不支援；MAKEPOINT 的 SRID
+  Esri File Geodatabase、MapInfo 尚不支援；資料庫的空間欄位（PostGIS、SQL Server 等）只有轉譯快照、尚未實機驗證；MAKEPOINT 的 SRID
   只支援常用的代碼。空間 join 的 Intersects 以經緯度平面判斷，跨越 180 度經線的形狀可能不同
 - **TOTAL()**：以量值篩選後仍在檢視中的標記所對應的底層資料重新彙總
 - **週起始日**：.twb 沒寫時視為星期日
@@ -1244,7 +1270,7 @@ Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及
 標題中的 Table Calculation 值、
 故事點記下的其他狀態（範圍篩選、排序、欄列架的變更、註解等）、
 取消彙總的叢集與以維度分群、Teradata 的彙總中的 RANDOM()、
-Live 連線的跨資料庫關聯（多個具名連線）、文字檔的資料解譯器、舊版的 .tde 萃取。
+Data Blending 的次要資料源是跨資料庫的 join、Live 連線中以資料庫的空間欄位做空間 join、文字檔的資料解譯器、舊版的 .tde 萃取。
 
 ## 開發規則
 

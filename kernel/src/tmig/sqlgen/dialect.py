@@ -10,6 +10,11 @@
   轉譯後的每個節點都要在該方言的允許清單中，或是改寫規則產生的；其他節點一律列為不支援，
   不送出可能算錯的 SQL（SQLGlot 對不認得的函式不會報錯，只會原樣輸出）
 - 自訂 SQL 以佔位資料表表示，產生目標方言後才換回原文（原文不經過轉譯）
+- 空間函式（MAKEPOINT、MAKELINE、DISTANCE、BUFFER、AREA、INTERSECTS）：與萃取相同在 DuckDB 計算（球面的
+  計算與 Tableau 相同）。用到空間函式的 CTE 與之後依賴它的 CTE 改在 DuckDB 執行，之前的部分（資料源的資料列）
+  下推到來源資料庫、只取用到的欄。資料庫的空間欄位（geography、geometry）在來源資料庫轉成 WKT 文字
+  （tmig_geo_wkt：PostGIS 與 Redshift 的 ST_AsText、SQL Server 的 STAsText、Oracle 的 SDO_UTIL.TO_WKTGEOMETRY、
+  Snowflake 的 ST_ASWKT 等）
 
 PostgreSQL（16 以上）、Spark（Databricks 的引擎，3.4 以上；另以 Spark Thrift Server 走 HiveServer2 協定實跑）、
 MySQL（8.0 以上）、Trino（CI 以 Docker 執行；Athena 的 SQL 也在同一台執行）與 BigQuery（CI 以 ZetaSQL 的模擬器執行）
@@ -41,7 +46,7 @@ from sqlglot.errors import ParseError
 from tmig.data import udf
 from tmig.formula.functions import icu_features
 from tmig.ir.models import Scalar
-from tmig.sqlgen.query import QueryError, WorksheetSql
+from tmig.sqlgen.query import CteDef, QueryError, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
 
 
@@ -151,9 +156,49 @@ class Split:
     """DuckDB 執行的部分：Table Calculation 的 CTE 與輸出；下推的結果以同名資料表參照。"""
 
 
+SPATIAL_CALL = re.compile(
+    r"\b(?:" + "|".join(sorted(udf.SPATIAL_FUNCTIONS, key=len, reverse=True)) + r")\s*\(",
+    re.IGNORECASE,
+)
+"""用到空間函式（在 DuckDB 計算）。"""
+
+
+def localize_spatial(query: WorksheetSql) -> tuple[list[CteDef], bool]:
+    """用到空間函式的 CTE 與之後依賴它的 CTE 改在 DuckDB 執行（回傳新的 CTE 與是否改過）。直接讀來源資料表
+    的 CTE 用到空間函式時（例如資料表的空間 join）不能改，維持原樣（轉譯時列為不支援）。"""
+    ctes = list(query.ctes)
+    spatial = {c.name for c in ctes if c.pushdown and SPATIAL_CALL.search(c.body)}
+    if not spatial:
+        return ctes, False
+    names = {c.name for c in ctes}
+    for cte in ctes:
+        if cte.name in spatial and _reads_source(cte.body, names):
+            return ctes, False
+    local = set(spatial)
+    changed = True
+    while changed:
+        changed = False
+        for cte in ctes:
+            if cte.pushdown and cte.name not in local and _references(cte.body, local):
+                local.add(cte.name)
+                changed = True
+    return [replace(c, pushdown=False) if c.name in local else c for c in ctes], True
+
+
+def _reads_source(sql: str, names: set[str]) -> bool:
+    """SQL 讀了來源資料表（不是 CTE，例如 "SALES"."ORDERS" 或自訂 SQL 的佔位資料表）。"""
+    try:
+        tree = sqlglot.parse_one(sql, read="duckdb")
+    except ParseError:  # pragma: no cover - 產生的 SQL 一定能解析
+        return True
+    ctes = {c.alias_or_name for c in tree.find_all(exp.CTE)}
+    return any(table.db or table.name not in names | ctes for table in tree.find_all(exp.Table))
+
+
 def split(query: WorksheetSql) -> Split:
-    remote = [c for c in query.ctes if c.pushdown]
-    local = [c for c in query.ctes if not c.pushdown]
+    ctes, localized = localize_spatial(query)
+    remote = [c for c in ctes if c.pushdown]
+    local = [c for c in ctes if not c.pushdown]
     remote_names = [c.name for c in remote]
     local_names = {c.name for c in local}
     bodies = {c.name: c.body for c in remote}
@@ -167,16 +212,81 @@ def split(query: WorksheetSql) -> Split:
         for name in _references(text, set(remote_names)):
             if name not in needed:
                 needed.append(name)
+    head = ""
+    if local:
+        head = "WITH " + ", ".join(f'"{c.name}" AS ({c.body})' for c in local) + " "
     fetches: list[Fetch] = []
     for name in needed:
         closure = _closure(name, deps)
         ordered = [n for n in remote_names if n in closure]
-        ctes = ", ".join(f'"{n}" AS ({bodies[n]})' for n in ordered)
-        fetches.append(Fetch(name=name, sql=f'WITH {ctes} SELECT * FROM "{name}"'))
-    head = ""
-    if local:
-        head = "WITH " + ", ".join(f'"{c.name}" AS ({c.body})' for c in local) + " "
+        defined = ", ".join(f'"{n}" AS ({bodies[n]})' for n in ordered)
+        fetches.append(Fetch(name=name, sql=f'WITH {defined} SELECT * FROM "{name}"'))
+    if localized:
+        # 空間函式改在 DuckDB 計算：取回的是資料列，只取 DuckDB 用到的欄
+        fetches = _pruned(fetches, head + query.main)
     return Split(fetches=fetches, local_sql=head + query.main)
+
+
+def _pruned(fetches: list[Fetch], local_sql: str) -> list[Fetch]:
+    """取回的資料只取 local_sql 用到的欄（分析不了時原樣）。"""
+    from sqlglot.errors import SqlglotError
+    from sqlglot.optimizer.pushdown_projections import pushdown_projections
+    from sqlglot.optimizer.qualify import qualify
+    from sqlglot.optimizer.scope import traverse_scope
+
+    try:
+        outputs: dict[str, list[str]] = {}
+        for fetch in fetches:
+            tree = qualify(
+                sqlglot.parse_one(fetch.sql, read="duckdb"),
+                validate_qualify_columns=False,
+                quote_identifiers=False,
+            )
+            selects: list[exp.Expr] = list(getattr(tree, "selects", []))
+            columns = [e.alias_or_name for e in selects]
+            if not columns or any(isinstance(e, exp.Star) or e.is_star for e in selects):
+                return fetches
+            outputs[fetch.name] = columns
+        schema: dict[str, object] = {
+            name: {column: "VARCHAR" for column in columns} for name, columns in outputs.items()
+        }
+        tree = qualify(
+            sqlglot.parse_one(local_sql, read="duckdb"),
+            schema=schema,
+            validate_qualify_columns=False,
+            quote_identifiers=False,
+        )
+        tree = pushdown_projections(tree)
+        used: dict[str, set[str]] = {name.casefold(): set() for name in outputs}
+        for scope in traverse_scope(tree):
+            sources = {
+                alias: source.name.casefold()
+                for alias, source in scope.sources.items()
+                if isinstance(source, exp.Table) and not source.db
+            }
+            if any(name in used for name in sources.values()) and any(
+                isinstance(e, exp.Star) or e.is_star
+                for e in getattr(scope.expression, "selects", [])
+            ):
+                return fetches
+            for column in scope.columns:
+                name = sources.get(column.table)
+                if name in used:
+                    used[name].add(column.name.casefold())
+    except (SqlglotError, RecursionError, KeyError, ValueError):
+        return fetches
+    result: list[Fetch] = []
+    for fetch in fetches:
+        columns = outputs[fetch.name]
+        wanted = used.get(fetch.name.casefold(), set())
+        keep = [c for c in columns if c.casefold() in wanted] or columns[:1]
+        if len(keep) == len(columns):
+            result.append(fetch)
+            continue
+        head, _, _ = fetch.sql.rpartition(" SELECT * FROM ")
+        items = ", ".join('"' + c.replace('"', '""') + '"' for c in keep)
+        result.append(replace(fetch, sql=f'{head} SELECT {items} FROM "{fetch.name}"'))
+    return result
 
 
 def underlying_query(query: WorksheetSql, limit: int | None = None) -> WorksheetSql:
@@ -608,9 +718,13 @@ class Rewriter:
         if handler is not None:
             return handler(node)
         name = _anon_name(node)
+        if name == udf.GEO_WKT:
+            assert isinstance(node, exp.Anonymous)
+            return self.wkt(node.expressions[0])
         if name in udf.SPATIAL_FUNCTIONS:
+            # 空間函式改在 DuckDB 計算（見 localize_spatial）；還在下推的部分時（例如資料表的空間 join）不支援
             raise DialectError(
-                f"空間資料（MAKEPOINT 等空間函式、空間檔案的形狀）在 Live 連線的 {self.name} 尚未支援"
+                f"空間函式在 Live 連線的 {self.name} 只能用在資料表讀出之後（資料表的空間 join 尚未支援）"
             )
         if name in udf.REGEX_FUNCTIONS:
             assert isinstance(node, exp.Anonymous)
@@ -671,6 +785,17 @@ class Rewriter:
 
     def functions(self) -> dict[str, Callable[[list[exp.Expr]], exp.Expr]]:
         return {}
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        """資料庫的空間欄位（geography、geometry）→ WKT 文字（Tableau 2021.2 支援 PostGIS、SQL Server 的
+        geography、Oracle、Snowflake 與 Redshift 的空間欄位）。"""
+        raise DialectError(f"{self.name} 的空間欄位尚未支援")
+
+    def _method(self, value: exp.Expr, method: str) -> exp.Expr:
+        """欄位的方法（例如 SQL Server 的 [t].[geo].STAsText()）：SQLGlot 沒有這種語法節點。"""
+        self.validate(value)
+        text = value.sql(dialect=SQLGLOT_NAMES[self.dialect], identify=True)
+        return _mark(exp.Var(this=f"{text}.{method}()"))
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
         raise NotImplementedError
@@ -750,6 +875,10 @@ class PostgresRewriter(Rewriter):
 
     name = "PostgreSQL"
     dialect = "postgres"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return _fn("ST_AsText", value)  # PostGIS 的 geometry 與 geography；Redshift 的 GEOMETRY
+
     # PostgreSQL 的 ARE：前後查看與反向參照（沒有原子群組與佔有量詞）
     icu_regex = frozenset({"前向查看", "否定前向查看", "後向查看", "否定後向查看", "反向參照"})
     allowed = frozenset(
@@ -1400,6 +1529,10 @@ class OracleRewriter(Rewriter):
 
     name = "Oracle"
     dialect = "oracle"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return _fn("SDO_UTIL.TO_WKTGEOMETRY", value)  # SDO_GEOMETRY → CLOB
+
     allowed = frozenset({exp.Median, exp.Mod, exp.IntDiv})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -1881,6 +2014,10 @@ class MySQLRewriter(Rewriter):
 
     name = "MySQL"
     dialect = "mysql"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return _fn("ST_AsText", value)
+
     icu_regex = ICU_ALL  # MySQL 8 以 ICU 執行
     allowed = frozenset(
         {
@@ -2210,6 +2347,10 @@ class SnowflakeRewriter(Rewriter):
 
     name = "Snowflake"
     dialect = "snowflake"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return _fn("ST_ASWKT", value)  # GEOGRAPHY、GEOMETRY
+
     allowed = frozenset(
         {
             exp.Year,
@@ -2743,6 +2884,10 @@ class BigQueryRewriter(Rewriter):
 
     name = "BigQuery"
     dialect = "bigquery"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return _fn("ST_ASTEXT", value)  # GEOGRAPHY
+
     allowed = frozenset(
         {
             exp.Year,
@@ -3595,6 +3740,10 @@ class TeradataRewriter(OracleRewriter):
 
     name = "Teradata"
     dialect = "teradata"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return self._method(value, "ST_AsText")  # ST_Geometry
+
     allowed = frozenset({exp.Median, exp.Mod, exp.IntDiv})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -4231,6 +4380,10 @@ class Db2Rewriter(OracleRewriter):
 
     name = "Db2"
     dialect = "db2"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return _fn("DB2GSE.ST_AsText", value)
+
     allowed = frozenset({exp.Median, exp.Mod, exp.NullSafeEQ, exp.Repeat})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -4654,6 +4807,10 @@ class HanaRewriter(Rewriter):
 
     name = "SAP HANA"
     dialect = "hana"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return self._method(value, "ST_AsWKT")  # ST_GEOMETRY
+
     allowed = frozenset({exp.Median, exp.Year, exp.Month, exp.Boolean})
 
     def add_interval(self, value: exp.Expr, unit: str, amount: exp.Expr) -> exp.Expr:
@@ -5155,6 +5312,10 @@ class TSqlRewriter(Rewriter):
 
     name = "SQL Server"
     dialect = "tsql"
+
+    def wkt(self, value: exp.Expr) -> exp.Expr:
+        return self._method(value, "STAsText")  # geography、geometry
+
     allowed = frozenset(
         {
             exp.Year,

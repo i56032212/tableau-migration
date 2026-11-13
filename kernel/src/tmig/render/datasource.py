@@ -19,6 +19,7 @@ from tmig.ir.models import (
     ExtractConnection,
     FieldUse,
     FileConnection,
+    FileTable,
     Filter,
     JoinRelation,
     JoinTerm,
@@ -36,6 +37,8 @@ from tmig.ir.models import (
     TopNFilter,
     TupleFilter,
     UnionRelation,
+    local_tables,
+    source_connections,
 )
 
 DATABASES = {
@@ -118,7 +121,9 @@ def datasource_summary(ds: Datasource, parameters: Sequence[Parameter] = ()) -> 
     if isinstance(ds.connection, FileConnection):
         # 檔案型資料源：資料表顯示檔案與工作表（而不是匯入後的 Files.<name>）
         files = {
-            t.name: f"{PurePosixPath(t.path).name}：{t.sheet or t.layer}"
+            t.name: _remote_source(t)
+            if t.format == "live"
+            else f"{PurePosixPath(t.path).name}：{t.sheet or t.layer}"
             if t.sheet or (t.layer and t.format == "spatial" and t.path.lower().endswith(".zip"))
             else PurePosixPath(t.path).name
             for t in ds.connection.tables
@@ -299,20 +304,37 @@ def _term(term: JoinTerm) -> str:
     return _value(term.literal)
 
 
+def _remote_source(table: FileTable) -> str:
+    """跨資料庫的 join 中資料庫的資料表：資料庫與資料表（或自訂 SQL）。"""
+    connection = table.connection
+    where = (connection.database or connection.server or connection.dbclass) if connection else ""
+    what = "自訂 SQL" if table.sql is not None else ".".join(table.table or [table.name])
+    return f"{where}：{what}" if where else what
+
+
 def _connection(connection: ExtractConnection | LiveConnection | FileConnection) -> dict[str, Any]:
     if isinstance(connection, FileConnection):
-        formats = {t.format for t in connection.tables}
+        local = local_tables(connection)
+        formats = {t.format for t in local}
         kinds = {
             "excel": DATABASES["excel-direct"],
             "text": DATABASES["textscan"],
             "hyper": DATABASES["hyper"],
             "spatial": DATABASES["ogrdirect"],
         }
-        return {
+        remote = source_connections(connection)
+        types = [kinds[f] for f in sorted(formats)]
+        types += [DATABASES.get(c.dbclass, c.dbclass) for c in remote]
+        found: dict[str, Any] = {
             "kind": "file",
-            "type": "、".join(kinds[f] for f in sorted(formats)),
-            "files": list(dict.fromkeys(t.path for t in connection.tables)),
+            "type": "、".join(dict.fromkeys(types)),
+            "files": list(dict.fromkeys(t.path for t in local)),
         }
+        if remote:
+            # 跨資料庫的 join：各資料庫的連線（查詢時取回資料、在本機合併）
+            found["federated"] = True
+            found["connections"] = [_live(c) for c in remote]
+        return found
     if isinstance(connection, ExtractConnection):
         refresh = connection.refresh
         return {

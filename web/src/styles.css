@@ -564,6 +564,10 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .dse-folder { display: flex; gap: 4px; }
 .dse-folder input { flex: 1; min-width: 0; font: inherit; padding: 3px 6px; }
 .dse-folder button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; font: inherit; }
+.dse-add-connection { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; font-size: 13px; }
+.dse-add-connection button.dse-other, .dse-server button.dse-other { font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
+.dse-source { font-size: 12px; margin-left: 4px; }
+.ds-federated { margin-top: 6px; }
 @media (max-width: 760px) {
   .dse-body { grid-template-columns: 1fr; }
 }

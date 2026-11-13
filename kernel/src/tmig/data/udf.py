@@ -47,6 +47,9 @@ GEO_BUFFER = "tmig_geo_buffer"
 GEO_AREA = "tmig_geo_area"
 GEO_INTERSECTS = "tmig_geo_intersects"
 GEO_BOUNDS = "tmig_geo_bounds"
+GEO_WKT = "tmig_geo_wkt"
+"""資料庫的空間欄位 → WKT 文字：Live 連線轉譯成該資料庫的函式（PostGIS 的 ST_AsText 等）；DuckDB 中原樣
+（已是 WKT 文字）。不是空間函式（不影響下推）。"""
 SPATIAL_FUNCTIONS = (
     GEO_COLLECT,
     GEO_POINT,
@@ -58,7 +61,7 @@ SPATIAL_FUNCTIONS = (
     GEO_INTERSECTS,
     GEO_BOUNDS,
 )
-FUNCTIONS = REGEX_FUNCTIONS + SPATIAL_FUNCTIONS
+FUNCTIONS = (*REGEX_FUNCTIONS, *SPATIAL_FUNCTIONS, GEO_WKT)
 
 
 @lru_cache(maxsize=256)
@@ -166,6 +169,10 @@ def _intersects_arrow(left: Any, right: Any) -> Any:
     return pa.array(result, type=pa.bool_(), mask=null)
 
 
+def _same_text(value: str | None) -> str | None:
+    return value
+
+
 def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
     """在連線上加入正規表示式與空間函式（Null 的參數得 Null）。"""
     from tmig.geo import spatial
@@ -194,6 +201,7 @@ def register(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
     ]
     for name, func, parameters, result in spatial_functions:
         con.create_function(name, _safe(func), parameters, result, null_handling=HANDLES_NULLS)
+    con.create_function(GEO_WKT, _same_text, ["VARCHAR"], "VARCHAR", null_handling=HANDLES_NULLS)
     con.create_function(
         GEO_INTERSECTS,
         _intersects_arrow,

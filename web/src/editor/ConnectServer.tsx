@@ -150,6 +150,95 @@ export function ConnectServerDialog({ workbook, onClose, go }: { workbook: strin
   );
 }
 
+/** 資料源分頁的「加入連線＞資料庫」：選擇（或建立、登入）一個資料庫的連線，之後在資料源中加入它的資料表
+ * （跨資料庫的 join）。 */
+export function PickConnectionDialog({
+  onClose,
+  onPick,
+}: {
+  onClose: () => void;
+  onPick: (connection: ConnectionEntry) => void;
+}) {
+  const [connectors, setConnectors] = useState<Connector[] | null>(null);
+  const [connections, setConnections] = useState<ConnectionEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const reload = () =>
+    connectionsApi
+      .list()
+      .then(setConnections)
+      .catch((e: Error) => setError(e.message));
+  useEffect(() => {
+    connectionsApi
+      .connectors()
+      .then(setConnectors)
+      .catch((e: Error) => setError(e.message));
+    void reload();
+  }, []);
+  const run = async (task: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await task();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const pick = (connection: ConnectionEntry) => {
+    onPick(connection);
+    onClose();
+  };
+  return (
+    <Modal title="加入連線：資料庫" onClose={onClose} wide>
+      <div className="connect-server" data-busy={busy ? "true" : "false"}>
+        {error && <p className="error">{error}</p>}
+        <p className="hint">不同連線的資料表在本機合併（跨資料庫的 join），與 Tableau 相同；資料庫的資料在查詢時取回。</p>
+        {connections.length > 0 && (
+          <section className="cs-saved" aria-label="已建立的連線">
+            <h3>已建立的連線</h3>
+            <ul>
+              {connections.map((c) => (
+                <SavedConnection
+                  key={c.id}
+                  connection={c}
+                  busy={busy}
+                  onUse={() => pick(c)}
+                  onSignIn={(password, remember) =>
+                    void run(async () => {
+                      const { connection } = await connectionsApi.signIn(c.id, password, remember);
+                      pick(connection);
+                    })
+                  }
+                  onRemove={() =>
+                    void run(async () => {
+                      if (!window.confirm(`刪除連線「${describeConnection(c)}」？（記住的密碼一併刪除；已建立的報表不受影響）`)) return;
+                      await connectionsApi.remove(c.id);
+                      await reload();
+                    })
+                  }
+                />
+              ))}
+            </ul>
+          </section>
+        )}
+        {connectors && (
+          <NewConnection
+            connectors={connectors}
+            busy={busy}
+            onConnect={(body) =>
+              void run(async () => {
+                const { connection } = await connectionsApi.connect(body);
+                pick(connection);
+              })
+            }
+          />
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function SavedConnection({
   connection,
   busy,

@@ -34,6 +34,7 @@ from tmig.ir.models import (
     TableRelation,
     UnionRelation,
     Worksheet,
+    is_federated,
 )
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, use_key
@@ -105,6 +106,11 @@ def blend_sql(
             )
         connection = secondary.connection
         alias = f"__blend{n}"
+        if is_federated(connection):
+            raise QueryError(
+                f"Data Blending：次要資料源「{secondary.caption}」是跨資料庫的 join，尚不支援",
+                unsupported=True,
+            )
         if isinstance(connection, ExtractConnection) and connection.model is None:
             moved = connection.model_copy(update={"table": f"{alias}.{connection.table}"})
         elif isinstance(connection, FileConnection) and not isinstance(

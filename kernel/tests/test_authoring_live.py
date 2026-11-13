@@ -27,7 +27,15 @@ from tmig.data.catalog import (
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import ConnectionConfig, DuckDBExecutor
 from tmig.edit import EditError, replace_worksheet
-from tmig.ir import IR, LiveConnection, ModelRelation, SqlRelation, UnionRelation
+from tmig.ir import (
+    IR,
+    FileConnection,
+    LiveConnection,
+    ModelRelation,
+    SqlRelation,
+    UnionRelation,
+    is_federated,
+)
 from tmig.ir.integrity import check_references
 from tmig.sqlgen.query import worksheet_sql
 
@@ -183,12 +191,19 @@ def test_tables_relationships_and_joins(database: Path, runtime: Any) -> None:
     )
     f = ids(ir)
     assert query(ir, runtime, f["returned"], f["sales"]) == {"Yes": 175.5, None: 250.25}
-    with pytest.raises(EditError, match="不能加入檔案"):
-        from tmig.authoring import add_table, inspect_file
+    # 加上檔案：改成跨資料庫的 join（見 tests/test_authoring_federated.py）
+    from tmig.authoring import add_table, inspect_file
 
-        csv = database.parent / "x.csv"
-        csv.write_text("a\n1\n", encoding="utf-8")
+    csv = database.parent / "x.csv"
+    csv.write_text("region,goal\nEast,1\n", encoding="utf-8")
+    with pytest.raises(EditError, match="要指定關聯或 join 的條件"):
         add_table(ir, ds.id, inspect_file(csv), None, "Data/x.csv")
+    joined = add_table(
+        ir, ds.id, inspect_file(csv), None, "Data/x.csv", on=[(f["region"], "=", "region")]
+    )
+    connection = joined.datasources[0].connection
+    assert isinstance(connection, FileConnection) and is_federated(connection)
+    assert [t.format for t in connection.tables] == ["live", "live", "live", "text"]
 
 
 def test_union_pivot_and_custom_sql(database: Path, runtime: Any) -> None:

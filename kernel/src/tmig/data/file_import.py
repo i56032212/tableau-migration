@@ -51,6 +51,7 @@ from tmig.ir.models import (
     ProjectRelation,
     Relation,
     UnionRelation,
+    remote_tables,
 )
 
 ARROW_TYPES = {
@@ -163,6 +164,8 @@ def import_file_tables(
         con.execute(f"CREATE SCHEMA {_quote(FILE_SCHEMA)}")
         hyper = _hyper_exports(archive, connection, Path(work))
         for table in connection.tables:
+            if table.format == "live":
+                continue  # 跨資料庫的 join：資料庫的資料表在查詢時取回（tmig.data.federated）
             if table.format == "hyper":
                 results.append(load_hyper_export(con, hyper[table.name], FILE_SCHEMA, table.name))
                 continue
@@ -241,6 +244,8 @@ def file_missing_columns(
 ) -> list[str]:
     """IR 的實體欄位不在所屬資料表的欄位中（樞紐、聯集與合併的欄位依它們產生的欄判斷）。"""
     by_name = {t.table: {c.name for c in t.columns} for t in tables}
+    # 跨資料庫的 join：資料庫的資料表依記下的欄（查詢時取回）
+    by_name.update({t.name: {c.name for c in t.columns} for t in remote_tables(connection)})
     top = connection.relation
     available: dict[str, set[str]] = {}
     owner: dict[str, Relation] = {}

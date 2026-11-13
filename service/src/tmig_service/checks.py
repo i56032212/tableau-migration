@@ -16,7 +16,7 @@ from typing import Any, Literal
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, LiveConnection, check_references
+from tmig.ir import IR, check_references, source_connections
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, StateError
 from tmig.sqlgen.query import QueryError, worksheet_sql
@@ -47,8 +47,10 @@ def check_report(
     configs = runtime.configs
     unavailable: set[str] = set()
     for ds in ir.datasources:
-        connection = ds.connection
-        if isinstance(connection, LiveConnection) and connection.connection_id not in configs:
+        # Live 連線，或跨資料庫的 join 中的資料庫
+        for connection in source_connections(ds.connection):
+            if connection.connection_id in configs:
+                continue
             unavailable.add(ds.id)
             if where == "server":
                 problems.append(

@@ -255,8 +255,10 @@ def test_invalid_formulas(formula: str, message: str) -> None:
 
 
 def test_live_connections_do_not_translate_spatial() -> None:
+    """空間函式不轉成來源資料庫的 SQL：兩段式執行時改在 DuckDB 計算（見 tests/sqlgen/test_live_spatial.py），
+    還在下推的部分時（例如資料表的空間 join）不支援。"""
     sql = ExprCompiler(Analyzer(Scope()), Env()).row(
         parse_formula("DISTANCE(MAKEPOINT([Lat], [Lon]), MAKEPOINT(1, 2), 'km')")
     )
-    with pytest.raises(DialectError, match="空間資料"):
+    with pytest.raises(DialectError, match="空間函式"):
         to_dialect(f'SELECT {sql} AS v FROM "Extract"."Extract" t', "postgres")

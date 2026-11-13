@@ -2635,7 +2635,7 @@
     },
     "FileTable": {
       "additionalProperties": false,
-      "description": "檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等）、空間檔案（Shapefile、GeoJSON、\nKML、TopoJSON），或 .hyper 檔中的資料表（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；\n只有一張資料表時與萃取相同）。",
+      "description": "檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等）、空間檔案（Shapefile、GeoJSON、\nKML、TopoJSON），或 .hyper 檔中的資料表（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；\n只有一張資料表時與萃取相同）。\n\n跨資料庫的 join（Tableau 的 cross-database join，資料源有多個連線）：資料庫的資料表或自訂 SQL 也是\n一張 FileTable（format 為 live，connection 為它的連線，table 為限定名稱或 sql 為自訂 SQL），查詢時從\n資料庫取回、與檔案的資料表在本機合併（tmig.data.federated）。",
       "properties": {
         "name": {
           "description": "關聯樹中的資料表名稱（relation 的 name）",
@@ -2648,16 +2648,42 @@
             "excel",
             "text",
             "hyper",
-            "spatial"
+            "spatial",
+            "live"
           ],
           "title": "Format",
           "type": "string"
         },
         "path": {
-          "description": ".twbx 內的路徑，一律用 /",
+          "description": ".twbx 內的路徑，一律用 /；資料庫的資料表為 live:<連線代號>",
           "minLength": 1,
           "title": "Path",
           "type": "string"
+        },
+        "connection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LiveConnection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "跨資料庫的 join：資料庫的資料表所在的連線（沒有 relation；憑證依 connection_id）"
+        },
+        "sql": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "跨資料庫的 join：資料庫的自訂 SQL（以該資料庫的方言寫成）",
+          "title": "Sql"
         },
         "layer": {
           "anyOf": [
@@ -2698,7 +2724,7 @@
             }
           ],
           "default": null,
-          "description": ".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]",
+          "description": ".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]；資料庫的資料表的限定名稱",
           "title": "Table"
         },
         "cells": {

@@ -96,6 +96,9 @@ def datasource_source(ds: Datasource) -> Source:
         column = f"{ident(aliases[table])}.{ident(data_field.column)}"
         if data_field.datatype == "datetime" and datetime_columns_vary(connection):
             column = f"CAST({column} AS TIMESTAMP)"
+        if data_field.datatype == "spatial" and isinstance(connection, LiveConnection):
+            # 資料庫的空間欄位（geography、geometry）在來源資料庫轉成 WKT 文字
+            column = f"{udf.GEO_WKT}({column})"
         projections.append(f"{column} AS {ident(data_field.id)}")
     if not projections:
         raise SourceError(f"資料源「{ds.caption}」沒有實體欄位")

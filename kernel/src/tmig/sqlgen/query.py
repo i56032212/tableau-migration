@@ -67,6 +67,7 @@ from tmig.ir.models import (
     TopNFilter,
     TupleFilter,
     Worksheet,
+    remote_tables,
 )
 from tmig.ir.scope import DatasourceScope
 from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
@@ -991,6 +992,7 @@ class WorksheetQuery:
             custom_sql=list(self.source.custom_sql),
             parameters=custom_sql_parameters(self.ir, self.state.parameters)
             if self.source.custom_sql
+            or any(t.sql is not None for t in remote_tables(self.datasource.connection))
             else {},
             guards=self._guard_list(),
             underlying=underlying,

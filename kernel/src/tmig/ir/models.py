@@ -604,18 +604,33 @@ class FileColumn(IRModel):
 class FileTable(IRModel):
     """檔案型資料源中的一張資料表：Excel 的工作表、文字檔（CSV 等）、空間檔案（Shapefile、GeoJSON、
     KML、TopoJSON），或 .hyper 檔中的資料表（直接以 .hyper 為來源、有 join 或多個 .hyper 檔時；
-    只有一張資料表時與萃取相同）。"""
+    只有一張資料表時與萃取相同）。
+
+    跨資料庫的 join（Tableau 的 cross-database join，資料源有多個連線）：資料庫的資料表或自訂 SQL 也是
+    一張 FileTable（format 為 live，connection 為它的連線，table 為限定名稱或 sql 為自訂 SQL），查詢時從
+    資料庫取回、與檔案的資料表在本機合併（tmig.data.federated）。"""
 
     name: str = Field(min_length=1, description="關聯樹中的資料表名稱（relation 的 name）")
-    format: Literal["excel", "text", "hyper", "spatial"]
-    path: str = Field(min_length=1, description=".twbx 內的路徑，一律用 /")
+    format: Literal["excel", "text", "hyper", "spatial", "live"]
+    path: str = Field(
+        min_length=1,
+        description=".twbx 內的路徑，一律用 /；資料庫的資料表為 live:<連線代號>",
+    )
+    connection: LiveConnection | None = Field(
+        default=None,
+        description="跨資料庫的 join：資料庫的資料表所在的連線（沒有 relation；憑證依 connection_id）",
+    )
+    sql: str | None = Field(
+        default=None, description="跨資料庫的 join：資料庫的自訂 SQL（以該資料庫的方言寫成）"
+    )
     layer: str | None = Field(
         default=None,
         description="空間檔案的圖層：壓縮檔中的 Shapefile、TopoJSON 的物件（Tableau 的資料表名稱）",
     )
     sheet: str | None = Field(default=None, description="Excel 的工作表（或具名範圍）")
     table: list[str] | None = Field(
-        default=None, description=".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]"
+        default=None,
+        description=".hyper 檔中的資料表（結構描述、資料表），例如 [public, Art]；資料庫的資料表的限定名稱",
     )
     cells: str | None = Field(
         default=None, description="Excel 的資料範圍，例如 A1:U10195；None 表示整張工作表"
@@ -649,9 +664,48 @@ Connection = Annotated[
 ]
 
 
+LIVE_PATH_PREFIX = "live:"
+"""跨資料庫的 join 中資料庫的資料表在 FileTable.path 的寫法：live:<連線代號>。"""
+
+
+def remote_tables(
+    connection: ExtractConnection | LiveConnection | FileConnection,
+) -> list[FileTable]:
+    """跨資料庫的 join：檔案型資料源中資料庫的資料表與自訂 SQL（查詢時從資料庫取回）。"""
+    if not isinstance(connection, FileConnection):
+        return []
+    return [t for t in connection.tables if t.format == "live"]
+
+
+def local_tables(connection: FileConnection) -> list[FileTable]:
+    """檔案型資料源中的檔案（匯入 DuckDB 的資料表）。"""
+    return [t for t in connection.tables if t.format != "live"]
+
+
+def is_federated(connection: ExtractConnection | LiveConnection | FileConnection) -> bool:
+    """跨資料庫的 join：檔案型資料源中有資料庫的資料表。"""
+    return bool(remote_tables(connection))
+
+
+def source_connections(
+    connection: ExtractConnection | LiveConnection | FileConnection,
+) -> list[LiveConnection]:
+    """查詢時要連的資料庫：Live 連線本身，或跨資料庫的 join 中各資料庫（依連線代號只列一次）。"""
+    if isinstance(connection, LiveConnection):
+        return [connection]
+    found: dict[str, LiveConnection] = {}
+    for table in remote_tables(connection):
+        if table.connection is not None:
+            found.setdefault(table.connection.connection_id, table.connection)
+    return list(found.values())
+
+
 def has_local_data(connection: ExtractConnection | LiveConnection | FileConnection) -> bool:
-    """資料在 .twbx 內（萃取或檔案）：匯入 DuckDB 後在本機查詢。"""
-    return isinstance(connection, ExtractConnection | FileConnection)
+    """資料在 .twbx 內（萃取或檔案）：匯入 DuckDB 後在本機查詢。跨資料庫的 join 只有資料庫的資料表時
+    不需要匯入。"""
+    if isinstance(connection, FileConnection):
+        return bool(local_tables(connection))
+    return isinstance(connection, ExtractConnection)
 
 
 class DatasourceSettings(IRModel):

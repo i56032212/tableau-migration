@@ -5,6 +5,7 @@ from tmig.ir.models import (
     FILE_SCHEMA,
     IR,
     IR_VERSION,
+    LIVE_PATH_PREFIX,
     MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
@@ -115,6 +116,10 @@ from tmig.ir.models import (
     Zone,
     ZoneStyle,
     has_local_data,
+    is_federated,
+    local_tables,
+    remote_tables,
+    source_connections,
 )
 from tmig.ir.serialize import dumps_ir, ir_json_schema, ir_json_schema_text, load_ir, save_ir
 
@@ -122,6 +127,7 @@ __all__ = [
     "FILE_SCHEMA",
     "IR",
     "IR_VERSION",
+    "LIVE_PATH_PREFIX",
     "MEASURE_NAMES",
     "MEASURE_VALUES",
     "SPECIAL_FIELDS",
@@ -236,7 +242,11 @@ __all__ = [
     "has_local_data",
     "ir_json_schema",
     "ir_json_schema_text",
+    "is_federated",
     "iter_zones",
     "load_ir",
+    "local_tables",
+    "remote_tables",
     "save_ir",
+    "source_connections",
 ]
