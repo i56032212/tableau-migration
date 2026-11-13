@@ -1,6 +1,7 @@
 """打包後的本機引擎冒煙測試：啟動、開啟 .twbx（由 Hyper 匯入萃取）、查詢每張工作表、存成報表套件、
 關閉（工作區的複本要刪得掉：Windows 上檔案還開著時刪不掉）、重新開啟報表套件，查詢結果的列數要相同；
-最後確認連到伺服器的程式有打包進去（以作業系統憑證存放區的 HTTPS 用戶端連一個沒有服務的埠）。
+確認連到伺服器的程式有打包進去（以作業系統憑證存放區的 HTTPS 用戶端連一個沒有服務的埠）；最後以 MapInfo 的
+.mif（TWD67 二度分帶）建立報表，確認 GDAL（pyogrio）與基準面轉換的 PROJ（pyproj）的資料檔有打包進去。
 
     python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine fixtures/superstore_demo/superstore_demo.twbx
 
@@ -117,6 +118,29 @@ def main(engine: str, workbook: str) -> int:
             )
             assert status == 502 and "連不上伺服器" in str(detail), (status, detail)
             print("連到伺服器的程式：已打包（連不上時回應 502）")
+
+            # MapInfo（GDAL）與 TWD67 → WGS84（PROJ）：台北的點約在 121.5532°E、25.0352°N
+            mif = work / "towns67.mif"
+            mif.write_text(
+                'Version 300\nCharset "Neutral"\nDelimiter ","\n'
+                'CoordSys Earth Projection 8, 999, 2, -752, -358, -179, "m", 121, 0, 0.9999, 250000, 0\n'
+                "Columns 1\n  town Char(10)\nData\n\nPoint 305000 2770000\n",
+                encoding="utf-8",
+            )
+            mif.with_suffix(".mid").write_text('"Taipei"\n', encoding="utf-8")
+            created = call(
+                port, token, "POST", "/api/desktop/new", {"path": str(mif), "table": None}
+            )
+            preview = call(
+                port,
+                token,
+                "GET",
+                f"/api/workbooks/{created['document']['id']}/datasources/{created['datasource']}/preview",
+            )
+            cells = [str(c) for row in preview["rows"] for c in row]
+            point = next((c for c in cells if c.startswith("POINT(121.553")), None)
+            assert point is not None, cells
+            print(f"MapInfo 與基準面轉換：{point}")
         finally:
             process.stdin.close()
             try:

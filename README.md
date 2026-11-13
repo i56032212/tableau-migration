@@ -738,7 +738,8 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
 `tmig_service.datasource_editor`、檢視器的 `web/src/editor/DatasourceEditor.tsx`）：
 
 - **新增報表**（檔案選單的「新增報表（連線到資料）」Ctrl+N、首頁的「新增報表（連線到資料）…」）：選 Excel
-  （.xlsx、.xlsm、.xls）、文字檔（.csv、.tsv、.txt、.tab）或空間檔案（Shapefile、GeoJSON、KML、TopoJSON），
+  （.xlsx、.xlsm、.xls）、文字檔（.csv、.tsv、.txt、.tab）或空間檔案（Shapefile、GeoJSON、KML、TopoJSON、
+  Esri File Geodatabase 的 .gdb.zip 或 .gdb 資料夾、MapInfo 的 .tab 或 .mif；第一行是 `!table` 的 .tab 是 MapInfo），
   檔案中有多張工作表或圖層時選一張；建立一個資料源與空白的「工作表 1」，開啟資料源的編輯畫面（網址
   `/w/<報表>/edit-ds/<資料源>`）。已開啟的報表以工具列的「新增資料源…」加入另一個資料源，「編輯資料源」
   （或資料窗格的「編輯資料源…」）開啟目前資料源的編輯畫面
@@ -864,13 +865,23 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   以標記的位置計算；參考區間、分布與盒鬚圖尚未畫出
 - **空間資料**（Tableau 的空間檔案與空間函式）：
   - 空間檔案（`ogrdirect` 連線，沒有萃取時匯入資料庫）：Esri Shapefile（.shp 與 .dbf、.prj、.cpg，或壓縮成
-    .zip）、GeoJSON、KML／KMZ 與 TopoJSON。投影座標依 .prj 換成經緯度（橫麥卡托如 TWD97 二度分帶與 UTM、
-    麥卡托與 Web Mercator、Lambert 正形圓錐如美國州平面座標、Albers 等積圓錐、Lambert 方位等積，公式依
-    EPSG Guidance Note 7-2，以其中的範例驗算）；多邊形的各環依包含關係分成外環與內環；屬性的文字依 .cpg
-    （例如 Big5 的 950）解碼。萃取中的形狀（GEOGRAPHY）以 WKT 匯入
+    .zip）、GeoJSON、KML／KMZ、TopoJSON、**Esri File Geodatabase**（.gdb 資料夾或壓縮的 .gdb.zip，資料表是
+    feature class）與 **MapInfo**（.tab 與 .dat、.map、.id，或 .mif 與 .mid）；File Geodatabase、MapInfo 以 GDAL
+    （pyogrio，與 Tableau 相同是 OGR：連線記有 `ogr-grid-shift-folder`）讀取，形狀的 Z、M 值略過、只有一個部分的
+    MULTI* 寫成單一的形狀（與 Shapefile 相同），File Geodatabase 的日期欄位是日期時間。投影座標依 .prj（或檔案記下的
+    座標系統）換成經緯度（橫麥卡托如 TWD97 二度分帶與 UTM、麥卡托與 Web Mercator、Lambert 正形圓錐如美國州平面座標、
+    Albers 等積圓錐、Lambert 方位等積，公式依 EPSG Guidance Note 7-2，以其中的範例驗算；其他投影如荷蘭的斜軸立體、
+    瑞士的斜軸麥卡托以 PROJ 計算）；多邊形的各環依包含關係分成外環與內環；屬性的文字依 .cpg（例如 Big5 的 950）
+    解碼。萃取中的形狀（GEOGRAPHY）以 WKT 匯入
+  - **座標基準面之間的轉換**：與 Tableau 相同「不論座標系統，一律轉換成 WGS84（EPSG:4326）」。WGS84 與 GRS80 橢球的
+    基準面（TWD97、NAD83、ETRS89、GDA94、JGD2000 等，與 WGS84 相差約 1 公尺）直接以上面的公式換成經緯度；其他橢球的
+    基準面（TWD67、OSGB 1936、Tokyo、NAD27、ED50 等）以 PROJ（pyproj）依 EPSG 資料庫的轉換參數計算（沒有下載的格網檔
+    時以七參數等，與 GDAL 預設相同；OS 的範例點相差在 2 公尺之內）。EPSG 資料庫沒有 TWD67 到 WGS84 的參數，以臺灣
+    常用的七參數補上（台北的 TWD67 與 TWD97 約相差 X + 828、Y − 207 公尺，與常用的換算相符）；MAKEPOINT(X, Y, SRID)
+    同樣轉換
   - 形狀與 Hyper 讀入時相同處理（經緯度上的直線邊切分、外環逆時針），以 Hyper 實測逐字相同
-  - 空間函式：MAKEPOINT(緯度, 經度)、MAKEPOINT(X, Y, SRID)（TWD97、UTM、Web Mercator、日本與韓國的平面座標等
-    常用的 EPSG 代碼）、MAKELINE、DISTANCE（WGS84 橢球的大地線，GeographicLib）、BUFFER（點的 120 邊形，與 Hyper
+  - 空間函式：MAKEPOINT(緯度, 經度)、MAKEPOINT(X, Y, SRID)（EPSG 代碼：TWD97、UTM、Web Mercator、日本與韓國的
+    平面座標等以公式計算，其他代碼以 PROJ 計算）、MAKELINE、DISTANCE（WGS84 橢球的大地線，GeographicLib）、BUFFER（點的 120 邊形，與 Hyper
     相同）、AREA（大地線多邊形的面積）與彙總 COLLECT（同種形狀合成 MULTI*，不同種合成 GEOMETRYCOLLECTION）。
     與 Hyper 的 `tableau.geo_*` 函式逐一比對：DISTANCE、AREA 的相對差距在 1e-6 以內（Hyper 內部的座標精度約
     6e-8 度），MAKEPOINT、MAKELINE、COLLECT 的文字相同，BUFFER 的頂點相差在 3e-7 度以內
@@ -888,6 +899,12 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   標籤重疊的不顯示
 - **縮放**：與 Tableau 相同自動縮放到所有標記的範圍（只算主要的陸塊，例如法國不含海外省）；平移、縮放後存檔的
   地圖畫出存檔的範圍，跨越 180 度經線的範圍（例如俄羅斯、阿拉斯加的島嶼）以該處為中心
+- **平移與縮放**（`web/src/mapZoom.ts`）：與 Tableau 相同，滾輪以游標為中心縮放、拖曳平移、連按兩下放大（Shift 連按
+  兩下縮小），左上角的地圖工具列有放大、縮小與「重設地圖」（回到依標記自動縮放）。投影的自動縮放（Vega 的 fit）換成
+  同樣的縮放與位移（與 d3 的 fitSize 相同的計算，誤差在 1e-12 像素），再乘上平移與縮放，操作時立即重畫；停止操作後以
+  畫面中的經緯度範圍重新繪製（查詢狀態的 `viewport`，底圖的細節、州界與地名依新的縮放層級）。拖曳後放開滑鼠不當成
+  點選標記。檢視器中只在這個檢視（篩選改變後維持目前的範圍）；編輯器與 Tableau Desktop 相同存進工作表
+  （`map.viewport`，可以復原）。分格的地圖尚不能平移、縮放
 - **檢視器與匯出**：形狀與底圖以 TopoJSON 從 `/api/geo/<版本>/` 取得（不需登入、瀏覽器長期快取），畫面之外的
   形狀裁掉；匯出與訂閱的截圖等形狀下載、畫好才截取
 - **編輯器**：資料窗格以地球圖示標出地理角色的欄位，「🌐」指定地理角色與編輯位置（預設國家、州與指定的地名）；
@@ -1059,12 +1076,12 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
 - **地圖**：底圖由平台內建的公開地理資料畫出（陸地、水域、國界、州界與地名），沒有 Tableau 底圖的街道、地形、
   衛星影像與美國人口普查的資料圖層，「街道」「戶外」「衛星」樣式以相近的配色呈現；郵遞區號沒有區域形狀（平台的
   資料只有中心點），填色地圖以中心點的圓點呈現；美國以外沒有郡的資料。同名而範圍不足以區分的地名（例如沒有州的
-  Springfield）列為未知，與 Tableau 的「不明確」相同。地圖的平移、縮放（地圖工具列）、Tableau 的選取工具與
+  Springfield）列為未知，與 Tableau 的「不明確」相同。Tableau 地圖工具列的選取工具（矩形、套索、半徑）與
   自訂的 WMS、Mapbox 背景地圖尚不支援（以內建的底圖呈現）；密度圖依色彩分組、地圖上的趨勢線與參考區間尚未畫出。
-  標籤重疊的判斷依工作表在 dashboard 上的大小估計。空間資料：基準面之間的轉換（例如 TWD67、OSGB 1936 到 WGS84）
-  尚未計算（TWD97、NAD83 等與 WGS84 的差距在 1 公尺左右）；BUFFER 只支援點（Tableau 2021.2 的範圍）；
-  Esri File Geodatabase、MapInfo 尚不支援；資料庫的空間欄位（PostGIS、SQL Server 等）只有轉譯快照、尚未實機驗證；MAKEPOINT 的 SRID
-  只支援常用的代碼。空間 join 的 Intersects 以經緯度平面判斷，跨越 180 度經線的形狀可能不同
+  標籤重疊的判斷依工作表在 dashboard 上的大小估計。空間資料：基準面之間的轉換沒有下載格網檔（例如英國的 OSTN15），
+  以七參數等計算，精度約數公尺（Tableau 的設定未公開）；BUFFER 只支援點（Tableau 2021.2 的範圍）；File Geodatabase
+  的曲線（圓弧等）尚未支援；資料庫的空間欄位（PostGIS、SQL Server 等）只有轉譯快照、尚未實機驗證。空間 join 的
+  Intersects 以經緯度平面判斷，跨越 180 度經線的形狀可能不同
 - **TOTAL()**：以量值篩選後仍在檢視中的標記所對應的底層資料重新彙總
 - **週起始日**：.twb 沒寫時視為星期日
 - **預期 CSV 的格式**：Tableau 匯出的欄名與數值格式依版本與語系而異；欄名用 mapping.yaml 對照，
@@ -1263,7 +1280,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   伺服器上的連線以資料源名稱對應報表中的資料源，對不到時以連線類型對應
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
-合併集合（XML 的寫法尚未在公開報表中看到）、Esri File Geodatabase 與 MapInfo、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
+合併集合（XML 的寫法尚未在公開報表中看到）、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
 Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
 Data Blending 的次要資料源的維度、篩選與 Table Calculation（以及 Live 連線、Relationship 模型的次要資料源、與總計一起使用）、

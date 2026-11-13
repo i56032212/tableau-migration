@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
+import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
 import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
@@ -37,7 +38,15 @@ interface Props {
   onDrill?: (key: string, delta: number) => void;
   /** 工具提示中的工作表（Viz in Tooltip）的查詢狀態；沒有傳入時工具提示只有文字（工具提示中的工作表本身也不再巢狀） */
   tooltipState?: (target: string, mark: Mark) => QueryState;
+  /**
+   * 地圖平移、縮放之後的顯示範圍（null 為重設地圖、依標記自動縮放）：傳入時由呼叫端處理（編輯器存進工作表）；
+   * 沒有傳入時只在這個檢視中（以新的範圍重新繪製）
+   */
+  onViewport?: (viewport: Viewport | null) => void;
 }
+
+/** 停止平移、縮放之後多久以新的範圍重新繪製（毫秒） */
+const VIEWPORT_DELAY = 600;
 
 /** 滑過標記時的工具提示：位置（視窗座標）、Vega 算好的欄位與值、標記的維度值。 */
 interface Tip {
@@ -418,8 +427,15 @@ export function WorksheetView({
   revision = 0,
   onDrill,
   tooltipState,
+  onViewport,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const onViewportRef = useRef(onViewport);
+  onViewportRef.current = onViewport;
+  // 地圖的平移、縮放：檢視器中只在這個檢視（重新繪製時帶著顯示範圍）；編輯器由呼叫端存進工作表
+  const [viewport, setViewport] = useState<Viewport | null>(null);
+  const [zoomable, setZoomable] = useState(false);
+  const viewRef = useRef<Result | null>(null);
   // 事件處理以 ref 取最新的回呼，圖表不必因父元件重繪而重建
   const onMarksRef = useRef(onMarks);
   onMarksRef.current = onMarks;
@@ -445,7 +461,7 @@ export function WorksheetView({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showTable, setShowTable] = useState(false);
-  const stateKey = JSON.stringify(state);
+  const stateKey = JSON.stringify(viewport && !onViewport ? { ...state, viewport } : state);
   const tooltipSheets = tooltipState ? (response?.tooltip_sheets ?? []) : [];
   const vizTooltips = tooltipSheets.length > 0;
 
@@ -524,7 +540,16 @@ export function WorksheetView({
     };
     // 畫好之前（例如地圖的形狀還在下載）標記為未完成：匯出、訂閱的截圖等它完成
     element.dataset.drawn = "false";
-    embed(element, spec as any, { actions: false, renderer: "svg", ...(vizTooltips ? { tooltip } : {}) })
+    // 地圖：投影改成可以平移、縮放（mapZoom）
+    let zoomed = false;
+    const patch = (vg: any) => {
+      zoomed = zoomableMap(vg);
+      return vg;
+    };
+    let viewTimer: number | undefined;
+    /** 平移、縮放過（放開滑鼠時不當成點選標記） */
+    let moved = false;
+    embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips ? { tooltip } : {}) })
       .then(async (result) => {
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
@@ -534,6 +559,26 @@ export function WorksheetView({
           return;
         }
         view = result;
+        viewRef.current = result;
+        setZoomable(zoomed);
+        element.dataset.zoomable = zoomed ? "true" : "false";
+        if (zoomed) {
+          result.view.addEventListener("mousedown", () => {
+            moved = false;
+          });
+          result.view.addSignalListener(VIEW_SIGNAL, (_name: string, value: ZoomState) => {
+            moved = true;
+            window.clearTimeout(viewTimer);
+            if (value.z === 1 && value.x === 0 && value.y === 0) return;
+            // 停止操作後以畫面中的範圍重新繪製（底圖的細節、地名依新的縮放層級）
+            viewTimer = window.setTimeout(() => {
+              if (disposed) return;
+              const box = visibleBox(fitOf(result.view), value);
+              if (onViewportRef.current) onViewportRef.current(box);
+              else setViewport(box);
+            }, VIEWPORT_DELAY);
+          });
+        }
         // 捲動時與 Tableau 相同，欄標題、座標軸與列標題固定在區塊邊緣
         freezeHeaders(element, result, scroll, (original.usermeta?.background as string | undefined) ?? undefined);
         if (!interactive) return;
@@ -559,6 +604,11 @@ export function WorksheetView({
           });
         };
         result.view.addEventListener("click", (event: any, item: any) => {
+          if (moved) {
+            // 拖曳平移之後放開滑鼠：不是點選
+            moved = false;
+            return;
+          }
           const mark = markAt(item);
           if (mark !== undefined) emit("click", event, mark, item);
         });
@@ -580,10 +630,27 @@ export function WorksheetView({
     return () => {
       disposed = true;
       window.clearTimeout(leaveTimer);
+      window.clearTimeout(viewTimer);
       view?.finalize();
+      viewRef.current = null;
       setTip(null);
     };
   }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips]);
+
+  /** 地圖工具列：以畫面中央放大、縮小，或重設地圖（依標記的位置自動縮放）。 */
+  const zoomBy = (factor: number) => {
+    const current = viewRef.current?.view;
+    if (!current) return;
+    const value = current.signal(VIEW_SIGNAL) as ZoomState;
+    const next = zoomAt(value, factor, Number(current.signal("width")) / 2, Number(current.signal("height")) / 2);
+    void current.signal(VIEW_SIGNAL, next).runAsync();
+  };
+  const resetMap = () => {
+    const current = viewRef.current?.view;
+    if (current) void current.signal(VIEW_SIGNAL, { z: 1, x: 0, y: 0 }).runAsync();
+    if (onViewportRef.current) onViewportRef.current(null);
+    else setViewport(null);
+  };
 
   const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;
@@ -689,6 +756,19 @@ export function WorksheetView({
           </div>
         )}
         {!error && !response?.unsupported && !showTable && <div className="chart" ref={chartRef} />}
+        {zoomable && !showTable && !error && (
+          <div className="map-tools" role="toolbar" aria-label="地圖工具列">
+            <button type="button" title="放大（滾輪、連按兩下）" aria-label="放大" onClick={() => zoomBy(2)}>
+              +
+            </button>
+            <button type="button" title="縮小（滾輪、Shift 連按兩下）" aria-label="縮小" onClick={() => zoomBy(0.5)}>
+              −
+            </button>
+            <button type="button" title="重設地圖（依標記的位置自動縮放）" aria-label="重設地圖" onClick={resetMap}>
+              ⌂
+            </button>
+          </div>
+        )}
         {loading && !response && <div className="placeholder">載入中…</div>}
       </div>
       {tip && vizTooltips && (

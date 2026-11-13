@@ -255,6 +255,7 @@ def test_cases(client: TestClient) -> None:
         "pages": {},
         "drill": {},
         "tooltip": None,
+        "viewport": None,
     }
 
 

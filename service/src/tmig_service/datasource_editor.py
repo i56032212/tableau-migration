@@ -206,10 +206,11 @@ class RemoteColumnsBody(BaseModel):
 
 
 def local_file(raw: str) -> Path:
+    """作者電腦上的檔案（Esri File Geodatabase 可以是 .gdb 資料夾）。"""
     path = Path(raw).expanduser()
     if not path.is_absolute():
         raise HTTPException(422, f"檔案必須是完整路徑：{raw}")
-    if not path.is_file():
+    if not path.is_file() and not (path.suffix.lower() == ".gdb" and path.is_dir()):
         raise HTTPException(404, f"找不到檔案：{path}")
     return path
 
@@ -247,6 +248,14 @@ def copy_source(directory: Path, source: InspectedFile) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     name = source.path.name
     stem, suffix = source.path.stem, source.path.suffix
+    if source.path.is_dir():
+        # File Geodatabase 的資料夾：整個資料夾複製（同名時加上序號）
+        n = 1
+        while (folder / name).exists():
+            n += 1
+            name = f"{stem} ({n}){suffix}"
+        shutil.copytree(source.path, folder / name)
+        return f"{DATA_DIR}/{name}"
     n = 1
     while (folder / name).exists() and (folder / name).read_bytes() != source.path.read_bytes():
         n += 1
@@ -262,7 +271,8 @@ def packaged_source(directory: Path, path: str, interpreter: bool = False) -> In
     """報表中已有的檔案（sources/Data/…）；interpreter 時 Excel 依資料解譯器找標題列。"""
     root = (directory / SOURCES).resolve()
     found = (root / path).resolve()
-    if not found.is_relative_to(root) or not found.is_file():
+    gdb = found.suffix.lower() == ".gdb" and found.is_dir()
+    if not found.is_relative_to(root) or not (found.is_file() or gdb):
         raise HTTPException(
             404, f"報表中沒有檔案 {path}（以前存的報表套件沒有存入檔案時，請重新選擇檔案）"
         )
@@ -298,7 +308,7 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
                 "interpreted": path in interpreted,
             }
             local = root / path
-            if local.is_file():
+            if local.is_file() or (local.suffix.lower() == ".gdb" and local.is_dir()):
                 try:
                     found = inspect_file(local, path in interpreted)
                     entry.update(

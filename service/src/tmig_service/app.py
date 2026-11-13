@@ -57,7 +57,7 @@ from tmig.package import read_report_file
 from tmig.planner.drill import apply_drill, drill_info
 from tmig.planner.dynamic import dynamic_fields, resolve_parameters
 from tmig.planner.identity import Identity, protected_fields
-from tmig.planner.state import QueryState, StateError, parse_key
+from tmig.planner.state import QueryState, StateError, parse_key, with_viewport
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.datasource import datasource_summary
 from tmig.render.format import fiscal_label
@@ -825,6 +825,8 @@ def create_app(
         drill = drill_info(ir, target, state.drill) if target is not None else []
         tooltip_sheets = viz_tooltips(ir, target, grant) if target is not None else []
         ir = apply_drill(ir, ws, state.drill)
+        # 地圖平移、縮放後的顯示範圍（只影響繪製）
+        ir = with_viewport(ir, ws, state.viewport)
         empty = {
             "worksheet": ws,
             "name": target.name if target else ws,

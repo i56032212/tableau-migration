@@ -255,12 +255,16 @@ async fn pick_data_path(app: AppHandle) -> Option<String> {
                     "資料檔",
                     &[
                         "xlsx", "xlsm", "xls", "csv", "tsv", "txt", "shp", "zip", "geojson", "json",
-                        "kml", "kmz", "topojson",
+                        "kml", "kmz", "topojson", "tab", "mif",
                     ],
                 )
                 .add_filter("Excel", &["xlsx", "xlsm", "xls"])
                 .add_filter("文字檔", &["csv", "tsv", "txt"])
-                .add_filter("空間檔案", &["shp", "zip", "geojson", "json", "kml", "kmz", "topojson"])
+                // Esri File Geodatabase 請選壓縮的 .gdb.zip（與 Tableau Server 相同）；MapInfo 選 .tab 或 .mif
+                .add_filter(
+                    "空間檔案",
+                    &["shp", "zip", "geojson", "json", "kml", "kmz", "topojson", "tab", "mif"],
+                )
                 .blocking_pick_file(),
         )
     })

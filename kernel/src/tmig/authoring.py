@@ -87,7 +87,19 @@ SAMPLE_ROWS = 10_000
 """判斷型別時讀的列數（匯入時仍讀全部的列，不符合型別的值成為 Null）。"""
 EXCEL_SUFFIXES = (".xlsx", ".xlsm", ".xls")
 TEXT_SUFFIXES = (".csv", ".tsv", ".txt", ".tab")
-SPATIAL_SUFFIXES = (".shp", ".zip", ".geojson", ".json", ".kml", ".kmz", ".topojson")
+SPATIAL_SUFFIXES = (
+    ".shp",
+    ".zip",
+    ".geojson",
+    ".json",
+    ".kml",
+    ".kmz",
+    ".topojson",
+    ".tab",
+    ".mif",
+    ".gdb",
+)
+"""空間檔案（.gdb 是 Esri File Geodatabase 的資料夾，.tab、.mif 是 MapInfo）。"""
 TEXT_LOCALE = "en_US"
 CHARSETS = ("UTF-8", "cp950", "latin-1")
 """文字檔的字元集依序嘗試：UTF-8（含 BOM）、Big5（Windows 的 950）、Latin-1。"""
@@ -187,9 +199,14 @@ class InspectedFile:
 def inspect_file(path: Path, interpreter: bool = False) -> InspectedFile:
     """檔案的資料表、欄名、型別與列數；interpreter 時 Excel 依資料解譯器找標題列。"""
     suffix = path.suffix.lower()
+    if suffix == ".gdb" and path.is_dir():
+        return _inspect_spatial(path, b"")
     if not path.is_file():
         raise EditError(f"找不到檔案：{path}")
     data = path.read_bytes()
+    if suffix == ".tab" and data.lstrip()[:6].lower() == b"!table":
+        # .tab 可以是 Tab 分隔的文字檔或 MapInfo 的表格（第一行是 !table）
+        return _inspect_spatial(path, data)
     if suffix in EXCEL_SUFFIXES:
         return InspectedFile(path, "excel", _inspect_excel(path.name, data, interpreter))
     if suffix in TEXT_SUFFIXES:
@@ -198,7 +215,8 @@ def inspect_file(path: Path, interpreter: bool = False) -> InspectedFile:
     if suffix in SPATIAL_SUFFIXES:
         return _inspect_spatial(path, data)
     raise EditError(
-        f"不認得的檔案類型：{path.name}（支援 Excel、文字檔與 Shapefile、GeoJSON、KML、TopoJSON）"
+        f"不認得的檔案類型：{path.name}（支援 Excel、文字檔與 Shapefile、GeoJSON、KML、TopoJSON、"
+        "Esri File Geodatabase、MapInfo）"
     )
 
 
@@ -327,6 +345,14 @@ def _inspect_text(name: str, data: bytes) -> tuple[InspectedTable, str, str]:
 
 
 def _inspect_spatial(path: Path, data: bytes) -> InspectedFile:
+    from tmig.data.ogr_files import (
+        GDB_SUFFIX,
+        MAPINFO_MIF,
+        MAPINFO_TAB,
+        OgrError,
+        gdb_in_zip,
+        ogr_layers,
+    )
     from tmig.data.spatial_files import (
         GEOMETRY_COLUMN,
         SHAPEFILE_PARTS,
@@ -336,7 +362,27 @@ def _inspect_spatial(path: Path, data: bytes) -> InspectedFile:
 
     files = {path.name: data}
     sidecars: list[Path] = []
-    if path.suffix.lower() == ".shp":
+    suffix = path.suffix.lower()
+    if suffix == GDB_SUFFIX:
+        # File Geodatabase 的資料夾：其中的每個檔案（複製到報表時整個資料夾一起複製）
+        files = {
+            f"{path.name}/{f.relative_to(path).as_posix()}": f.read_bytes()
+            for f in sorted(path.rglob("*"))
+            if f.is_file()
+        }
+    if suffix in (".tab", ".mif"):
+        # MapInfo 的同名檔案（.dat、.map、.id、.ind 或 .mid）
+        group = MAPINFO_TAB if suffix == ".tab" else MAPINFO_MIF
+        for candidate in sorted(path.parent.iterdir()):
+            if (
+                candidate != path
+                and candidate.is_file()
+                and candidate.stem.lower() == path.stem.lower()
+                and candidate.suffix.lower() in group
+            ):
+                files[path.stem + candidate.suffix.lower()] = candidate.read_bytes()
+                sidecars.append(candidate)
+    if suffix == ".shp":
         for ext in SHAPEFILE_PARTS[1:]:
             for candidate in (path.with_suffix(ext), path.with_suffix(ext.upper())):
                 if candidate.is_file():
@@ -346,12 +392,23 @@ def _inspect_spatial(path: Path, data: bytes) -> InspectedFile:
                     sidecars.append(candidate)
                     break
     layers: list[str | None] = [None]
-    if path.suffix.lower() == ".zip":
+    if suffix == ".zip":
         import zipfile
 
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            shapes = [n for n in archive.namelist() if n.lower().endswith(".shp")]
+            names = archive.namelist()
+        shapes = [n for n in names if n.lower().endswith(".shp")]
         layers = [PurePosixPath(n).stem for n in shapes] or [None]
+        if gdb_in_zip(names):
+            try:
+                layers = list(ogr_layers(files, path.name)) or [None]
+            except OgrError as exc:
+                raise EditError(str(exc)) from exc
+    if suffix == GDB_SUFFIX:
+        try:
+            layers = list(ogr_layers(files, path.name)) or [None]
+        except OgrError as exc:
+            raise EditError(str(exc)) from exc
     tables: list[InspectedTable] = []
     for layer in layers:
         try:

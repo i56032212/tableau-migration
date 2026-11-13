@@ -488,7 +488,15 @@ def _import_files(archive: Any, target: Path, ds: Any) -> DatasourceImport:
     tables = import_file_tables(archive, connection, out_path)
     digest = hashlib.sha256()
     paths = list(dict.fromkeys(t.path for t in local_tables(connection)))
+    names = [n.replace("\\", "/") for n in archive.namelist()]
     for path in paths:
+        if path.lower().rstrip("/").endswith(".gdb"):
+            # File Geodatabase 是資料夾：其中的每個檔案
+            from tmig.data.ogr_files import companion_paths
+
+            for member in companion_paths(names, path):
+                digest.update(read_member(archive, member))
+            continue
         digest.update(read_member(archive, path))
     result = DatasourceImport(
         datasource=ds.id,

@@ -24,6 +24,7 @@ from tmig.ir.models import (
     DateDerivation,
     FieldUse,
     Filter,
+    MapViewport,
     RangeFilter,
     Scalar,
     TopNFilter,
@@ -109,6 +110,11 @@ class QueryState(BaseModel):
     tooltip: TooltipMark | None = Field(
         default=None,
         description="在另一張工作表的工具提示中顯示（Viz in Tooltip）：以滑過的標記篩選這張工作表",
+    )
+    viewport: MapViewport | None = Field(
+        default=None,
+        description="地圖平移、縮放後的顯示範圍（檢視器的地圖工具列、滾輪與拖曳）：只影響地圖的繪製"
+        "（底圖的細節與地名依新的縮放層級），不影響查詢",
     )
 
 
@@ -345,3 +351,20 @@ def _new_filter(
         values=[] if mode == "all" else list(value.values),
         source_ref=source,
     )
+
+
+def with_viewport(ir: IR, worksheet: str, viewport: MapViewport | None) -> IR:
+    """地圖工作表改以 viewport 為顯示範圍（檢視器平移、縮放之後重新繪製）；None 時原樣。"""
+    if viewport is None:
+        return ir
+    from tmig.ir.models import MapOptions
+
+    sheets = [
+        ws.model_copy(
+            update={"map": (ws.map or MapOptions()).model_copy(update={"viewport": viewport})}
+        )
+        if ws.id == worksheet
+        else ws
+        for ws in ir.worksheets
+    ]
+    return ir.model_copy(update={"worksheets": sheets})

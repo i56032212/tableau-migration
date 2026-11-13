@@ -680,6 +680,24 @@ export function Editor({
                     });
                   }}
                   tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
+                  onViewport={(viewport) =>
+                    // 與 Tableau Desktop 相同，平移、縮放後的地圖範圍存進工作表（「重設地圖」改回自動縮放）
+                    apply((s) => {
+                      const current = (s.map as Partial<MapOptionsIR> | null | undefined) ?? null;
+                      if (!viewport && !current?.viewport) return s;
+                      return {
+                        ...s,
+                        map: {
+                          style: "light",
+                          washout: 0,
+                          layers: {},
+                          hide_unknown: false,
+                          ...(current ?? {}),
+                          viewport,
+                        },
+                      };
+                    })
+                  }
                 />
               </>
             )}

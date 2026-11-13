@@ -24,6 +24,12 @@ hyper_datas, hyper_binaries, hyper_imports = collect_all("tableauhyperapi")
 datas += hyper_datas
 binaries += hyper_binaries
 hiddenimports += hyper_imports
+# File Geodatabase、MapInfo 的 GDAL（pyogrio）與基準面轉換的 PROJ（pyproj）：原生程式庫與資料檔（proj.db 等）
+for package in ("pyogrio", "pyproj"):
+    package_datas, package_binaries, package_imports = collect_all(package)
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_imports
 # 延遲匯入（函式內 import）與 SQLGlot 的方言、uvicorn 的協定實作
 for package in ("tmig", "tmig_service", "sqlglot", "uvicorn"):
     hiddenimports += collect_submodules(

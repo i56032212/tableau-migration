@@ -486,6 +486,8 @@ def test_forecast_and_clusters_in_editor(engine: str) -> None:
         dialog.get_by_label("預測的期數").fill("6")
         dialog.get_by_label("預測的期間單位").select_option("month")
         dialog.get_by_role("button", name="確定").click()
+        # 先建立預測指標的欄位，之後才存檔：等對話框關閉（已開始存檔）
+        dialog.wait_for(state="detached")
         settle(page)
         saved = sheet("ws_monthly_profit")
         forecast = saved["forecast"]
@@ -510,6 +512,7 @@ def test_forecast_and_clusters_in_editor(engine: str) -> None:
         dialog.get_by_label("自動決定叢集數").uncheck()
         dialog.get_by_label("叢集數", exact=True).fill("3")
         dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
         settle(page)
         saved = sheet("ws_sub_category_profit")
         cluster = saved["cluster"]

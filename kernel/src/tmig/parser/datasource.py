@@ -172,7 +172,7 @@ GEO_ROLES: dict[str, GeoRole] = {
 FILE_SOURCES = frozenset({"excel-direct", "textscan", "hyper", "dataengine", "ogrdirect"})
 """檔案型連線（沒有萃取時匯入 DuckDB，見 FileConnection）。.hyper 只有一張資料表時與萃取相同，
 有 join、多個 .hyper 檔或 Relationship 模型時是檔案型連線；ogrdirect 是空間檔案（Shapefile、GeoJSON、
-KML、TopoJSON 等）。"""
+KML、TopoJSON、Esri File Geodatabase、MapInfo 等）。"""
 TABLE_ID_PREFIX = "[__tableau_internal_object_id__]."
 """物件模型中每張邏輯資料表的筆數欄位（Tableau 2020.2 起的「資料表 (計數)」）。"""
 
@@ -792,11 +792,13 @@ class DatasourceParser:
                 columns=columns,
             )
         if source.get("class") == "ogrdirect":
-            # 空間檔案：資料表名稱是圖層（壓縮檔中的 Shapefile、TopoJSON 的物件）
-            filename = (source.get("filename") or "").replace("\\", "/")
+            # 空間檔案：資料表名稱是圖層（壓縮檔中的 Shapefile、TopoJSON 的物件、File Geodatabase 的
+            # feature class）；File Geodatabase 可以是資料夾（.twbx 中是資料夾裡的各個檔案）
+            filename = (source.get("filename") or "").replace("\\", "/").rstrip("/")
             directory = (source.get("directory") or "").replace("\\", "/").rstrip("/")
             joined = f"{directory}/{filename}" if directory and "/" not in filename else filename
-            path = self._packaged(joined)
+            path = self._packaged_folder(joined) if joined.lower().endswith(".gdb") else None
+            path = path or self._packaged(joined)
             if path is None:
                 self.ctx.flag(source, f"資料源「{self.caption}」的檔案「{filename}」不在 .twbx 內")
                 return None
@@ -920,6 +922,27 @@ class DatasourceParser:
         table = ".".join(qualified_parts(tables[0]))
         source = self._extract_source(conn) if via_extract else None
         return ExtractConnection(kind="extract", hyper_file=hyper_file, table=table, source=source)
+
+    def _packaged_folder(self, folder: str) -> str | None:
+        """.twbx 內的資料夾（例如 File Geodatabase 的 .gdb）：路徑相同，或資料夾名稱相同的只有一個。"""
+        package = self.ctx.package
+        if package.source.suffix.lower() != ".twbx":
+            return folder or None
+        names = [f.name.replace("\\", "/") for f in package.files]
+        wanted = folder.lstrip("./").lower()
+        folders = {
+            "/".join(parts[: i + 1])
+            for n in names
+            for parts in [n.split("/")]
+            for i, part in enumerate(parts[:-1])
+            if part.lower().endswith(".gdb")
+        }
+        exact = [f for f in folders if f.lower() == wanted]
+        if exact:
+            return exact[0]
+        base = PurePosixPath(wanted).name
+        same = [f for f in folders if PurePosixPath(f).name.lower() == base]
+        return same[0] if len(same) == 1 else None
 
     def _packaged(self, dbname: str) -> str | None:
         path = dbname.replace("\\", "/")

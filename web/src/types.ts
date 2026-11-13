@@ -407,6 +407,8 @@ export interface QueryState {
   drill?: Record<string, number>;
   /** 在另一張工作表的工具提示中顯示（Viz in Tooltip）：來源工作表與滑過的標記 */
   tooltip?: { source: string; mark: Mark } | null;
+  /** 地圖平移、縮放後的顯示範圍（只影響地圖的繪製） */
+  viewport?: { west: number; south: number; east: number; north: number } | null;
 }
 
 /** 工具提示中的工作表（Viz in Tooltip）：滑過標記時顯示，以標記的值篩選 */

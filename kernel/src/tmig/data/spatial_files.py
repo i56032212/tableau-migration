@@ -7,9 +7,11 @@
 - GeoJSON（FeatureCollection、Feature 或單一 geometry；舊版的 crs 名稱可指定 EPSG 代碼）
 - KML（各層 Folder 中的 Placemark：Name、Description 與 ExtendedData 的欄位）
 - TopoJSON（資料表是 objects 中的物件）
+- Esri File Geodatabase（.gdb 資料夾或壓縮的 .gdb.zip，資料表是 feature class）與 MapInfo（.tab、.mif）：以 GDAL
+  讀取（tmig.data.ogr_files）
 
-形狀都依 Hyper 讀入 WKT 時的處理切分直線邊、調整環的方向（tmig.geo.spatial.normalize），與 Tableau 的萃取相同。
-Esri File Geodatabase、MapInfo 尚未支援。
+座標一律換成 WGS84 的經緯度（含基準面之間的轉換，見 tmig.geo.projection），與 Tableau 相同。形狀都依 Hyper 讀入
+WKT 時的處理切分直線邊、調整環的方向（tmig.geo.spatial.normalize），與 Tableau 的萃取相同。
 """
 
 from __future__ import annotations
@@ -75,7 +77,9 @@ class SpatialTable:
 def read_spatial(files: dict[str, bytes], path: str, layer: str | None = None) -> SpatialTable:
     """files：.twbx 內的檔案（路徑 → 內容，至少含 path 與 Shapefile 的同名檔案）；layer：資料表名稱
     （壓縮檔中的 Shapefile、TopoJSON 的物件）。"""
-    suffix = PurePosixPath(path).suffix.lower()
+    suffix = PurePosixPath(path.rstrip("/")).suffix.lower()
+    if suffix in (".gdb", ".tab", ".mif"):
+        return _read_ogr(files, path, layer)
     data = files.get(path)
     if data is None:
         raise SpatialFileError(f"找不到空間檔案 {path}")
@@ -102,15 +106,41 @@ def read_spatial(files: dict[str, bytes], path: str, layer: str | None = None) -
             if inner is None:
                 raise SpatialFileError(f"{path} 內沒有 .kml")
             return read_kml(kmz.read(inner), path)
-    if suffix in (".tab", ".mif", ".gdb") or path.lower().endswith(".gdb.zip"):
-        raise SpatialFileError(
-            f"{PurePosixPath(path).name}：MapInfo、Esri File Geodatabase 尚未支援"
-        )
     raise SpatialFileError(f"{PurePosixPath(path).name}：不認得的空間檔案格式")
 
 
+def _read_ogr(files: dict[str, bytes], path: str, layer: str | None) -> SpatialTable:
+    """File Geodatabase、MapInfo：以 GDAL 讀取，座標換成 WGS84 的經緯度。"""
+    from tmig.data.ogr_files import OgrError, read_ogr
+    from tmig.geo.projection import crs_from_user
+
+    try:
+        found = read_ogr(files, path, layer)
+    except OgrError as exc:
+        raise SpatialFileError(str(exc)) from exc
+    crs: Crs | None = None
+    if found.crs:
+        try:
+            crs = crs_from_user(found.crs)
+        except ProjectionError as exc:
+            raise SpatialFileError(
+                f"{PurePosixPath(path.rstrip('/')).name} 的座標系統無法轉換：{exc}"
+            ) from exc
+    columns = [*found.fields, GEOMETRY_COLUMN]
+    rows: list[dict[str, Any]] = []
+    for attrs, shape in zip(found.rows, found.shapes, strict=True):
+        geom = shape if shape is None or crs is None else _project(shape, crs)
+        rows.append({**attrs, GEOMETRY_COLUMN: _wkt(geom)})
+    return SpatialTable(columns=columns, rows=rows)
+
+
 def sidecar_paths(names: list[str], path: str) -> list[str]:
-    """.twbx 內與 Shapefile 同名的檔案（.shx、.dbf、.prj、.cpg）。"""
+    """.twbx 內與空間檔案一起讀的檔案：Shapefile 的同名檔案（.shx、.dbf、.prj、.cpg）、MapInfo 的同名檔案
+    （.dat、.map、.id，或 .mid）與 .gdb 資料夾中的檔案。"""
+    from tmig.data.ogr_files import companion_paths, is_ogr_path
+
+    if is_ogr_path(path):
+        return companion_paths(names, path)
     if not path.lower().endswith(".shp"):
         return [path]
     stem = path[:-4].lower()
@@ -120,8 +150,11 @@ def sidecar_paths(names: list[str], path: str) -> list[str]:
 def _read_zip(data: bytes, layer: str | None, path: str) -> SpatialTable:
     with zipfile.ZipFile(io.BytesIO(data)) as inner:
         names = [n for n in inner.namelist() if not n.endswith("/")]
-        if any(".gdb/" in n.lower() for n in names):
-            raise SpatialFileError(f"{PurePosixPath(path).name}：Esri File Geodatabase 尚未支援")
+        from tmig.data.ogr_files import gdb_in_zip
+
+        if gdb_in_zip(names):
+            # 壓縮的 File Geodatabase（Tableau Server 上要寫成 .gdb.zip）
+            return _read_ogr({path: data}, path, layer)
         shapes = [n for n in names if n.lower().endswith(".shp")]
         if shapes:
             wanted = (layer or "").lower()
@@ -286,16 +319,23 @@ def _assemble(rings: list[list[list[float]]]) -> Geometry | None:
 
 def _project(geom: Geometry, crs: Crs) -> Geometry:
     """幾何的座標依座標系統換成經緯度。"""
-    if crs.kind == "geographic" and crs.unit == 1.0 and crs.prime_meridian == 0.0:
+    if (
+        crs.kind == "geographic"
+        and crs.unit == 1.0
+        and crs.prime_meridian == 0.0
+        and not crs.shifted
+    ):
         return geom
 
     def convert(coords: Any) -> Any:
+        if coords is None or len(coords) == 0:
+            return []  # 空的形狀（例如 GeoJSON 中 coordinates 是空的）
         arr = np.asarray(coords, dtype=float)
         if arr.ndim == 1:
-            lon, lat = crs.inverse(arr[:1], arr[1:2])
+            lon, lat = crs.to_wgs84(arr[:1], arr[1:2])
             return [float(lon[0]), float(lat[0])]
         if arr.ndim == 2:
-            lon, lat = crs.inverse(arr[:, 0], arr[:, 1])
+            lon, lat = crs.to_wgs84(arr[:, 0], arr[:, 1])
             return np.column_stack([lon, lat]).tolist()
         return [convert(c) for c in coords]
 

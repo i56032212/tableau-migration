@@ -18,6 +18,9 @@ dependencies = [
     "xlrd>=2.0",
     "numpy>=1.26",
     "geographiclib>=2.0",
+    # 空間檔案：Esri File Geodatabase、MapInfo（GDAL）與座標基準面之間的轉換（PROJ）
+    "pyogrio>=0.10",
+    "pyproj>=3.6",
 ]
 
 [project.optional-dependencies]

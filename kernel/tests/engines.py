@@ -1144,7 +1144,7 @@ def bigquery_client(address: str) -> Any:
     while True:
         try:
             # 資料集由模擬器的 --dataset 建立；不重試（模擬器的錯誤是 500，用戶端預設會重試 10 分鐘）
-            client.get_dataset("tmig", retry=None, timeout=10)
+            client.get_dataset("tmig", retry=None, timeout=10)  # pyright: ignore[reportArgumentType]
             return client
         except Exception as exc:
             if time.monotonic() > deadline:

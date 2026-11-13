@@ -161,9 +161,10 @@ def test_unsupported_formats() -> None:
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as archive:
         archive.writestr("parcels.gdb/a00000001.gdbtable", b"\x00")
-    with pytest.raises(SpatialFileError, match="File Geodatabase"):
+    # 壞掉的 File Geodatabase 與 MapInfo（正常的檔案見 tests/data/test_ogr_files.py）
+    with pytest.raises(SpatialFileError, match="無法讀取"):
         read_spatial({"p.zip": out.getvalue()}, "p.zip")
-    with pytest.raises(SpatialFileError, match="MapInfo"):
+    with pytest.raises(SpatialFileError, match="無法讀取"):
         read_spatial({"p.tab": b""}, "p.tab")
     with pytest.raises(SpatialFileError, match="Shapefile"):
         read_spatial({"bad.shp": b"not a shapefile"}, "bad.shp")

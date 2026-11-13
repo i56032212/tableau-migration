@@ -217,13 +217,15 @@ def read_member(archive: Archive, path: str) -> bytes:
 
 
 def spatial_rows(archive: Archive, table: FileTable) -> list[list[Any]]:
-    """空間檔案（Shapefile、GeoJSON、KML、TopoJSON）的各列，依 Tableau 記下的欄名（不分大小寫）取值；
-    Geometry 是 WKT 文字（tmig.data.spatial_files）。"""
+    """空間檔案（Shapefile、GeoJSON、KML、TopoJSON、File Geodatabase、MapInfo）的各列，依 Tableau 記下的欄名
+    （不分大小寫）取值；Geometry 是 WKT 文字（tmig.data.spatial_files）。"""
     from tmig.data.spatial_files import SpatialFileError, read_spatial, sidecar_paths
 
     names = [n.replace("\\", "/") for n in archive.namelist()]
     files = {p: read_member(archive, p) for p in sidecar_paths(names, table.path)}
-    files.setdefault(table.path, read_member(archive, table.path))
+    if not table.path.lower().rstrip("/").endswith(".gdb"):
+        # .gdb 是資料夾（其中的檔案已在上面讀出）
+        files.setdefault(table.path, read_member(archive, table.path))
     try:
         found = read_spatial(files, table.path, table.layer)
     except SpatialFileError as exc:

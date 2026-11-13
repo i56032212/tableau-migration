@@ -71,7 +71,9 @@ export async function pickDataPath(): Promise<string | null> {
       console.warn("選檔對話框無法使用，改以輸入路徑", e);
     }
   }
-  const path = window.prompt("要連線的資料檔（.xlsx、.xls、.csv、.txt、.shp、.geojson、.kml 等）的完整路徑");
+  const path = window.prompt(
+    "要連線的資料檔（.xlsx、.xls、.csv、.txt、.shp、.geojson、.kml、MapInfo 的 .tab、Esri File Geodatabase 的 .gdb 資料夾或 .gdb.zip 等）的完整路徑",
+  );
   return path?.trim() || null;
 }
 
