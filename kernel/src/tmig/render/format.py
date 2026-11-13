@@ -261,6 +261,22 @@ def format_date(value: dt.date, fmt: str) -> str | None:
     return "".join(parts)
 
 
+def fiscal_label(value: Any, kind: str, unit: str, start: int) -> str | None:
+    """會計年度的年、季的顯示文字（Tableau 加上 FY）：年的部分「FY 2005」、年的截斷「FY 2005」、季的截斷
+    「FY 2005 Q1」（季的部分與月、週、日不變）。值已依會計年度計算（tmig.sqlgen.query.fiscal_node）：
+    截斷是會計年度（季）的第一天，會計年度以結束的年份命名。start 為 1（日曆年）時回傳 None。"""
+    if start == 1 or value is None:
+        return None
+    if kind == "part" and unit == "year":
+        return f"FY {value}"
+    if kind == "trunc" and unit in ("year", "quarter") and isinstance(value, dt.date):
+        year = value.year + (value.month + 12 - start) // 12
+        if unit == "year":
+            return f"FY {year}"
+        return f"FY {year} Q{(value.month - start) % 12 // 3 + 1}"
+    return None
+
+
 DATE_LABELS = {
     "year": "%Y",
     "quarter": "%Y Q%q",

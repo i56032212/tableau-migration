@@ -334,10 +334,13 @@ class WorkbookParser:
                 name=state.name,
                 caption=state.caption,
                 connection=state.connection,
-                settings=DatasourceSettings(week_start=state.week_start),
+                settings=DatasourceSettings(
+                    week_start=state.week_start, fiscal_year_start=state.fiscal_year_start
+                ),
                 fields=state.fields,
                 filters=state.filters,
                 hierarchies=state.hierarchies,
+                folders=state.folders,
                 published=state.published,
                 geo=state.geo,
                 source_ref=state.element.getroottree().getpath(state.element),

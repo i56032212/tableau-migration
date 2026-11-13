@@ -60,11 +60,13 @@ from tmig.planner.identity import Identity, protected_fields
 from tmig.planner.state import QueryState, StateError, parse_key
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.datasource import datasource_summary
+from tmig.render.format import fiscal_label
 from tmig.render.format import format_value as display_value
 from tmig.render.vegalite import (
     after_groups,
     build_spec,
     caption,
+    fiscal_starts,
     title_values,
     value_format,
     worksheet_title,
@@ -935,6 +937,7 @@ def create_app(
             if c.role != "sort" and c.use is not None and c.datatype != "spatial"
         ]
         index = {key: i for i, key in enumerate(result.columns)}
+        starts = fiscal_starts(ir)
         # 成員別名：資料表與圖表相同，顯示別名
         aliases = {
             c.key: member_aliases(fields[c.use.field], c.use)
@@ -952,8 +955,16 @@ def create_app(
                 value = row[positions[column.key]] if column.key in positions else None
                 use = column.use
                 alias = aliases.get(column.key, {}).get(alias_key(value))
+                fy = (
+                    fiscal_label(value, use.date.kind, use.date.unit, starts.get(use.field, 1))
+                    if use.date is not None
+                    else None
+                )
                 if alias is not None:
                     out.append(alias)
+                elif fy is not None:
+                    # 會計年度的年、季：與 Tableau 相同加上 FY
+                    out.append(fy)
                 elif use.date is not None and use.date.kind == "part" and value is not None:
                     out.append(str(value))
                 else:

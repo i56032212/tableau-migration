@@ -93,6 +93,8 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
   }
   if (numeric && rowLevel(field) && field.kind !== "set")
     create.push({ label: "數值分組…", action: () => editor.openDialog({ kind: "bins", datasource, source: field.id, field: null }) });
+  if (dimension && field.kind !== "set" && field.datatype !== "spatial")
+    create.push({ label: "合併欄位…", action: () => editor.openDialog({ kind: "combined", datasource, field: field.id }) });
   create.push({ label: "參數…", action: () => editor.openDialog({ kind: "parameter", parameter: null }) });
   items.push({ label: "建立", children: create });
   if (field.group) {
@@ -107,7 +109,7 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
       label: "編輯集合…",
       action: () => editor.openDialog({ kind: "set", datasource, levels: set.levels.map((l) => l.field), field: field.id }),
     });
-  } else if (field.kind === "calc") {
+  } else if (field.kind === "calc" && !field.combined) {
     items.push({ label: "編輯計算欄位…", action: () => editor.openCalc(field, datasource) });
   }
   if (dimension && DISCRETE.includes(field.datatype) && !isDate(field))
@@ -116,6 +118,25 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
     items.push({ label: "建立階層…", action: () => editor.openDialog({ kind: "hierarchy", datasource, name: null, field: field.id }) });
   if (field.kind !== "set" && ["string", "integer", "real"].includes(field.datatype))
     items.push({ label: "地理角色…", action: () => editor.openDialog({ kind: "geo", datasource, field: field.id }) });
+  // 資料夾：建立、加入、移出（與 Tableau 的「資料夾」相同）
+  const folders = editor.catalog.datasources.find((d) => d.id === datasource)?.folders ?? [];
+  const current = folders.find((f) => f.fields.includes(field.id));
+  const move = (folder: string | null, message: string) =>
+    void editApi
+      .moveToFolder(workbook, datasource, [field.id], folder)
+      .then(() => done(message))
+      .catch(fail);
+  const folderItems: MenuItem[] = [
+    { label: "建立資料夾…", action: () => editor.openDialog({ kind: "folder", datasource, fields: [field.id], folder: null }) },
+  ];
+  const targets = [...new Set(folders.map((f) => f.name))].filter((name) => name !== current?.name);
+  if (targets.length)
+    folderItems.push({
+      label: "加入資料夾",
+      children: targets.map((name) => ({ label: name, action: () => move(name, `已把「${field.caption}」移到「${name}」`) })),
+    });
+  if (current) folderItems.push({ label: "從資料夾移除", action: () => move(null, `已把「${field.caption}」移出「${current.name}」`) });
+  items.push({ label: "資料夾", children: folderItems });
   items.push(SEPARATOR);
   if (!derived && rowLevel(field) && field.datatype !== "spatial") {
     items.push(
@@ -140,6 +161,8 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
       label: isDate(field) ? "日期格式…" : "數字格式…",
       action: () => editor.openDialog({ kind: "field-format", datasource, field: field.id }),
     });
+  if (isDate(field))
+    properties.push({ label: "會計年度起始…", action: () => editor.openDialog({ kind: "fiscal", datasource, field: field.id }) });
   properties.push({ label: "註解…", action: () => editor.openDialog({ kind: "comment", datasource, field: field.id }) });
   items.push({ label: "預設屬性", children: properties });
   if (field.kind !== "column") {
@@ -232,6 +255,185 @@ export function CommentDialog({ datasource, field, onClose, onSaved }: { datasou
         onClose={onClose}
         disabled={busy}
       />
+    </Modal>
+  );
+}
+
+export const MONTHS = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
+const WEEK_DAYS: [string, string][] = [
+  ["sunday", "星期日"],
+  ["monday", "星期一"],
+  ["tuesday", "星期二"],
+  ["wednesday", "星期三"],
+  ["thursday", "星期四"],
+  ["friday", "星期五"],
+  ["saturday", "星期六"],
+];
+
+/** 日期欄位的會計年度起始月（預設屬性）：沿用資料源或指定月份。 */
+export function FiscalDialog({ datasource, field, onClose, onSaved }: { datasource: string; field: string; onClose: () => void; onSaved: () => void }) {
+  const editor = useEditor();
+  const target = useField(datasource, field);
+  const inherited = editor.catalog.datasources.find((d) => d.id === datasource)?.settings?.fiscal_year_start ?? 1;
+  const [month, setMonth] = useState<number | null>(target?.fiscal_year_start ?? null);
+  const { error, busy, run } = useSave(onClose, onSaved);
+  if (!target) return null;
+  return (
+    <Modal title={`會計年度起始：${target.caption}`} onClose={onClose}>
+      <p className="hint">年、季與週數依會計年度計算，年與季加上 FY；會計年度以結束的年份命名（四月起算時 2004 年 6 月屬於 FY 2005）。</p>
+      <label className="inline">
+        起始月
+        <select aria-label="會計年度的起始月" value={month ?? ""} onChange={(e) => setMonth(e.target.value ? Number(e.target.value) : null)}>
+          <option value="">沿用資料源（{MONTHS[inherited - 1]}）</option>
+          {MONTHS.map((label, i) => (
+            <option key={label} value={i + 1}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <p className="error">{error}</p>}
+      <Actions
+        onSave={() =>
+          run(
+            () => editApi.saveFieldProperties(editor.workbook, datasource, field, { fiscal_year_start: month }),
+            `已設定「${target.caption}」的會計年度起始月`,
+          )
+        }
+        onClose={onClose}
+        disabled={busy}
+      />
+    </Modal>
+  );
+}
+
+/** 資料源的日期屬性（Tableau 的「日期屬性」）：週起始日與會計年度起始月。 */
+export function DatePropertiesDialog({ datasource, onClose, onSaved }: { datasource: string; onClose: () => void; onSaved: () => void }) {
+  const editor = useEditor();
+  const ds = editor.catalog.datasources.find((d) => d.id === datasource);
+  const [weekStart, setWeekStart] = useState(ds?.settings?.week_start ?? "sunday");
+  const [month, setMonth] = useState(ds?.settings?.fiscal_year_start ?? 1);
+  const { error, busy, run } = useSave(onClose, onSaved);
+  if (!ds) return null;
+  return (
+    <Modal title={`日期屬性：${ds.caption}`} onClose={onClose}>
+      <label className="inline">
+        週的起始日
+        <select aria-label="週的起始日" value={weekStart} onChange={(e) => setWeekStart(e.target.value)}>
+          {WEEK_DAYS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="inline">
+        會計年度的起始月
+        <select aria-label="會計年度的起始月" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+          {MONTHS.map((label, i) => (
+            <option key={label} value={i + 1}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="hint">日期欄位可以在「預設屬性＞會計年度起始…」另外指定。</p>
+      {error && <p className="error">{error}</p>}
+      <Actions
+        onSave={() =>
+          run(
+            () => editApi.saveDateProperties(editor.workbook, datasource, { week_start: weekStart, fiscal_year_start: month }),
+            "已設定日期屬性",
+          )
+        }
+        onClose={onClose}
+        disabled={busy}
+      />
+    </Modal>
+  );
+}
+
+/** 合併欄位（Tableau 的「建立＞合併欄位」）：勾選兩個以上的維度，依勾選的順序合併。 */
+export function CombinedDialog({ datasource, field, onClose, onSaved }: { datasource: string; field: string; onClose: () => void; onSaved: () => void }) {
+  const editor = useEditor();
+  const ds = editor.catalog.datasources.find((d) => d.id === datasource);
+  const [picked, setPicked] = useState<string[]>([field]);
+  const { error, busy, run } = useSave(onClose, onSaved);
+  if (!ds) return null;
+  const candidates = ds.fields.filter((f) => isDimension(f) && f.kind !== "set" && f.datatype !== "spatial" && !f.hidden);
+  const caption = (id: string) => ds.fields.find((f) => f.id === id)?.caption ?? id;
+  return (
+    <Modal title="建立合併欄位" onClose={onClose}>
+      <p className="hint">勾選要合併的維度（依勾選的順序）；成員為各欄位的值以「, 」連接，例如「East, Chair」。</p>
+      <ul className="member-list combined-list" aria-label="合併的維度">
+        {candidates.map((f) => (
+          <li key={f.id}>
+            <label>
+              <input
+                type="checkbox"
+                checked={picked.includes(f.id)}
+                onChange={(e) => setPicked((all) => (e.target.checked ? [...all, f.id] : all.filter((x) => x !== f.id)))}
+              />{" "}
+              {f.caption}
+            </label>
+          </li>
+        ))}
+      </ul>
+      <p className="muted">名稱：{picked.length >= 2 ? `${picked.map(caption).join(" & ")} (Combined)` : "（請勾選兩個以上的維度）"}</p>
+      {error && <p className="error">{error}</p>}
+      <Actions
+        onSave={() =>
+          run(async () => {
+            const created = await editApi.createCombined(editor.workbook, datasource, picked);
+            return created;
+          }, "已建立合併欄位")
+        }
+        onClose={onClose}
+        disabled={busy || picked.length < 2}
+      />
+    </Modal>
+  );
+}
+
+/** 建立資料夾（選取的欄位移進去）或改名。 */
+export function FolderDialog({
+  datasource,
+  fields,
+  folder,
+  onClose,
+  onSaved,
+}: {
+  datasource: string;
+  fields: string[];
+  folder: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const editor = useEditor();
+  const [name, setName] = useState(folder ?? "");
+  const { error, busy, run } = useSave(onClose, onSaved);
+  const save = () =>
+    run(
+      () =>
+        folder === null
+          ? editApi.createFolder(editor.workbook, datasource, name.trim(), fields)
+          : editApi.renameFolder(editor.workbook, datasource, folder, name.trim()),
+      folder === null ? `已建立資料夾「${name.trim()}」` : `已改名為「${name.trim()}」`,
+    );
+  return (
+    <Modal title={folder === null ? "建立資料夾" : `重新命名資料夾：${folder}`} onClose={onClose}>
+      <label className="inline">
+        名稱
+        <input
+          aria-label="資料夾名稱"
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && name.trim() && save()}
+        />
+      </label>
+      {error && <p className="error">{error}</p>}
+      <Actions onSave={save} onClose={onClose} disabled={busy || !name.trim()} />
     </Modal>
   );
 }

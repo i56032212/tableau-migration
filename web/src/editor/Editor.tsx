@@ -7,7 +7,19 @@ import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
 import { DataPane } from "./DataPane";
-import { AliasDialog, BinDialog, CommentDialog, FieldFormatDialog, GroupDialog, RenameDialog, SetDialog } from "./FieldDialogs";
+import {
+  AliasDialog,
+  BinDialog,
+  CombinedDialog,
+  CommentDialog,
+  DatePropertiesDialog,
+  FieldFormatDialog,
+  FiscalDialog,
+  FolderDialog,
+  GroupDialog,
+  RenameDialog,
+  SetDialog,
+} from "./FieldDialogs";
 import {
   AxisDialog,
   CalcDialog,
@@ -822,6 +834,14 @@ function fieldDialog(dialog: EditorDialog, onClose: () => void, onSaved: () => v
       return <FieldFormatDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
     case "aliases":
       return <AliasDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "combined":
+      return <CombinedDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "fiscal":
+      return <FiscalDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "folder":
+      return <FolderDialog datasource={dialog.datasource} fields={dialog.fields} folder={dialog.folder} onClose={onClose} onSaved={onSaved} />;
+    case "date-properties":
+      return <DatePropertiesDialog datasource={dialog.datasource} onClose={onClose} onSaved={onSaved} />;
     case "group":
       return (
         <GroupDialog

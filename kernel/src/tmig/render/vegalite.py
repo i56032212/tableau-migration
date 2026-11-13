@@ -87,6 +87,7 @@ from tmig.render.format import (
     PERCENT_TABLE_CALCS,
     axis_format,
     display_format,
+    fiscal_label,
     format_value,
     parse_format,
 )
@@ -228,6 +229,8 @@ class Channel:
     """成員別名（原始值的比對鍵 → 顯示名稱）；只有離散維度的原始成員有。"""
     is_set: bool = False
     """集合（成員依「內」、「外」的順序）。"""
+    fiscal: int = 1
+    """日期欄位的會計年度起始月（年、季的標籤加上 FY）。"""
 
 
 @dataclass
@@ -237,6 +240,18 @@ class RenderResult:
     mark: str
     unsupported: str | None = None
     notes: list[str] = field(default_factory=list)
+
+
+def fiscal_starts(ir: IR) -> dict[str, int]:
+    """日期欄位 id → 會計年度起始月（欄位自訂的或資料源的；只列出不是一月的）。"""
+    result: dict[str, int] = {}
+    for ds in ir.datasources:
+        for f in ds.fields:
+            if f.datatype in ("date", "datetime"):
+                start = f.fiscal_year_start or ds.settings.fiscal_year_start
+                if start != 1:
+                    result[f.id] = start
+    return result
 
 
 def caption(ir_field: DataField, use: FieldUse, ws: Worksheet) -> str:
@@ -1775,6 +1790,7 @@ def build_spec(
     # Data Blending：次要資料源的量值也在查詢結果中
     sources = {ws.datasource, *(b.datasource for b in ws.blends)}
     fields = {f.id: f for d in ir.datasources if d.id in sources for f in d.fields}
+    fiscal = fiscal_starts(ir)
 
     channels: dict[str, Channel] = {}
     for n, column in enumerate(c for c in columns if c.role != "sort" and c.use is not None):
@@ -1790,6 +1806,7 @@ def build_spec(
             format=value_format(ws, data_field, column.use),
             aliases=member_aliases(data_field, column.use) if column.role == "dimension" else {},
             is_set=data_field.set is not None,
+            fiscal=fiscal.get(data_field.id, 1),
         )
     uses = [*ws.rows, *ws.columns, *ws.marks.uses()]
     uses += [u for pane in ws.panes for u in pane.marks.uses()]
@@ -3114,6 +3131,7 @@ def title_values(
     日期部分照樣套用），多個值時為 *；Null 與沒有資料時不顯示。
     main：工作表查詢的欄位與結果（標題中在檢視中的維度直接取它的值）。"""
     fields = {f.id: f for d in ir.datasources for f in d.fields}
+    starts = fiscal_starts(ir)
     texts: dict[str, str] = {}
     if queries.measures is not None and measures is not None and measures.rows:
         index = {key: i for i, key in enumerate(measures.columns)}
@@ -3146,8 +3164,15 @@ def title_values(
             continue
         value, use = values[0], column.use
         alias = member_aliases(fields[use.field], use).get(alias_key(value))
+        fiscal = (
+            fiscal_label(value, use.date.kind, use.date.unit, starts.get(use.field, 1))
+            if use.date is not None
+            else None
+        )
         if alias is not None:
             texts[key] = alias
+        elif fiscal is not None:
+            texts[key] = fiscal
         elif use.date is not None and use.date.kind == "part":
             texts[key] = str(value)
         else:
@@ -3260,8 +3285,15 @@ def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str
             trunc = use.date.unit if use.date is not None and use.date.kind == "trunc" else None
             record[ch.name] = _json_value(raw)
             alias = ch.aliases.get(alias_key(raw)) if ch.aliases else None
+            fiscal = (
+                fiscal_label(raw, use.date.kind, use.date.unit, ch.fiscal)
+                if use.date is not None and ch.fiscal != 1
+                else None
+            )
             if alias is not None:
                 record[ch.label] = alias
+            elif fiscal is not None:
+                record[ch.label] = fiscal
             elif use.date is not None and use.date.kind == "part" and raw is not None:
                 record[ch.label] = str(raw)
             else:

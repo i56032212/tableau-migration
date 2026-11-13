@@ -20,7 +20,8 @@
         "refresh": null
       },
       "settings": {
-        "week_start": "sunday"
+        "week_start": "sunday",
+        "fiscal_year_start": 1
       },
       "fields": [
         {
@@ -43,6 +44,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
@@ -66,6 +69,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
@@ -89,6 +94,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
@@ -112,6 +119,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
@@ -135,6 +144,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
@@ -162,6 +173,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
@@ -189,12 +202,15 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         }
       ],
       "filters": [],
       "hierarchies": [],
+      "folders": [],
       "published": null,
       "geo": null,
       "source_ref": "/workbook/datasources/datasource[2]"

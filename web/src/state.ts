@@ -388,9 +388,35 @@ function aliasOf(aliases: MemberAlias[] | undefined, value: Scalar): string | un
 
 /** 篩選控制項中維度成員的顯示名稱：成員別名只用於維度的原始成員（沒有日期衍生與彙總）。 */
 export function memberLabel(ir: IR, use: FieldUse, value: Scalar): string {
-  if (use.date || use.agg || use.table_calc) return displayScalar(value);
+  if (use.date) return fiscalLabel(ir, use, value) ?? displayScalar(value);
+  if (use.agg || use.table_calc) return displayScalar(value);
   const field = ir.datasources.flatMap((d) => d.fields).find((f) => f.id === use.field);
   return aliasOf(field?.aliases, value) ?? displayScalar(value);
+}
+
+/** 會計年度的年、季（與 Tableau 相同加上 FY，見 kernel 的 tmig.render.format.fiscal_label）：年的部分
+ * 「FY 2005」、年的截斷「FY 2005」、季的截斷「FY 2005 Q1」；日曆年時為 null。 */
+export function fiscalLabel(ir: IR, use: FieldUse, value: Scalar): string | null {
+  if (!use.date || value === null || value === undefined) return null;
+  for (const ds of ir.datasources) {
+    const field = ds.fields.find((f) => f.id === use.field);
+    if (!field) continue;
+    if (field.datatype !== "date" && field.datatype !== "datetime") return null;
+    const start = field.fiscal_year_start ?? ds.settings?.fiscal_year_start ?? 1;
+    if (start === 1) return null;
+    const { kind, unit } = use.date;
+    if (kind === "part" && unit === "year") return `FY ${value}`;
+    if (kind === "trunc" && (unit === "year" || unit === "quarter") && typeof value === "string") {
+      const year = Number(value.slice(0, 4));
+      const month = Number(value.slice(5, 7));
+      if (!year || !month) return null;
+      const fy = year + Math.floor((month + 12 - start) / 12);
+      if (unit === "year") return `FY ${fy}`;
+      return `FY ${fy} Q${Math.floor((((month - start) % 12) + 12) % 12 / 3) + 1}`;
+    }
+    return null;
+  }
+  return null;
 }
 
 /** 參數值的顯示名稱（Tableau 的「顯示為」）。 */

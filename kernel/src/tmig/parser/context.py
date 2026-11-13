@@ -12,6 +12,7 @@ from tmig.ir.models import (
     CalcLevel,
     Connection,
     DataField,
+    FieldFolder,
     FieldUse,
     Filter,
     FitMode,
@@ -52,6 +53,8 @@ class DsState:
     caption: str
     connection: Connection
     week_start: WeekDay
+    fiscal_year_start: int = 1
+    """會計年度起始月（1 為一月）。"""
     fields: list[DataField] = field(default_factory=list)
     by_name: dict[str, DataField] = field(default_factory=dict)
     """以內部名稱（含方括號，例如 [Sales]）找欄位。"""
@@ -73,6 +76,8 @@ class DsState:
     """集合（含使用者篩選）的欄位 id：篩選架上沒有條件的篩選表示「在集合中」。"""
     hierarchies: list[Hierarchy] = field(default_factory=list)
     """階層（<drill-paths>）。"""
+    folders: list[FieldFolder] = field(default_factory=list)
+    """資料窗格的資料夾（<folder>、<folders-common>）。"""
     geo: GeoSettings | None = None
     """地理設定（預設的國家、州）。"""
     definitions: dict[str, Any] = field(default_factory=dict)

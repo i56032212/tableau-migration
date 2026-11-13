@@ -280,6 +280,16 @@ class DataField(IRModel):
     comment: str | None = Field(
         default=None, description="註解（Tableau 的「預設屬性＞註解」）：資料窗格的提示"
     )
+    fiscal_year_start: int | None = Field(
+        default=None,
+        ge=1,
+        le=12,
+        description="日期欄位自訂的會計年度起始月（預設屬性）；None 沿用資料源的設定",
+    )
+    combined: list[Id] | None = Field(
+        default=None,
+        description="合併欄位（Combined Field）的組成欄位：值為各欄位的值以「, 」連接（calc）",
+    )
     relationship_calc: bool = Field(
         default=False,
         description="關聯計算（Tableau 2020.2 起關聯條件的一邊可以是公式）：只用在 Relationship 模型的"
@@ -627,6 +637,13 @@ def has_local_data(connection: ExtractConnection | LiveConnection | FileConnecti
 
 class DatasourceSettings(IRModel):
     week_start: WeekDay = Field(description="週起始日，影響週數與 DATETRUNC('week')")
+    fiscal_year_start: int = Field(
+        default=1,
+        ge=1,
+        le=12,
+        description="會計年度的起始月（1 為一月，即日曆年）：檢視中日期的年、季、週數與年、季的截斷依會計"
+        "年度計算，會計年度以結束的年份命名（四月起算時 2004 年 6 月屬於 FY 2005）",
+    )
 
 
 # ---------------------------------------------------------------- 篩選
@@ -848,6 +865,20 @@ class Hierarchy(IRModel):
     fields: list[Id] = Field(min_length=1, description="由上到下的欄位 id")
 
 
+class FieldFolder(IRModel):
+    """資料窗格的資料夾（Tableau 的「資料夾」）：只影響資料窗格中欄位的分組，不影響查詢。"""
+
+    name: str = Field(min_length=1)
+    fields: list[Id] = Field(
+        default_factory=list, description="資料夾中的欄位 id（依資料窗格中的順序）"
+    )
+    role: Literal["dimension", "measure"] | None = Field(
+        default=None,
+        description="2020.2 以前的資料夾分在維度或量值之下（<folder role='dimensions'>）；"
+        "None 為不分（2020.2 起的 <folders-common>）",
+    )
+
+
 class GeoSettings(IRModel):
     """資料源的地理設定（Tableau 的「編輯位置」，.twb 資料源的 semantic-values）：檢視中沒有國家、州時
     比對的範圍。"""
@@ -866,6 +897,9 @@ class Datasource(IRModel):
     filters: list[Filter] = Field(default_factory=list, description="萃取篩選與資料源篩選")
     hierarchies: list[Hierarchy] = Field(
         default_factory=list, description="階層；每個欄位最多屬於一個階層"
+    )
+    folders: list[FieldFolder] = Field(
+        default_factory=list, description="資料窗格的資料夾；每個欄位最多在一個資料夾中"
     )
     published: PublishedSource | None = Field(
         default=None, description="來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
@@ -891,6 +925,19 @@ class Datasource(IRModel):
                 if field_id in seen:
                     raise ValueError(f"欄位 {field_id} 屬於兩個階層")
                 seen.add(field_id)
+        folders: set[tuple[str, str | None]] = set()
+        foldered: set[str] = set()
+        for folder in self.folders:
+            # 同名的資料夾可以分在維度與量值之下（2020.2 以前）
+            if (folder.name, folder.role) in folders:
+                raise ValueError(f"資料夾「{folder.name}」重複")
+            folders.add((folder.name, folder.role))
+            for field_id in folder.fields:
+                if field_id not in known:
+                    raise ValueError(f"資料夾「{folder.name}」的欄位 {field_id} 不在資料源中")
+                if field_id in foldered:
+                    raise ValueError(f"欄位 {field_id} 在兩個資料夾中")
+                foldered.add(field_id)
         return self
 
 

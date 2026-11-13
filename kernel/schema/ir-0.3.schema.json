@@ -1777,6 +1777,39 @@
           "description": "註解（Tableau 的「預設屬性＞註解」）：資料窗格的提示",
           "title": "Comment"
         },
+        "fiscal_year_start": {
+          "anyOf": [
+            {
+              "maximum": 12,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "日期欄位自訂的會計年度起始月（預設屬性）；None 沿用資料源的設定",
+          "title": "Fiscal Year Start"
+        },
+        "combined": {
+          "anyOf": [
+            {
+              "items": {
+                "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "合併欄位（Combined Field）的組成欄位：值為各欄位的值以「, 」連接（calc）",
+          "title": "Combined"
+        },
         "relationship_calc": {
           "default": false,
           "description": "關聯計算（Tableau 2020.2 起關聯條件的一邊可以是公式）：只用在 Relationship 模型的關聯條件，table 為所屬的邏輯資料表，公式只能用到這張資料表的欄位；資料窗格不顯示",
@@ -1900,6 +1933,14 @@
           "title": "Hierarchies",
           "type": "array"
         },
+        "folders": {
+          "description": "資料窗格的資料夾；每個欄位最多在一個資料夾中",
+          "items": {
+            "$ref": "#/$defs/FieldFolder"
+          },
+          "title": "Folders",
+          "type": "array"
+        },
         "published": {
           "anyOf": [
             {
@@ -1959,6 +2000,14 @@
           ],
           "title": "Week Start",
           "type": "string"
+        },
+        "fiscal_year_start": {
+          "default": 1,
+          "description": "會計年度的起始月（1 為一月，即日曆年）：檢視中日期的年、季、週數與年、季的截斷依會計年度計算，會計年度以結束的年份命名（四月起算時 2004 年 6 月屬於 FY 2005）",
+          "maximum": 12,
+          "minimum": 1,
+          "title": "Fiscal Year Start",
+          "type": "integer"
         }
       },
       "required": [
@@ -2270,6 +2319,49 @@
         "size"
       ],
       "title": "FieldBin",
+      "type": "object"
+    },
+    "FieldFolder": {
+      "additionalProperties": false,
+      "description": "資料窗格的資料夾（Tableau 的「資料夾」）：只影響資料窗格中欄位的分組，不影響查詢。",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "fields": {
+          "description": "資料夾中的欄位 id（依資料窗格中的順序）",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Fields",
+          "type": "array"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "dimension",
+                "measure"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "2020.2 以前的資料夾分在維度或量值之下（<folder role='dimensions'>）；None 為不分（2020.2 起的 <folders-common>）",
+          "title": "Role"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "FieldFolder",
       "type": "object"
     },
     "FieldGroup": {

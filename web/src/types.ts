@@ -37,12 +37,16 @@ export interface DataField {
   aliases?: MemberAlias[];
   /** 集合（TRUE／FALSE，顯示為 In／Out） */
   set?: FieldSet | null;
+  /** 日期欄位自訂的會計年度起始月（null 沿用資料源） */
+  fiscal_year_start?: number | null;
 }
 
 export interface Datasource {
   id: string;
   caption: string;
   fields: DataField[];
+  /** 日期屬性：週起始日、會計年度起始月 */
+  settings?: { week_start: string; fiscal_year_start?: number };
 }
 
 export interface Allowed {

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
@@ -48,9 +48,15 @@ from tmig.edit import (
     upsert_parameter,
 )
 from tmig.field_edit import (
+    create_combined,
+    create_folder,
     duplicate_field,
+    move_to_folder,
     remove_field,
+    remove_folder,
+    rename_folder,
     set_aliases,
+    set_date_properties,
     set_field_properties,
     upsert_bins,
     upsert_group,
@@ -225,11 +231,46 @@ class SetBody(BaseModel):
 
 
 class PropertiesBody(BaseModel):
-    """預設屬性：只改送來的項目（null 為清除）。"""
+    """預設屬性：只改送來的項目（null 為清除；會計年度起始月 null 為沿用資料源）。"""
 
     model_config = ConfigDict(extra="forbid")
     format: str | None = None
     comment: str | None = None
+    fiscal_year_start: int | None = Field(default=None, ge=1, le=12)
+
+
+class DatePropertiesBody(BaseModel):
+    """資料源的日期屬性：只改送來的項目。"""
+
+    model_config = ConfigDict(extra="forbid")
+    week_start: (
+        Literal["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] | None
+    ) = None
+    fiscal_year_start: int | None = Field(default=None, ge=1, le=12)
+
+
+class CombinedBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fields: list[str] = Field(min_length=2)
+
+
+class FolderBody(BaseModel):
+    """建立資料夾（name 與欄位）、改名（rename）或移動欄位（folder 為 null 時移出資料夾）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    fields: list[str] = []
+
+
+class FolderRenameBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+
+
+class MoveFieldsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fields: list[str] = Field(min_length=1)
+    folder: str | None = None
 
 
 SET_RULE: TypeAdapter[Any] = TypeAdapter(SetRule)
@@ -448,6 +489,60 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         """預設的數字或日期格式與註解（只改送來的項目）。"""
         changes = {key: getattr(body, key) for key in body.model_fields_set}
         edit(request, workbook, lambda ir: set_field_properties(ir, datasource, field, **changes))
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/date-properties")
+    def put_date_properties(
+        workbook: str, datasource: str, body: DatePropertiesBody, request: Request
+    ) -> dict[str, bool]:
+        """資料源的日期屬性：週起始日與會計年度起始月（見 tmig.field_edit.set_date_properties）。"""
+        changes = {
+            key: getattr(body, key)
+            for key in body.model_fields_set
+            if getattr(body, key) is not None
+        }
+        edit(request, workbook, lambda ir: set_date_properties(ir, datasource, **changes))
+        return {"ok": True}
+
+    @router.post("/{workbook}/datasources/{datasource}/combined")
+    def post_combined(
+        workbook: str, datasource: str, body: CombinedBody, request: Request
+    ) -> dict[str, Any]:
+        """合併欄位：兩個以上的維度（見 tmig.field_edit.create_combined）。"""
+        field = edit(request, workbook, lambda ir: create_combined(ir, datasource, body.fields))
+        return {"field": field.model_dump(mode="json")}
+
+    @router.post("/{workbook}/datasources/{datasource}/folders")
+    def post_folder(
+        workbook: str, datasource: str, body: FolderBody, request: Request
+    ) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: create_folder(ir, datasource, body.name, body.fields))
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/folders/{folder}")
+    def put_folder(
+        workbook: str, datasource: str, folder: str, body: FolderRenameBody, request: Request
+    ) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: rename_folder(ir, datasource, folder, body.name))
+        return {"ok": True}
+
+    @router.delete("/{workbook}/datasources/{datasource}/folders/{folder}")
+    def delete_folder(
+        workbook: str, datasource: str, folder: str, request: Request
+    ) -> dict[str, bool]:
+        edit(request, workbook, lambda ir: remove_folder(ir, datasource, folder))
+        return {"ok": True}
+
+    @router.put("/{workbook}/datasources/{datasource}/folder-items")
+    def put_folder_items(
+        workbook: str, datasource: str, body: MoveFieldsBody, request: Request
+    ) -> dict[str, bool]:
+        """欄位移到資料夾（folder 為 null 時移出資料夾）。"""
+        edit(
+            request,
+            workbook,
+            lambda ir: move_to_folder(ir, datasource, body.fields, body.folder),
+        )
         return {"ok": True}
 
     @router.delete("/{workbook}/datasources/{datasource}/fields/{field}")

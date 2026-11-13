@@ -128,10 +128,45 @@ export const editApi = {
       body: JSON.stringify({ aliases }),
     }),
   /** 預設的數字或日期格式、註解（只改送出的項目；null 為清除） */
-  saveFieldProperties: (workbook: string, datasource: string, field: string, body: { format?: string | null; comment?: string | null }) =>
+  saveFieldProperties: (
+    workbook: string,
+    datasource: string,
+    field: string,
+    body: { format?: string | null; comment?: string | null; fiscal_year_start?: number | null },
+  ) =>
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/properties`, {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+  /** 資料源的日期屬性：週起始日、會計年度起始月 */
+  saveDateProperties: (workbook: string, datasource: string, body: { week_start?: string; fiscal_year_start?: number }) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/date-properties`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  /** 合併欄位 */
+  createCombined: (workbook: string, datasource: string, fields: string[]) =>
+    request<{ field: { id: string; caption: string } }>(`${edit(workbook)}/datasources/${part(datasource)}/combined`, {
+      method: "POST",
+      body: JSON.stringify({ fields }),
+    }),
+  /** 資料夾：建立、改名、刪除、移入或移出欄位 */
+  createFolder: (workbook: string, datasource: string, name: string, fields: string[]) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/folders`, {
+      method: "POST",
+      body: JSON.stringify({ name, fields }),
+    }),
+  renameFolder: (workbook: string, datasource: string, folder: string, name: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/folders/${part(folder)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    }),
+  removeFolder: (workbook: string, datasource: string, folder: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/folders/${part(folder)}`, { method: "DELETE" }),
+  moveToFolder: (workbook: string, datasource: string, fields: string[], folder: string | null) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/folder-items`, {
+      method: "PUT",
+      body: JSON.stringify({ fields, folder }),
     }),
   /** 刪除計算欄位、群組、數值分組或集合 */
   removeField: (workbook: string, datasource: string, field: string) =>

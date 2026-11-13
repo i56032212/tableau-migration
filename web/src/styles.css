@@ -282,6 +282,14 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .hierarchy-name:hover .field-actions { display: inline-flex; }
 .hierarchy-name .toggle { width: 12px; color: var(--muted); }
 .hierarchy > .fields { padding-left: 16px; }
+.folder { list-style: none; }
+.folder-name { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 3px; white-space: nowrap; }
+.folder-name.over { background: var(--accent-soft, #e8f0fb); outline: 1px dashed var(--accent); }
+.folder-name:hover .field-actions { display: inline-flex; }
+.folder-name .toggle { width: 12px; color: var(--muted); }
+.folder > .fields { padding-left: 16px; }
+.data-pane .ds-links { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.combined-list { max-height: 280px; }
 .hierarchy-dialog { display: flex; flex-direction: column; gap: 8px; min-width: 320px; }
 .tooltip-dialog { display: flex; flex-direction: column; gap: 8px; min-width: 420px; }
 .tooltip-dialog .tooltip-sheet { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }

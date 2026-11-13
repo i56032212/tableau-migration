@@ -32,6 +32,17 @@ export interface CatalogField {
   comment?: string | null;
   /** 資料表中的欄名（計算欄位、集合為 null） */
   column?: string | null;
+  /** 日期欄位自訂的會計年度起始月（null 沿用資料源） */
+  fiscal_year_start?: number | null;
+  /** 合併欄位的組成欄位 */
+  combined?: string[] | null;
+}
+
+/** 資料窗格的資料夾（role 為 null 時不分維度、量值）。 */
+export interface CatalogFolder {
+  name: string;
+  fields: string[];
+  role: "dimension" | "measure" | null;
 }
 
 /** 集合的規則：固定成員（包含或排除）、條件或 Top／Bottom N。 */
@@ -71,6 +82,10 @@ export interface CatalogDatasource {
   caption: string;
   fields: CatalogField[];
   hierarchies?: CatalogHierarchy[];
+  /** 資料窗格的資料夾 */
+  folders?: CatalogFolder[];
+  /** 日期屬性：週起始日、會計年度起始月 */
+  settings?: { week_start: string; fiscal_year_start: number };
   /** 編輯位置的預設國家、州 */
   geo?: { country: string | null; state: string | null } | null;
 }

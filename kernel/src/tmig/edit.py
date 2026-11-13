@@ -80,6 +80,8 @@ def catalog(ir: IR) -> dict[str, Any]:
                 # 關聯計算只用在關聯條件，資料窗格不顯示
                 "fields": [_field_entry(f) for f in ds.fields if not f.relationship_calc],
                 "hierarchies": [h.model_dump(mode="json") for h in ds.hierarchies],
+                "folders": [f.model_dump(mode="json") for f in ds.folders],
+                "settings": ds.settings.model_dump(mode="json"),
                 "geo": ds.geo.model_dump(mode="json") if ds.geo is not None else None,
             }
             for ds in ir.datasources
@@ -123,6 +125,8 @@ def _field_entry(f: DataField) -> dict[str, Any]:
         "format": f.format,
         "comment": f.comment,
         "column": f.column,
+        "fiscal_year_start": f.fiscal_year_start,
+        "combined": f.combined,
     }
 
 
@@ -1229,9 +1233,22 @@ def _datasource(ir: IR, datasource: str) -> Datasource:
 
 
 def _replace_datasource(ir: IR, ds: Datasource) -> IR:
+    ds = _prune_folders(ds)
     return ir.model_copy(
         update={"datasources": [ds if d.id == ds.id else d for d in ir.datasources]}
     )
+
+
+def _prune_folders(ds: Datasource) -> Datasource:
+    """資料夾中已經移除的欄位一併拿掉（資料夾本身保留）。"""
+    if not ds.folders:
+        return ds
+    known = {f.id for f in ds.fields}
+    folders = [
+        folder.model_copy(update={"fields": [x for x in folder.fields if x in known]})
+        for folder in ds.folders
+    ]
+    return ds if folders == ds.folders else ds.model_copy(update={"folders": folders})
 
 
 def _validated(ir: IR, message: str) -> IR:

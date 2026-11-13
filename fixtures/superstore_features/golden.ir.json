@@ -20,7 +20,8 @@
         "refresh": null
       },
       "settings": {
-        "week_start": "sunday"
+        "week_start": "sunday",
+        "fiscal_year_start": 1
       },
       "fields": [
         {
@@ -43,6 +44,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
@@ -66,6 +69,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
@@ -89,6 +94,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
@@ -112,6 +119,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
@@ -135,6 +144,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
@@ -158,6 +169,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
@@ -181,6 +194,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
@@ -204,6 +219,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
@@ -227,6 +244,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
@@ -250,6 +269,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
@@ -273,6 +294,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
@@ -296,6 +319,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
@@ -319,6 +344,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
@@ -342,6 +369,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
@@ -365,6 +394,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
@@ -388,6 +419,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
@@ -411,6 +444,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
@@ -434,6 +469,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
@@ -457,6 +494,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
@@ -480,6 +519,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
@@ -503,6 +544,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
@@ -563,6 +606,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
@@ -619,6 +664,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
@@ -679,6 +726,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
@@ -726,6 +775,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
@@ -788,6 +839,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
@@ -871,6 +924,8 @@
           },
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[10]"
         },
@@ -955,6 +1010,8 @@
           },
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[11]"
         },
@@ -1018,6 +1075,8 @@
             "peg": 0.0
           },
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[12]"
         },
@@ -1088,6 +1147,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[13]"
         },
@@ -1125,6 +1186,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[14]"
         },
@@ -1177,6 +1240,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[15]"
         },
@@ -1254,6 +1319,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[16]"
         },
@@ -1331,6 +1398,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/column[17]"
         },
@@ -1381,6 +1450,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/group[4]"
         },
@@ -1493,6 +1564,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/group[5]"
         },
@@ -1541,6 +1614,8 @@
           "group": null,
           "bin": null,
           "comment": null,
+          "fiscal_year_start": null,
+          "combined": null,
           "relationship_calc": false,
           "source_ref": "/workbook/datasources/datasource[2]/group[6]"
         }
@@ -1577,6 +1652,7 @@
           ]
         }
       ],
+      "folders": [],
       "published": null,
       "geo": {
         "country": "United States",

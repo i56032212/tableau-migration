@@ -224,20 +224,61 @@ def test_week_start_option(tmp_path: Path) -> None:
     assert parse(tmp_path, b.workbook(ds)).datasources[0].settings.week_start == "monday"
 
 
-def test_fiscal_year_start_is_flagged(tmp_path: Path) -> None:
-    """會計年度從一月以外的月份開始時，年、季與週數不同：列為不支援，不能默默以日曆年計算。"""
+def test_fiscal_year_start(tmp_path: Path) -> None:
+    """會計年度起始月：資料源的 <date-options fiscal-year-start='april'>（已發布資料源的複本寫在
+    <overridable-settings>），日期欄位自訂的 fiscal-year-start（0 為沿用資料源）；無法辨識時列為不支援。"""
     calendar = b.extract_datasource(
         extra="<date-options fiscal-year-start='january' start-of-week='sunday' />",
         columns="<column datatype='date' fiscal-year-start='0' name='[Order Date]' role='dimension' type='ordinal' />",
     )
-    assert reasons(parse(tmp_path, b.workbook(calendar))) == []
+    ir = parse(tmp_path, b.workbook(calendar))
+    assert reasons(ir) == []
+    assert ir.datasources[0].settings.fiscal_year_start == 1
     fiscal = b.extract_datasource(
         extra="<date-options fiscal-year-start='april' start-of-week='sunday' />",
         columns="<column datatype='date' fiscal-year-start='7' name='[Order Date]' role='dimension' type='ordinal' />",
     )
-    found = reasons(parse(tmp_path, b.workbook(fiscal)))
-    assert any("會計年度從 april 開始" in r for r in found)
-    assert any("欄位「Order Date」自訂的會計年度起始月（7）" in r for r in found)
+    ir = parse(tmp_path, b.workbook(fiscal))
+    assert reasons(ir) == []
+    ds = ir.datasources[0]
+    assert ds.settings.fiscal_year_start == 4
+    order_date = next(f for f in ds.fields if f.caption == "Order Date")
+    assert order_date.fiscal_year_start == 7
+    copied = b.extract_datasource(
+        extra="<overridable-settings><date-options fiscal-year-start='october' start-of-week='monday' />"
+        "<default-date-format /><default-calendar-type>Gregorian</default-calendar-type>"
+        "</overridable-settings>",
+    )
+    ir = parse(tmp_path, b.workbook(copied))
+    assert reasons(ir) == []
+    settings = ir.datasources[0].settings
+    assert (settings.fiscal_year_start, settings.week_start) == (10, "monday")
+    unknown = b.extract_datasource(extra="<date-options fiscal-year-start='someday' />")
+    assert any("會計年度起始月 someday" in r for r in reasons(parse(tmp_path, b.workbook(unknown))))
+
+
+def test_folders(tmp_path: Path) -> None:
+    """資料窗格的資料夾：2020.2 以前分在維度、量值之下的 <folder role>，與 2020.2 起的 <folders-common>。"""
+    old = b.extract_datasource(
+        extra="<folder name='Money' role='measures'><folder-item name='[Sales]' type='field' />"
+        "<folder-item name='[Profit]' type='field' /><folder-item name='[Missing]' type='field' />"
+        "</folder><folder name='Place' role='dimensions'><folder-item name='[Region]' type='field' />"
+        "</folder>"
+    )
+    ir = parse(tmp_path, b.workbook(old))
+    assert reasons(ir) == []
+    ds = ir.datasources[0]
+    ids = {f.caption: f.id for f in ds.fields}
+    assert [(f.name, f.role, f.fields) for f in ds.folders] == [
+        ("Money", "measure", [ids["Sales"], ids["Profit"]]),
+        ("Place", "dimension", [ids["Region"]]),
+    ]
+    common = b.extract_datasource(
+        extra="<folders-common><folder name='Orders'><folder-item name='[Order ID]' type='field' />"
+        "<folder-item name='[Quantity]' type='field' /></folder></folders-common>"
+    )
+    ds = parse(tmp_path, b.workbook(common)).datasources[0]
+    assert [(f.name, f.role, len(f.fields)) for f in ds.folders] == [("Orders", None, 2)]
 
 
 def test_unknown_datasource_element(tmp_path: Path) -> None:

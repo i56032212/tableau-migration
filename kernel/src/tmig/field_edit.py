@@ -8,7 +8,12 @@
   categorical-bin 相同以公式計算，定義記在 DataField.group 供「編輯群組」使用
 - 數值分組（upsert_bins）：值為所在區間的下限，大小可以是參數（DataField.bin）
 - 集合（upsert_set）：固定成員（包含或排除）、條件（彙總的布林公式）或 Top／Bottom N（DataField.set）
-- 預設屬性（set_field_properties）：數字或日期的格式字串、註解
+- 預設屬性（set_field_properties）：數字或日期的格式字串、註解、日期欄位的會計年度起始月
+- 日期屬性（set_date_properties）：資料源的週起始日與會計年度起始月
+- 合併欄位（create_combined）：兩個以上的維度組合成一個維度（Tableau 的「建立＞合併欄位」），值為各欄位的
+  值以「, 」連接，名稱為「A & B (Combined)」
+- 資料夾（create_folder、move_to_folder、rename_folder、remove_folder）：資料窗格中欄位的分組，資料夾依
+  名稱排序；刪除資料夾時欄位回到最上層
 - 刪除（remove_field）：計算欄位、群組、數值分組與集合；工作表、其他欄位、篩選或動作用到時不能刪
 
 所有函式都不改動傳入的 IR，回傳新的 IR（與 tmig.edit 相同）。
@@ -39,6 +44,7 @@ from tmig.ir import (
     DataField,
     Datasource,
     FieldBin,
+    FieldFolder,
     FieldGroup,
     FieldSet,
     FieldUse,
@@ -410,9 +416,16 @@ UNSET: Any = object()
 
 
 def set_field_properties(
-    ir: IR, datasource: str, field_id: str, *, format: Any = UNSET, comment: Any = UNSET
+    ir: IR,
+    datasource: str,
+    field_id: str,
+    *,
+    format: Any = UNSET,
+    comment: Any = UNSET,
+    fiscal_year_start: Any = UNSET,
 ) -> IR:
-    """預設屬性（Tableau 的「預設屬性」）：數字或日期的格式字串（None 為自動）與註解（None 為沒有）。"""
+    """預設屬性（Tableau 的「預設屬性」）：數字或日期的格式字串（None 為自動）、註解（None 為沒有）與
+    日期欄位的會計年度起始月（1 到 12；None 沿用資料源的設定）。"""
     ds = _datasource(ir, datasource)
     field = _field(ds, field_id)
     update: dict[str, Any] = {}
@@ -422,9 +435,149 @@ def set_field_properties(
     if comment is not UNSET:
         text = (comment or "").strip() or None
         update["comment"] = text
+    if fiscal_year_start is not UNSET:
+        if field.datatype not in ("date", "datetime"):
+            raise EditError(f"「{field.caption}」不是日期，沒有會計年度")
+        _check_month(fiscal_year_start, allow_none=True)
+        update["fiscal_year_start"] = fiscal_year_start
     if not update:
         return ir
     return _put(ir, ds, field.model_copy(update=update), f"「{field.caption}」的設定不正確")
+
+
+WEEK_DAYS = ("sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
+
+
+def _check_month(value: Any, allow_none: bool = False) -> None:
+    if value is None and allow_none:
+        return
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 12:
+        raise EditError(f"會計年度的起始月要是 1 到 12（不是 {value}）")
+
+
+def set_date_properties(
+    ir: IR, datasource: str, *, week_start: Any = UNSET, fiscal_year_start: Any = UNSET
+) -> IR:
+    """資料源的日期屬性（Tableau 的「日期屬性」）：週起始日與會計年度起始月（1 為一月，即日曆年）。"""
+    ds = _datasource(ir, datasource)
+    update: dict[str, Any] = {}
+    if week_start is not UNSET:
+        if week_start not in WEEK_DAYS:
+            raise EditError(f"不認得的週起始日 {week_start}")
+        update["week_start"] = week_start
+    if fiscal_year_start is not UNSET:
+        _check_month(fiscal_year_start)
+        update["fiscal_year_start"] = fiscal_year_start
+    if not update:
+        return ir
+    settings = ds.settings.model_copy(update=update)
+    return _validated(
+        _replace_datasource(ir, ds.model_copy(update={"settings": settings})), "日期屬性不正確"
+    )
+
+
+# ---------------------------------------------------------------- 合併欄位
+
+
+def create_combined(ir: IR, datasource: str, field_ids: Sequence[str]) -> tuple[IR, DataField]:
+    """合併欄位（Tableau 的「建立＞合併欄位」）：兩個以上的維度，值為各欄位的值以「, 」連接（Null 顯示為
+    Null，與解析器相同），名稱為「A & B (Combined)」。"""
+    ds = _datasource(ir, datasource)
+    parts = [_field(ds, field_id) for field_id in dict.fromkeys(field_ids)]
+    if len(parts) < 2:
+        raise EditError("合併欄位要選兩個以上的維度")
+    for part in parts:
+        if not _is_dimension(part) or part.datatype == "spatial" or part.set is not None:
+            raise EditError(f"「{part.caption}」不是維度，不能合併")
+    caption = _caption(ds, "", " & ".join(p.caption for p in parts) + " (Combined)", None)
+    formula = ' + ", " + '.join(f'IFNULL(STR({p.name}), "Null")' for p in parts)
+    check = check_formula(ir, datasource, formula)
+    field = DataField(
+        id=_unique_id(ir, "f_" + _slug(caption)),
+        name="[" + caption.replace("]", "]]") + "]",
+        caption=caption,
+        role="dimension",
+        datatype="string",
+        calc=check.calc,
+        combined=[p.id for p in parts],
+        source_ref=EDITOR_REF,
+    )
+    return _put(ir, ds, field, f"無法建立「{caption}」"), field
+
+
+# ---------------------------------------------------------------- 資料夾
+
+
+def _folder_index(ds: Datasource, name: str) -> int:
+    found = next((i for i, f in enumerate(ds.folders) if f.name == name), None)
+    if found is None:
+        raise EditError(f"找不到資料夾「{name}」")
+    return found
+
+
+def _sorted_folders(folders: list[FieldFolder]) -> list[FieldFolder]:
+    """資料夾依名稱排序（與 Tableau 的資料窗格相同）。"""
+    return sorted(folders, key=lambda f: (f.name.casefold(), f.role or ""))
+
+
+def _with_folders(ir: IR, ds: Datasource, folders: list[FieldFolder]) -> IR:
+    updated = ds.model_copy(update={"folders": _sorted_folders(folders)})
+    return _validated(_replace_datasource(ir, updated), "資料夾的設定不正確")
+
+
+def create_folder(ir: IR, datasource: str, name: str, field_ids: Sequence[str] = ()) -> IR:
+    """建立資料夾（Tableau 的「資料夾＞建立資料夾」），選取的欄位移進去。"""
+    ds = _datasource(ir, datasource)
+    name = name.strip()
+    if not name:
+        raise EditError("資料夾需要名稱")
+    if any(f.name.casefold() == name.casefold() for f in ds.folders):
+        raise EditError(f"已經有名為「{name}」的資料夾")
+    moving = [_field(ds, field_id).id for field_id in dict.fromkeys(field_ids)]
+    folders = [
+        f.model_copy(update={"fields": [x for x in f.fields if x not in moving]})
+        for f in ds.folders
+    ]
+    return _with_folders(ir, ds, [*folders, FieldFolder(name=name, fields=moving)])
+
+
+def move_to_folder(ir: IR, datasource: str, field_ids: Sequence[str], folder: str | None) -> IR:
+    """欄位移到資料夾（Tableau 的「資料夾＞加入資料夾」、拖到資料夾的名稱上）；folder 為 None 時移出資料夾。"""
+    ds = _datasource(ir, datasource)
+    moving = [_field(ds, field_id).id for field_id in dict.fromkeys(field_ids)]
+    folders = [
+        f.model_copy(update={"fields": [x for x in f.fields if x not in moving]})
+        for f in ds.folders
+    ]
+    if folder is not None:
+        _folder_index(ds, folder)
+        # 同名的資料夾分在維度與量值之下時（2020.2 以前），依欄位的角色放進對應的一個
+        role = _field(ds, moving[0]).role if moving else None
+        candidates = [i for i, f in enumerate(folders) if f.name == folder]
+        index = next((i for i in candidates if folders[i].role in (None, role)), candidates[0])
+        target = folders[index]
+        folders[index] = target.model_copy(update={"fields": [*target.fields, *moving]})
+    return _with_folders(ir, ds, folders)
+
+
+def rename_folder(ir: IR, datasource: str, name: str, new_name: str) -> IR:
+    ds = _datasource(ir, datasource)
+    _folder_index(ds, name)
+    new_name = new_name.strip()
+    if not new_name:
+        raise EditError("資料夾需要名稱")
+    if any(f.name.casefold() == new_name.casefold() and f.name != name for f in ds.folders):
+        raise EditError(f"已經有名為「{new_name}」的資料夾")
+    # 同名分在維度、量值之下的資料夾（2020.2 以前）一起改名
+    folders = [f.model_copy(update={"name": new_name}) if f.name == name else f for f in ds.folders]
+    return _with_folders(ir, ds, folders)
+
+
+def remove_folder(ir: IR, datasource: str, name: str) -> IR:
+    """刪除資料夾：其中的欄位回到最上層（欄位本身不刪除）。"""
+    ds = _datasource(ir, datasource)
+    _folder_index(ds, name)
+    return _with_folders(ir, ds, [f for f in ds.folders if f.name != name])
 
 
 def remove_field(ir: IR, datasource: str, field_id: str) -> IR:

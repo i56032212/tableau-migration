@@ -423,6 +423,39 @@ def with_set_values(datasource: Datasource, values: dict[str, SetValue]) -> Data
     return datasource.model_copy(update={"fields": fields})
 
 
+def fiscal_unit(kind: str, unit: str, start: int) -> bool:
+    """會計年度不是日曆年時，依會計年度計算的日期層級：年、季（部分與截斷）與週數（Tableau 說明文件
+    「會計日期」：月、日與週的截斷不變）。"""
+    return start != 1 and (unit in ("year", "quarter") or (kind == "part" and unit == "week"))
+
+
+def fiscal_node(kind: str, unit: str, ref: Node, start: int) -> Node:
+    """會計年度（start 月起算）的年、季與週數：會計年度以結束的年份命名，即日期往後移 13 - start 個月的
+    年份；季為往前移 start - 1 個月的季；年、季的截斷是會計年度（季）的第一天；週數是距會計年度第一天
+    所在的週的週數加 1（週的起始日依資料源）。"""
+
+    def text(value: str) -> LiteralNode:
+        return LiteralNode(0, "string", value)
+
+    def number(value: int) -> LiteralNode:
+        return LiteralNode(0, "integer", value)
+
+    def months(n: int, value: Node) -> Node:
+        return Call(0, "DATEADD", (text("month"), number(n), value))
+
+    back = months(1 - start, ref)
+    if kind == "part" and unit == "year":
+        return Call(0, "DATEPART", (text("year"), months(13 - start, ref)))
+    if kind == "part" and unit == "quarter":
+        return Call(0, "DATEPART", (text("quarter"), back))
+    first = months(start - 1, Call(0, "DATETRUNC", (text("year"), back)))
+    if kind == "part" and unit == "week":
+        return Binary(0, "+", Call(0, "DATEDIFF", (text("week"), first, ref)), number(1))
+    if unit == "year":
+        return first
+    return months(start - 1, Call(0, "DATETRUNC", (text("quarter"), back)))
+
+
 class WorksheetQuery:
     """一張工作表在某個篩選狀態下的查詢。"""
 
@@ -542,9 +575,22 @@ class WorksheetQuery:
         except FormulaSemanticError as exc:
             raise QueryError(exc.message, unsupported=exc.unsupported) from exc
 
+    def fiscal_start(self, use: FieldUse) -> int:
+        """日期欄位的會計年度起始月：欄位自訂的，或資料源的設定（1 為日曆年）。"""
+        found = self.fields.get(use.field)
+        if found is None or found.datatype not in ("date", "datetime"):
+            return 1
+        return found.fiscal_year_start or self.datasource.settings.fiscal_year_start
+
     def dim_sql(self, use: FieldUse, compiler: ExprCompiler | None = None) -> str:
         comp = compiler or self.row
         node = self.field_node(use.field)
+        if use.date is not None and fiscal_unit(
+            use.date.kind, use.date.unit, self.fiscal_start(use)
+        ):
+            # 會計年度的年、季、週數：以日期函式改寫（見 fiscal_node）
+            fiscal = self.dim_node(use)
+            return self._compile(lambda: comp.row(fiscal))
         base = self._compile(lambda: comp.row(node))
         if use.date is None:
             return base
@@ -1435,10 +1481,17 @@ class WorksheetQuery:
         return uses
 
     def dim_node(self, use: FieldUse) -> Node:
-        """維度（含日期部分、截斷）的運算式語法樹。"""
+        """維度（含日期部分、截斷）的運算式語法樹；會計年度的年、季與週數見 fiscal_node。"""
         ref = self.field_node(use.field)
         if use.date is None:
             return ref
+        start = self.fiscal_start(use)
+        if fiscal_unit(use.date.kind, use.date.unit, start):
+            fiscal = fiscal_node(use.date.kind, use.date.unit, ref, start)
+            if use.date.kind == "trunc" and self.fields[use.field].datatype == "date":
+                # 日期欄位的截斷仍是日期（DATEADD 的結果是日期時間）
+                return Call(0, "DATE", (fiscal,))
+            return fiscal
         unit = LiteralNode(0, "string", use.date.unit)
         name = "DATEPART" if use.date.kind == "part" else "DATETRUNC"
         return Call(0, name, (unit, ref))

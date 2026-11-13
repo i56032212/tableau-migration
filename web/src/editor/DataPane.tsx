@@ -11,6 +11,7 @@ import {
   blendSources,
   buildMap,
   type CatalogField,
+  type CatalogFolder,
   type CatalogHierarchy,
   defaultUse,
   GENERATED_LABELS,
@@ -33,6 +34,7 @@ function canHaveGeoRole(field: CatalogField): boolean {
 空間資料為地圖）。 */
 function fieldIcon(field: CatalogField): string {
   if (field.geo_role) return "🌐";
+  if (field.combined) return "🔗";
   if (field.datatype === "spatial") return "🗺";
   if (field.kind === "set") return "◎";
   if (field.group) return "📎";
@@ -161,9 +163,11 @@ function FieldRow({
           )}
         {field.kind === "calc" && (
             <>
-              <button type="button" className="link" title="編輯計算欄位" onClick={() => editor.openCalc(field, datasource)}>
-                ✎
-              </button>
+              {!field.combined && (
+                <button type="button" className="link" title="編輯計算欄位" onClick={() => editor.openCalc(field, datasource)}>
+                  ✎
+                </button>
+              )}
               <button
                 type="button"
                 className="link"
@@ -283,6 +287,94 @@ function HierarchyGroup({
   );
 }
 
+/** 資料夾：名稱與其中的欄位；把欄位拖曳到名稱上即移進資料夾（與 Tableau 相同）。 */
+function FolderGroup({ folder, datasource, children }: { folder: CatalogFolder; datasource: string; children: React.ReactNode }) {
+  const editor = useEditor();
+  const [open, setOpen] = useState(true);
+  const [over, setOver] = useState(false);
+  const dragged = () => {
+    const item = currentDrag();
+    return item?.kind === "field" && !folder.fields.includes(item.field) ? item.field : null;
+  };
+  const done = (message: string) => {
+    editor.reloadCatalog();
+    editor.notify(message);
+  };
+  return (
+    <li className="folder" data-folder={folder.name}>
+      <div
+        className={`folder-name${over ? " over" : ""}`}
+        onDragOver={(e) => {
+          if (dragged()) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+        onDragEnter={() => setOver(dragged() !== null)}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          const field = dragged();
+          if (!field) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(false);
+          endDrag();
+          editApi
+            .moveToFolder(editor.workbook, datasource, [field], folder.name)
+            .then(() => done(`已移到資料夾「${folder.name}」`))
+            .catch((err: Error) => editor.notify(err.message, "error"));
+        }}
+      >
+        <button type="button" className="link toggle" aria-expanded={open} aria-label={`${open ? "收合" : "展開"}資料夾 ${folder.name}`} onClick={() => setOpen(!open)}>
+          {open ? "▾" : "▸"}
+        </button>
+        <span className="field-icon">📁</span>
+        <span className="field-name">{folder.name}</span>
+        <span className="field-actions">
+          <button
+            type="button"
+            className="link"
+            title="重新命名資料夾"
+            aria-label={`重新命名資料夾 ${folder.name}`}
+            onClick={() => editor.openDialog({ kind: "folder", datasource, fields: [], folder: folder.name })}
+          >
+            ✎
+          </button>
+          <button
+            type="button"
+            className="link"
+            title="刪除資料夾（欄位留在資料窗格中）"
+            aria-label={`刪除資料夾 ${folder.name}`}
+            onClick={() =>
+              void editApi
+                .removeFolder(editor.workbook, datasource, folder.name)
+                .then(() => done(`已刪除資料夾「${folder.name}」`))
+                .catch((err: Error) => editor.notify(err.message, "error"))
+            }
+          >
+            ✕
+          </button>
+        </span>
+      </div>
+      {open && <ul className="fields">{children}</ul>}
+    </li>
+  );
+}
+
+/** 一個區段（維度或量值）中的資料夾：分在這個區段（或不分）且有顯示的欄位的資料夾；空的資料夾列在維度。 */
+function sectionFolders(
+  folders: CatalogFolder[],
+  role: "dimension" | "measure",
+  shown: CatalogField[],
+  searching: boolean,
+): { folder: CatalogFolder; fields: CatalogField[] }[] {
+  const byId = new Map(shown.map((f) => [f.id, f]));
+  return folders
+    .filter((f) => f.role === null || f.role === role)
+    .map((folder) => ({ folder, fields: folder.fields.map((id) => byId.get(id)).filter((f): f is CatalogField => !!f) }))
+    .filter(({ folder, fields }) => fields.length > 0 || (!searching && role === "dimension" && folder.role === null && folder.fields.length === 0));
+}
+
 function SpecialRow({ id, label, measure, geo = false }: { id: string; label: string; measure: boolean; geo?: boolean }) {
   return (
     <li
@@ -332,6 +424,11 @@ export function DataPane({
   const candidates = new Set(hierarchyCandidates(dimensions).map((f) => f.id));
   // 有地名角色的欄位時，與 Tableau 相同列出 Latitude／Longitude (generated)
   const geographic = (ds?.fields ?? []).some((f) => f.geo_role && f.geo_role !== "latitude" && f.geo_role !== "longitude");
+  // 資料夾：資料夾中的欄位列在資料夾下（階層中的維度仍列在階層下）
+  const folders = ds?.folders ?? [];
+  const dimensionFolders = sectionFolders(folders, "dimension", dimensions.filter((f) => !inHierarchy.has(f.id)), !!term);
+  const measureFolders = sectionFolders(folders, "measure", measures, !!term);
+  const foldered = new Set([...dimensionFolders, ...measureFolders].flatMap((g) => g.fields.map((f) => f.id)));
   return (
     <aside className={`data-pane${over ? " over" : ""}`} {...handlers} aria-label="資料">
       <div className="pane-title">資料</div>
@@ -348,16 +445,34 @@ export function DataPane({
           </option>
         ))}
       </select>
-      {onEditDatasource && (
+      <div className="ds-links">
+        {onEditDatasource && (
+          <button
+            type="button"
+            className="link ds-edit-link"
+            title="開啟資料源分頁：加入資料表、關聯、join、聯集、樞紐與欄位的設定"
+            onClick={() => onEditDatasource(shown)}
+          >
+            編輯資料源…
+          </button>
+        )}
         <button
           type="button"
           className="link ds-edit-link"
-          title="開啟資料源分頁：加入資料表、關聯、join、聯集、樞紐與欄位的設定"
-          onClick={() => onEditDatasource(shown)}
+          title="週的起始日與會計年度的起始月（Tableau 的「日期屬性」）"
+          onClick={() => editor.openDialog({ kind: "date-properties", datasource: shown })}
         >
-          編輯資料源…
+          日期屬性…
         </button>
-      )}
+        <button
+          type="button"
+          className="link ds-edit-link"
+          title="建立資料夾（把欄位拖曳到資料夾的名稱上即移進去）"
+          onClick={() => editor.openDialog({ kind: "folder", datasource: shown, fields: [], folder: null })}
+        >
+          新資料夾…
+        </button>
+      </div>
       {shown !== sheet.datasource && (
         <div className="pane-actions blend-actions">
           <span className="hint">量值放到檢視上即與主要資料源混合（Data Blending，依名稱相同的維度連結）</span>
@@ -393,8 +508,15 @@ export function DataPane({
         {hierarchies.map((h) => (
           <HierarchyGroup key={h.name} hierarchy={h} fields={dimensions} datasource={shown} />
         ))}
+        {dimensionFolders.map(({ folder, fields }) => (
+          <FolderGroup key={`d:${folder.name}`} folder={folder} datasource={shown}>
+            {fields.map((f) => (
+              <FieldRow key={f.id} field={f} datasource={shown} hierarchical={candidates.has(f.id)} />
+            ))}
+          </FolderGroup>
+        ))}
         {dimensions
-          .filter((f) => !inHierarchy.has(f.id))
+          .filter((f) => !inHierarchy.has(f.id) && !foldered.has(f.id))
           .map((f) => (
             <FieldRow key={f.id} field={f} datasource={shown} hierarchical={candidates.has(f.id)} />
           ))}
@@ -412,9 +534,18 @@ export function DataPane({
       )}
       <div className="pane-section">量值</div>
       <ul className="fields">
-        {measures.map((f) => (
-          <FieldRow key={f.id} field={f} datasource={shown} />
+        {measureFolders.map(({ folder, fields }) => (
+          <FolderGroup key={`m:${folder.name}`} folder={folder} datasource={shown}>
+            {fields.map((f) => (
+              <FieldRow key={f.id} field={f} datasource={shown} />
+            ))}
+          </FolderGroup>
         ))}
+        {measures
+          .filter((f) => !foldered.has(f.id))
+          .map((f) => (
+            <FieldRow key={f.id} field={f} datasource={shown} />
+          ))}
         {!term && geographic && (
           <>
             <SpecialRow id={LATITUDE_GENERATED} label={GENERATED_LABELS[LATITUDE_GENERATED]} measure geo />

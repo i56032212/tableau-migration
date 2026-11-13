@@ -26,6 +26,7 @@ from tmig.ir.models import (
     ExtractConnection,
     ExtractRefresh,
     FieldBin,
+    FieldFolder,
     FieldGroup,
     FieldUse,
     FileColumn,
@@ -134,9 +135,25 @@ DS_CHILDREN = frozenset(
         "drill-paths",
         "default-sorts",
         "date-options",
+        "overridable-settings",
         "field-sort-info",
     }
 )
+MONTH_NAMES = (
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+"""會計年度起始月在 <date-options fiscal-year-start> 中的寫法。"""
 GEO_ROLES: dict[str, GeoRole] = {
     "Country": "country",
     "State": "state",
@@ -382,10 +399,13 @@ class DatasourceParser:
             caption=self.caption,
             connection=connection,
             week_start=self._week_start(),
+            fiscal_year_start=self._fiscal_year_start(),
             published=None if published else self._published(),
         )
         self._fields(state, conn, data_conn, via_extract)
+        self._fiscal_fields(state)
         self._hierarchies(state)
+        self._folders(state)
         self._geography(state)
         self._comments(state)
         if not state.fields:
@@ -790,12 +810,77 @@ class DatasourceParser:
             return stripped or None
         return None
 
+    def _date_options(self) -> etree._Element | None:
+        """資料源的日期屬性：<date-options>；報表中已發布資料源的複本另寫在 <overridable-settings> 之下
+        （資料源本身的設定優先）。"""
+        found = child(self.el, "date-options")
+        if found is None:
+            found = child(child(self.el, "overridable-settings"), "date-options")
+        return found
+
     def _week_start(self) -> WeekDay:
-        options = child(self.el, "date-options")
+        options = self._date_options()
         value = (options.get("start-of-week") if options is not None else None) or "sunday"
         value = value.lower()
-        self._check_fiscal_year(options)
         return value if value in WEEK_DAYS else "sunday"  # type: ignore[return-value]
+
+    def _fiscal_year_start(self) -> int:
+        """會計年度起始月（<date-options fiscal-year-start='april'>，也接受 1 到 12）；無法辨識時列為不支援，
+        不默默以日曆年計算。"""
+        options = self._date_options()
+        raw = ((options.get("fiscal-year-start") if options is not None else None) or "").strip()
+        if not raw:
+            return 1
+        month = _month(raw)
+        if month is None:
+            assert options is not None
+            self.ctx.flag(options, f"資料源「{self.caption}」的會計年度起始月 {raw} 無法辨識")
+            return 1
+        return month
+
+    def _fiscal_fields(self, state: DsState) -> None:
+        """日期欄位自訂的會計年度起始月（預設屬性，<column fiscal-year-start='4'>；0 為沿用資料源）。"""
+        for column in children(self.el, "column"):
+            raw = (column.get("fiscal-year-start") or "").strip()
+            if raw in ("", "0"):
+                continue
+            found = state.by_name.get(column.get("name", ""))
+            if found is None:
+                continue
+            month = _month(raw)
+            if month is None:
+                self.ctx.flag(column, f"欄位「{found.caption}」的會計年度起始月 {raw} 無法辨識")
+                continue
+            found.fiscal_year_start = month
+
+    def _folders(self, state: DsState) -> None:
+        """資料窗格的資料夾：2020.2 以前的 <folder name role='dimensions'>（分在維度或量值之下），與 2020.2
+        起的 <folders-common><folder>；資料夾中的欄位（<folder-item name='[欄位]' type='field'>）找不到時
+        略過，一個欄位只算在第一個資料夾。"""
+        elements = [
+            *children(self.el, "folder"),
+            *children(child(self.el, "folders-common"), "folder"),
+        ]
+        roles = {"dimensions": "dimension", "measures": "measure"}
+        seen: set[str] = set()
+        for element in elements:
+            name = (element.get("name") or "").strip()
+            if not name:
+                continue
+            role = roles.get(element.get("role") or "")
+            ids: list[str] = []
+            for item in children(element, "folder-item"):
+                if (item.get("type") or "field") != "field":
+                    continue
+                found = state.by_name.get(item.get("name", ""))
+                if found is not None and found.id not in seen:
+                    ids.append(found.id)
+                    seen.add(found.id)
+            existing = next((f for f in state.folders if (f.name, f.role) == (name, role)), None)
+            if existing is not None:
+                existing.fields.extend(ids)
+            else:
+                state.folders.append(FieldFolder(name=name, fields=ids, role=role))  # type: ignore[arg-type]
 
     def _hierarchies(self, state: DsState) -> None:
         """階層：<drill-paths><drill-path name='Product'><field>[Category]</field>…；找不到的欄位略過
@@ -811,26 +896,6 @@ class DatasourceParser:
             if name and ids and all(h.name != name for h in state.hierarchies):
                 state.hierarchies.append(Hierarchy(name=name, fields=ids))
                 used.update(ids)
-
-    def _check_fiscal_year(self, options: etree._Element | None) -> None:
-        """會計年度起始月（資料源的 <date-options fiscal-year-start='april'>、日期欄位的 fiscal-year-start）
-        改變日期的年、季與週數：還沒支援，列為不支援，不能默默以日曆年計算。欄位上的 0 表示沿用資料源的設定。"""
-        start = (
-            (options.get("fiscal-year-start") or "january") if options is not None else "january"
-        )
-        if options is not None and start.lower() != "january":
-            self.ctx.flag(
-                options,
-                f"資料源「{self.caption}」的會計年度從 {start} 開始：年、季與週數依會計年度計算，尚不支援",
-            )
-        for column in children(self.el, "column"):
-            value = column.get("fiscal-year-start")
-            if value not in (None, "", "0"):
-                caption = column.get("caption") or strip_brackets(column.get("name", ""))
-                self.ctx.flag(
-                    column,
-                    f"欄位「{caption}」自訂的會計年度起始月（{value}）：年、季與週數依會計年度計算，尚不支援",
-                )
 
     # ------------------------------------------------------------ 欄位
 
@@ -975,6 +1040,7 @@ class DatasourceParser:
             datatype="string",
             column=None,
             calc=Calc(formula=formula),
+            combined=[state.by_name[level].id for level in levels],
             source_ref=xpath(group),
         )
         state.add_field(data_field)
@@ -1285,6 +1351,16 @@ class DatasourceParser:
 
 
 GROUP_KINDS = {"categorical-bin": "群組", "bin": "數值分組"}
+
+
+def _month(raw: str) -> int | None:
+    """月份的寫法：英文名稱（january）或 1 到 12。"""
+    text = raw.strip().lower()
+    if text in MONTH_NAMES:
+        return MONTH_NAMES.index(text) + 1
+    if text.isdigit() and 1 <= int(text) <= 12:
+        return int(text)
+    return None
 
 
 def _source_datatype(state: DsState, source: str) -> str | None:
