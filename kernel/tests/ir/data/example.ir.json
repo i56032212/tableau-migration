@@ -395,6 +395,8 @@
       "tooltips": true,
       "formats": {},
       "title": [],
+      "caption": [],
+      "caption_shown": false,
       "totals": [],
       "totals_colored": false,
       "totals_top": false,
@@ -570,6 +572,8 @@
       "tooltips": true,
       "formats": {},
       "title": [],
+      "caption": [],
+      "caption_shown": false,
       "totals": [],
       "totals_colored": false,
       "totals_top": false,
@@ -692,6 +696,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[1]"
@@ -720,6 +725,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[2]"
@@ -748,6 +754,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[3]"
@@ -782,6 +789,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[4]"
@@ -810,6 +818,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[5]"
@@ -838,6 +847,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone/zone[6]"
@@ -848,6 +858,7 @@
           "distribute": false,
           "hidden": false,
           "show_title": true,
+          "show_caption": false,
           "style": null,
           "fit": null,
           "source_ref": "/workbook/dashboards/dashboard[1]/zones/zone"

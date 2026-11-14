@@ -281,6 +281,8 @@ export interface Zone {
   distribute?: boolean;
   /** 篩選控制項「只顯示相關的值」 */
   relevant?: boolean;
+  /** 工作表區塊是否顯示說明（Caption） */
+  show_caption?: boolean;
   hidden?: boolean;
   show_title?: boolean;
   /** 沒有時表示沒有外距、內距、框線與背景 */
@@ -487,6 +489,10 @@ export interface RenderResponse {
   name?: string;
   /** 工作表的標題：自訂標題代入目前的參數值；沒有自訂標題時為工作表名稱 */
   title?: string;
+  /** 工作表的說明（Caption）：自訂的文字或自動產生的說明 */
+  caption?: string | null;
+  /** 工作表本身是否顯示說明（單獨檢視時；dashboard 的區塊各自決定） */
+  caption_shown?: boolean;
   rows: number;
   mark?: string;
   spec: Record<string, unknown> | null;

@@ -2470,6 +2470,7 @@
         "rule": {
           "discriminator": {
             "mapping": {
+              "combined": "#/$defs/SetCombined",
               "condition": "#/$defs/SetCondition",
               "members": "#/$defs/SetMembers",
               "top_n": "#/$defs/SetTop"
@@ -2485,6 +2486,9 @@
             },
             {
               "$ref": "#/$defs/SetCondition"
+            },
+            {
+              "$ref": "#/$defs/SetCombined"
             }
           ],
           "title": "Rule"
@@ -5514,6 +5518,48 @@
       "title": "SetAction",
       "type": "object"
     },
+    "SetCombined": {
+      "additionalProperties": false,
+      "description": "合併集合（Tableau 的「建立合併集合」）：同一個維度上兩個集合的聯集、交集或差集。\n\n查詢時以布林公式（DataField.calc，例如 [A] AND NOT [B]）計算，來源集合的成員改變時跟著改變。",
+      "properties": {
+        "kind": {
+          "const": "combined",
+          "title": "Kind",
+          "type": "string"
+        },
+        "left": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Left",
+          "type": "string"
+        },
+        "right": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Right",
+          "type": "string"
+        },
+        "op": {
+          "description": "union＝兩個集合的所有成員，intersect＝共同的成員，left_only＝左側集合中不在右側的成員，right_only＝右側集合中不在左側的成員",
+          "enum": [
+            "union",
+            "intersect",
+            "left_only",
+            "right_only"
+          ],
+          "title": "Op",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "left",
+        "right",
+        "op"
+      ],
+      "title": "SetCombined",
+      "type": "object"
+    },
     "SetCondition": {
       "additionalProperties": false,
       "description": "條件集合：彙總條件成立的成員，例如 SUM([Profit]) > 0；mode、values 為先選取的成員。",
@@ -7691,6 +7737,20 @@
           "title": "Title",
           "type": "array"
         },
+        "caption": {
+          "description": "自訂的說明（Caption）文字：文字與參數的值；空的表示自動產生的說明（檢視的內容）",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Caption",
+          "type": "array"
+        },
+        "caption_shown": {
+          "default": false,
+          "description": "顯示說明（工作表選單的「顯示說明」）：說明在檢視的下方",
+          "title": "Caption Shown",
+          "type": "boolean"
+        },
         "totals": {
           "description": "總計（Grand Total）：rows＝列架加上總計列（每一欄的合計，在最下方），columns＝欄架加上總計欄（每一列的合計，在最右邊）",
           "items": {
@@ -8297,6 +8357,12 @@
           "default": true,
           "description": "工作表區塊是否顯示標題",
           "title": "Show Title",
+          "type": "boolean"
+        },
+        "show_caption": {
+          "default": false,
+          "description": "工作表區塊是否顯示說明（Caption）；與工作表本身的設定無關",
+          "title": "Show Caption",
           "type": "boolean"
         },
         "style": {

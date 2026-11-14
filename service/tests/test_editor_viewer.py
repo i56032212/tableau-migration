@@ -743,6 +743,18 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         assert side["distribute"] is True
         assert max(heights) - min(heights) <= 1 and heights[0] > 96, heights
 
+        # 工作表區塊的「顯示說明」：自動產生的說明顯示在工作表的下方
+        page.locator('[data-tree-zone="z9"]').click()
+        shown = page.locator(".dash-props").get_by_label("顯示說明")
+        shown.click()
+        expect(shown).to_be_checked()
+        settle(page)
+        assert find(board()["zones"], "z9")["show_caption"] is True
+        expect(
+            page.locator('.dash-editor .dashboard [data-zone="z9"] .worksheet-caption')
+        ).to_be_visible()
+        expect(page.locator(".dash-editor .dashboard .worksheet-caption")).to_have_count(1)
+
         # 選取工作表區塊後移除（版面配置與畫面都選得到）
         page.locator('[data-tree-zone="z10"]').click()
         expect(page.locator('[data-zone-props="z10"]')).to_be_visible()
@@ -1787,6 +1799,21 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
             ("f_sub_category", True),
         ]
 
+        # 說明：顯示說明（自動產生的文字），再改成自訂的文字
+        page.get_by_role("button", name="說明…").click()
+        page.locator(".caption-dialog").get_by_label("顯示說明").check()
+        confirm(page, ".caption-dialog")
+        assert sheet()["caption_shown"] is True and sheet()["caption"] == []
+        note = page.locator(".editor .worksheet-caption")
+        expect(note).to_contain_text("Region的Sales。")
+        expect(note).to_contain_text("資料依Category、Sub-Category篩選。")
+        page.get_by_role("button", name="說明…").click()
+        page.get_by_role("textbox", name="說明的文字").click()
+        page.keyboard.type("各區的業績（家具）")
+        confirm(page, ".caption-dialog")
+        assert [r["text"] for r in sheet()["caption"]] == ["各區的業績（家具）"]
+        expect(note).to_have_text("各區的業績（家具）")
+
         # 複製、貼上格式：ws_1 的背景與文字顏色貼到 Sales by Region（欄位與篩選不變）
         styled = {**sheet(), "background": "#112233", "text_color": "#eeeeee"}
         request = urllib.request.Request(
@@ -1824,5 +1851,69 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         category = panel.locator("fieldset.control", has_text="Category").first
         category.locator("label", has_text="Technology").locator("input").check()
         expect(sub).to_contain_text("Phones")
+        assert errors == []
+        browser.close()
+
+
+def test_datasource_filters_in_datasource_editor(engine: str) -> None:
+    """資料來源分頁的資料源篩選：新增（與工作表的篩選同一個對話框）、編輯時看得到全部的值、移除。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    def filters() -> list[dict[str, Any]]:
+        return call(engine, "/api/edit/demo/datasources/ds_orders/filters")["filters"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit-ds/ds_orders")
+        section = page.locator(".dse-filters")
+        expect(section.locator(".dse-filter-list li")).to_have_count(
+            1
+        )  # .twb 原有的 Country/Region
+        expect(section).to_contain_text("United States")
+
+        # 新增：Region 只保留 East、West
+        section.get_by_label("新增資料源篩選").select_option(label="Region")
+        page.wait_for_selector(".filter-dialog .value-list li")
+        expect(page.locator(".filter-dialog").get_by_role("tab", name="頂部")).to_have_count(0)
+        for name in ("Central", "South"):
+            page.locator(".value-list label", has_text=name).locator("input").uncheck()
+        page.locator(".filter-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".filter-dialog")).to_have_count(0)
+        expect(section.locator(".dse-filter-list li")).to_have_count(2)
+        saved = filters()
+        assert [(f["field"]["field"], f["stage"]) for f in saved] == [
+            ("f_country_region", "datasource"),
+            ("f_region", "datasource"),
+        ]
+        assert (saved[1]["mode"], saved[1]["values"]) == ("include", ["East", "West"])
+        # 工作表的資料也跟著篩選
+        table = call(engine, "/api/workbooks/demo/worksheets/ws_region_share_by_year/render", {})[
+            "table"
+        ]
+        regions = {row[table["keys"].index("f_region")] for row in table["raw"]}
+        assert regions == {"East", "West"}
+
+        # 編輯：可選值是全部四個區域（不套用它自己），勾選的是 East、West
+        section.locator(".dse-filter-list li", has_text="Region").last.get_by_role(
+            "button", name="編輯"
+        ).click()
+        page.wait_for_selector(".filter-dialog .value-list li")
+        expect(page.locator(".filter-dialog .value-list li")).to_have_count(4)
+        expect(
+            page.locator(".value-list label", has_text="Central").locator("input")
+        ).not_to_be_checked()
+        expect(page.locator(".value-list label", has_text="East").locator("input")).to_be_checked()
+        page.locator(".filter-dialog").get_by_role("button", name="取消").click()
+
+        # 移除
+        section.locator(".dse-filter-list li", has_text="East").get_by_role(
+            "button", name="移除"
+        ).click()
+        expect(section.locator(".dse-filter-list li")).to_have_count(1)
+        assert [f["field"]["field"] for f in filters()] == ["f_country_region"]
         assert errors == []
         browser.close()

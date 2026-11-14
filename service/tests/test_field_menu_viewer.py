@@ -166,6 +166,30 @@ def test_field_menu(engine: str, tmp_path: Path) -> None:
         dialog.wait_for(state="detached")
         pane.locator("li.field", has_text="Region Set").wait_for()
         assert fields()["Region Set"]["set"]["rule"]["members"] == [["East"]]
+        # 合併集合：再建立一個 West 的集合，從 Region Set 的選單與它合併（聯集）
+        menu("Region", "建立", "集合…")
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("集合的名稱").fill("West Set")
+        dialog.get_by_label("West", exact=True).check()
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        pane.locator("li.field", has_text="West Set").wait_for()
+        ids.update({caption: f["id"] for caption, f in fields().items()})
+        menu("Region Set", "建立合併集合…")
+        dialog = page.get_by_role("dialog")
+        assert dialog.get_by_label("左側的集合").input_value() == ids["Region Set"]
+        assert dialog.get_by_label("右側的集合").input_value() == ids["West Set"]
+        dialog.get_by_label("集合的名稱").fill("East or West")
+        dialog.get_by_label("兩個集合中的所有成員").check()
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        pane.locator("li.field", has_text="East or West").wait_for()
+        assert fields()["East or West"]["set"]["rule"] == {
+            "kind": "combined",
+            "left": ids["Region Set"],
+            "right": ids["West Set"],
+            "op": "union",
+        }
         # 重新命名、隱藏
         menu("Quantity", "重新命名…")
         dialog = page.get_by_role("dialog")

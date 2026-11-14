@@ -501,6 +501,9 @@ class WorkbookParser:
                         self.ctx.ignore(card, f"工作表「{name}」上的{param}：不顯示這個控制項")
                         continue
                     item = SheetControl(kind="parameter", parameter=param[0], control=param[1])
+                elif kind == "caption":
+                    ws.caption_shown = True  # 顯示說明
+                    continue
                 else:
                     continue
                 if item not in controls:

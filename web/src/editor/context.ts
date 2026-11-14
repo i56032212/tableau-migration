@@ -47,6 +47,7 @@ export type EditorDialog =
   | { kind: "annotations"; mark: Record<string, Scalar> | null }
   | { kind: "format"; use: FieldUse }
   | { kind: "title" }
+  | { kind: "caption" }
   | { kind: "sheet-format" }
   | { kind: "axis"; use: FieldUse; shelf: "rows" | "columns" }
   | { kind: "reference"; index: number | null; axis: FieldUse | null }
@@ -69,7 +70,7 @@ export type EditorDialog =
   /** 建立或編輯數值分組 */
   | { kind: "bins"; datasource: string; source: string; field: string | null }
   /** 建立或編輯集合；members 為從檢視上選取的成員（各層級的值組合） */
-  | { kind: "set"; datasource: string; levels: string[]; field: string | null; members?: Scalar[][] }
+  | { kind: "set"; datasource: string; levels: string[]; field: string | null; members?: Scalar[][]; combine?: string }
   /** 合併欄位（field 為先選的維度）、日期欄位的會計年度起始月 */
   | { kind: "combined" | "fiscal"; datasource: string; field: string }
   /** 建立資料夾（fields 移進去）或改名（folder 為現有的資料夾） */

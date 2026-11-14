@@ -860,3 +860,161 @@ def test_sheet_controls_and_relevant_values(client: TestClient) -> None:
     ws = sheet(client, "ws_sales_by_region")
     ws["filters"] = [f for f in ws["filters"] if f["id"] != "flt_sub"]
     assert put(client, ws)["controls"] == []
+
+
+def test_datasource_filters(client: TestClient) -> None:
+    """資料源篩選：逐列套用到資料源的所有工作表與可選值；萃取篩選不變；Top N 與量值不能當作資料源篩選。"""
+    base = "/api/edit/demo/datasources/ds_orders/filters"
+    original = client.get("/api/edit/demo/catalog").json()
+    assert original["datasources"][0]["id"] == "ds_orders"
+    (country,) = client.get(base).json()["filters"]  # .twb 原有的資料源篩選
+    assert (country["field"]["field"], country["values"]) == ("f_country_region", ["United States"])
+    region = {
+        "kind": "categorical",
+        "id": "dsf_region",
+        "field": use("f_region"),
+        "stage": "dimension",  # 一律存成資料源階段
+        "mode": "include",
+        "values": ["East", "West"],
+        "ranges": [],
+        "group": None,
+        "source_ref": "/editor",
+    }
+    saved = client.put(base, json={"filters": [country, region]})
+    assert saved.status_code == 200, saved.text
+    assert [(f["id"], f["stage"]) for f in saved.json()["filters"]] == [
+        ("flt_country_region", "datasource"),
+        ("dsf_region", "datasource"),
+    ]
+    assert client.get(base).json()["filters"][1]["values"] == ["East", "West"]
+
+    # 所有工作表只剩 East、West（Sales by Region 原本有 Top N 篩選，在資料源篩選之後）
+    ws = blank(client, rows=[use("f_region")], columns=[use("f_sales", agg="sum", continuous=True)])
+    put(client, ws)
+    assert column(render(client, "ws_sales_by_region")["table"], "f_region") == ["East", "West"]
+    # 可選值也只有通過資料源篩選的值；編輯這個資料源篩選時不套用它自己
+    domain = {"use": use("f_region"), "kind": "values"}
+    assert client.post("/api/edit/demo/domain", json=domain).json()["values"] == ["East", "West"]
+    everything = client.post(
+        "/api/edit/demo/domain", json={**domain, "exclude_filter": "dsf_region"}
+    )
+    assert everything.json()["values"] == ["Central", "East", "South", "West"]
+
+    # 不能逐列套用的篩選
+    top = {
+        "kind": "top_n",
+        "id": "dsf_top",
+        "field": use("f_region"),
+        "stage": "top_n",
+        "direction": "top",
+        "count": 2,
+        "by": "SUM([Sales])",
+        "mode": "all",
+        "values": [],
+        "source_ref": "/editor",
+    }
+    refused = client.put(base, json={"filters": [region, top]})
+    assert refused.status_code == 422 and "Top N" in refused.json()["detail"]
+    measure = {**region, "id": "dsf_sales", "field": use("f_sales", agg="sum", continuous=True)}
+    refused = client.put(base, json={"filters": [measure]})
+    assert refused.status_code == 422 and "彙總" in refused.json()["detail"]
+    aggregate = {
+        "kind": "condition",
+        "id": "dsf_cond",
+        "field": use("f_region"),
+        "stage": "dimension",
+        "condition": "SUM([Sales]) > 0",
+        "mode": "all",
+        "values": [],
+        "group": None,
+        "source_ref": "/editor",
+    }
+    refused = client.put(base, json={"filters": [aggregate]})
+    assert refused.status_code == 422 and "不能當作資料源篩選" in refused.json()["detail"]
+    assert client.put(base.replace("ds_orders", "ds_nope"), json={"filters": []}).status_code == 422
+    # 失敗的不會留下：仍是原本的兩個篩選
+    assert [f["id"] for f in client.get(base).json()["filters"]] == [
+        "flt_country_region",
+        "dsf_region",
+    ]
+
+    # 移除後恢復
+    assert len(client.put(base, json={"filters": [country]}).json()["filters"]) == 1
+    assert len(column(render(client, "ws_sales_by_region")["table"], "f_region")) == 4
+
+
+def test_combined_sets(client: TestClient) -> None:
+    """合併集合：同一個維度上兩個集合的聯集、交集與差集；來源的集合不能刪除，不同維度的集合不能合併。"""
+    base = "/api/edit/demo/datasources/ds_orders"
+
+    def make(caption: str, rule: dict[str, Any], level: str = "f_sub_category") -> dict[str, Any]:
+        response = client.post(
+            f"{base}/sets", json={"levels": [level], "caption": caption, "rule": rule}
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["field"]
+
+    top = make("Top 5", {"kind": "top_n", "direction": "top", "count": 5, "by": "SUM([Sales])"})
+    rich = make("Profitable", {"kind": "condition", "condition": "SUM([Profit]) > 30000"})
+    region = make("East", {"kind": "members", "mode": "include", "members": [["East"]]}, "f_region")
+
+    def combined(op: str, left: str = top["id"], right: str = rich["id"]) -> Any:
+        rule = {"kind": "combined", "left": left, "right": right, "op": op}
+        return client.post(
+            f"{base}/sets", json={"levels": [], "caption": f"Combined {op}", "rule": rule}
+        )
+
+    fields = {}
+    for op in ("union", "intersect", "left_only", "right_only"):
+        response = combined(op)
+        assert response.status_code == 200, response.text
+        fields[op] = response.json()["field"]
+    both = fields["intersect"]
+    assert both["set"]["rule"] == {
+        "kind": "combined",
+        "left": top["id"],
+        "right": rich["id"],
+        "op": "intersect",
+    }
+    assert [u["field"] for u in both["set"]["levels"]] == ["f_sub_category"]
+    assert both["calc"] is not None and both["datatype"] == "boolean"
+
+    ws = blank(
+        client,
+        rows=[
+            use("f_sub_category"),
+            use(top["id"]),
+            use(rich["id"]),
+            *(use(f["id"]) for f in fields.values()),
+        ],
+        columns=[use("f_sales", agg="sum", continuous=True)],
+    )
+    put(client, ws)
+    table = render(client, "ws_sales_by_region")["table"]
+
+    def members(field_id: str) -> set[str]:
+        return {
+            name
+            for name, inside in zip(
+                column(table, "f_sub_category"), column(table, field_id), strict=True
+            )
+            if inside == "true"
+        }
+
+    a, b = members(top["id"]), members(rich["id"])
+    assert len(a) == 5 and b and a != b
+    assert members(fields["union"]["id"]) == a | b
+    assert members(fields["intersect"]["id"]) == a & b
+    assert members(fields["left_only"]["id"]) == a - b
+    assert members(fields["right_only"]["id"]) == b - a
+
+    # 不同維度、同一個集合、不是集合
+    refused = combined("union", top["id"], region["id"])
+    assert refused.status_code == 422 and "同一個維度" in refused.json()["detail"]
+    refused = combined("union", top["id"], top["id"])
+    assert refused.status_code == 422 and "不同的集合" in refused.json()["detail"]
+    refused = combined("union", top["id"], "f_region")
+    assert refused.status_code == 422 and "不是其他的集合" in refused.json()["detail"]
+    # 來源的集合還在用：不能刪除
+    removed = client.delete(f"{base}/calcs/{top['id']}")
+    assert removed.status_code == 422, removed.text

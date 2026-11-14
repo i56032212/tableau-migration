@@ -41,6 +41,7 @@ from tmig.edit import (
     replace_dashboard,
     replace_story,
     replace_worksheet,
+    set_datasource_filters,
     set_geo_defaults,
     set_geography,
     upsert_action,
@@ -82,6 +83,13 @@ class ApplyFilterBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     targets: list[str]
+
+
+class DatasourceFiltersBody(BaseModel):
+    """資料源篩選：完整的篩選清單（取代原本的資料源篩選；萃取篩選不變）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    filters: list[dict[str, Any]]
 
 
 class NewWorksheetBody(BaseModel):
@@ -350,7 +358,18 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
                     )
                     else "values"
                 )
-                sql = domain_sql(ir, ds.id, use, kind, user)
+                # 正在編輯的是資料源篩選時，可選值不套用它自己（其他的資料源篩選照樣套用）
+                scoped = ir
+                if body.exclude_filter and any(f.id == body.exclude_filter for f in ds.filters):
+                    without = ds.model_copy(
+                        update={"filters": [f for f in ds.filters if f.id != body.exclude_filter]}
+                    )
+                    scoped = ir.model_copy(
+                        update={
+                            "datasources": [without if d.id == ds.id else d for d in ir.datasources]
+                        }
+                    )
+                sql = domain_sql(scoped, ds.id, use, kind, user)
                 result = runtime.run_sql(sql, ds, database, custom_sql_parameters(ir))
                 if kind == "range":
                     low, high = result.rows[0] if result.rows else (None, None)
@@ -461,6 +480,26 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
             lambda ir: apply_filter_to_worksheets(ir, worksheet, filter_id, body.targets),
         )
         return {"worksheet": sheet.model_dump(mode="json")}
+
+    @router.get("/{workbook}/datasources/{datasource}/filters")
+    def get_datasource_filters(workbook: str, datasource: str, request: Request) -> dict[str, Any]:
+        """資料源篩選（資料來源分頁的「篩選條件」）；萃取篩選不列出。"""
+        ir = workspace(request).get(workbook).ir
+        ds = next((d for d in ir.datasources if d.id == datasource), None)
+        if ds is None:
+            raise HTTPException(404, f"找不到資料源「{datasource}」")
+        return {
+            "filters": [f.model_dump(mode="json") for f in ds.filters if f.stage == "datasource"]
+        }
+
+    @router.put("/{workbook}/datasources/{datasource}/filters")
+    def put_datasource_filters(
+        workbook: str, datasource: str, body: DatasourceFiltersBody, request: Request
+    ) -> dict[str, Any]:
+        saved = edit(
+            request, workbook, lambda ir: set_datasource_filters(ir, datasource, body.filters)
+        )
+        return {"filters": [f.model_dump(mode="json") for f in saved]}
 
     @router.post("/{workbook}/worksheets")
     def post_worksheet(workbook: str, body: NewWorksheetBody, request: Request) -> dict[str, Any]:

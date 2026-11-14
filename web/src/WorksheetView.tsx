@@ -23,6 +23,8 @@ interface Props {
   state: QueryState;
   hideLegend?: boolean;
   showTitle?: boolean;
+  /** 是否顯示說明（Caption）；省略時依工作表本身的設定 */
+  showCaption?: boolean;
   /** dashboard 區塊中的顯示大小；沒有時依工作表本身的設定（usermeta.fit） */
   fit?: FitMode | null;
   onRendered?: (response: RenderResponse) => void;
@@ -460,6 +462,7 @@ export function WorksheetView({
   state,
   hideLegend,
   showTitle = true,
+  showCaption,
   fit,
   onRendered,
   onMarks,
@@ -816,6 +819,11 @@ export function WorksheetView({
         )}
         {loading && !response && <div className="placeholder">載入中…</div>}
       </div>
+      {response?.caption && (showCaption ?? response.caption_shown === true) && (
+        <div className="worksheet-caption" role="note" aria-label="說明">
+          {response.caption}
+        </div>
+      )}
       {tip && (
         <VizTooltip
           tip={tip}

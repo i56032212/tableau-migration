@@ -466,6 +466,7 @@ function ZoneContent({
           state={stateFor(ir, zone.worksheet!, view)}
           hideLegend={hideLegend}
           showTitle={zone.show_title !== false}
+          showCaption={zone.show_caption === true}
           fit={zone.fit}
           onRendered={onRendered}
           onMarks={onMarks}

@@ -2,7 +2,7 @@
 
 import { request } from "../api";
 import type { Action, Dashboard, Domain, FieldUse, MemberAlias, Scalar, Story } from "../types";
-import type { Catalog, CatalogField, CatalogHierarchy, GeoAlias, GeoRole, SetRuleIR, SheetIR } from "./model";
+import type { Catalog, CatalogField, CatalogHierarchy, FilterIR, GeoAlias, GeoRole, SetRuleIR, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
 const part = encodeURIComponent;
@@ -100,6 +100,14 @@ export const editApi = {
       method: "POST",
       body: JSON.stringify({ targets }),
     }).then((r) => r.worksheet),
+  /** 資料源篩選（資料來源分頁的「篩選條件」） */
+  datasourceFilters: (workbook: string, datasource: string) =>
+    request<{ filters: FilterIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/filters`),
+  saveDatasourceFilters: (workbook: string, datasource: string, filters: FilterIR[]) =>
+    request<{ filters: FilterIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/filters`, {
+      method: "PUT",
+      body: JSON.stringify({ filters }),
+    }),
   addWorksheet: (workbook: string, name?: string, datasource?: string) =>
     request<{ worksheet: SheetIR }>(`${edit(workbook)}/worksheets`, {
       method: "POST",

@@ -1425,10 +1425,10 @@ class WorksheetQuery:
                 for use in data_field.set.levels:
                     self.collect(self.field_node(use.field), usage, inside, owner)
                 rule = data_field.set.rule
-                if rule.kind != "members":
-                    self.collect(
-                        parse_formula(rule.by if rule.kind == "top_n" else rule.condition), usage
-                    )
+                if rule.kind == "top_n":
+                    self.collect(parse_formula(rule.by), usage)
+                elif rule.kind == "condition":
+                    self.collect(parse_formula(rule.condition), usage)
                 return
             if data_field.column is None and data_field.table is not None:
                 # 邏輯資料表的筆數欄位：SUM 即該資料表的列數

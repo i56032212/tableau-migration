@@ -181,7 +181,21 @@ class SetCondition(IRModel):
     values: list[Scalar] = Field(default_factory=list)
 
 
-SetRule = Annotated[SetMembers | SetTop | SetCondition, Field(discriminator="kind")]
+class SetCombined(IRModel):
+    """合併集合（Tableau 的「建立合併集合」）：同一個維度上兩個集合的聯集、交集或差集。
+
+    查詢時以布林公式（DataField.calc，例如 [A] AND NOT [B]）計算，來源集合的成員改變時跟著改變。"""
+
+    kind: Literal["combined"]
+    left: Id
+    right: Id
+    op: Literal["union", "intersect", "left_only", "right_only"] = Field(
+        description="union＝兩個集合的所有成員，intersect＝共同的成員，left_only＝左側集合中不在右側的成員，"
+        "right_only＝右側集合中不在左側的成員"
+    )
+
+
+SetRule = Annotated[SetMembers | SetTop | SetCondition | SetCombined, Field(discriminator="kind")]
 
 
 class FieldSet(IRModel):
@@ -299,7 +313,8 @@ class DataField(IRModel):
 
     @model_validator(mode="after")
     def _column_or_calc(self) -> Self:
-        computed = self.set is not None and self.set.rule.kind != "members"
+        # 固定成員與合併的集合以公式（calc）計算；Top N 與條件集合查詢時才算出成員
+        computed = self.set is not None and self.set.rule.kind in ("top_n", "condition")
         if sum(x for x in (self.column is not None, self.calc is not None, computed)) != 1:
             raise ValueError(
                 "欄位必須剛好有 column（一般欄位）、calc（計算欄位）或 Top N、條件集合其中之一"
@@ -1886,6 +1901,13 @@ class Worksheet(IRModel):
         default_factory=list,
         description="自訂的工作表標題（文字與參數的值）；空的表示以工作表名稱為標題",
     )
+    caption: list[TextRun] = Field(
+        default_factory=list,
+        description="自訂的說明（Caption）文字：文字與參數的值；空的表示自動產生的說明（檢視的內容）",
+    )
+    caption_shown: bool = Field(
+        default=False, description="顯示說明（工作表選單的「顯示說明」）：說明在檢視的下方"
+    )
     totals: list[Literal["rows", "columns"]] = Field(
         default_factory=list,
         description="總計（Grand Total）：rows＝列架加上總計列（每一欄的合計，在最下方），"
@@ -2159,6 +2181,9 @@ class Zone(IRModel):
     )
     hidden: bool = Field(default=False, description="使用者隱藏的區塊（例如以按鈕切換顯示的容器）")
     show_title: bool = Field(default=True, description="工作表區塊是否顯示標題")
+    show_caption: bool = Field(
+        default=False, description="工作表區塊是否顯示說明（Caption）；與工作表本身的設定無關"
+    )
     style: ZoneStyle | None = Field(
         default=None, description="區塊的格式（背景、框線、外距與內距）；None 表示都沒有"
     )

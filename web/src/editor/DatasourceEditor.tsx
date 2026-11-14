@@ -5,6 +5,7 @@ import { pickDataPath, pickFolderPath, toast } from "../desktop";
 import { Modal } from "../Server";
 import type { DatasourcePreview } from "../types";
 import { PickConnectionDialog } from "./ConnectServer";
+import { DatasourceFilters } from "./DatasourceFilters";
 import {
   connectionsApi,
   datasourceApi,
@@ -389,6 +390,7 @@ export function DatasourceEditor({
           </table>
         </div>
       </section>
+      <DatasourceFilters workbook={workbook} datasource={datasource} onChanged={() => setVersion((v) => v + 1)} />
       <section className="dse-preview" aria-label="資料">
         <div className="ds-grid-bar">
           <h2>資料</h2>

@@ -226,7 +226,12 @@ class DashboardParser:
             # 這個 dashboard 中的顯示大小；沒有 <viewpoint> 時依工作表本身
             fit = self.ctx.dashboard_fits.get(self.name, {}).get(name)
             return Zone(
-                kind="worksheet", worksheet=sheet.id, show_title=show_title, fit=fit, **base
+                kind="worksheet",
+                worksheet=sheet.id,
+                show_title=show_title,
+                show_caption=element.get("show-caption") == "true",
+                fit=fit,
+                **base,
             )
         if kind_attr == "title":
             text, content = self._text(element)

@@ -258,6 +258,16 @@ def check_references(ir: IR) -> list[str]:
             if rule.kind == "members":
                 if any(len(m) != len(fld.set.levels) for m in rule.members):
                     errors.append(f"{where}：成員的值與層級的數量不同")
+            elif rule.kind == "combined":
+                # 合併集合：來源是同一個資料源中、同樣層級的其他集合
+                for side in (rule.left, rule.right):
+                    source = by_id.get(side)
+                    if source is None or source.set is None or side == fld.id:
+                        errors.append(f"{where}：合併的來源「{side}」不是其他的集合")
+                    elif source.set.levels != fld.set.levels:
+                        errors.append(f"{where}：合併的來源「{side}」不在同一個維度上")
+                if fld.calc is None:
+                    errors.append(f"{where}：合併集合沒有計算的公式")
             elif len(fld.set.levels) != 1:
                 errors.append(f"{where}：Top N 與條件集合只能有一個層級")
             if (

@@ -38,7 +38,7 @@ import {
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
 import { AnnotationsDialog, ApplyFilterDialog, BlendsDialog, LabelDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
-import { ShapesDialog, TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
+import { CaptionDialog, ShapesDialog, TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
 import {
   type Card,
   type Catalog,
@@ -559,6 +559,9 @@ export function Editor({
           <button type="button" onClick={() => setDialog({ kind: "title" })}>
             標題…
           </button>
+          <button type="button" title="檢視下方的說明（Tableau 的「工作表＞顯示說明」）" onClick={() => setDialog({ kind: "caption" })}>
+            說明…
+          </button>
           <button type="button" onClick={() => setDialog({ kind: "sheet-format" })}>
             格式…
           </button>
@@ -787,6 +790,7 @@ export function Editor({
       {dialog?.kind === "blends" && <BlendsDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "totals" && <TotalsDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "shapes" && <ShapesDialog card={dialog.card} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "caption" && <CaptionDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "hierarchy" && (
         <HierarchyDialog
           datasource={dialog.datasource}
@@ -943,6 +947,7 @@ function fieldDialog(dialog: EditorDialog, onClose: () => void, onSaved: () => v
           levels={dialog.levels}
           field={dialog.field}
           members={dialog.members}
+          combine={dialog.combine}
           onClose={onClose}
           onSaved={onSaved}
         />

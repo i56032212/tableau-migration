@@ -1862,7 +1862,7 @@ def test_worksheet_cards_and_relevant_values(tmp_path: Path) -> None:
       <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
       <zones>
         <zone h='100000' id='1' type-v2='layout-flow' param='horz' layout-strategy-id='distribute-evenly' w='100000' x='0' y='0'>
-          <zone h='100000' id='2' name='With Region' w='50000' x='0' y='0' />
+          <zone h='100000' id='2' name='With Region' show-caption='true' w='50000' x='0' y='0' />
           <zone h='100000' id='3' mode='checkdropdown' name='With Region' param='{ref("none:Region:nk")}' type-v2='filter' values='relevant' w='50000' x='50000' y='0' />
         </zone>
       </zones>
@@ -1900,3 +1900,51 @@ def test_worksheet_cards_and_relevant_values(tmp_path: Path) -> None:
     assert container.distribute and container.layout == "horizontal"
     zone = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "filter")
     assert zone.relevant
+    sheet_zone = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "worksheet")
+    assert sheet_zone.show_caption  # 區塊的「顯示說明」
+
+
+def test_worksheet_caption(tmp_path: Path) -> None:
+    """說明（Caption）：<layout-options><caption> 的自訂文字（參數的值）；視窗的 <card type='caption'> 表示顯示。
+    沒有自訂文字時是自動產生的說明。"""
+    from tmig.render.vegalite import worksheet_caption
+
+    sheet = worksheet(
+        "Captioned",
+        BASIC,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        encodings=f"<color column='{ref('none:Category:nk')}' />",
+    )
+    custom = sheet.replace(
+        "<table>",
+        "<layout-options><caption><formatted-text><run>前 </run>"
+        "<run bold='true'>&lt;[Parameters].[Parameter 1]&gt;</run><run> 名的業績</run>"
+        "</formatted-text></caption></layout-options><table>",
+        1,
+    )
+    windows = (
+        "<windows><window class='worksheet' name='Captioned'><cards>"
+        "<edge name='bottom'><strip size='60'><card type='caption' /></strip></edge>"
+        "</cards></window></windows>"
+    )
+    ir = parse(tmp_path, b.workbook(worksheets=custom).replace("<windows />", windows))
+    assert reasons(ir) == []
+    ws = ir.worksheets[0]
+    assert ws.caption_shown and [r.text or r.parameter for r in ws.caption] == [
+        "前 ",
+        ir.parameters[0].id,
+        " 名的業績",
+    ]
+    assert worksheet_caption(ir, ws) == "前 5 名的業績"
+    assert worksheet_caption(ir, ws, {ir.parameters[0].id: 3}) == "前 3 名的業績"
+
+    # 沒有自訂文字：自動產生的說明；沒有顯示說明的視窗設定時不顯示
+    (tmp_path / "auto").mkdir()
+    ir = parse(tmp_path / "auto", b.workbook(worksheets=sheet).replace("<windows />", windows))
+    ws = ir.worksheets[0]
+    assert ws.caption == [] and ws.caption_shown
+    assert worksheet_caption(ir, ws) == "Region的Sales。色彩顯示Category。"
+    (tmp_path / "hidden").mkdir()
+    ir = parse(tmp_path / "hidden", b.workbook(worksheets=custom))
+    assert not ir.worksheets[0].caption_shown and worksheet_caption(ir, ir.worksheets[0]) is None

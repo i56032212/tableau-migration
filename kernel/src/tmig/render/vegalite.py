@@ -66,6 +66,7 @@ from tmig.ir.models import (
     TextRun,
     TextStyle,
     TrendLine,
+    TupleFilter,
     Worksheet,
     ZeroLine,
     Zone,
@@ -3283,6 +3284,67 @@ def worksheet_title(
         return ws.name
     params = {p.id: p.value for p in ir.parameters} | (parameters or {})
     return compose_text(ws.title, ir, params, fields=fields or {}) or ws.name
+
+
+def worksheet_caption(
+    ir: IR, ws: Worksheet, parameters: dict[str, Scalar] | None = None, force: bool = False
+) -> str | None:
+    """工作表的說明（Caption）：不顯示時為 None；自訂的文字（代入目前的參數值），沒有時為自動產生的說明。
+    force：不論工作表本身是否顯示（dashboard 的區塊各自決定是否顯示說明）。"""
+    if not ws.caption_shown and not force:
+        return None
+    if ws.caption:
+        params = {p.id: p.value for p in ir.parameters} | (parameters or {})
+        text = compose_text(ws.caption, ir, params, fields={})
+        if text:
+            return text
+    return _auto_caption(ir, ws)
+
+
+def _auto_caption(ir: IR, ws: Worksheet) -> str:
+    """自動產生的說明：欄列架上的維度與量值、標記卡上的欄位與篩選的欄位（Tableau 的自動說明是英文的句子，
+    這裡是相同內容的簡短敘述）。"""
+    fields = {f.id: f for d in ir.datasources for f in d.fields}
+
+    def name(use: FieldUse) -> str:
+        if use.field == MEASURE_NAMES:
+            return MEASURE_NAMES_TITLE
+        if use.field == MEASURE_VALUES:
+            return "Measure Values"
+        data_field = fields.get(use.field)
+        return caption(data_field, use, ws) if data_field is not None else use.field
+
+    def measure(use: FieldUse) -> bool:
+        data_field = fields.get(use.field)
+        return (
+            use.agg is not None
+            or use.table_calc is not None
+            or use.field == MEASURE_VALUES
+            or (data_field is not None and data_field.role == "measure")
+        )
+
+    shelves = [*ws.columns, *ws.rows]
+    measures = list(dict.fromkeys(name(u) for u in shelves if measure(u)))
+    dims = list(dict.fromkeys(name(u) for u in shelves if not measure(u)))
+    parts: list[str] = []
+    if measures and dims:
+        parts.append(f"{'、'.join(dims)}的{'與'.join(measures)}。")
+    elif measures or dims:
+        parts.append(f"{'、'.join(measures or dims)}。")
+    marks = ws.marks
+    for label, use in (("色彩", marks.color), ("大小", marks.size), ("形狀", marks.shape)):
+        if use is not None:
+            parts.append(f"{label}顯示{name(use)}。")
+    if marks.label:
+        parts.append(f"標記的標籤為{'、'.join(name(u) for u in marks.label)}。")
+    if marks.detail:
+        parts.append(f"詳細資料顯示{'、'.join(name(u) for u in marks.detail)}。")
+    filtered = list(
+        dict.fromkeys(name(f.field) for f in ws.filters if not isinstance(f, TupleFilter))
+    )
+    if filtered:
+        parts.append(f"資料依{'、'.join(filtered)}篩選。")
+    return "".join(parts)
 
 
 MULTIPLE_VALUES = "*"

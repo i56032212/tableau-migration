@@ -69,6 +69,7 @@ from tmig.render.vegalite import (
     fiscal_starts,
     title_values,
     value_format,
+    worksheet_caption,
     worksheet_title,
 )
 from tmig.sqlgen.dialect import underlying_query
@@ -1018,6 +1019,9 @@ def create_app(
             "worksheet": sheet.id,
             "name": sheet.name,
             "title": worksheet_title(ir, sheet, query.state.parameters, title_fields),
+            # 說明的文字一律附上：單獨檢視依工作表的設定顯示，dashboard 的區塊各自決定
+            "caption": worksheet_caption(ir, sheet, query.state.parameters, force=True),
+            "caption_shown": sheet.caption_shown,
             "rows": rendered.rows,
             "mark": rendered.mark,
             "spec": rendered.spec,

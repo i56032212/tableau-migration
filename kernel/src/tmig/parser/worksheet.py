@@ -551,6 +551,7 @@ class SheetParser:
             forecast=forecast,
             formats=formats,
             title=title,
+            caption=self._caption(child(el, "layout-options")),
             totals=totals,
             totals_colored=totals_colored,
             percentages=self._percentages(child(table, "view")),
@@ -1881,6 +1882,17 @@ class SheetParser:
             if rule.get("element") == "mark"
             for enc in children(rule, "encoding")
         )
+
+    def _caption(self, layout: etree._Element | None) -> list[TextRun]:
+        """自訂的說明（Caption）文字：文字與參數的值；欄位的值不支援（略過那一段）。是否顯示見工作表視窗的
+        <card type='caption'>（tmig.parser.workbook）。"""
+        formatted = child(child(layout, "caption"), "formatted-text")
+        if formatted is None:
+            return []
+        runs = self._text_runs(formatted, f"工作表「{self.name}」的說明")
+        if any(run.use is not None for run in runs):
+            self.ctx.ignore(formatted, f"工作表「{self.name}」的說明中的欄位值不顯示")
+        return [run for run in runs if run.use is None]
 
     def _title(self, layout: etree._Element | None) -> list[TextRun]:
         """自訂的工作表標題；只有工作表名稱（<Sheet Name>）時與預設相同，回傳空的。

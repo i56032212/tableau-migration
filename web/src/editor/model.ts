@@ -49,7 +49,9 @@ export interface CatalogFolder {
 export type SetRuleIR =
   | { kind: "members"; mode: "include" | "exclude"; members: Scalar[][] }
   | { kind: "condition"; condition: string; mode?: string; values?: Scalar[] }
-  | { kind: "top_n"; direction: "top" | "bottom"; count: number | { parameter: string }; by: string; mode?: string; values?: Scalar[] };
+  | { kind: "top_n"; direction: "top" | "bottom"; count: number | { parameter: string }; by: string; mode?: string; values?: Scalar[] }
+  /** 合併集合：同一個維度上兩個集合的聯集、交集或差集 */
+  | { kind: "combined"; left: string; right: string; op: "union" | "intersect" | "left_only" | "right_only" };
 
 export type GeoRole = "country" | "state" | "county" | "city" | "zip" | "latitude" | "longitude";
 

@@ -1058,6 +1058,8 @@
       "tooltips": true,
       "formats": {},
       "title": [],
+      "caption": [],
+      "caption_shown": false,
       "totals": [],
       "totals_colored": false,
       "totals_top": false,
@@ -1241,6 +1243,8 @@
       "tooltips": true,
       "formats": {},
       "title": [],
+      "caption": [],
+      "caption_shown": false,
       "totals": [],
       "totals_colored": false,
       "totals_top": false,
@@ -1419,6 +1423,8 @@
       "tooltips": true,
       "formats": {},
       "title": [],
+      "caption": [],
+      "caption_shown": false,
       "totals": [],
       "totals_colored": false,
       "totals_top": false,
@@ -1620,6 +1626,8 @@
       "tooltips": true,
       "formats": {},
       "title": [],
+      "caption": [],
+      "caption_shown": false,
       "totals": [],
       "totals_colored": false,
       "totals_top": false,
@@ -1788,6 +1796,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[1]"
@@ -1816,6 +1825,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[2]"
@@ -1844,6 +1854,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[3]"
@@ -1872,6 +1883,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[4]"
@@ -1900,6 +1912,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": "entire_view",
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]/zone[5]"
@@ -1910,6 +1923,7 @@
                   "distribute": false,
                   "hidden": false,
                   "show_title": true,
+                  "show_caption": false,
                   "style": null,
                   "fit": null,
                   "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[1]"
@@ -1963,6 +1977,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[1]"
@@ -1991,6 +2006,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[2]"
@@ -2025,6 +2041,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[3]"
@@ -2053,6 +2070,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[4]"
@@ -2081,6 +2099,7 @@
                       "distribute": false,
                       "hidden": false,
                       "show_title": true,
+                      "show_caption": false,
                       "style": null,
                       "fit": null,
                       "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]/zone[5]"
@@ -2091,6 +2110,7 @@
                   "distribute": false,
                   "hidden": false,
                   "show_title": true,
+                  "show_caption": false,
                   "style": null,
                   "fit": null,
                   "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone/zone[2]"
@@ -2101,6 +2121,7 @@
               "distribute": false,
               "hidden": false,
               "show_title": true,
+              "show_caption": false,
               "style": null,
               "fit": null,
               "source_ref": "/workbook/dashboards/dashboard/zones/zone/zone"
@@ -2111,6 +2132,7 @@
           "distribute": false,
           "hidden": false,
           "show_title": true,
+          "show_caption": false,
           "style": null,
           "fit": null,
           "source_ref": "/workbook/dashboards/dashboard/zones/zone"

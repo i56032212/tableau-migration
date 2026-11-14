@@ -6,6 +6,8 @@ import type { FieldUse, Scalar } from "../types";
 import { editApi } from "./api";
 import { useEditor } from "./context";
 import { allUses, type Card, cardMarks, isMeasure, pillLabel, type SheetIR, updateCard, useKey } from "./model";
+import { textTokens } from "./MoreDialogs";
+import { type RichRun, RichTextEditor } from "./RichText";
 
 type TotalAgg = "sum" | "avg" | "min" | "max";
 interface VisualTotalIR {
@@ -109,6 +111,41 @@ export function TotalsDialog({ onClose }: { onClose: () => void }) {
             <p className="hint">自動：在總計的詳細程度重新彙總底層資料；其餘：畫面上各標記的值再計算。</p>
           </fieldset>
         )}
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={save}>
+            確定
+          </button>
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 說明
+
+/** 說明（Tableau 的「工作表＞顯示說明」）：檢視下方的文字；留空白時是自動產生的說明（檢視的內容）。 */
+export function CaptionDialog({ onClose }: { onClose: () => void }) {
+  const editor = useEditor();
+  const [shown, setShown] = useState(editor.sheet.caption_shown === true);
+  const [runs, setRuns] = useState<RichRun[]>((editor.sheet.caption as RichRun[] | undefined) ?? []);
+  // 說明中可以插入參數的值（欄位的值不行）
+  const tokens = textTokens(editor.sheet, editor.fields, editor.catalog, { uses: false });
+  const save = () => {
+    const blank = runs.every((r) => r.text != null && !r.text.trim());
+    editor.apply((s: SheetIR) => ({ ...s, caption_shown: shown, caption: blank ? [] : runs }));
+    onClose();
+  };
+  return (
+    <Modal title="說明" onClose={onClose}>
+      <div className="action-form caption-dialog">
+        <label className="inline">
+          <input type="checkbox" checked={shown} onChange={(e) => setShown(e.target.checked)} /> 顯示說明
+        </label>
+        <RichTextEditor label="說明的文字" value={runs} tokens={tokens} onChange={setRuns} rows={3} />
+        <p className="hint">留空白時是自動產生的說明（欄列架、標記卡與篩選的欄位）；「插入」可以放進參數的值。</p>
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>
             確定

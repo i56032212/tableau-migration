@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from tmig.formula.analyze import Analyzer
 from tmig.formula.ast import FieldRef, to_json, walk
@@ -43,7 +43,7 @@ from tmig.ir import (
     iter_zones,
 )
 from tmig.ir.integrity import check_references
-from tmig.ir.models import Filter, GeoAlias, GeoRole, GeoSettings
+from tmig.ir.models import Filter, GeoAlias, GeoRole, GeoSettings, TopNFilter
 from tmig.ir.scope import DatasourceScope, ForeignSource, calc_references
 from tmig.render.palettes import PALETTES
 
@@ -607,6 +607,53 @@ def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR
     )
     updated = _sync_filter_groups(updated, sheet)
     return _validated(updated, "工作表的參照不正確"), sheet
+
+
+def set_datasource_filters(
+    ir: IR, datasource: str, filters: list[dict[str, Any]]
+) -> tuple[IR, list[Filter]]:
+    """資料源篩選（Tableau 資料來源分頁的「篩選條件」）：換掉這個資料源的資料源篩選，萃取篩選不變。
+
+    資料源篩選逐列套用到這個資料源的所有工作表與控制項的可選值：只能是維度上的類別、範圍、相對日期篩選
+    或列層級的條件（萬用字元）；Top N 與彙總的條件需要先算出成員，不能當作資料源篩選。"""
+    from tmig.sqlgen.query import QueryError, domain_sql
+
+    ds = _datasource(ir, datasource)
+    known = {f.id: f for f in ds.fields}
+    parsed: list[Filter] = []
+    seen: set[str] = set()
+    adapter: TypeAdapter[Filter] = TypeAdapter(Filter)
+    for item in filters:
+        if item.get("kind") in ("top_n", "tuple"):
+            raise EditError("資料源篩選不能是 Top N 或依值組合的篩選")
+        try:
+            flt = adapter.validate_python({**item, "stage": "datasource", "group": None})
+        except ValidationError as exc:
+            raise EditError(f"資料源篩選的內容不正確：{_first_error(exc)}") from exc
+        if isinstance(flt, TupleFilter | TopNFilter):
+            raise EditError("資料源篩選不能是 Top N 或依值組合的篩選")
+        field = known.get(flt.field.field)
+        if field is None:
+            raise EditError(f"資料源篩選的欄位 {flt.field.field} 不在這個資料源中")
+        if flt.field.agg is not None or flt.field.table_calc is not None:
+            raise EditError(f"資料源篩選的欄位「{field.caption}」不能是彙總或 Table Calculation")
+        if flt.id in seen:
+            raise EditError(f"資料源篩選 {flt.id} 重複")
+        seen.add(flt.id)
+        parsed.append(flt)
+    kept = [f for f in ds.filters if f.stage != "datasource"]
+    updated = _validated(
+        _replace_datasource(ir, ds.model_copy(update={"filters": [*kept, *parsed]})),
+        "資料源篩選的參照不正確",
+    )
+    # 逐列套用得了才接受（量值、彙總的條件等會在這裡被擋下）
+    probe = next((f for f in ds.fields if f.role == "dimension" and f.calc is None), None)
+    if probe is not None and parsed:
+        try:
+            domain_sql(updated, ds.id, FieldUse(field=probe.id), "values")
+        except QueryError as exc:
+            raise EditError(f"這個篩選不能當作資料源篩選：{exc}") from exc
+    return updated, parsed
 
 
 def _sync_controls(ir: IR, sheet: Worksheet) -> Worksheet:

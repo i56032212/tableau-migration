@@ -398,6 +398,11 @@ export function DashboardEditor({
             <input type="checkbox" checked={zone.show_title !== false} onChange={(e) => set({ show_title: e.target.checked })} /> 顯示標題
           </label>
         )}
+        {zone.kind === "worksheet" && (
+          <label className="inline" title="在工作表的下方顯示說明（Caption）">
+            <input type="checkbox" checked={zone.show_caption === true} onChange={(e) => set({ show_caption: e.target.checked })} /> 顯示說明
+          </label>
+        )}
         {zone.kind === "worksheet" && zone.worksheet && (
           <label className="inline" title="點選這張工作表的標記時，篩選 dashboard 上其他使用同一個資料源的工作表（自動產生一個篩選動作）">
             <input

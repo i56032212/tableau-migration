@@ -109,6 +109,11 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
       label: "編輯集合…",
       action: () => editor.openDialog({ kind: "set", datasource, levels: set.levels.map((l) => l.field), field: field.id }),
     });
+    // 合併集合：與同一個維度上的另一個集合合併成新的集合
+    items.push({
+      label: "建立合併集合…",
+      action: () => editor.openDialog({ kind: "set", datasource, levels: set.levels.map((l) => l.field), field: null, combine: field.id }),
+    });
   } else if (field.kind === "calc" && !field.combined) {
     items.push({ label: "編輯計算欄位…", action: () => editor.openCalc(field, datasource) });
   }
@@ -822,7 +827,13 @@ export function BinDialog({
 
 // ---------------------------------------------------------------- 集合
 
-type SetKind = "members" | "condition" | "top_n";
+type SetKind = "members" | "condition" | "top_n" | "combined";
+const SET_OPS: [string, string][] = [
+  ["union", "兩個集合中的所有成員"],
+  ["intersect", "兩個集合中共同的成員"],
+  ["left_only", "只在左側集合中的成員"],
+  ["right_only", "只在右側集合中的成員"],
+];
 const COMPARISONS = [">", ">=", "<", "<=", "=", "!="];
 
 export function SetDialog({
@@ -830,6 +841,7 @@ export function SetDialog({
   levels,
   field,
   members: preset,
+  combine,
   onClose,
   onSaved,
 }: {
@@ -838,6 +850,8 @@ export function SetDialog({
   field: string | null;
   /** 從檢視上選取的標記建立集合時的成員（各層級的值組合） */
   members?: Scalar[][];
+  /** 建立合併集合：左側的集合 */
+  combine?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -850,7 +864,13 @@ export function SetDialog({
   const { values, error: loadError } = useMembers(editor.workbook, levels[0]);
   const measures = (ds?.fields ?? []).filter((f) => (f.role === "measure" || f.level === "aggregate") && !f.hidden);
   const [caption, setCaption] = useState(existing?.caption ?? `${levelFields[0]?.caption ?? ""} Set`);
-  const [kind, setKind] = useState<SetKind>((rule?.kind as SetKind | undefined) ?? "members");
+  const [kind, setKind] = useState<SetKind>((rule?.kind as SetKind | undefined) ?? (combine ? "combined" : "members"));
+  // 合併集合：同樣維度上的其他集合
+  const sameLevels = (f: CatalogField) => JSON.stringify((f.set?.levels ?? []).map((l) => l.field)) === JSON.stringify(levels);
+  const otherSets = (ds?.fields ?? []).filter((f) => f.kind === "set" && f.set && f.id !== field && sameLevels(f));
+  const [left, setLeft] = useState(rule?.kind === "combined" ? rule.left : (combine ?? otherSets[0]?.id ?? ""));
+  const [right, setRight] = useState(rule?.kind === "combined" ? rule.right : (otherSets.find((f) => f.id !== (combine ?? otherSets[0]?.id))?.id ?? ""));
+  const [combineOp, setCombineOp] = useState<string>(rule?.kind === "combined" ? rule.op : "union");
   const [exclude, setExclude] = useState(rule?.kind === "members" && rule.mode === "exclude");
   const [picked, setPicked] = useState<string[]>(() =>
     rule?.kind === "members" ? rule.members.map((m) => memberKey(m[0])) : (preset ?? []).map((m) => memberKey(m[0])),
@@ -881,6 +901,7 @@ export function SetDialog({
   const term = search.trim().toLowerCase();
   const shown = all.filter((v) => !term || memberText(v).toLowerCase().includes(term));
   const body = (): SetRuleBody => {
+    if (kind === "combined") return { kind: "combined", left, right, op: combineOp as "union" | "intersect" | "left_only" | "right_only" };
     if (!single || kind === "members") {
       const rows = single ? all.filter((v) => picked.includes(memberKey(v))).map((v) => [v]) : (preset ?? (rule?.kind === "members" ? rule.members : []));
       return { kind: "members", mode: exclude ? "exclude" : "include", members: rows };
@@ -899,13 +920,13 @@ export function SetDialog({
         名稱
         <input aria-label="集合的名稱" value={caption} onChange={(e) => setCaption(e.target.value)} />
       </label>
-      {single && (
+      {(single || otherSets.length >= 2) && (
         <div className="tabs" role="tablist">
           {(
             [
               ["members", "一般"],
-              ["condition", "條件"],
-              ["top_n", "頂部"],
+              ...(single ? [["condition", "條件"], ["top_n", "頂部"]] : []),
+              ...(otherSets.length >= 2 || kind === "combined" ? [["combined", "合併"]] : []),
             ] as [SetKind, string][]
           ).map(([k, label]) => (
             <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "active" : ""} onClick={() => setKind(k)}>
@@ -914,7 +935,37 @@ export function SetDialog({
           ))}
         </div>
       )}
-      {(!single || kind === "members") && (
+      {kind === "combined" && (
+        <div className="set-rule">
+          <label className="admin-field">
+            左側的集合
+            <select aria-label="左側的集合" value={left} onChange={(e) => setLeft(e.target.value)}>
+              {otherSets.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.caption}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="admin-field">
+            右側的集合
+            <select aria-label="右側的集合" value={right} onChange={(e) => setRight(e.target.value)}>
+              {otherSets.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.caption}
+                </option>
+              ))}
+            </select>
+          </label>
+          {SET_OPS.map(([value, label]) => (
+            <label className="inline" key={value}>
+              <input type="radio" name="set-op" checked={combineOp === value} onChange={() => setCombineOp(value)} /> {label}
+            </label>
+          ))}
+          {otherSets.length < 2 && <p className="hint">這個維度上要有兩個集合才能合併。</p>}
+        </div>
+      )}
+      {kind !== "combined" && (!single || kind === "members") && (
         <div className="set-members">
           {single ? (
             <>
@@ -1018,7 +1069,7 @@ export function SetDialog({
         </div>
       )}
       {error && <p className="error">{error}</p>}
-      <Actions onSave={save} onClose={onClose} disabled={busy || (single && kind === "members" && values === null)} />
+      <Actions onSave={save} onClose={onClose} disabled={busy || (single && kind === "members" && values === null) || (kind === "combined" && (!left || !right || left === right))} />
     </Modal>
   );
 }

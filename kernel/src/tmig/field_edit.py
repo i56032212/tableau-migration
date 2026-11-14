@@ -51,6 +51,7 @@ from tmig.ir import (
     GroupItem,
     MemberAlias,
     ParamRef,
+    SetCombined,
     SetCondition,
     SetMembers,
     SetTop,
@@ -69,7 +70,7 @@ IN_OUT = [MemberAlias(value=True, label="In"), MemberAlias(value=False, label="O
 """集合的值在 Tableau 上顯示為 In／Out。"""
 GROUPABLE = ("string", "integer", "real", "boolean", "date", "datetime")
 """可以建立群組、集合與別名的維度型別。"""
-SetRule = SetMembers | SetCondition | SetTop
+SetRule = SetMembers | SetCondition | SetTop | SetCombined
 
 
 def _field(ds: Datasource, field_id: str) -> DataField:
@@ -347,6 +348,20 @@ def upsert_set(
     組合）、條件（彙總的布林公式）或 Top／Bottom N（依彙總排名，只能一個層級）。"""
     ds = _datasource(ir, datasource)
     existing = _existing(ds, field_id, "set", "集合")
+    sources: list[DataField] = []
+    if isinstance(rule, SetCombined):
+        # 合併集合：維度與來源的集合相同（兩個集合要在同一個維度上）
+        sources = [_field(ds, rule.left), _field(ds, rule.right)]
+        for source in sources:
+            if source.set is None or source.id == field_id:
+                raise EditError(f"「{source.caption}」不是其他的集合，不能合併")
+        left_set, right_set = sources[0].set, sources[1].set
+        assert left_set is not None and right_set is not None
+        if left_set.levels != right_set.levels:
+            raise EditError("兩個集合必須在同一個維度上才能合併")
+        if rule.left == rule.right:
+            raise EditError("請選擇兩個不同的集合")
+        levels = [use.field for use in left_set.levels]
     if not levels:
         raise EditError("集合至少要一個維度")
     fields = [_field(ds, level) for level in levels]
@@ -373,6 +388,15 @@ def upsert_set(
             formula = members_formula(set_levels(ds.fields, field_set), rule.members, rule.mode)
         except FormulaValueError as exc:
             raise EditError(str(exc)) from exc
+        calc = check_formula(ir, datasource, formula, field_id).calc
+    elif isinstance(rule, SetCombined):
+        left, right = (s.name if s.name.startswith("[") else f"[{s.name}]" for s in sources)
+        formula = {
+            "union": f"{left} OR {right}",
+            "intersect": f"{left} AND {right}",
+            "left_only": f"{left} AND NOT {right}",
+            "right_only": f"{right} AND NOT {left}",
+        }[rule.op]
         calc = check_formula(ir, datasource, formula, field_id).calc
     else:
         if len(levels) != 1:

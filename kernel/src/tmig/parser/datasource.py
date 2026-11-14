@@ -1840,8 +1840,9 @@ def _check_set(
     if data_field.id in state.levels or data_field.set is None:
         return
     rule = data_field.set.rule
-    if rule.kind == "members":
+    if rule.kind in ("members", "combined"):
         return
+    assert rule.kind != "members" and rule.kind != "combined"
     text, what = (rule.by, "排名依據") if rule.kind == "top_n" else (rule.condition, "條件")
     try:
         info = analyzer.analyze(parse_formula(text))
