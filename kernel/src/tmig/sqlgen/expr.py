@@ -38,6 +38,7 @@ from tmig.formula.ast import (
     Unary,
 )
 from tmig.formula.functions import (
+    EXTERNAL,
     WEEK_STARTS,
     icu_features,
     int_literal,
@@ -164,6 +165,10 @@ class ExprCompiler:
         target = self.analyzer.resolve(node)
         if target.kind == "param":
             return self.env.param(target)
+        external = getattr(self.env, "external_column", None)
+        found = external(target) if external is not None else None
+        if found is not None:
+            return found  # Data Blending：次要資料源的彙總計算欄位（已併入的欄）
         if target.formula is not None:
             # 巢狀 Table Calculation 中先算好的計算欄位（見 tmig.sqlgen.query 的分層計算）
             calc_column = getattr(self.env, "calc_column", None)
@@ -239,6 +244,9 @@ class ExprCompiler:
         參數只取所屬部分的列；COUNT、COUNTD 沒有這部分的列時為 Null（與 Tableau 合併各量值表的
         結果時相同，其他彙總對全是 Null 的參數本來就是 Null）。"""
         name = node.name
+        if name == EXTERNAL:
+            # Data Blending 的外部彙總只能從次要資料源的查詢結果併入（見 tmig.sqlgen.blend）
+            raise FormulaSemanticError(f"尚不支援函式 {name}", node.pos, unsupported=True)
         hook = getattr(self.env, "part_condition", None)
         only: str | None = hook(node) if hook is not None else None
 

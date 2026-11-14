@@ -28,7 +28,7 @@ from tmig.formula.ast import (
     Unary,
     walk,
 )
-from tmig.formula.functions import lookup
+from tmig.formula.functions import EXTERNAL, lookup
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import (
@@ -240,7 +240,9 @@ class Analyzer:
         has_lod = _lod(infos)
         level: Level
         if spec.kind == "aggregate":
-            if infos and infos[0].level in ("agg", "tc"):
+            if node.name == EXTERNAL:
+                self._check_external(node, infos)
+            elif infos and infos[0].level in ("agg", "tc"):
                 raise FormulaSemanticError(f"{node.name} 的參數已經是彙總", node.pos)
             level = "agg"
         elif spec.kind == "table_calc":
@@ -251,6 +253,18 @@ class Analyzer:
         else:
             level = combine_levels([i.level for i in infos], node.pos)
         return Info(datatype, level, has_lod)
+
+    def _check_external(self, node: Call, infos: list[Info]) -> None:
+        """__EXTERNAL__（內部用，見 tmig.formula.functions.EXTERNAL）：參數是只用到其他資料源欄位的彙總。"""
+        foreign = getattr(self.scope, "foreign", {})
+        for item in walk(node):
+            if not isinstance(item, FieldRef):
+                continue
+            target = self.resolve(item)
+            if target.kind != "param" and target.id not in foreign:
+                raise FormulaSemanticError(f"尚不支援函式 {node.name}", node.pos, unsupported=True)
+        if not infos or infos[0].level != "agg":
+            raise FormulaSemanticError(f"{node.name} 的參數必須是彙總", node.pos)
 
     def _lod(self, node: Lod) -> Info:
         for dim in node.dims:

@@ -1,9 +1,11 @@
-"""Data Blending 的主要或次要資料源是 Live 連線：與 Tableau 相同，主要資料源與次要資料源的查詢分開執行
-（Live 連線在各自的資料庫彙總），結果在本機依連結欄位合併。
+"""Data Blending 的主要或次要資料源是 Live 連線：與 Tableau 相同，次要資料源的查詢先在自己的來源執行
+（Live 連線在資料庫依連結欄位彙總），結果登記成資料表，併入主要資料源的查詢（主要資料源是 Live 連線時，
+併入之前的部分在資料庫彙總，之後的部分在 DuckDB 計算）。
 
 以臨時的 PostgreSQL 與 MySQL 實跑（沒有時略過；TMIG_REQUIRE_ENGINES=1 時改為失敗）：test_blend 的工作表
-（依地區連結、在未連結的維度上重複、以年連結、自訂關聯）在各種組合（主要資料源 PostgreSQL、次要資料源
-PostgreSQL 或 MySQL、萃取與 Live 互換）下，結果與兩個都是萃取時相同。"""
+（依地區連結、在未連結的維度上重複、以年連結、自訂關聯、計算欄位、篩選、排序、Table Calculation、總計）
+在各種組合（主要資料源 PostgreSQL、次要資料源 PostgreSQL 或 MySQL、萃取與 Live 互換）下，結果與兩個都是
+萃取時相同。"""
 
 from __future__ import annotations
 
@@ -146,7 +148,7 @@ def run_all(runtime: DataRuntime, ir: IR, folder: Path) -> list[dict[str, Any]]:
     for name, convert in COMBOS.items():
         changed = convert(ir)
         query = worksheet_sql(changed, ws.id)
-        assert [s.name for s in query.stages][:2] == ["__p", "__s0"], name
+        assert [s.name for s in query.stages][:1] == ["__s0"], name
         primary = next(d for d in changed.datasources if d.id == ws.datasource)
         found = runtime.run(query, primary, folder / f"{primary.id}.duckdb").records()
         assert found == expected, name
@@ -245,22 +247,28 @@ def test_custom_relationship(runtime: DataRuntime, folder: Path, tmp_path: Path)
     }
 
 
-def test_staged_queries_need_the_runtime(folder: Path, tmp_path: Path) -> None:
-    """分開執行的查詢不能直接以 DuckDB 執行；說明用的 SQL 列出各段。"""
+def test_live_secondary_needs_the_runtime(folder: Path, tmp_path: Path) -> None:
+    """次要資料源在資料庫中時，不能只以萃取的 DuckDB 執行；次要資料源的查詢列在 stages 中。"""
     sheet = blended(
         rows=ref("none:Region:nk"),
         cols=ref("sum:Sales:qk"),
         encodings=f"<text column='{target_ref('sum:Target:qk')}' />",
     )
-    ir = live(parse(tmp_path, folder, sheet), 0, PG_ID, "postgres", "public")
+    extracts = parse(tmp_path, folder, sheet)
+    ir = live(extracts, 1, PG_ID, "postgres", "public")
     ws = ir.worksheets[0]
     query = worksheet_sql(ir, ws.id)
-    assert "-- __p：" in query.sql and "-- __s0：Targets" in query.sql
-    assert any("分開查詢" in line for note in query.plan for line in note.detail)
+    (stage,) = query.stages
+    assert (stage.name, stage.datasource.caption) == ("__s0", "Targets")
+    assert stage.query.live and not query.live
+    assert any("Data Blending" in line for note in query.plan for line in note.detail)
     with pytest.raises(ExecutionError, match="DataRuntime"):
         execute_query(folder / f"{ws.datasource}.duckdb", query)
-    # 兩個都是萃取時仍在同一段 DuckDB 查詢中混合
-    assert worksheet_sql(parse(tmp_path, folder, sheet), ws.id).stages == []
+    # 主要資料源是 Live 連線：次要資料源併入之後的部分不下推到資料庫
+    primary = worksheet_sql(live(extracts, 0, PG_ID, "postgres", "public"), ws.id)
+    joined = [cte for cte in primary.ctes if '"__s0"' in cte.body]
+    assert joined and not any(cte.pushdown for cte in joined)
+    assert any(cte.pushdown for cte in primary.ctes)
 
 
 def test_calcs_and_secondary_dimensions(runtime: DataRuntime, folder: Path, tmp_path: Path) -> None:
@@ -345,3 +353,85 @@ def test_secondary_filters_and_totals(runtime: DataRuntime, folder: Path, tmp_pa
     ws = ir.worksheets[0].model_copy(update={"totals": ["rows"], "subtotals": [region]})
     results = compare(ir.model_copy(update={"worksheets": [ws]}))
     assert sorted(len(rows) for rows in results) == [1, 4]
+
+
+def test_measure_filters_sorts_and_table_calcs(
+    runtime: DataRuntime, folder: Path, tmp_path: Path
+) -> None:
+    """次要資料源的量值篩選、依它排序、套用 Table Calculation（快速計算與次要資料源中的計算欄位），以及
+    引用次要資料源欄位的計算欄位放在篩選與排序上：各種 Live 的組合都與都是萃取時相同。"""
+    from .test_blend import (
+        ATTAINMENT,
+        BLEND_CALCS,
+        RUNNING,
+        SHARE,
+        TARGET,
+        TARGET_CALCS,
+        by_field,
+        down,
+        measure_filter,
+        measure_sheet,
+        quick_target,
+    )
+
+    def regions(ir: IR) -> list[Any]:
+        return [r[fields(ir)["Region"]] for r in run_all(runtime, ir, folder)]
+
+    text = f"<text column='{target_ref('sum:Target:qk')}' />"
+    # 量值篩選（目標 ≥ 100）與依目標排序（遞減）
+    extra = measure_filter(target_ref("sum:Target:qk"), 100) + by_field(target_ref("sum:Target:qk"))
+    assert regions(parse(tmp_path, folder, measure_sheet(encodings=text, view_extra=extra))) == [
+        "West",
+        "East",
+    ]
+    # 只放在排序依據上；排序的層級（地區）比連結欄位（地區、年）粗
+    sheet = measure_sheet(
+        cols=ref("yr:Order Date:ok"),
+        instances=[REGION, YEAR, SALES],
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        view_extra=by_field(target_ref("sum:Target:qk")),
+    )
+    found = regions(parse(tmp_path, folder, sheet))
+    assert list(dict.fromkeys(found)) == ["West", "East", "South", "North"]
+    # 引用次要資料源欄位的計算欄位（達成率）放在篩選與排序上
+    extra = measure_filter(ref("usr:Calculation_att:qk"), 0.88) + by_field(
+        ref("usr:Calculation_att:qk")
+    )
+    sheet = measure_sheet(instances=[REGION, SALES, ATTAINMENT], view_extra=extra)
+    assert regions(parse(tmp_path, folder, sheet, columns=BLEND_CALCS)) == ["South", "West"]
+
+    # Table Calculation：累計、占比、排名，以及以累計的結果篩選
+    secondary = [
+        TARGET,
+        quick_target("CumTotal", "cum"),
+        quick_target("PctTotal", "pcto"),
+        quick_target("Rank", "rank", " rank-options='Competition,Descending'"),
+    ]
+    encodings = (
+        f"<text column='{target_ref('cum:sum:Target:qk')}' />"
+        f"<tooltip column='{target_ref('pcto:sum:Target:qk')}' />"
+        f"<tooltip column='{target_ref('rank:sum:Target:qk')}' />"
+    )
+    ir = parse(tmp_path, folder, down(encodings, secondary))
+    ids = fields(ir)
+    running = next(tc.id for tc in ir.worksheets[0].table_calcs if tc.type == "running_total")
+    key = f"sum({ids['Targets.Target']})#{running}"
+    assert {r[ids["Region"]]: r[key] for r in run_all(runtime, ir, folder)} == {
+        "East": 400.0,
+        "North": 400.0,
+        "South": 450.0,
+        "West": 1350.0,
+    }
+    flt = measure_filter(target_ref("cum:sum:Target:qk"), 450)
+    assert regions(parse(tmp_path, folder, down(encodings, secondary, view_extra=flt))) == [
+        "South",
+        "West",
+    ]
+    # 次要資料源中的 Table Calculation 計算欄位
+    encodings = (
+        f"<text column='{target_ref('usr:Calculation_run:qk')}' />"
+        f"<tooltip column='{target_ref('usr:Calculation_share:qk')}' />"
+    )
+    ir = parse(tmp_path, folder, down(encodings, [RUNNING, SHARE]), secondary_columns=TARGET_CALCS)
+    assert ir.unsupported == []
+    assert len(run_all(runtime, ir, folder)) == 4

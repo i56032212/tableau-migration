@@ -52,7 +52,6 @@ from tmig.ir.models import (
     DataField,
     Datasource,
     FieldUse,
-    FileConnection,
     Filter,
     LiveConnection,
     Marks,
@@ -70,7 +69,7 @@ from tmig.ir.models import (
     Worksheet,
     remote_tables,
 )
-from tmig.ir.scope import DatasourceScope
+from tmig.ir.scope import DatasourceScope, ForeignSource
 from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
 from tmig.planner.analytics import Analytics, ClusterPlan, ForecastPlan
 from tmig.planner.identity import Identity
@@ -90,6 +89,7 @@ from tmig.sqlgen.sql import ident, literal
 
 if TYPE_CHECKING:
     from tmig.data.executor import QueryResult
+    from tmig.sqlgen.blend import Blending
 
 DUPLICATE_SAFE = frozenset({"MIN", "MAX", "COUNTD", "ATTR"})
 """同一列重複出現也不影響結果的彙總（Relationship 模型的一對多分支不需要檢查）。"""
@@ -227,21 +227,9 @@ class Guard:
 
 
 @dataclass
-class FederatedBlend:
-    """Data Blending 的次要資料源是跨資料庫的 join：執行前建立 <附加的名稱>.Files.<名稱>（匯入的檔案在次要
-    資料源的 DuckDB 檔，資料庫的資料表在查詢時取回，見 tmig.data.federated.attach_federated）。"""
-
-    connection: FileConnection
-    sql: str
-    """次要資料源的查詢（只參照它自己的資料表）：資料庫的資料表只取其中用到的欄。"""
-    parameters: dict[str, tuple[Scalar, str]] = field(default_factory=dict)
-    """資料庫的自訂 SQL 中參數的目前值（同 WorksheetSql.parameters）。"""
-
-
-@dataclass
 class BlendStage:
-    """Data Blending 分開執行的一段：主要資料源的查詢（name 為 __p）或一個次要資料源依連結欄位彙總的查詢
-    （__s0、__s1…），在 datasource 自己的來源執行（Live 連線下推到它的資料庫），結果以 name 的資料表交給合併。"""
+    """Data Blending 中一個次要資料源依連結欄位彙總的查詢（__s0、__s1…；__u0… 是不篩選時有哪些連結值），
+    在 datasource 自己的來源執行（Live 連線下推到它的資料庫），結果以 name 的資料表交給主要資料源的查詢。"""
 
     name: str
     datasource: Datasource
@@ -266,15 +254,9 @@ class WorksheetSql:
     """自訂 SQL 中參數的目前值：內部名稱（不含方括號）與顯示名稱 → （值、資料型別）。"""
     guards: list[Guard] = field(default_factory=list)
     """Relationship 模型：在比檢視粗的層級彙總時，確認其他資料表不會讓量值重複計算（見 tmig.sqlgen.model）。"""
-    attach: dict[str, str] = field(default_factory=dict)
-    """Data Blending：執行前以唯讀附加的其他萃取（附加的名稱 → 資料源 id，與主要資料源的 DuckDB 檔同一目錄）。"""
-    federated: dict[str, FederatedBlend] = field(default_factory=dict)
-    """Data Blending 的次要資料源中是跨資料庫的 join 的（附加的名稱 → 連線與查詢）；匯入的檔案仍在 attach 所指的
-    DuckDB 檔。"""
     stages: list[BlendStage] = field(default_factory=list)
-    """Data Blending 的主要或次要資料源有 Live 連線（或次要資料源是 Relationship 模型）時：與 Tableau 相同，各資料源
-    的查詢分開執行（Live 連線在各自的資料庫），結果再依連結欄位合併（main 在 DuckDB 以各段的 name 參照結果）。
-    sql 只是說明用（各段的 SQL），要以 tmig.data.runtime.DataRuntime 執行。"""
+    """Data Blending：執行前先在各次要資料源執行的查詢（依連結欄位彙總）；結果以各段的名稱（__s0…）的資料表
+    交給執行這個查詢的 DuckDB（Live 連線時是在 DuckDB 執行的部分），見 tmig.sqlgen.blend。"""
     underlying: str = ""
     """完整資料（基礎資料列）的 SELECT：彙總前的資料列中，仍在檢視中的標記所對應的列（與 main 相同接在 ctes 之後）；
     空的時不支援（例如 Data Blending）。"""
@@ -389,6 +371,15 @@ class _PostEnv:
         col = self.fields.get(target.id)
         return ident(col) if col is not None else None
 
+    def external_column(self, target: Target) -> str | None:
+        """次要資料源的彙總計算欄位（Data Blending）：併入的外部彙總的欄。"""
+        if target.id not in self.query.foreign or target.level != "agg":
+            return None
+        col = self.agg_cols.get(self.query.canon(self.query.external_ref(target.id)))  # type: ignore[arg-type]
+        if col is None:
+            raise QueryError(f"內部錯誤：次要資料源的欄位 {target.id} 沒有對應的欄位")
+        return ident(col)
+
     def column(self, target: Target) -> str:
         raise QueryError(f"列層級欄位 {target.id} 必須彙總")
 
@@ -496,27 +487,48 @@ class WorksheetQuery:
         worksheet: str,
         state: QueryState | None = None,
         user: Identity | None = None,
+        links: Worksheet | None = None,
     ) -> None:
         """user：登入者的身分，使用者函式依此代入（不從篩選狀態取得，見 tmig.planner.identity）。"""
         self.ir = ir
         self.user = user
+        self.query_state = state
         self.worksheet = _find_worksheet(ir, worksheet)
         self.datasource = next(ds for ds in ir.datasources if ds.id == self.worksheet.datasource)
-        if self.worksheet.blends:
-            # Data Blending：次要資料源的篩選套用在次要資料源的查詢（tmig.sqlgen.blend），不在這裡
-            own = {f.id for f in self.datasource.fields}
+        # Data Blending：次要資料源（公式以 [資料源].[欄位] 引用它們的欄位，見 tmig.sqlgen.blend）
+        blended = [
+            (blend, ds)
+            for blend in self.worksheet.blends
+            for ds in ir.datasources
+            if ds.id == blend.datasource and ds.id != self.datasource.id
+        ]
+        self.foreign: dict[str, Datasource] = {f.id: ds for _, ds in blended for f in ds.fields}
+        """次要資料源的欄位 id → 次要資料源。"""
+        self.blend: Blending | None = None
+        self.links = links
+        full = self.worksheet
+        if blended:
+            # 次要資料源的維度篩選套用在次要資料源的查詢，不在這裡
             kept = [
                 f
-                for f in self.worksheet.filters
-                if isinstance(f, TupleFilter) or f.field.field in own
+                for f in full.filters
+                if isinstance(f, TupleFilter)
+                or f.field.field not in self.foreign
+                or f.stage in ("measure", "table_calc")
             ]
-            self.worksheet = self.worksheet.model_copy(update={"filters": kept})
+            self.worksheet = full.model_copy(update={"filters": kept})
         if state is not None and state.sets:
             self.datasource = with_set_values(self.datasource, state.sets)
         self.state = apply_state(ir, self.worksheet, state or QueryState())
-        self.scope = DatasourceScope(self.datasource.name, self.datasource.fields, ir.parameters)
+        self.scope = DatasourceScope(
+            self.datasource.name,
+            self.datasource.fields,
+            ir.parameters,
+            [ForeignSource(ds.name, ds.caption, ds.fields) for _, ds in blended],
+        )
         self.analyzer = Analyzer(self.scope)
-        self.fields: dict[str, DataField] = {f.id: f for f in self.datasource.fields}
+        self.fields: dict[str, DataField] = {f.id: f for _, ds in blended for f in ds.fields}
+        self.fields.update({f.id: f for f in self.datasource.fields})
         self.params = {p.id: p for p in ir.parameters}
         self.week_start = self.datasource.settings.week_start
         try:
@@ -554,7 +566,15 @@ class WorksheetQuery:
         self.recursive = False
         """是否有遞迴的 CTE（PREVIOUS_VALUE）：輸出時寫成 WITH RECURSIVE。"""
         self.row_number: str | None = None
-        """另外輸出依顯示順序的列號的欄名（Data Blending 合併後依它排序，見 tmig.sqlgen.blend）。"""
+        """另外輸出依顯示順序的列號的欄名。"""
+        if blended:
+            from tmig.sqlgen.blend import Blending  # blend 也匯入本模組
+
+            self.worksheet, original = full, self.worksheet
+            try:
+                self.blend = Blending(self, blended)
+            finally:
+                self.worksheet = original
 
     # ------------------------------------------------------------ 工具
 
@@ -591,7 +611,17 @@ class WorksheetQuery:
         return ExprCompiler(self.analyzer, env)  # type: ignore[arg-type]
 
     def field_node(self, field_id: str) -> FieldRef:
+        owner = self.foreign.get(field_id)
+        if owner is not None:
+            # 次要資料源的欄位：[資料源].[欄位]
+            return FieldRef(0, (_strip(owner.name), _strip(self.fields[field_id].name)))
         return FieldRef(0, (_strip(self.fields[field_id].name),))
+
+    def external_ref(self, field_id: str) -> Call:
+        """次要資料源的彙總計算欄位（直接引用）：當作一個外部彙總（見 tmig.sqlgen.blend）。"""
+        from tmig.sqlgen.blend import EXTERNAL_REF
+
+        return Call(0, EXTERNAL_REF, (self.field_node(field_id),))
 
     def level(self, field_id: str) -> str:
         try:
@@ -699,6 +729,8 @@ class WorksheetQuery:
                 target = self._resolve(item)
                 if target.kind == "field" and target.formula is not None:
                     visit(self.analyzer.calc_ast(target))
+                elif target.id in self.foreign and target.level == "agg":
+                    found.append(self.external_ref(target.id))
                 return
             if isinstance(item, Lod):
                 return
@@ -768,6 +800,8 @@ class WorksheetQuery:
             self.sets.setdefault(field_id, f"__set_{len(self.sets)}")
         for lod in self.lods_in(node):
             if lod not in self.lods:
+                if self.blend is not None:
+                    self.blend.check_lod(lod)
                 self.lods[lod] = self._lod_spec(lod, None)
 
     def _lod_spec(self, lod: Lod, outer: LodSpec | None) -> LodSpec:
@@ -809,6 +843,21 @@ class WorksheetQuery:
     def build(self) -> WorksheetSql:
         ws = self.worksheet
         dims, measures = self._view_fields()
+        if self.blend is not None:
+            # 作用中的連結依檢視的維度（總計與小計的查詢依原本的工作表）
+            view = dims
+            if self.links is not None:
+                sub = self.ir.model_copy(
+                    update={
+                        "worksheets": [
+                            self.links if w.id == self.links.id else w for w in self.ir.worksheets
+                        ]
+                    }
+                )
+                view, _ = WorksheetQuery(
+                    sub, self.links.id, self.query_state, self.user
+                )._view_fields()
+            self.blend.activate([d.use for d in view])
         filters = self._filters()
         stage = {
             s: [f for f in filters if f.stage == s]
@@ -941,7 +990,9 @@ class WorksheetQuery:
             {self.canon(a): a for m in measures for a in self.aggregates_in(m.node)}.values()
         )
         self._guard(self._covered([d.use for d in dims]), "檢視的彙總", agg_nodes)
-        agg_name, agg_cols, keys = self.aggregate("agg", agg_nodes, level, rows_cte, 6, dims)
+        agg_name, agg_cols, keys = self.aggregate(
+            "agg", agg_nodes, level, rows_cte, 6, dims, restrict=True
+        )
         if (
             self.model_plan is not None
             and self.model_plan.domain is not None
@@ -1016,13 +1067,23 @@ class WorksheetQuery:
             columns.append(OutputColumn(self.row_number, "sort", "integer", None))
         main = f"SELECT {', '.join(outputs)}\nFROM {final}{_where(conds)}{order_sql}"
         underlying = self._underlying(dims, marks, rows_cte)
+        stages: list[BlendStage] = []
+        effective = self.state
+        if self.blend is not None:
+            # Data Blending：次要資料源的查詢；併入之後的各段在 DuckDB 執行（不下推）
+            stages = self.blend.stages()
+            effective = self.blend.state(self.state)
+            if stages:
+                underlying = ""
+                self._localize({s.name for s in stages})
         stage_of = {name: n for n, note in self.plan.items() for name in note.ctes}
         return WorksheetSql(
             worksheet=ws.id,
             sql=self._render(main),
             columns=columns,
             plan=[self.plan[n] for n in STAGES if self.plan[n].ctes or self.plan[n].detail],
-            state=self.state,
+            state=effective,
+            stages=stages,
             ctes=[
                 CteDef(name, body, stage_of[name], self.pushdown[name]) for name, body in self.ctes
             ],
@@ -1036,6 +1097,17 @@ class WorksheetQuery:
             guards=self._guard_list(),
             underlying=underlying,
         )
+
+    def _localize(self, tables: set[str]) -> None:
+        """讀了次要資料源查詢結果（tables）的 CTE 與之後依賴它們的 CTE 不下推（Live 連線時在 DuckDB 執行）。"""
+        from tmig.sqlgen.dialect import _references  # dialect 也匯入本模組
+
+        local = set(tables)
+        for name, body in self.ctes:
+            if _references(body, local):
+                self.pushdown[name] = False
+            if not self.pushdown[name]:
+                local.add(name)
 
     def _underlying(self, dims: list[Dim], marks: str, rows_cte: str) -> str:
         """完整資料：彙總前的資料列（資料源篩選、列層級權限、維度篩選之後），只留下量值篩選後仍在檢視中的標記
@@ -1281,6 +1353,8 @@ class WorksheetQuery:
         plan = self.model_plan
         if plan is None:
             return
+        if self.blend is not None:
+            nodes = [n for n in nodes if self.blend.source_of(n) is None]
         parts = sorted(
             {
                 i
@@ -1342,8 +1416,8 @@ class WorksheetQuery:
         owner 為該彙總所屬的量值表（見 owner_of）。"""
         if isinstance(node, FieldRef):
             target = self._resolve(node)
-            if target.kind != "field":
-                return
+            if target.kind != "field" or target.id in self.foreign:
+                return  # 參數，或次要資料源的欄位（Data Blending：不在這個資料源的資料表中）
             data_field = self.fields[target.id]
             if data_field.set is not None and data_field.calc is None:
                 # Top N 與條件集合：層級的欄位（用在彙總中時與直接用到層級的欄位相同）；
@@ -1373,6 +1447,8 @@ class WorksheetQuery:
         if isinstance(node, Call) and not inside:
             spec = lookup(node.name, len(node.args))
             if spec is not None and spec.kind == "aggregate":
+                if self.blend is not None and self.blend.source_of(node) is not None:
+                    return  # 次要資料源的彙總
                 inside, owner = True, self.owner_of(node)
         for item in children(node):
             self.collect(item, usage, inside, owner)
@@ -1945,12 +2021,25 @@ class WorksheetQuery:
         stage: int,
         view_dims: list[Dim] | None,
         pushdown: bool | None = None,
+        restrict: bool = False,
     ) -> tuple[str, dict[Call, str], list[str]]:
-        """在指定層級彙總。回傳 CTE 名稱、彙總節點 → 欄名、層級鍵欄名。
+        """在指定層級彙總。回傳 CTE 名稱、彙總節點 → 欄名、層級鍵欄名。restrict：檢視的層級（Data Blending
+        的次要資料源的篩選限制顯示的標記）。
 
         Relationship 模型中量值來自多張資料表時，只用這些彙總所屬各部分的列（見 _parts_scope）。"""
-        with self._parts_scope(nodes) as only:
-            return self._aggregate(prefix, nodes, level, source, stage, view_dims, pushdown, only)
+        blend = self.blend
+        outside = [n for n in nodes if blend is not None and blend.source_of(n) is not None]
+        inside = [n for n in nodes if n not in outside]
+        with self._parts_scope(inside) as only:
+            name, cols, keys = self._aggregate(
+                prefix, inside, level, source, stage, view_dims, pushdown, only
+            )
+        if blend is not None and (outside or restrict):
+            # Data Blending：次要資料源的彙總從它的查詢結果併入
+            name = blend.attach(
+                prefix, name, cols, keys, outside, level, source, stage, pushdown, restrict
+            )
+        return name, cols, keys
 
     def _aggregate(
         self,
@@ -2975,12 +3064,7 @@ def worksheet_sql(
 ) -> WorksheetSql:
     """detail：總計與小計的查詢（totals_sql）中原本的工作表（Data Blending 的連結依原本的檢視）。"""
     ws = _find_worksheet(ir, worksheet)
-    if ws.blends:
-        from tmig.sqlgen.blend import blend_sql  # blend 也匯入本模組
-
-        query = blend_sql(ir, worksheet, state, user, detail)
-    else:
-        query = WorksheetQuery(ir, worksheet, state, user).build()
+    query = WorksheetQuery(ir, worksheet, state, user, detail if ws.blends else None).build()
     query.analytics = analytics_plan(ir, ws, query.columns)
     return query
 
@@ -3407,7 +3491,6 @@ __all__ = [
     "SUBTOTAL",
     "BlendStage",
     "CteDef",
-    "FederatedBlend",
     "Guard",
     "OutputColumn",
     "PreviewColumn",

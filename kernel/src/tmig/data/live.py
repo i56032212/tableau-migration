@@ -30,25 +30,38 @@ from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
 from tmig.sqlgen.sql import ident
 
 
-def execute_live(query: WorksheetSql, executor: Executor) -> QueryResult:
-    """執行一張工作表的查詢（兩段式）；讀資料表的那一段就用到空間函式時改以 execute_rows 執行。"""
-    if query.stages:
-        raise ExecutionError("Data Blending 的各資料源要以 DataRuntime 分開執行")
+def execute_live(
+    query: WorksheetSql, executor: Executor, tables: dict[str, pa.Table] | None = None
+) -> QueryResult:
+    """執行一張工作表的查詢（兩段式）；讀資料表的那一段就用到空間函式時改以 execute_rows 執行。
+    tables：Data Blending 的次要資料源的查詢結果（WorksheetSql.stages，由 DataRuntime 先執行），登記在執行
+    之後部分的 DuckDB 中。"""
+    if query.stages and tables is None:
+        raise ExecutionError("Data Blending 的次要資料源要以 DataRuntime 先執行")
     try:
-        return _execute_split(query, executor)
+        return _execute_split(query, executor, tables or {})
     except DialectError:
         if not any(SPATIAL_CALL.search(c.body) for c in query.ctes if c.pushdown):
             raise
-        return execute_rows(query, executor)
+        return execute_rows(query, executor, tables)
 
 
-def execute_rows(query: WorksheetSql, executor: Executor) -> QueryResult:
+def execute_rows(
+    query: WorksheetSql, executor: Executor, tables: dict[str, pa.Table] | None = None
+) -> QueryResult:
     """取回查詢讀的每張資料表（只取用到的欄；自訂 SQL 取整段的結果），以原本的名稱（"結構描述"."資料表"）交給
     記憶體中的 DuckDB，整段查詢在 DuckDB 執行（與萃取相同）。"""
-    referenced = source_tables(query.sql, prune=False)
+    given = tables or {}
+    referenced = {
+        parts: columns
+        for parts, columns in source_tables(query.sql, prune=False).items()
+        if parts[-1] not in given  # Data Blending 的次要資料源的查詢結果不是來源資料表
+    }
     used = source_tables(query.sql)
     spatial = spatial_columns(query.sql)
     con = udf.register(duckdb.connect())
+    for name, table in given.items():
+        con.register(name, table)
 
     def fetch(sql: str, parts: tuple[str, ...]) -> pa.Table:
         translated = to_dialect(sql, executor.dialect, query.custom_sql, query.parameters)
@@ -205,7 +218,9 @@ def source_tables(sql: str, prune: bool = True) -> dict[tuple[str, ...], set[str
     return found
 
 
-def _execute_split(query: WorksheetSql, executor: Executor) -> QueryResult:
+def _execute_split(
+    query: WorksheetSql, executor: Executor, tables: dict[str, pa.Table]
+) -> QueryResult:
     """兩段式執行一張工作表的查詢。轉譯不了的 SQL 以 DialectError（QueryError）回報。
 
     查詢附帶的檢查（Relationship 模型的一對多）先在來源資料庫執行，不通過時以 QueryError 回報。
@@ -226,6 +241,8 @@ def _execute_split(query: WorksheetSql, executor: Executor) -> QueryResult:
     ]
     con = udf.register(duckdb.connect())
     try:
+        for name, given in tables.items():
+            con.register(name, given)
         for name, sql in remote:
             try:
                 table = executor.fetch(sql)

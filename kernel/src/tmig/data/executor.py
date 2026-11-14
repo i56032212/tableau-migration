@@ -18,8 +18,8 @@ import duckdb
 import pyarrow as pa
 
 from tmig.data import udf
-from tmig.sqlgen.query import Guard, OutputColumn, QueryError, WorksheetSql
-from tmig.sqlgen.sql import ident, string
+from tmig.ir.models import FileConnection, LiveConnection, is_federated
+from tmig.sqlgen.query import BlendStage, Guard, OutputColumn, QueryError, WorksheetSql
 
 
 class ExecutionError(RuntimeError):
@@ -61,28 +61,22 @@ def format_value(value: Any) -> str:
 def execute(
     db_path: str | Path,
     sql: str,
-    attach: dict[str, Path] | None = None,
-    prepare: Callable[[duckdb.DuckDBPyConnection], None] | None = None,
+    tables: dict[str, pa.Table] | None = None,
 ) -> QueryResult:
-    """attach：先以唯讀附加的其他 DuckDB 檔（附加的名稱 → 檔案），例如 Data Blending 的次要資料源；
-    prepare：執行前在連線上的準備（例如跨資料庫的次要資料源，見 execute_query）。"""
+    """tables：執行前登記的資料表（名稱 → 資料），例如 Data Blending 的次要資料源的查詢結果。"""
     path = Path(db_path)
-    for item in [path, *(attach or {}).values()]:
-        if not item.is_file():
-            raise ExecutionError(f"找不到資料檔 {item}；請先執行 tmig import-hyper")
+    if not path.is_file():
+        raise ExecutionError(f"找不到資料檔 {path}；請先執行 tmig import-hyper")
     try:
-        # 用到 ICU 的正規表示式（或要在預設的資料庫之外建立資料表）時另開記憶體資料庫附加資料檔
-        # （見 tmig.data.udf）
+        # 用到 ICU 的正規表示式（或要登記資料表）時另開記憶體資料庫附加資料檔（見 tmig.data.udf）
         connection = (
             udf.attached(path)
-            if udf.needed(sql) or prepare is not None
+            if udf.needed(sql) or tables
             else duckdb.connect(str(path), read_only=True)
         )
         with connection as con:
-            for alias, other in (attach or {}).items():
-                con.execute(f"ATTACH {string(str(other))} AS {ident(alias)} (READ_ONLY)")
-            if prepare is not None:
-                prepare(con)
+            for name, table in (tables or {}).items():
+                con.register(name, table)
             cursor = con.execute(sql)
             description = cursor.description or []
             columns = [d[0] for d in description]
@@ -95,29 +89,36 @@ def execute(
 def execute_query(
     db_path: str | Path,
     query: WorksheetSql,
-    fetch: Callable[..., Any] | None = None,
-    cache: Any = None,
+    tables: dict[str, pa.Table] | None = None,
 ) -> QueryResult:
     """執行一張工作表的查詢（萃取的 DuckDB 檔）：先做查詢附帶的檢查，再執行查詢。
 
-    Data Blending 的次要資料源是同一目錄中以資料源 id 為檔名的 DuckDB 檔；次要資料源是跨資料庫的 join 時，
-    資料庫的資料表以 fetch 取回（tmig.data.federated.attach_federated，cache 為取回的資料的快取）。"""
-    if query.stages:
-        raise ExecutionError(
-            "Data Blending 的資料源有 Live 連線（或 Relationship 模型），要以 DataRuntime 分開執行"
-        )
+    Data Blending 的次要資料源的查詢（WorksheetSql.stages）先執行，結果登記成資料表：tables 省略時在同一
+    目錄中以資料源 id 為檔名的 DuckDB 檔執行（萃取與檔案；次要資料源在資料庫中時要以 DataRuntime 執行）。"""
+    if tables is None:
+        folder = Path(db_path).parent
+        tables = stage_tables(query, lambda stage: _local_stage(folder, stage))
     for guard in query.guards:
         check_guard(guard, execute(db_path, guard.sql).rows)
-    folder = Path(db_path).parent
-    if query.federated:
-        from tmig.data.federated import attach_secondaries
+    return finish(query, execute(db_path, query.sql, tables))
 
-        def prepare(con: duckdb.DuckDBPyConnection) -> None:
-            attach_secondaries(con, folder, query, fetch, cache)
 
-        return finish(query, execute(db_path, query.sql, None, prepare))
-    attach = {alias: folder / f"{ds}.duckdb" for alias, ds in query.attach.items()}
-    return finish(query, execute(db_path, query.sql, attach))
+def _local_stage(folder: Path, stage: BlendStage) -> QueryResult:
+    connection = stage.datasource.connection
+    if isinstance(connection, LiveConnection) or (
+        isinstance(connection, FileConnection) and is_federated(connection)
+    ):
+        raise ExecutionError(
+            f"Data Blending 的次要資料源「{stage.datasource.caption}」在資料庫中，要以 DataRuntime 執行"
+        )
+    return execute_query(folder / f"{stage.datasource.id}.duckdb", stage.query)
+
+
+def stage_tables(
+    query: WorksheetSql, run: Callable[[BlendStage], QueryResult]
+) -> dict[str, pa.Table]:
+    """Data Blending 的次要資料源的查詢結果（各段的名稱 → 資料表）。"""
+    return {stage.name: result_table(stage.query.columns, run(stage)) for stage in query.stages}
 
 
 ARROW_TYPES: dict[str, pa.DataType] = {
@@ -148,27 +149,6 @@ def result_table(columns: list[OutputColumn], result: QueryResult) -> pa.Table:
         except (pa.ArrowInvalid, pa.ArrowTypeError):
             arrays.append(pa.array([None if v is None else str(v) for v in values]))
     return pa.Table.from_arrays(arrays, names=list(result.columns))
-
-
-def combine(
-    query: WorksheetSql, parts: dict[str, tuple[list[OutputColumn], QueryResult]]
-) -> QueryResult:
-    """Data Blending 分開執行的各段（WorksheetSql.stages）：結果以各段的名稱交給記憶體中的 DuckDB，
-    執行合併的 SELECT（query.main，依連結欄位 LEFT JOIN）。"""
-    con = duckdb.connect()
-    try:
-        for name, (columns, result) in parts.items():
-            con.register(name, result_table(columns, result))
-        cursor = con.execute(query.main)
-        description = cursor.description or []
-        rows = cursor.fetchall()
-    except duckdb.Error as exc:
-        raise ExecutionError(f"Data Blending 合併失敗：{exc}") from exc
-    finally:
-        con.close()
-    return finish(
-        query, QueryResult(columns=[d[0] for d in description], rows=[tuple(r) for r in rows])
-    )
 
 
 def finish(query: WorksheetSql, result: QueryResult) -> QueryResult:

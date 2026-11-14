@@ -927,10 +927,14 @@ Grade = Literal["A", "B", "C"]
 
 def _blends(view: etree._Element | None, names: list[str], used: list[str]) -> bool:
     """工作表是否混合次要資料源（Data Blending）：欄列架、標記卡或 Measure Values 用到其他資料源的欄位，
-    或以次要資料源的欄位篩選。對應到主要資料源欄位的跨資料源篩選（<target field>）不是混合。"""
+    或以次要資料源的欄位篩選、排序。對應到主要資料源欄位的跨資料源篩選（<target field>）不是混合。"""
     if len(names) < 2:
         return False
     texts = list(used)
+    for element in view.iter() if view is not None else ():
+        if isinstance(element.tag, str):
+            # 排序依據（<computed-sort using>、<shelf-sort measure-to-sort-by>）
+            texts += [element.get(name) or "" for name in ("using", "measure-to-sort-by")]
     for flt in children(view, "filter"):
         column = flt.get("column", "")
         if column.endswith("[:Measure Names]"):
@@ -942,8 +946,9 @@ def _blends(view: etree._Element | None, names: list[str], used: list[str]) -> b
 
 
 def _blending_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:
-    """Data Blending 已支援次要資料源只用量值的工作表：主要與次要資料源可以是萃取、檔案、跨資料庫的 join 或
-    Live 連線（Live 連線與 Tableau 相同各自查詢後合併）；Published Data Source 要先下載 .tdsx 併入報表。"""
+    """Data Blending 已支援：主要與次要資料源可以是萃取、檔案、跨資料庫的 join 或 Live 連線（與 Tableau 相同
+    各自查詢後合併），含次要資料源的量值、維度、篩選、排序與 Table Calculation；Published Data Source 要先
+    下載 .tdsx 併入報表。"""
     blended = [w for w in r.worksheets if w.blending]
     title = "Data Blending（Published Data Source 須先併入報表）"
     if not blended:
@@ -963,7 +968,7 @@ def _blending_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:
     if published:
         detail += f"；Published Data Source：{_quote(published)}"
     else:
-        detail += "（次要資料源的量值篩選與 Table Calculation 尚不支援，解析時另列）"
+        detail += "（次要資料源的條件與 Top N 篩選、LOD 中次要資料源的欄位尚不支援，解析時另列）"
     return Check(
         key="no_blending", title=title, status="fail" if published else "warn", detail=detail
     )

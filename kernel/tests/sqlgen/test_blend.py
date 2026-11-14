@@ -299,7 +299,10 @@ def test_render_uses_the_secondary_caption(tmp_path: Path, folder: Path) -> None
     rendered = build_spec(ir, ws.id, query.columns, result)
     assert rendered.spec is not None, rendered.unsupported
     assert rendered.spec["encoding"]["x"]["title"] == "Target"
-    assert "Data Blending" in query.sql
+    # 次要資料源的查詢先執行（stages），結果以資料表 __s0 併入
+    assert [stage.name for stage in query.stages] == ["__s0"]
+    assert '"__s0"' in query.sql
+    assert any("Data Blending" in text for note in query.plan for text in note.detail)
 
 
 def test_unsupported_blends_are_flagged(tmp_path: Path, folder: Path) -> None:
@@ -369,7 +372,7 @@ def test_totals_with_blending(tmp_path: Path, folder: Path) -> None:
     # 非加總型的彙總（中位數等）不能由各連結值的結果再彙總
     median = FieldUse(field=ids["Targets.Target"], agg="median", continuous=True)
     other = ws.model_copy(update={"marks": ws.marks.model_copy(update={"label": [median]})})
-    with pytest.raises(QueryError, match="總計、小計一起使用尚不支援"):
+    with pytest.raises(QueryError, match="不能由各連結值的結果再彙總"):
         totals_of(ir.model_copy(update={"worksheets": [other]}), folder)
 
 
@@ -876,3 +879,469 @@ def test_secondary_filter_control_on_dashboard(tmp_path: Path, folder: Path) -> 
     assert control.field is not None
     sql = domain_sql(ir, secondary, control.field, "values")
     assert [r[0] for r in execute(folder / f"{secondary}.duckdb", sql).rows] == ["2023", "2024"]
+
+
+# ---------------------------------------------------------------- 量值篩選、排序、Table Calculation、參考線
+
+
+def measure_sheet(
+    rows: str = "",
+    cols: str = "",
+    instances: list[str] | None = None,
+    secondary: list[str] | None = None,
+    encodings: str = "",
+    view_extra: str = "",
+    pane_extra: str = "",
+) -> str:
+    """預設：列是地區、欄是 SUM(Sales)；次要資料源的欄位實例列在 secondary。"""
+    deps = (
+        f"<datasource-dependencies datasource='{TARGETS}'>{''.join(secondary or [TARGET])}"
+        "</datasource-dependencies>"
+    )
+    return worksheet(
+        "Measures",
+        instances or [REGION, SALES],
+        rows=rows or ref("none:Region:nk"),
+        cols=cols or ref("sum:Sales:qk"),
+        encodings=encodings,
+        datasources=SOURCES,
+        view_extra=deps + view_extra,
+        pane_extra=pane_extra,
+    )
+
+
+def measure_filter(column: str, minimum: float, nulls: bool = False) -> str:
+    included = "in-range-or-null" if nulls else "in-range"
+    return (
+        f"<filter class='quantitative' column='{column}' included-values='{included}'>"
+        f"<min>{minimum}</min></filter>"
+    )
+
+
+def by_field(using: str, direction: str = "DESC") -> str:
+    return (
+        f"<computed-sort column='{ref('none:Region:nk')}' direction='{direction}' "
+        f"using='{using}' />"
+    )
+
+
+def regions(ir: IR, folder: Path, state: object = None) -> list[object]:
+    ws = ir.worksheets[0]
+    query = worksheet_sql(ir, ws.id, state)  # type: ignore[arg-type]
+    found = execute_query(folder / f"{ws.datasource}.duckdb", query).records()
+    return [r[fields(ir)["Region"]] for r in found]
+
+
+def test_secondary_measure_filter(tmp_path: Path, folder: Path) -> None:
+    """次要資料源的量值篩選：以混合後的值篩選標記（與主要資料源的量值篩選相同）；沒有對應資料的標記是
+    Null，篩選包含 Null 時才留下。"""
+    from tmig.ir import RangeFilter
+
+    text = f"<text column='{target_ref('sum:Target:qk')}' />"
+    flt = measure_filter(target_ref("sum:Target:qk"), 100)
+    ir = parse(tmp_path, folder, measure_sheet(encodings=text, view_extra=flt))
+    assert ir.unsupported == [] and check_references(ir) == []
+    ids = fields(ir)
+    (found,) = ir.worksheets[0].filters
+    assert isinstance(found, RangeFilter)
+    assert (found.field.field, found.field.agg, found.stage) == (
+        ids["Targets.Target"],
+        "sum",
+        "measure",
+    )
+    target = f"sum({ids['Targets.Target']})"
+    assert {r[ids["Region"]]: r[target] for r in run(ir, folder)} == {
+        "East": 400.0,
+        "West": 900.0,
+    }
+    # 總計只合計顯示的標記
+    totaled = ir.worksheets[0].model_copy(update={"totals": ["rows"]})
+    ((grand,),) = totals_of(ir.model_copy(update={"worksheets": [totaled]}), folder).values()
+    assert (grand[f"sum({ids['Sales']})"], grand[target]) == (1150.0, 1300.0)
+    # 包含 Null：North 沒有目標，仍顯示
+    ir = parse(
+        tmp_path,
+        folder,
+        measure_sheet(
+            encodings=text, view_extra=measure_filter(target_ref("sum:Target:qk"), 100, True)
+        ),
+    )
+    assert regions(ir, folder) == ["East", "North", "West"]
+    # 次要資料源的量值只放在篩選上（檢視中沒有它的欄位）：仍是 Data Blending
+    ir = parse(tmp_path, folder, measure_sheet(view_extra=flt))
+    assert ir.unsupported == []
+    assert [blend.datasource for blend in ir.worksheets[0].blends] == [ir.datasources[1].id]
+    assert regions(ir, folder) == ["East", "West"]
+    # 與次要資料源的維度篩選一起用：先篩選次要資料源的資料（2024 年），再以混合後的值篩選
+    year = instance("[Calculation_year]", "None", "[none:Calculation_year:nk]")
+    sheet = measure_sheet(
+        secondary=[TARGET, year],
+        encodings=text,
+        view_extra=year_filter(["2024"]) + measure_filter(target_ref("sum:Target:qk"), 80),
+    )
+    ir = parse(tmp_path, folder, sheet, secondary_columns=YEAR_TEXT)
+    assert ir.unsupported == []
+    assert {r[ids["Region"]]: r[target] for r in run(ir, folder)} == {"East": 100.0}
+
+
+def test_blend_calc_on_filter_and_sort(tmp_path: Path, folder: Path) -> None:
+    """引用次要資料源欄位的計算欄位（實績 ÷ 目標）放在篩選與排序上（不在檢視中）。"""
+    flt = measure_filter(ref("usr:Calculation_att:qk"), 0.88)
+    sheet = measure_sheet(instances=[REGION, SALES, ATTAINMENT], view_extra=flt)
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS)
+    assert ir.unsupported == [] and check_references(ir) == []
+    ws = ir.worksheets[0]
+    assert [blend.datasource for blend in ws.blends] == [ir.datasources[1].id]
+    # East 0.875 與 North（沒有目標，Null）不顯示
+    assert regions(ir, folder) == ["South", "West"]
+
+    # 依達成率排序（遞減）：South 2、West 0.889、East 0.875；North 是 Null
+    sheet = measure_sheet(
+        instances=[REGION, SALES, ATTAINMENT], view_extra=by_field(ref("usr:Calculation_att:qk"))
+    )
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS)
+    assert ir.unsupported == []
+    assert [blend.datasource for blend in ir.worksheets[0].blends] == [ir.datasources[1].id]
+    assert regions(ir, folder) == ["South", "West", "East", "North"]
+
+
+def test_sort_by_secondary_measure(tmp_path: Path, folder: Path) -> None:
+    """依次要資料源的量值排序：檢視中沒有次要資料源的欄位時仍混合；排序的層級比連結欄位粗時（地區與年都
+    連結、依地區排序），各連結值的結果再彙總。"""
+    sheet = measure_sheet(view_extra=by_field(target_ref("sum:Target:qk")))
+    ir = parse(tmp_path, folder, sheet)
+    assert ir.unsupported == [] and check_references(ir) == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    assert [blend.datasource for blend in ws.blends] == [ir.datasources[1].id]
+    (sort,) = ws.sorts
+    assert sort.by == FieldUse(field=ids["Targets.Target"], agg="sum", continuous=True)
+    # West 900、East 400、South 50；North 沒有目標
+    assert regions(ir, folder) == ["West", "East", "South", "North"]
+    sheet = measure_sheet(view_extra=by_field(target_ref("sum:Target:qk"), "ASC"))
+    assert regions(parse(tmp_path, folder, sheet), folder)[:3] == ["South", "East", "West"]
+
+    # 地區 × 年：依各地區的目標合計排序（East 2023 的 300 與 2024 的 100 再加總）
+    sheet = measure_sheet(
+        cols=ref("yr:Order Date:ok"),
+        instances=[REGION, YEAR, SALES],
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        view_extra=by_field(target_ref("sum:Target:qk")),
+    )
+    ir = parse(tmp_path, folder, sheet)
+    assert ir.unsupported == []
+    found = regions(ir, folder)
+    assert list(dict.fromkeys(found)) == ["West", "East", "South", "North"]
+
+
+def quick_target(kind: str, name: str, extra: str = "") -> str:
+    """次要資料源的 SUM(Target) 套用快速 Table Calculation（表格向下，也就是沿著列上的地區）。"""
+    return instance(
+        "[Target]",
+        "Sum",
+        f"[{name}:sum:Target:qk]",
+        "quantitative",
+        f"<table-calc ordering-type='Columns' type='{kind}'{extra} />",
+    )
+
+
+def down(
+    encodings: str,
+    secondary: list[str],
+    instances: list[str] | None = None,
+    view_extra: str = "",
+) -> str:
+    """列是地區、欄是 SUM(Sales)：Table Calculation 沿著地區計算。"""
+    return measure_sheet(
+        instances=instances, secondary=secondary, encodings=encodings, view_extra=view_extra
+    )
+
+
+def test_table_calcs_on_secondary_measures(tmp_path: Path, folder: Path) -> None:
+    """次要資料源的量值套用 Table Calculation：在混合後的結果上計算（沒有目標的 North 是 Null）。"""
+    secondary = [
+        TARGET,
+        quick_target("CumTotal", "cum"),
+        quick_target("PctTotal", "pcto"),
+        quick_target("Rank", "rank", " rank-options='Competition,Descending'"),
+    ]
+    encodings = (
+        f"<text column='{target_ref('cum:sum:Target:qk')}' />"
+        f"<tooltip column='{target_ref('pcto:sum:Target:qk')}' />"
+        f"<tooltip column='{target_ref('rank:sum:Target:qk')}' />"
+    )
+    ir = parse(tmp_path, folder, down(encodings, secondary))
+    assert ir.unsupported == [] and check_references(ir) == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    assert sorted(tc.type for tc in ws.table_calcs) == ["percent_of_total", "rank", "running_total"]
+    assert all(tc.addressing == [ids["Region"]] for tc in ws.table_calcs)
+    by_type = {tc.type: tc.id for tc in ws.table_calcs}
+    base = f"sum({ids['Targets.Target']})"
+    records = {r[ids["Region"]]: r for r in run(ir, folder)}
+
+    def column(kind: str) -> dict[object, object]:
+        return {region: r[f"{base}#{by_type[kind]}"] for region, r in records.items()}
+
+    # 累計：沒有目標的 North 沿用前面的累計
+    assert column("running_total") == {
+        "East": 400.0,
+        "North": 400.0,
+        "South": 450.0,
+        "West": 1350.0,
+    }
+    assert column("percent_of_total") == pytest.approx(
+        {"East": 400 / 1350, "North": None, "South": 50 / 1350, "West": 900 / 1350}
+    )
+    assert column("rank") == {"East": 2, "North": None, "South": 3, "West": 1}
+
+    # 以 Table Calculation 的結果篩選（累計 ≥ 450）
+    flt = measure_filter(target_ref("cum:sum:Target:qk"), 450)
+    ir = parse(tmp_path, folder, down(encodings, secondary, view_extra=flt))
+    assert ir.unsupported == []
+    (found,) = ir.worksheets[0].filters
+    assert found.stage == "table_calc"
+    assert regions(ir, folder) == ["South", "West"]
+
+
+TARGET_CALCS = (
+    b.calc("Calculation_run", "Running Target", "RUNNING_SUM(SUM([Target]))")
+    + b.calc("Calculation_half", "Half Target", "SUM([Target]) / 2")
+    # 引用彙總的計算欄位、參數以外的常數與另一個 Table Calculation
+    + b.calc(
+        "Calculation_share",
+        "Target Share",
+        "[Calculation_half] * 2 / TOTAL(SUM([Target])) + 0 * [Calculation_run]",
+    )
+    # 彙總之上的運算（ZN）在次要資料源計算：沒有對應資料的標記仍是 Null
+    + b.calc("Calculation_zrank", "Target Rank", "RANK(ZN(SUM([Target])))")
+)
+RUNNING = instance(
+    "[Calculation_run]",
+    "User",
+    "[usr:Calculation_run:qk]",
+    "quantitative",
+    "<table-calc ordering-type='Columns' />",
+)
+SHARE = instance(
+    "[Calculation_share]",
+    "User",
+    "[usr:Calculation_share:qk]",
+    "quantitative",
+    "<table-calc ordering-type='Columns' />",
+)
+
+
+ZRANK = instance(
+    "[Calculation_zrank]",
+    "User",
+    "[usr:Calculation_zrank:qk]",
+    "quantitative",
+    "<table-calc ordering-type='Columns' />",
+)
+
+
+def test_table_calc_fields_of_the_secondary(tmp_path: Path, folder: Path) -> None:
+    """次要資料源中的 Table Calculation 計算欄位（RUNNING_SUM、TOTAL）：公式在混合後的結果上計算，其中的
+    彙總仍在次要資料源計算。"""
+    encodings = (
+        f"<text column='{target_ref('usr:Calculation_run:qk')}' />"
+        f"<tooltip column='{target_ref('usr:Calculation_share:qk')}' />"
+        f"<tooltip column='{target_ref('usr:Calculation_zrank:qk')}' />"
+    )
+    sheet = down(encodings, [RUNNING, SHARE, ZRANK])
+    ir = parse(tmp_path, folder, sheet, secondary_columns=TARGET_CALCS)
+    assert ir.unsupported == [] and check_references(ir) == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    assert [tc.type for tc in ws.table_calcs] == ["formula", "formula", "formula"]
+    keys = {
+        name: next(c.key for c in worksheet_sql(ir, ws.id).columns if c.key.startswith(ids[name]))
+        for name in ("Targets.Running Target", "Targets.Target Share", "Targets.Target Rank")
+    }
+    records = {r[ids["Region"]]: r for r in run(ir, folder)}
+    running = {region: r[keys["Targets.Running Target"]] for region, r in records.items()}
+    assert running == {"East": 400.0, "North": 400.0, "South": 450.0, "West": 1350.0}
+    share = {region: r[keys["Targets.Target Share"]] for region, r in records.items()}
+    assert share == pytest.approx(
+        {"East": 400 / 1350, "North": None, "South": 50 / 1350, "West": 900 / 1350}
+    )
+    # ZN 在次要資料源計算：North 在次要資料源沒有列，仍是 Null（不參與排名）
+    rank = {region: r[keys["Targets.Target Rank"]] for region, r in records.items()}
+    assert rank == {"East": 2, "North": None, "South": 3, "West": 1}
+    # 公式在主要資料源的查詢中展開：彙總之上的運算整段在次要資料源計算
+    from tmig.ir.scope import ForeignSource
+
+    targets = ir.datasources[1]
+    source = ForeignSource(targets.name, targets.caption, targets.fields)
+    by_caption = {f.caption: f for f in targets.fields}
+    assert source.qualified(by_caption["Target Rank"]) == (
+        f"RANK(__EXTERNAL__(ZN(SUM([{TARGETS}].[Target]))))"
+    )
+    assert source.qualified(by_caption["Running Target"]) == (
+        f"RUNNING_SUM(SUM([{TARGETS}].[Target]))"
+    )
+
+
+def test_primary_table_calc_over_secondary_fields(tmp_path: Path, folder: Path) -> None:
+    """主要資料源的 Table Calculation 計算欄位引用次要資料源的欄位（達成率的排名、目標占比）。"""
+    calcs = (
+        BLEND_CALCS
+        + b.calc("Calculation_rank", "Attainment Rank", "RANK([Calculation_att])")
+        + b.calc(
+            "Calculation_tshare",
+            "Share of Target",
+            f"SUM([{TARGETS}].[Target]) / TOTAL(SUM([{TARGETS}].[Target]))",
+        )
+        # 主要資料源的計算欄位：ZN 在混合後計算，沒有目標的 North 是 0（排在最後）
+        + b.calc("Calculation_zrank", "Target Rank", f"RANK(ZN(SUM([{TARGETS}].[Target])))")
+    )
+    zrank = instance(
+        "[Calculation_zrank]",
+        "User",
+        "[usr:Calculation_zrank:qk]",
+        "quantitative",
+        "<table-calc ordering-type='Columns' />",
+    )
+    rank = instance(
+        "[Calculation_rank]",
+        "User",
+        "[usr:Calculation_rank:qk]",
+        "quantitative",
+        "<table-calc ordering-type='Columns' />",
+    )
+    share = instance(
+        "[Calculation_tshare]",
+        "User",
+        "[usr:Calculation_tshare:qk]",
+        "quantitative",
+        "<table-calc ordering-type='Columns' />",
+    )
+    encodings = (
+        f"<text column='{ref('usr:Calculation_rank:qk')}' />"
+        f"<tooltip column='{ref('usr:Calculation_tshare:qk')}' />"
+        f"<tooltip column='{ref('usr:Calculation_zrank:qk')}' />"
+    )
+    sheet = down(encodings, [TARGET], instances=[REGION, SALES, rank, share, zrank])
+    ir = parse(tmp_path, folder, sheet, columns=calcs)
+    assert ir.unsupported == [] and check_references(ir) == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    query = worksheet_sql(ir, ws.id)
+    keys = {
+        name: next(c.key for c in query.columns if c.key.startswith(ids[name]))
+        for name in ("Attainment Rank", "Share of Target", "Target Rank")
+    }
+    records = {r[ids["Region"]]: r for r in run(ir, folder)}
+    # 達成率：South 2、West 0.889、East 0.875；North 沒有目標
+    assert {region: r[keys["Attainment Rank"]] for region, r in records.items()} == {
+        "East": 3,
+        "North": None,
+        "South": 1,
+        "West": 2,
+    }
+    assert {region: r[keys["Share of Target"]] for region, r in records.items()} == pytest.approx(
+        {"East": 400 / 1350, "North": None, "South": 50 / 1350, "West": 900 / 1350}
+    )
+    assert {region: r[keys["Target Rank"]] for region, r in records.items()} == {
+        "East": 2,
+        "North": 4,
+        "South": 3,
+        "West": 1,
+    }
+
+
+def test_reference_line_on_secondary_measure(tmp_path: Path, folder: Path) -> None:
+    """次要資料源的量值與引用它的計算欄位在座標軸上：參考線（平均）以混合後的標記值計算。"""
+    import json
+
+    def line(n: int, axis: str) -> str:
+        return (
+            f"<reference-line axis-column='{axis}' enable-instant-analytics='false' "
+            f"formula='average' id='refline{n}' label-type='automatic' scope='per-table' "
+            f"value-column='{axis}' z-order='{n + 1}' />"
+        )
+
+    sheet = measure_sheet(
+        cols=f"({target_ref('sum:Target:qk')} + {ref('usr:Calculation_att:qk')})",
+        instances=[REGION, ATTAINMENT],
+        pane_extra=line(0, target_ref("sum:Target:qk")) + line(1, ref("usr:Calculation_att:qk")),
+    )
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS)
+    assert ir.unsupported == [] and check_references(ir) == []
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    first, second = ws.reference_lines
+    assert first.axis == FieldUse(field=ids["Targets.Target"], agg="sum", continuous=True)
+    assert first.value == first.axis
+    assert second.axis.field == ids["Attainment"]
+    query = worksheet_sql(ir, ws.id)
+    result = execute_query(folder / f"{ws.datasource}.duckdb", query)
+    rendered = build_spec(ir, ws.id, query.columns, result)
+    assert rendered.spec is not None, rendered.unsupported
+    assert not any("參考線" in note for note in rendered.notes)
+    text = json.dumps(rendered.spec)
+    # 目標的平均：(400 + 50 + 900) / 3；達成率的平均：(0.875 + 2 + 800/900) / 3
+    assert "450.0" in text
+    assert str((0.875 + 2.0 + 800.0 / 900.0) / 3)[:12] in text
+
+
+def test_editor_uses_secondary_measures_everywhere(tmp_path: Path, folder: Path) -> None:
+    """編輯器：以次要資料源的量值排序、篩選，或在它上面套用 Table Calculation。"""
+    from tmig.edit import replace_worksheet
+    from tmig.ir import RangeFilter, Sort, TableCalc
+
+    sheet = worksheet(
+        "Plain", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+    )
+    ir = parse(tmp_path, folder, sheet)
+    ids = fields(ir)
+    ws = ir.worksheets[0]
+    target = FieldUse(field=ids["Targets.Target"], agg="sum", continuous=True)
+
+    # 只放在排序依據上
+    sort = Sort(field=ids["Region"], kind="by_field", order="desc", by=target)
+    edited, saved = replace_worksheet(ir, ws.model_copy(update={"sorts": [sort]}))
+    assert [blend.datasource for blend in saved.blends] == [ir.datasources[1].id]
+    assert regions(edited, folder) == ["West", "East", "South", "North"]
+
+    # 只放在量值篩選上
+    flt = RangeFilter(
+        kind="range",
+        id="flt_target",
+        field=target,
+        stage="measure",
+        min=100,
+        source_ref="/editor",
+    )
+    edited, saved = replace_worksheet(ir, ws.model_copy(update={"filters": [flt]}))
+    assert [blend.datasource for blend in saved.blends] == [ir.datasources[1].id]
+    assert regions(edited, folder) == ["East", "West"]
+
+    # 套用 Table Calculation（累計，沿著地區）
+    calc = TableCalc(
+        id="tc_running",
+        type="running_total",
+        preset="table_down",
+        addressing=[ids["Region"]],
+        options={"aggregation": "sum"},
+        source_ref="/editor",
+    )
+    running = target.model_copy(update={"table_calc": calc.id})
+    edited, saved = replace_worksheet(
+        ir,
+        ws.model_copy(
+            update={
+                "marks": ws.marks.model_copy(update={"label": [running]}),
+                "table_calcs": [calc],
+            }
+        ),
+    )
+    assert [blend.datasource for blend in saved.blends] == [ir.datasources[1].id]
+    key = f"sum({ids['Targets.Target']})#{calc.id}"
+    assert {r[ids["Region"]]: r[key] for r in run(edited, folder)} == {
+        "East": 400.0,
+        "North": 400.0,
+        "South": 450.0,
+        "West": 1350.0,
+    }

@@ -481,7 +481,8 @@ def check_references(ir: IR) -> list[str]:
                     f"{base}.sorts[{i}]：欄位「{srt.field}」不在資料源「{ws.datasource}」中"
                 )
             if srt.by is not None:
-                check_use(srt.by, ws.datasource, f"{base}.sorts[{i}].by", tcs)
+                # 排序依據可以是次要資料源的量值（Data Blending）
+                check_use(srt.by, ws.datasource, f"{base}.sorts[{i}].by", tcs, extra=blended)
         for tc in ws.table_calcs:
             for fid in tc.addressing:
                 if fid not in fields_by_ds[ws.datasource]:
@@ -489,8 +490,11 @@ def check_references(ir: IR) -> list[str]:
                         f"{base}.table_calcs[{tc.id}].addressing：欄位「{fid}」不在資料源「{ws.datasource}」中"
                     )
             for nested in tc.nested:
+                # 巢狀計算的計算欄位可以是次要資料源的（Data Blending）；定址的欄位是主要資料源的維度
                 for fid in [nested.field, *nested.addressing]:
-                    if fid not in fields_by_ds[ws.datasource]:
+                    if fid not in fields_by_ds[ws.datasource] and (
+                        fid != nested.field or fid not in blended
+                    ):
                         errors.append(
                             f"{base}.table_calcs[{tc.id}].nested：欄位「{fid}」不在資料源「{ws.datasource}」中"
                         )
@@ -498,7 +502,9 @@ def check_references(ir: IR) -> list[str]:
             where = f"{base}.reference_lines[{line.id}]"
             # 地圖的緯度、經度（generated）軸上的參考線
             coordinates = line.axis.field in GENERATED_FIELDS
-            check_use(line.axis, ws.datasource, f"{where}.axis", tcs, special=coordinates)
+            check_use(
+                line.axis, ws.datasource, f"{where}.axis", tcs, special=coordinates, extra=blended
+            )
             if isinstance(line.value, ParamRef):
                 if line.value.parameter not in params:
                     errors.append(f"{where}.value：參數「{line.value.parameter}」不存在")
@@ -509,6 +515,7 @@ def check_references(ir: IR) -> list[str]:
                     f"{where}.value",
                     tcs,
                     special=line.value.field in GENERATED_FIELDS,
+                    extra=blended,
                 )
 
     for db in ir.dashboards:

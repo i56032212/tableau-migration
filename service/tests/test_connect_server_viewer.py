@@ -390,3 +390,41 @@ def test_blend_live_primary_with_excel_secondary(dsn: str, engine: str, tmp_path
     body = call(engine, f"/api/workbooks/{wb}/worksheets/ws_1/render", {})
     rows = {row[0]: tuple(row[1:]) for row in body["table"]["rows"]}
     assert rows == {"East": ("150.75", "300"), "Grand Total": ("150.75", "300")}
+    # 次要資料源的量值篩選（目標 ≥ 100）、依目標排序（遞減）與累計（Table Calculation）：以混合後的值計算
+    target = {"field": g["target"], "agg": "sum"}
+    saved.update(
+        totals=[],
+        filters=[
+            {
+                "kind": "range",
+                "id": "flt_target",
+                "field": target,
+                "stage": "measure",
+                "min": 100,
+                "source_ref": "/editor",
+            }
+        ],
+        sorts=[{"field": f["region"], "kind": "by_field", "order": "desc", "by": target}],
+        table_calcs=[
+            {
+                "id": "tc_running",
+                "type": "running_total",
+                "preset": "table_down",
+                "addressing": [f["region"]],
+                "options": {"aggregation": "sum"},
+                "source_ref": "/editor",
+            }
+        ],
+        columns=[{"field": f["sales"], "agg": "sum"}, {**target, "table_calc": "tc_running"}],
+    )
+    saved = call(engine, f"/api/edit/{wb}/worksheets/ws_1", {"worksheet": saved}, "PUT")[
+        "worksheet"
+    ]
+    assert [b["datasource"] for b in saved["blends"]] == [secondary]
+    body = call(engine, f"/api/workbooks/{wb}/worksheets/ws_1/render", {})
+    assert body.get("unsupported") in (None, [])
+    # South 沒有目標（Null），不顯示；East 300、West 150 依目標遞減，累計 300、450
+    assert [tuple(row) for row in body["table"]["rows"]] == [
+        ("East", "150.75", "300"),
+        ("West", "200", "450"),
+    ]

@@ -219,6 +219,9 @@ def _cmd_sql(args: argparse.Namespace) -> int:
     ) as exc:
         print(f"失敗：{exc}", file=sys.stderr)
         return 1
+    for stage in query.stages:
+        # Data Blending：次要資料源的查詢先執行，結果以這個名稱的資料表併入
+        sys.stdout.write(f"-- {stage.name}：{stage.datasource.caption}\n{stage.query.sql}\n;\n")
     sys.stdout.write(query.sql)
     if query.state.skipped:
         print(f"-- 不適用這張工作表的篩選：{'、'.join(query.state.skipped)}", file=sys.stderr)

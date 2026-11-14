@@ -5,8 +5,8 @@
   同一個連線一次只執行一段查詢
 - 跨資料庫的 join（檔案型資料源中有資料庫的資料表）：各資料庫的資料表取回後與匯入的檔案在本機的 DuckDB
   合併（tmig.data.federated）；取回的資料在 TTL 之內重複使用
-- Data Blending 的資料源有 Live 連線（或次要資料源是 Relationship 模型）：與 Tableau 相同，主要資料源與各次要
-  資料源的查詢分開執行（WorksheetSql.stages，各自依上面的方式），結果在 DuckDB 依連結欄位合併
+- Data Blending：與 Tableau 相同，各次要資料源的查詢先在各自的來源執行（WorksheetSql.stages，各自依上面的
+  方式），結果登記成資料表併入主要資料源的查詢（tmig.sqlgen.blend）
 
 查詢服務、tmig verify 與 tmig query 都透過這裡執行查詢。
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from tmig.data.executor import QueryResult, combine, execute, execute_query
+from tmig.data.executor import QueryResult, execute, execute_query, stage_tables
 from tmig.data.federated import FederatedCache, execute_federated, execute_federated_sql
 from tmig.data.live import execute_live, execute_remote
 from tmig.data.sources import (
@@ -33,7 +33,7 @@ from tmig.data.sources import (
 )
 from tmig.ir.models import Datasource, FileConnection, LiveConnection, has_local_data, is_federated
 from tmig.sqlgen.dialect import ParameterValues
-from tmig.sqlgen.query import OutputColumn, QueryError, WorksheetSql
+from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import datasource_source
 
 Database = Path | Callable[[], Path]
@@ -76,38 +76,25 @@ class DataRuntime:
             return executor.fetch(sql)
 
     def run(self, query: WorksheetSql, datasource: Datasource, database: Database) -> QueryResult:
-        """執行一張工作表的查詢（萃取或 Live）。"""
-        if query.stages:
-            return self._run_stages(query, datasource, database)
-        connection = datasource.connection
-        if isinstance(connection, LiveConnection):
-            with self._executor(connection) as executor:
-                return execute_live(query, executor)
-        if isinstance(connection, FileConnection) and is_federated(connection):
-            path = _path(database) if has_local_data(connection) or query.attach else None
-            local = path if has_local_data(connection) else None
-            folder = path.parent if path is not None and query.attach else None
-            return execute_federated(query, local, connection, self.fetch, self.federated, folder)
-        # Data Blending 的次要資料源是跨資料庫的 join 時，資料庫的資料表在查詢時取回
-        return execute_query(_path(database), query, self.fetch, self.federated)
-
-    def _run_stages(
-        self, query: WorksheetSql, datasource: Datasource, database: Database
-    ) -> QueryResult:
-        """Data Blending 分開執行的各段：主要資料源以 database，次要資料源以同一目錄中以資料源 id 為檔名的
-        DuckDB 檔（萃取、檔案；Live 連線不需要）；結果依連結欄位合併。"""
+        """執行一張工作表的查詢（萃取或 Live）。Data Blending 的次要資料源的查詢（WorksheetSql.stages）先在
+        各自的來源執行（萃取、檔案是同一目錄中以資料源 id 為檔名的 DuckDB 檔；Live 連線不需要），結果登記成
+        資料表交給主要資料源的查詢。"""
 
         def beside(ds_id: str) -> Callable[[], Path]:
             return lambda: _path(database).parent / f"{ds_id}.duckdb"
 
-        parts: dict[str, tuple[list[OutputColumn], QueryResult]] = {}
-        for stage in query.stages:
-            own = stage.datasource.id == datasource.id
-            result = self.run(
-                stage.query, stage.datasource, database if own else beside(stage.datasource.id)
-            )
-            parts[stage.name] = (stage.query.columns, result)
-        return combine(query, parts)
+        tables = stage_tables(
+            query,
+            lambda stage: self.run(stage.query, stage.datasource, beside(stage.datasource.id)),
+        )
+        connection = datasource.connection
+        if isinstance(connection, LiveConnection):
+            with self._executor(connection) as executor:
+                return execute_live(query, executor, tables)
+        if isinstance(connection, FileConnection) and is_federated(connection):
+            local = _path(database) if has_local_data(connection) else None
+            return execute_federated(query, local, connection, self.fetch, self.federated, tables)
+        return execute_query(_path(database), query, tables)
 
     def run_sql(
         self,

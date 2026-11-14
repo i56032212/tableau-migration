@@ -405,7 +405,9 @@ def test_blending_with_cross_database_secondary(
     blend = next(w for w in ir.worksheets if w.name == "Blend Cross")
     assert [b.datasource for b in blend.blends] == [ir.datasources[0].id]
     query = worksheet_sql(ir, blend.id)
-    assert set(query.federated) == set(query.attach) == {"__blend0"}
+    # 次要資料源的查詢另外執行（跨資料庫的 join），結果以資料表 __s0 併入
+    (stage,) = query.stages
+    assert (stage.name, stage.datasource.id) == ("__s0", ir.datasources[0].id)
     with runtime_for(postgres) as runtime:
         spy = Spy(runtime)
         runtime.fetch = spy  # type: ignore[method-assign]
@@ -435,7 +437,7 @@ def test_blending_with_relationship_model_secondary(
     folder, ir = built
     blend = next(w for w in ir.worksheets if w.name == "Blend Model")
     query = worksheet_sql(ir, blend.id)
-    assert [stage.name for stage in query.stages] == ["__p", "__s0"]
+    assert [stage.name for stage in query.stages] == ["__s0"]
     with runtime_for(postgres) as runtime:
         # 依關聯：East 15.5、West 7；South 的訂單沒有對應的地區（Null，連結欄位的 Null 視為相等）
         assert blended(runtime, ir, folder, "Blend Model") == {

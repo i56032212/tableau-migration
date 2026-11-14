@@ -1866,8 +1866,8 @@ def _check_set(
     state.levels[data_field.id] = "row"
 
 
-def _foreign_refs(state: DsState, formula: str) -> bool:
-    """公式以 [資料源].[欄位] 引用其他資料源的欄位。"""
+def _foreign_refs(state: DsState, formula: str, seen: set[str] | None = None) -> bool:
+    """公式以 [資料源].[欄位] 引用其他資料源的欄位（直接引用，或經由引用的計算欄位）。"""
     from tmig.formula.ast import walk
     from tmig.ir.scope import TABLE_OWNER
 
@@ -1875,10 +1875,24 @@ def _foreign_refs(state: DsState, formula: str) -> bool:
         node = parse_formula(formula)
     except FormulaSyntaxError:
         return False
+    seen = set() if seen is None else seen
     own = {"Parameters", TABLE_OWNER, state.name.strip("[]"), state.caption}
-    return any(
-        isinstance(n, FieldRef) and len(n.parts) == 2 and n.parts[0] not in own for n in walk(node)
-    )
+    captions: dict[str, DataField] = {}
+    for item in state.fields:
+        captions.setdefault(item.caption, item)
+    for found in walk(node):
+        if not isinstance(found, FieldRef):
+            continue
+        if len(found.parts) == 2 and found.parts[0] not in own:
+            return True
+        name = found.parts[-1]
+        referenced = state.by_name.get("[" + name.replace("]", "]]") + "]") or captions.get(name)
+        if referenced is None or referenced.calc is None or referenced.id in seen:
+            continue
+        seen.add(referenced.id)
+        if _foreign_refs(state, referenced.calc.formula, seen):
+            return True
+    return False
 
 
 def analyze_calcs(ctx: ParseContext, state: DsState) -> None:

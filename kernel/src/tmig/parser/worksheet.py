@@ -797,10 +797,14 @@ class SheetParser:
         return ClusterSpec(field=field_id, measures=measures, count=count)
 
     def _secondary_use(self, name: str, ref: str) -> FieldUse | str:
-        """次要資料源（Data Blending）的欄位：只能是欄列架與標記卡上彙總的量值。"""
+        """次要資料源（Data Blending）的欄位：彙總的量值（可以套用 Table Calculation）或以 ATTR 彙總的維度，
+        放在欄列架、標記卡、量值篩選、排序依據與參考線上。"""
         secondary = self.secondaries[name]
         if not self._blending:
-            return f"次要資料源「{secondary.caption}」（Data Blending）的欄位只支援放在欄列架與標記卡上"
+            return (
+                f"次要資料源「{secondary.caption}」（Data Blending）的欄位只支援放在欄列架、標記卡、"
+                "量值篩選、排序依據與參考線上"
+            )
         key = instance_key(ref)
         cache = f"[{name}].{key}"
         if cache in self.uses:
@@ -812,22 +816,30 @@ class SheetParser:
                 return f"找不到次要資料源「{secondary.caption}」的欄位實例 {ref}"
             use: FieldUse | str = FieldUse(field=data_field.id)
         else:
-            if children(inst, "table-calc"):
-                return f"次要資料源「{secondary.caption}」的欄位套用 Table Calculation（Data Blending）v0 不支援"
             use = use_from_instance(secondary, inst)
         if isinstance(use, str):
             return use
-        if secondary.levels.get(use.field) == "table_calc":
-            caption = secondary.field_by_id(use.field).caption
-            return (
-                f"次要資料源「{secondary.caption}」的「{caption}」是 Table Calculation："
-                "Data Blending 尚不支援次要資料源的 Table Calculation"
-            )
-        if not is_aggregate(secondary, use):
+        calculated = inst is not None and bool(children(inst, "table-calc"))
+        if not calculated and not is_aggregate(secondary, use):
             # 次要資料源的維度：與 Tableau 相同以 ATTR 彙總（連結欄位的每個值只有一個值時是那個值，否則是 *）
             use = use.model_copy(update={"agg": "attr", "continuous": False})
         self.uses[cache] = use
         return use
+
+    def _state_of(self, field_id: str) -> DsState:
+        """欄位所屬的資料源（主要或次要資料源）。"""
+        assert self.ds is not None
+        for secondary in self.secondaries.values():
+            if any(f.id == field_id for f in secondary.fields):
+                return secondary
+        return self.ds
+
+    def _own_ref(self, ref: str) -> str:
+        """參考線等位置的欄位參照：次要資料源的欄位保留資料源的名稱，其餘只留欄位實例。"""
+        parts = qualified_parts(ref)
+        if len(parts) == 2 and parts[0] in self.secondaries:
+            return ref
+        return instance_key(ref)
 
     @contextmanager
     def _blend_scope(self) -> Iterator[None]:
@@ -947,13 +959,26 @@ class SheetParser:
         for use in uses:
             if use.field in own and own[use.field].calc is not None:
                 referenced |= calc_references(own, use.field)
-        filtered = {name for name in self.secondaries if self._secondary_filters(view, name)}
+        # 只用在篩選、排序上的計算欄位（欄位實例在工作表的相依清單中）
+        for inst in self.instances.values():
+            data_field = self.ds.by_name.get(inst.get("column", ""))
+            if data_field is not None and data_field.calc is not None:
+                referenced |= calc_references(own, data_field.id)
+        # 次要資料源自己的篩選、以次要資料源的量值排序
+        hinted = {name for name in self.secondaries if self._secondary_filters(view, name)}
+        for element in view.iter():
+            if not isinstance(element.tag, str):
+                continue
+            for attribute in ("using", "measure-to-sort-by"):
+                parts = qualified_parts(element.get(attribute) or "")
+                if len(parts) == 2 and parts[0] in self.secondaries:
+                    hinted.add(parts[0])
         for name, secondary in self.secondaries.items():
             ids = {f.id for f in secondary.fields}
             if (
                 not any(u.field in ids for u in uses)
                 and not (referenced & ids)
-                and name not in filtered
+                and name not in hinted
             ):
                 continue
             label = f"工作表「{self.name}」混合次要資料源「{secondary.caption}」（Data Blending）"
@@ -1129,7 +1154,8 @@ class SheetParser:
                 f"參考線、參考區間或分布（{formula}，{element.get('scope')}）新平台不畫（不影響數字）",
             )
             return None
-        axis = self.resolve(instance_key(element.get("axis-column", "")))
+        with self._blend_scope():
+            axis = self.resolve(self._own_ref(element.get("axis-column", "")))
         # 地圖的緯度、經度（generated）軸上的參考線照畫（見 tmig.render.maps）
         if isinstance(axis, str) or axis.field in (
             MEASURE_NAMES,
@@ -1154,7 +1180,8 @@ class SheetParser:
                 ctx.flag(element, f"參考線的常數無法解析：{exc}")
                 return None
         else:
-            found = self.resolve(instance_key(value_ref)) if value_ref else axis
+            with self._blend_scope():
+                found = self.resolve(self._own_ref(value_ref)) if value_ref else axis
             if isinstance(found, str) or found.field in (
                 MEASURE_NAMES,
                 MEASURE_VALUES,
@@ -1935,33 +1962,43 @@ class SheetParser:
         # 窗格內變化的維度（窗格的計算方向只定址這些）
         self._pane_dims = (self._inner(rows), self._inner(cols))
         result: list[TableCalc] = []
-        # 依工作表相依清單的順序處理；只出現在篩選上的 Table Calculation 也要先建立
-        for key, inst in self.instances.items():
-            # 第一個沒有 field 的 <table-calc> 是這個欄位的設定；有 field 的是巢狀計算各自的計算方向
-            elements = children(inst, "table-calc")
-            calc_el = next((e for e in elements if e.get("field") is None), None)
-            data_field = ds.by_name.get(inst.get("column", ""))
-            is_formula = data_field is not None and ds.levels.get(data_field.id) == "table_calc"
-            if calc_el is None and not is_formula:
-                continue
-            use = self.resolve(key)
-            if isinstance(use, str):
-                self.ctx.flag(inst, f"Table Calculation 的欄位無法解析：{use}")
-                continue
-            self._pie = key in pie_keys
-            if calc_el is None:
-                created = self._default_formula_calc(use, row_dims, col_dims, mark_dims, inst)
-            else:
-                created = self._table_calc(calc_el, use, row_dims, col_dims, mark_dims)
-            if created is None:
-                continue
-            nested = [
-                found
-                for e in elements
-                if e.get("field") is not None
-                and (found := self._nested_calc(e, row_dims, col_dims, mark_dims)) is not None
-            ]
-            result.append(created.model_copy(update={"nested": nested}) if nested else created)
+        # 依工作表相依清單的順序處理；只出現在篩選上的 Table Calculation 也要先建立。
+        # 次要資料源（Data Blending）的量值也可以套用 Table Calculation：在混合後的結果上計算
+        sources: list[tuple[DsState, str, dict[str, etree._Element]]] = [(ds, "", self.instances)]
+        sources += [
+            (secondary, f"[{name}].", self.secondary_instances.get(name, {}))
+            for name, secondary in self.secondaries.items()
+        ]
+        for owner, prefix, instances in sources:
+            for key, inst in instances.items():
+                # 第一個沒有 field 的 <table-calc> 是這個欄位的設定；有 field 的是巢狀計算各自的計算方向
+                elements = children(inst, "table-calc")
+                calc_el = next((e for e in elements if e.get("field") is None), None)
+                data_field = owner.by_name.get(inst.get("column", ""))
+                is_formula = (
+                    data_field is not None and owner.levels.get(data_field.id) == "table_calc"
+                )
+                if calc_el is None and not is_formula:
+                    continue
+                with self._blend_scope():
+                    use = self.resolve(prefix + key)
+                if isinstance(use, str):
+                    self.ctx.flag(inst, f"Table Calculation 的欄位無法解析：{use}")
+                    continue
+                self._pie = not prefix and key in pie_keys
+                if calc_el is None:
+                    created = self._default_formula_calc(use, row_dims, col_dims, mark_dims, inst)
+                else:
+                    created = self._table_calc(calc_el, use, row_dims, col_dims, mark_dims)
+                if created is None:
+                    continue
+                nested = [
+                    found
+                    for e in elements
+                    if e.get("field") is not None
+                    and (found := self._nested_calc(e, row_dims, col_dims, mark_dims)) is not None
+                ]
+                result.append(created.model_copy(update={"nested": nested}) if nested else created)
         return result
 
     def _nested_calc(
@@ -1972,13 +2009,12 @@ class SheetParser:
         mark_dims: list[FieldUse],
     ) -> NestedTableCalc | None:
         """巢狀計算的計算方向：<table-calc field='[ds].[Calculation1]' ordering-type='Rows' />。"""
-        assert self.ds is not None
         ref = calc_el.get("field", "")
         field_id = self._field_ref(ref)
         if field_id is None:
             self.ctx.flag(calc_el, f"巢狀計算的欄位 {ref} 找不到")
             return None
-        if self.ds.levels.get(field_id) != "table_calc":
+        if self._state_of(field_id).levels.get(field_id) != "table_calc":
             self.ctx.ignore(calc_el, "巢狀計算的設定指向非 Table Calculation 的欄位，不影響數字")
             return None
         direction = self._direction(calc_el, row_dims, col_dims, mark_dims)
@@ -2000,8 +2036,7 @@ class SheetParser:
         mark_dims: list[FieldUse],
         inst: etree._Element | None,
     ) -> TableCalc:
-        assert self.ds is not None
-        caption = self.ds.field_by_id(use.field).caption
+        caption = self._state_of(use.field).field_by_id(use.field).caption
         tc_id = self.ctx.ids.make("tc", f"formula {caption}", f"formula {use.field}")
         use.table_calc = tc_id
         return TableCalc(
@@ -2021,8 +2056,7 @@ class SheetParser:
         col_dims: list[FieldUse],
         mark_dims: list[FieldUse],
     ) -> TableCalc | None:
-        assert self.ds is not None
-        ds = self.ds
+        ds = self._state_of(use.field)
         type_attr = calc_el.get("type")
         if type_attr in (None, "None", "Custom"):
             # 沒有寫類型或 Custom：計算欄位本身的 Table Calculation 公式的計算方向
@@ -2275,6 +2309,15 @@ class SheetParser:
         """[ds].[Region]（欄位名稱）或 [ds].[none:Region:nk]（欄位實例）→ 欄位 id。"""
         assert self.ds is not None
         key = instance_key(ref)
+        parts = qualified_parts(ref)
+        if len(parts) == 2 and parts[0] in self.secondaries:
+            # 次要資料源（Data Blending）的欄位，例如巢狀計算的計算欄位
+            data_field = self.secondaries[parts[0]].by_name.get(key)
+            if data_field is not None:
+                return data_field.id
+            with self._blend_scope():
+                resolved = self.resolve(ref)
+            return None if isinstance(resolved, str) else resolved.field
         data_field = self.ds.by_name.get(key)
         if data_field is not None:
             return data_field.id
@@ -2332,32 +2375,49 @@ class SheetParser:
         filters: list[Filter],
         kinds: dict[str, FilterKind],
     ) -> bool:
-        """次要資料源（Data Blending）的維度篩選：篩選次要資料源的資料；主要資料源中連結欄位的值沒有對應到
-        通過篩選的資料時，那些標記不顯示（見 tmig.sqlgen.blend）。篩選留在工作表的 filters 中（欄位是次要
-        資料源的欄位）。回傳是否加入。"""
+        """次要資料源（Data Blending）的篩選，留在工作表的 filters 中（欄位是次要資料源的欄位）。
+
+        維度篩選：篩選次要資料源的資料；主要資料源中連結欄位的值沒有對應到通過篩選的資料時，那些標記不
+        顯示（見 tmig.sqlgen.blend）。量值與 Table Calculation 的篩選：以混合後的值篩選標記，與主要資料源
+        的量值篩選相同。回傳是否加入。"""
         secondary = self.secondaries[name]
         column = element.get("column", "")
         key = instance_key(column)
 
         def resolve(ref: str) -> FieldUse | str:
-            inst = self.secondary_instances.get(name, {}).get(instance_key(ref))
+            found = instance_key(ref)
+            inst = self.secondary_instances.get(name, {}).get(found)
             if inst is None:
-                return use_from_name(secondary, instance_key(ref))
-            if children(inst, "table-calc"):
-                return "次要資料源的 Table Calculation（Data Blending）尚不支援"
-            return use_from_instance(secondary, inst)
+                return use_from_name(secondary, found)
+            use = use_from_instance(secondary, inst)
+            if isinstance(use, str):
+                return use
+            if children(inst, "table-calc") or is_aggregate(secondary, use):
+                # 量值：與檢視中的是同一個欄位實例（Table Calculation 的設定在 _table_calcs 已建立）
+                with self._blend_scope():
+                    return self._secondary_use(name, f"[{name}].{found}")
+            return use
 
         parsed = FilterParser(self.ctx, secondary, resolve, "worksheet").parse(element)
         if parsed is None:
             return False
         label = f"工作表「{self.name}」以次要資料源「{secondary.caption}」的欄位 {column} 篩選"
-        if isinstance(parsed, TupleFilter) or parsed.stage != "dimension":
+        if isinstance(parsed, TupleFilter) or parsed.stage not in (
+            "dimension",
+            "measure",
+            "table_calc",
+        ):
             self.ctx.flag(
                 element,
-                f"{label}：Data Blending 只支援次要資料源的維度篩選（量值、條件、Top N 尚不支援）",
+                f"{label}：Data Blending 只支援次要資料源的維度與量值篩選"
+                "（內容篩選、條件、Top N 尚不支援）",
             )
             return False
-        if parsed.kind not in ("categorical", "range", "relative_date"):
+        if parsed.stage == "dimension" and parsed.kind not in (
+            "categorical",
+            "range",
+            "relative_date",
+        ):
             self.ctx.flag(element, f"{label}：{parsed.kind} 篩選（Data Blending）尚不支援")
             return False
         filters.append(parsed)
@@ -2630,7 +2690,9 @@ class SheetParser:
         direction: str | None,
     ) -> Sort | None:
         dim = self._use(column, element, "排序的維度")
-        by = self._use(using, element, "排序依據")
+        with self._blend_scope():
+            # 排序依據可以是次要資料源的量值（Data Blending）
+            by = self._use(using, element, "排序依據")
         if dim is None or by is None:
             return None
         return Sort(field=dim.field, kind="by_field", order=_order(direction), by=by)

@@ -614,7 +614,8 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
 
     與 Tableau 相同，工作表還沒有用到主要資料源的任何欄位時，第一個放上的欄位的資料源成為主要資料源。
     連結沿用其他工作表混合同一對資料源時的連結（例如來自 .twb 的自訂關聯），否則以名稱相同的維度
-    自動連結。次要資料源的欄位只能是彙總的量值。"""
+    自動連結。次要資料源的維度以 ATTR 彙總；量值可以套用 Table Calculation，也可以用在量值篩選、排序依據
+    與參考線上。"""
     owner = {f.id: ds.id for ds in ir.datasources for f in ds.fields}
     view = [*sheet.rows, *sheet.columns, *sheet.marks.uses()]
     view += [u for pane in sheet.panes for u in pane.marks.uses()]
@@ -626,7 +627,13 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
         primary = owner[used[0].field]
     order: list[str] = []
     own = {f.id: f for f in _datasource(ir, primary).fields} if used else {}
-    for use in used:
+    # 篩選、排序依據與參考線上的欄位：次要資料源的篩選（維度篩選只留下連結欄位的值有對應到通過篩選的
+    # 資料的標記；量值篩選以混合後的值篩選）、以次要資料源的量值排序
+    extra = [f.field for f in sheet.filters if not isinstance(f, TupleFilter)]
+    extra += [s.by for s in sheet.sorts if s.by is not None]
+    for line in sheet.reference_lines:
+        extra += [u for u in (line.axis, line.value) if isinstance(u, FieldUse)]
+    for use in [*used, *(u for u in extra if used and u.field in owner)]:
         ds = owner[use.field]
         if ds != primary and ds not in order:
             order.append(ds)
@@ -635,22 +642,12 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
             for other in sorted(calc_references(own, use.field)):
                 if other in owner and owner[other] not in order:
                     order.append(owner[other])
-    for flt in sheet.filters:
-        # 次要資料源的篩選（只留下連結欄位的值有對應到通過篩選的資料的標記）
-        if isinstance(flt, TupleFilter) or flt.field.field not in owner:
-            continue
-        ds = owner[flt.field.field]
-        if used and ds != primary and ds not in order:
-            order.append(ds)
     # 次要資料源的維度：與 Tableau 相同以 ATTR 彙總（連結欄位的每個值只有一個值時是那個值，否則是 *）
     plain = {
         use.field
         for use in used
         if owner[use.field] != primary
-        and use.agg is None
-        and use.table_calc is None
         and not _secondary_measure(_datasource(ir, owner[use.field]), use)
-        and _level_of(_datasource(ir, owner[use.field]), use.field) != "table_calc"
     }
     if plain:
         sheet = _as_attributes(sheet, plain)
@@ -664,13 +661,6 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
     blends: list[Blend] = []
     for ds_id in order:
         secondary = _datasource(ir, ds_id)
-        for use in used:
-            if owner[use.field] == ds_id and not _secondary_measure(secondary, use):
-                caption = next(f.caption for f in secondary.fields if f.id == use.field)
-                raise EditError(
-                    f"「{caption}」是次要資料源「{secondary.caption}」的欄位：Data Blending 只能使用"
-                    "次要資料源彙總的量值"
-                )
         found = existing.get(ds_id) if primary == sheet.datasource else None
         found = found or _known_blend(ir, sheet.id, primary, ds_id)
         if found is None:
@@ -685,11 +675,6 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
     if primary == sheet.datasource and blends == sheet.blends:
         return sheet
     return sheet.model_copy(update={"datasource": primary, "blends": blends})
-
-
-def _level_of(ds: Datasource, field_id: str) -> str | None:
-    found = next((f for f in ds.fields if f.id == field_id), None)
-    return found.calc.level if found is not None and found.calc is not None else None
 
 
 def _as_attributes(sheet: Worksheet, fields: set[str]) -> Worksheet:
@@ -738,13 +723,13 @@ def _field_refs(node: Any) -> set[str]:
 
 
 def _secondary_measure(ds: Datasource, use: FieldUse) -> bool:
+    """次要資料源的欄位在檢視中是否為量值（彙總、套用 Table Calculation，或彙總／Table Calculation 層級的
+    計算欄位）；不是的（維度）以 ATTR 彙總。"""
     field = next((f for f in ds.fields if f.id == use.field), None)
-    if field is None or use.table_calc is not None:
+    if field is None:
         return False
     level = field.calc.level if field.calc is not None else None
-    if level == "table_calc":
-        return False
-    return use.agg is not None or level == "aggregate"
+    return use.agg is not None or use.table_calc is not None or level in ("aggregate", "table_calc")
 
 
 def _known_blend(ir: IR, sheet: str, primary: str, secondary: str) -> Blend | None:

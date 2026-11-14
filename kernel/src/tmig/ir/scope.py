@@ -6,7 +6,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tmig.formula.analyze import Analyzer, Target
+from tmig.formula.ast import Call, FieldRef, Lod, Node, children, map_children
+from tmig.formula.functions import EXTERNAL, lookup
+from tmig.formula.lexer import FormulaSyntaxError
+from tmig.formula.parser import parse_formula
 from tmig.formula.types import Level
+from tmig.formula.unparse import to_formula
 from tmig.ir.models import IR, DataField, Datasource, Parameter
 
 
@@ -24,7 +29,8 @@ FOREIGN_LEVELS: dict[str | None, Level] = {
     "lod": "row",
     "aggregate": "agg",
 }
-"""其他資料源的欄位在公式中的層級（Table Calculation 的計算欄位不能引用）。"""
+"""其他資料源的欄位在公式中的層級。Table Calculation 的計算欄位不在其中：它在混合後的結果上計算，公式改寫成
+以 [資料源].[欄位] 引用後，在引用它的資料源中分析（見 ForeignSource.qualified）。"""
 
 
 @dataclass(frozen=True)
@@ -51,14 +57,94 @@ class ForeignSource:
                 level = field.calc.level
                 if level is None:
                     continue
-            if level not in FOREIGN_LEVELS:
+            if level == "table_calc":
+                formula = self.qualified(field)
+                if formula is None:
+                    continue
+                target = Target("field", field.id, field.datatype, field.role, formula)
+            elif level in FOREIGN_LEVELS:
+                target = Target(
+                    "field", field.id, field.datatype, field.role, None, FOREIGN_LEVELS[level]
+                )
+            else:
                 continue
-            target = Target(
-                "field", field.id, field.datatype, field.role, None, FOREIGN_LEVELS[level]
-            )
             found[_strip(field.name)] = target
             captions.setdefault(field.caption, target)
         return {**captions, **found}
+
+    def qualified(self, field: DataField) -> str | None:
+        """Table Calculation 計算欄位的公式，欄位改以 [資料源].[欄位] 引用（參數以 [Parameters].[參數]）：
+        Table Calculation 在混合後的結果上計算，所以公式在引用它的資料源中展開。其中的彙總仍在這個資料源計算：
+        單一的彙總（SUM([Target])）照一般的寫法；彙總之上還有運算的運算式（ZN(SUM([Target]))、
+        SUM([A]) / SUM([B])）整段包成 __EXTERNAL__(…)，在這個資料源依連結欄位算好（沒有對應資料的標記是
+        Null，與 Tableau 相同）。TOTAL 的參數在較粗的層級計算，不包（各彙總分別再彙總）。公式無法解析時為 None。"""
+        if field.calc is None:
+            return None
+        try:
+            tree = parse_formula(field.calc.formula)
+        except FormulaSyntaxError:
+            return None
+        owner = _strip(self.name)
+        names = {_strip(f.name): f for f in self.fields}
+        captions: dict[str, DataField] = {}
+        for item in self.fields:
+            captions.setdefault(item.caption, item)
+
+        def own(node: FieldRef) -> DataField | None:
+            parts = node.parts
+            if len(parts) == 2 and parts[0] in (owner, self.caption):
+                parts = parts[1:]
+            if len(parts) != 1:
+                return None
+            return names.get(parts[0]) or captions.get(parts[0])
+
+        def level(item: DataField) -> str | None:
+            if item.calc is None:
+                return "row"
+            return self.levels.get(item.id) if self.levels is not None else item.calc.level
+
+        def kind(node: Node) -> str | None:
+            """彙總函式或彙總層級的計算欄位為 aggregate，Table Calculation 的為 table_calc。"""
+            if isinstance(node, Call):
+                spec = lookup(node.name, len(node.args))
+                return spec.kind if spec is not None and spec.kind != "row" else None
+            if isinstance(node, FieldRef):
+                found = own(node)
+                found_level = level(found) if found is not None else None
+                return found_level if found_level in ("aggregate", "table_calc") else None
+            return None
+
+        def has(node: Node, wanted: str) -> bool:
+            if kind(node) == wanted:
+                return True
+            if isinstance(node, Lod) or kind(node) == "aggregate":
+                return False  # LOD 與彙總的內部是列層級
+            return any(has(child, wanted) for child in children(node))
+
+        def plain(node: Node) -> Node:
+            if not isinstance(node, FieldRef):
+                return map_children(node, plain)
+            parts = node.parts
+            if len(parts) == 2 and parts[0] not in (owner, self.caption):
+                return node  # 參數（[Parameters].[…]）或其他資料源的欄位
+            found = own(node)
+            if found is None:
+                # 不是欄位：參數（以顯示名稱引用）
+                return FieldRef(node.pos, ("Parameters", parts[-1]))
+            return FieldRef(node.pos, (owner, _strip(found.name)))
+
+        def visit(node: Node, total: bool = False) -> Node:
+            if not has(node, "table_calc"):
+                done = plain(node)
+                if total or kind(node) == "aggregate" or not has(node, "aggregate"):
+                    return done
+                return Call(node.pos, EXTERNAL, (done,))
+            if isinstance(node, FieldRef):
+                return plain(node)  # 另一個 Table Calculation 計算欄位
+            inside = isinstance(node, Call) and node.name == "TOTAL"
+            return map_children(node, lambda child: visit(child, total or inside))
+
+        return to_formula(visit(tree))
 
 
 class DatasourceScope:

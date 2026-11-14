@@ -747,7 +747,18 @@ def _build() -> dict[str, FunctionSpec]:
 REGISTRY: dict[str, FunctionSpec] = _build()
 
 
+EXTERNAL = "__EXTERNAL__"
+"""內部用的函式（不是 Tableau 的函式，不在函式目錄中）：Data Blending 中整段在次要資料源計算的彙總運算式
+（__EXTERNAL__(ZN(SUM([Targets].[Target])))）或次要資料源的彙總計算欄位，當作一個彙總；見 tmig.sqlgen.blend
+與 tmig.ir.scope.ForeignSource.qualified。"""
+_EXTERNAL_SPEC = FunctionSpec(
+    EXTERNAL, "aggregate", 1, 1, lambda infos, _args, _pos: infos[0].datatype
+)
+
+
 def lookup(name: str, arg_count: int) -> FunctionSpec | None:
+    if name == EXTERNAL:
+        return _EXTERNAL_SPEC
     if name in ("MIN", "MAX") and arg_count == 2:
         return REGISTRY[f"{name}2"]
     return REGISTRY.get(name)
