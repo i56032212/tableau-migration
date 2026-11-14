@@ -610,9 +610,13 @@ def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR
 
 
 def set_datasource_filters(
-    ir: IR, datasource: str, filters: list[dict[str, Any]]
+    ir: IR,
+    datasource: str,
+    filters: list[dict[str, Any]],
+    stage: Literal["datasource", "extract"] = "datasource",
 ) -> tuple[IR, list[Filter]]:
     """資料源篩選（Tableau 資料來源分頁的「篩選條件」）：換掉這個資料源的資料源篩選，萃取篩選不變。
+    stage 為 extract 時換掉的是萃取篩選（建立、更新萃取時套用在來源的資料上；下次更新萃取才生效）。
 
     資料源篩選逐列套用到這個資料源的所有工作表與控制項的可選值：只能是維度上的類別、範圍、相對日期篩選
     或列層級的條件（萬用字元）；Top N 與彙總的條件需要先算出成員，不能當作資料源篩選。"""
@@ -627,7 +631,7 @@ def set_datasource_filters(
         if item.get("kind") in ("top_n", "tuple"):
             raise EditError("資料源篩選不能是 Top N 或依值組合的篩選")
         try:
-            flt = adapter.validate_python({**item, "stage": "datasource", "group": None})
+            flt = adapter.validate_python({**item, "stage": stage, "group": None})
         except ValidationError as exc:
             raise EditError(f"資料源篩選的內容不正確：{_first_error(exc)}") from exc
         if isinstance(flt, TupleFilter | TopNFilter):
@@ -641,18 +645,24 @@ def set_datasource_filters(
             raise EditError(f"資料源篩選 {flt.id} 重複")
         seen.add(flt.id)
         parsed.append(flt)
-    kept = [f for f in ds.filters if f.stage != "datasource"]
+    kept = [f for f in ds.filters if f.stage != stage]
+    ordered = [*parsed, *kept] if stage == "extract" else [*kept, *parsed]
     updated = _validated(
-        _replace_datasource(ir, ds.model_copy(update={"filters": [*kept, *parsed]})),
+        _replace_datasource(ir, ds.model_copy(update={"filters": ordered})),
         "資料源篩選的參照不正確",
     )
-    # 逐列套用得了才接受（量值、彙總的條件等會在這裡被擋下）
+    # 逐列套用得了才接受（量值、彙總的條件等會在這裡被擋下）；萃取篩選以資料源篩選的方式試一次
     probe = next((f for f in ds.fields if f.role == "dimension" and f.calc is None), None)
     if probe is not None and parsed:
+        trial = updated
+        if stage == "extract":
+            as_source = [f.model_copy(update={"stage": "datasource"}) for f in parsed]
+            trial = _replace_datasource(ir, ds.model_copy(update={"filters": as_source}))
         try:
-            domain_sql(updated, ds.id, FieldUse(field=probe.id), "values")
+            domain_sql(trial, ds.id, FieldUse(field=probe.id), "values")
         except QueryError as exc:
-            raise EditError(f"這個篩選不能當作資料源篩選：{exc}") from exc
+            what = "萃取篩選" if stage == "extract" else "資料源篩選"
+            raise EditError(f"這個篩選不能當作{what}：{exc}") from exc
     return updated, parsed
 
 

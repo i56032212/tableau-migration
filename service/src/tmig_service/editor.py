@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable
 from pathlib import Path
@@ -16,8 +17,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from tmig.data.executor import ExecutionError
+from tmig.data.extract_refresh import RefreshError, refresh_extract, refresh_plan
 from tmig.data.runtime import DataRuntime
-from tmig.data.sources import SourceConnectionError
+from tmig.data.sources import SourceConnectionError, open_executor
 from tmig.edit import (
     EditError,
     add_analytics_field,
@@ -49,6 +51,12 @@ from tmig.edit import (
     upsert_hierarchy,
     upsert_parameter,
 )
+from tmig.extract_edit import (
+    extract_info,
+    set_extract_increment,
+    switch_to_extract,
+    switch_to_live,
+)
 from tmig.field_edit import (
     create_combined,
     create_folder,
@@ -64,7 +72,7 @@ from tmig.field_edit import (
     upsert_group,
     upsert_set,
 )
-from tmig.ir import FieldUse, MemberAlias, ParamRef, TupleFilter
+from tmig.ir import IR, FieldUse, MemberAlias, ParamRef, TupleFilter
 from tmig.ir.models import GeoAlias, GeoRole, Scalar, SetRule
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
@@ -90,6 +98,27 @@ class DatasourceFiltersBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     filters: list[dict[str, Any]]
+
+
+class ExtractSettingsBody(BaseModel):
+    """萃取設定：增量更新的欄位（None 為只能完整更新）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    increment: str | None = None
+
+
+class ExtractModeBody(BaseModel):
+    """即時與萃取的切換：改成萃取時立即從來源建立萃取的資料。"""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["live", "extract"]
+
+
+class ExtractRefreshBody(BaseModel):
+    """立即更新萃取：完整更新，或只附加增量欄位較新的列。"""
+
+    model_config = ConfigDict(extra="forbid")
+    incremental: bool = False
 
 
 class NewWorksheetBody(BaseModel):
@@ -128,6 +157,8 @@ class DomainBody(BaseModel):
     kind: Literal["values", "range"] | None = None
     worksheet: str | None = None
     exclude_filter: str | None = None
+    from_source: bool = False
+    """萃取篩選的對話框：可選值取自萃取的來源（萃取中只有通過萃取篩選的資料）。"""
 
 
 class HierarchyBody(BaseModel):
@@ -338,6 +369,13 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         ds = next((d for d in ir.datasources if any(f.id == use.field for f in d.fields)), None)
         if ds is None:
             raise HTTPException(404, f"找不到欄位「{use.field}」")
+        if body.from_source:
+            # 萃取的來源：把這個資料源當作即時連線查詢（來源無法解析時仍以萃取的資料）
+            try:
+                ir = switch_to_live(ir, ds.id)
+                ds = next(d for d in ir.datasources if d.id == ds.id)
+            except EditError:
+                pass
         field = next(f for f in ds.fields if f.id == use.field)
         level = field.calc.level if field.calc is not None else None
         measure = use.agg is not None or use.table_calc is not None
@@ -482,24 +520,122 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         return {"worksheet": sheet.model_dump(mode="json")}
 
     @router.get("/{workbook}/datasources/{datasource}/filters")
-    def get_datasource_filters(workbook: str, datasource: str, request: Request) -> dict[str, Any]:
-        """資料源篩選（資料來源分頁的「篩選條件」）；萃取篩選不列出。"""
+    def get_datasource_filters(
+        workbook: str,
+        datasource: str,
+        request: Request,
+        stage: Literal["datasource", "extract"] = "datasource",
+    ) -> dict[str, Any]:
+        """資料源篩選（資料來源分頁的「篩選條件」）；stage=extract 時是萃取篩選。"""
         ir = workspace(request).get(workbook).ir
         ds = next((d for d in ir.datasources if d.id == datasource), None)
         if ds is None:
             raise HTTPException(404, f"找不到資料源「{datasource}」")
-        return {
-            "filters": [f.model_dump(mode="json") for f in ds.filters if f.stage == "datasource"]
-        }
+        return {"filters": [f.model_dump(mode="json") for f in ds.filters if f.stage == stage]}
 
     @router.put("/{workbook}/datasources/{datasource}/filters")
     def put_datasource_filters(
-        workbook: str, datasource: str, body: DatasourceFiltersBody, request: Request
+        workbook: str,
+        datasource: str,
+        body: DatasourceFiltersBody,
+        request: Request,
+        stage: Literal["datasource", "extract"] = "datasource",
     ) -> dict[str, Any]:
         saved = edit(
-            request, workbook, lambda ir: set_datasource_filters(ir, datasource, body.filters)
+            request,
+            workbook,
+            lambda ir: set_datasource_filters(ir, datasource, body.filters, stage),
         )
         return {"filters": [f.model_dump(mode="json") for f in saved]}
+
+    # ------------------------------------------------------------ 萃取設定
+
+    def extract_state(request: Request, workbook: str, datasource: str) -> dict[str, Any]:
+        """萃取設定與上次從來源更新的時間（<資料源>.refresh.json）。"""
+        loaded = workspace(request).get(workbook)
+        try:
+            info = extract_info(loaded.ir, datasource)
+        except EditError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        report = loaded.directory / "data" / f"{datasource}.refresh.json"
+        refreshed: str | None = None
+        if info["mode"] == "extract" and report.is_file():
+            try:
+                refreshed = json.loads(report.read_text(encoding="utf-8")).get("finished")
+            except (OSError, ValueError):
+                refreshed = None
+        return {**info, "refreshed": refreshed}
+
+    def run_refresh(
+        request: Request, workbook: str, datasource: str, ir: IR, incremental: bool
+    ) -> dict[str, Any]:
+        """以 ir 的萃取設定從來源重建（或增量更新）這個資料源的資料檔；失敗時資料檔不變。"""
+        runtime: DataRuntime = request.app.state.runtime
+        loaded = workspace(request).get(workbook)
+        try:
+            plan = refresh_plan(ir, datasource)
+            executor = open_executor(plan.source, runtime.configs)
+            try:
+                result = refresh_extract(
+                    ir,
+                    datasource,
+                    executor,
+                    loaded.directory / "data" / f"{datasource}.duckdb",
+                    incremental=incremental,
+                )
+            finally:
+                executor.close()
+        except RefreshError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except SourceConnectionError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except ExecutionError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        return result.to_json()
+
+    @router.get("/{workbook}/datasources/{datasource}/extract")
+    def get_extract(workbook: str, datasource: str, request: Request) -> dict[str, Any]:
+        """萃取設定：模式（live、extract、file）、能不能切換、增量更新的欄位、萃取篩選與上次更新的時間。"""
+        return extract_state(request, workbook, datasource)
+
+    @router.put("/{workbook}/datasources/{datasource}/extract")
+    def put_extract(
+        workbook: str, datasource: str, body: ExtractSettingsBody, request: Request
+    ) -> dict[str, Any]:
+        edit(request, workbook, lambda ir: set_extract_increment(ir, datasource, body.increment))
+        return extract_state(request, workbook, datasource)
+
+    @router.post("/{workbook}/datasources/{datasource}/extract/mode")
+    def post_extract_mode(
+        workbook: str, datasource: str, body: ExtractModeBody, request: Request
+    ) -> dict[str, Any]:
+        """即時與萃取的切換。改成萃取時先從來源建立萃取的資料，成功後才存檔（失敗時維持即時連線）。"""
+        space = workspace(request)
+        ir = space.get(workbook).ir
+        try:
+            changed = (
+                switch_to_extract(ir, datasource)
+                if body.mode == "extract"
+                else switch_to_live(ir, datasource)
+            )
+        except EditError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        refreshed = None
+        if body.mode == "extract":
+            refreshed = run_refresh(request, workbook, datasource, changed, False)
+        space.save_ir(workbook, changed)
+        if on_change is not None:
+            on_change(workbook)
+        return {**extract_state(request, workbook, datasource), "result": refreshed}
+
+    @router.post("/{workbook}/datasources/{datasource}/extract/refresh")
+    def post_extract_refresh(
+        workbook: str, datasource: str, body: ExtractRefreshBody, request: Request
+    ) -> dict[str, Any]:
+        """立即更新萃取（Tableau 的「資料＞萃取＞重新整理」）：套用目前的萃取篩選，從來源取回資料。"""
+        ir = workspace(request).get(workbook).ir
+        result = run_refresh(request, workbook, datasource, ir, body.incremental)
+        return {**extract_state(request, workbook, datasource), "result": result}
 
     @router.post("/{workbook}/worksheets")
     def post_worksheet(workbook: str, body: NewWorksheetBody, request: Request) -> dict[str, Any]:

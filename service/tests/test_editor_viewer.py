@@ -1936,3 +1936,119 @@ def test_datasource_filters_in_datasource_editor(engine: str) -> None:
         assert [f["field"]["field"] for f in filters()] == ["f_country_region"]
         assert errors == []
         browser.close()
+
+
+def test_extract_settings_in_datasource_editor(tmp_path: Path) -> None:
+    """資料來源分頁的「連線：即時／萃取」：即時改成萃取（從來源建立資料）、萃取篩選的可選值取自來源、
+    立即更新萃取、增量更新的欄位、改回即時。來源資料庫以 DuckDB 檔模擬。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    from tmig.data.sources import ConnectionConfig
+    from tmig.ir import LiveConnection, TableRelation
+
+    port = free_port()
+    app = create_desktop_app(tmp_path / "workspace", TOKEN, DIST, username="amy")
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", proxy_headers=False)
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 30
+    while not server.started:
+        assert time.monotonic() < deadline and thread.is_alive(), "本機引擎沒有啟動"
+        time.sleep(0.05)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        demo = tmp_path / "demo.twbx"
+        shutil.copy(DEMO, demo)
+        call(base, "/api/desktop/open", {"path": str(demo)})
+        call(base, "/api/workbooks/demo/worksheets/ws_sales_by_region/render", {})  # 匯入萃取的資料
+        space = app.state.workspace
+        loaded = space.get("demo")
+        source = tmp_path / "source.duckdb"
+        shutil.copy(loaded.directory / "data" / "ds_orders.duckdb", source)
+        connection = LiveConnection(
+            kind="live",
+            connection_id="sales_duckdb",
+            dbclass="oracle",
+            dialect="oracle",
+            relation=TableRelation(kind="table", name="Orders", table=["Extract", "Extract"]),
+        )
+        live = loaded.ir.model_copy(
+            update={
+                "datasources": [
+                    ds.model_copy(update={"connection": connection}) for ds in loaded.ir.datasources
+                ]
+            }
+        )
+        space.save_ir("demo", live)
+        config = ConnectionConfig(
+            "sales_duckdb", "duckdb", {"driver": "duckdb", "path": str(source)}
+        )
+        app.state.runtime.add_configs({"sales_duckdb": config})
+
+        def info() -> dict[str, Any]:
+            return call(base, "/api/edit/demo/datasources/ds_orders/extract")
+
+        def regions() -> set[str]:
+            table = call(base, "/api/workbooks/demo/worksheets/ws_region_share_by_year/render", {})[
+                "table"
+            ]
+            return {row[table["keys"].index("f_region")] for row in table["raw"]}
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1500, "height": 950})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(f"{base}/?token={TOKEN}")
+            page.goto(f"{base}/w/demo/edit-ds/ds_orders")
+            section = page.locator(".dse-extract")
+            expect(section).to_have_attribute("data-mode", "live")
+            expect(section.get_by_label("即時")).to_be_checked()
+
+            # 即時 → 萃取：從來源建立資料
+            section.get_by_label("萃取", exact=True).click()
+            expect(page.locator('.dse-extract[data-mode="extract"]')).to_be_visible(timeout=30000)
+            assert info()["mode"] == "extract" and info()["refreshed"]
+            assert len(regions()) == 4
+
+            # 萃取篩選：Region 只留 East（可選值是來源的四個區域），立即更新後才生效
+            section = page.locator(".dse-extract")
+            section.get_by_label("新增萃取篩選").select_option(label="Region")
+            page.wait_for_selector(".filter-dialog .value-list li")
+            expect(page.locator(".filter-dialog .value-list li")).to_have_count(4)
+            for name in ("Central", "South", "West"):
+                page.locator(".value-list label", has_text=name).locator("input").uncheck()
+            page.locator(".filter-dialog").get_by_role("button", name="確定").click()
+            expect(page.locator(".filter-dialog")).to_have_count(0)
+            expect(section.locator(".dse-filter-list li")).to_have_count(1)
+            assert len(regions()) == 4  # 還沒有更新萃取
+            section.get_by_role("button", name="立即更新萃取").click()
+            expect(page.locator(".toast", has_text="已更新萃取").first).to_be_visible(timeout=30000)
+            assert regions() == {"East"}
+            # 再編輯這個萃取篩選：可選值仍是來源的四個區域（萃取中只剩 East）
+            section = page.locator(".dse-extract")
+            section.locator(".dse-filter-list li").get_by_role("button", name="編輯").click()
+            page.wait_for_selector(".filter-dialog .value-list li")
+            expect(page.locator(".filter-dialog .value-list li")).to_have_count(4)
+            page.locator(".filter-dialog").get_by_role("button", name="取消").click()
+
+            # 增量更新的欄位
+            section.get_by_label("增量更新的欄位").select_option(label="Order Date")
+            expect(page.locator(".toast", has_text="已儲存萃取設定").first).to_be_visible()
+            assert info()["increment"] == "f_order_date"
+            page.locator(".dse-extract").get_by_role("button", name="增量更新", exact=True).click()
+            expect(page.locator(".toast", has_text="已增量更新萃取").first).to_be_visible(
+                timeout=30000
+            )
+
+            # 萃取 → 即時
+            page.locator(".dse-extract").get_by_label("即時").click()
+            expect(page.locator('.dse-extract[data-mode="live"]')).to_be_visible(timeout=30000)
+            assert info()["mode"] == "live" and len(regions()) == 4
+            assert errors == []
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)

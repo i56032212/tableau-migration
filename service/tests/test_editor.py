@@ -1073,3 +1073,102 @@ def test_nested_sort(client: TestClient) -> None:
     ]
     refused = client.put("/api/edit/demo/worksheets/ws_sales_by_region", json={"worksheet": ws})
     assert refused.status_code == 422
+
+
+def test_extract_settings(client: TestClient, tmp_path: Path) -> None:
+    """萃取設定：即時改成萃取（立即從來源建立資料）、萃取篩選與立即更新、增量更新的欄位、改回即時。
+    來源資料庫以 DuckDB 檔模擬。"""
+    from tmig.data.sources import ConnectionConfig
+    from tmig.ir import LiveConnection, TableRelation
+
+    app: Any = client.app
+    space = app.state.workspace
+    base = "/api/edit/demo/datasources/ds_orders"
+    # .twbx 的萃取沒有來源資料庫的資訊：不能切換
+    info = client.get(f"{base}/extract").json()
+    assert (info["mode"], info["switchable"]) == ("extract", False)
+    refused = client.post(f"{base}/extract/mode", json={"mode": "live"})
+    assert refused.status_code == 422 and "來源無法解析" in refused.json()["detail"]
+
+    # 改成即時連線的報表：來源是萃取資料的一份複本
+    def sales() -> list[Any]:
+        values = column(render(client, "ws_sales_by_region")["table"], "sum(f_sales)")
+        return [pytest.approx(float(v)) for v in values]
+
+    before = sales()
+    loaded = space.get("demo")
+    source = tmp_path / "source.duckdb"
+    shutil.copy(loaded.directory / "data" / "ds_orders.duckdb", source)
+    connection = LiveConnection(
+        kind="live",
+        connection_id="sales_duckdb",
+        dbclass="oracle",
+        dialect="oracle",
+        relation=TableRelation(kind="table", name="Orders", table=["Extract", "Extract"]),
+    )
+    live = loaded.ir.model_copy(
+        update={
+            "datasources": [
+                ds.model_copy(update={"connection": connection}) for ds in loaded.ir.datasources
+            ]
+        }
+    )
+    space.save_ir("demo", live)
+    info = client.get(f"{base}/extract").json()
+    assert (info["mode"], info["switchable"], info["refreshed"]) == ("live", True, None)
+    # 還沒有連線設定：建立萃取失敗，仍是即時連線
+    failed = client.post(f"{base}/extract/mode", json={"mode": "extract"})
+    assert failed.status_code == 503, failed.text
+    assert client.get(f"{base}/extract").json()["mode"] == "live"
+    config = ConnectionConfig("sales_duckdb", "duckdb", {"driver": "duckdb", "path": str(source)})
+    app.state.runtime.add_configs({"sales_duckdb": config})
+    assert sales() == before
+
+    # 即時 → 萃取：立即從來源建立
+    switched = client.post(f"{base}/extract/mode", json={"mode": "extract"})
+    assert switched.status_code == 200, switched.text
+    body = switched.json()
+    assert (body["mode"], body["refreshable"]) == ("extract", True)
+    assert body["refreshed"] and body["result"]["tables"][0]["rows"] > 0
+    assert sales() == before
+
+    # 萃取篩選：下次更新時生效
+    extract_filter = {
+        "kind": "categorical",
+        "id": "xf_region",
+        "field": use("f_region"),
+        "stage": "dimension",
+        "mode": "include",
+        "values": ["East"],
+        "ranges": [],
+        "group": None,
+        "source_ref": "/editor",
+    }
+    saved = client.put(f"{base}/filters?stage=extract", json={"filters": [extract_filter]})
+    assert saved.status_code == 200, saved.text
+    assert [f["stage"] for f in saved.json()["filters"]] == ["extract"]
+    assert client.get(f"{base}/filters?stage=extract").json()["filters"][0]["id"] == "xf_region"
+    assert len(client.get(f"{base}/filters").json()["filters"]) == 1  # 資料源篩選不變
+    ws = blank(client, rows=[use("f_region")], columns=[use("f_sales", agg="sum", continuous=True)])
+    put(client, ws)
+    assert len(column(render(client, "ws_sales_by_region")["table"], "f_region")) == 4
+    refreshed = client.post(f"{base}/extract/refresh", json={"incremental": False})
+    assert refreshed.status_code == 200, refreshed.text
+    assert column(render(client, "ws_sales_by_region")["table"], "f_region") == ["East"]
+
+    # 增量更新的欄位
+    incremental = client.post(f"{base}/extract/refresh", json={"incremental": True})
+    assert incremental.status_code == 422 and "增量更新" in incremental.json()["detail"]
+    assert (
+        client.put(f"{base}/extract", json={"increment": "f_order_date"}).json()["increment"]
+        == "f_order_date"
+    )
+    incremental = client.post(f"{base}/extract/refresh", json={"incremental": True})
+    assert incremental.status_code == 200, incremental.text
+    assert incremental.json()["result"]["mode"] == "incremental"
+    assert client.put(f"{base}/extract", json={"increment": "f_region"}).status_code == 422
+
+    # 萃取 → 即時：直接查詢來源（萃取篩選不再套用）
+    back = client.post(f"{base}/extract/mode", json={"mode": "live"})
+    assert back.status_code == 200 and back.json()["mode"] == "live"
+    assert len(column(render(client, "ws_sales_by_region")["table"], "f_region")) == 4

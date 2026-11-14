@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "../desktop";
-import { editApi } from "./api";
+import { editApi, type ExtractInfo } from "./api";
 import { EditorContext, type EditorContextValue, type FilterTarget } from "./context";
 import { FilterDialog } from "./FilterDialog";
 import { type Catalog, EDITOR_REF, fieldIndex, type FilterIR, type MarksIR, type SheetIR } from "./model";
@@ -23,14 +23,26 @@ function describe(filter: FilterIR): string {
   return filter.kind;
 }
 
-export function DatasourceFilters({ workbook, datasource, onChanged }: { workbook: string; datasource: string; onChanged: () => void }) {
+/** stage：datasource＝資料源篩選；extract＝萃取篩選（建立、更新萃取時套用在來源的資料上，下次更新才生效）。 */
+export function DatasourceFilters({
+  workbook,
+  datasource,
+  onChanged,
+  stage = "datasource",
+}: {
+  workbook: string;
+  datasource: string;
+  onChanged: () => void;
+  stage?: "datasource" | "extract";
+}) {
+  const title = stage === "extract" ? "萃取篩選" : "資料源篩選";
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [filters, setFilters] = useState<FilterIR[]>([]);
   const [target, setTarget] = useState<FilterTarget | null>(null);
   const [picking, setPicking] = useState("");
   useEffect(() => {
     let cancelled = false;
-    Promise.all([editApi.catalog(workbook), editApi.datasourceFilters(workbook, datasource)])
+    Promise.all([editApi.catalog(workbook), editApi.datasourceFilters(workbook, datasource, stage)])
       .then(([loaded, found]) => {
         if (cancelled) return;
         setCatalog(loaded);
@@ -40,7 +52,7 @@ export function DatasourceFilters({ workbook, datasource, onChanged }: { workboo
     return () => {
       cancelled = true;
     };
-  }, [workbook, datasource]);
+  }, [workbook, datasource, stage]);
   const fields = useMemo(() => (catalog ? fieldIndex(catalog, datasource) : new Map()), [catalog, datasource]);
   // 可以當作資料源篩選的欄位：這個資料源的維度（列層級；彙總、LOD 與 Table Calculation 不能逐列套用）
   const own = catalog?.datasources.find((d) => d.id === datasource)?.fields ?? [];
@@ -50,7 +62,8 @@ export function DatasourceFilters({ workbook, datasource, onChanged }: { workboo
       .saveDatasourceFilters(
         workbook,
         datasource,
-        next.map((f) => ({ ...f, stage: "datasource", group: null })),
+        next.map((f) => ({ ...f, stage, group: null })),
+        stage,
       )
       .then((saved) => {
         setFilters(saved.filters);
@@ -94,11 +107,13 @@ export function DatasourceFilters({ workbook, datasource, onChanged }: { workboo
     reloadCatalog: () => undefined,
   };
   return (
-    <section className="dse-filters" aria-label="資料源篩選">
+    <section className="dse-filters" aria-label={title}>
       <div className="ds-grid-bar">
-        <h2>資料源篩選（{filters.length}）</h2>
+        <h2>
+          {title}（{filters.length}）
+        </h2>
         <select
-          aria-label="新增資料源篩選"
+          aria-label={`新增${title}`}
           value={picking}
           onChange={(e) => {
             const field = e.target.value;
@@ -113,7 +128,7 @@ export function DatasourceFilters({ workbook, datasource, onChanged }: { workboo
             </option>
           ))}
         </select>
-        <span className="muted">套用到使用這個資料源的所有工作表</span>
+        <span className="muted">{stage === "extract" ? "下次更新萃取時套用在來源的資料上" : "套用到使用這個資料源的所有工作表"}</span>
       </div>
       {filters.length > 0 && (
         <ul className="dse-filter-list">
@@ -133,8 +148,104 @@ export function DatasourceFilters({ workbook, datasource, onChanged }: { workboo
       )}
       {target && (
         <EditorContext.Provider value={context}>
-          <FilterDialog target={target} rowLevel onClose={() => setTarget(null)} />
+          <FilterDialog target={target} rowLevel fromSource={stage === "extract"} onClose={() => setTarget(null)} />
         </EditorContext.Provider>
+      )}
+    </section>
+  );
+}
+
+/**
+ * 即時與萃取（Tableau 資料來源分頁右上角的「連線：即時／萃取」與萃取的設定）：切換模式（改成萃取時立即從來源
+ * 建立資料）、增量更新的欄位、萃取篩選與「立即更新萃取」。
+ */
+export function ExtractSettings({ workbook, datasource, onChanged }: { workbook: string; datasource: string; onChanged: () => void }) {
+  const [info, setInfo] = useState<ExtractInfo | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    editApi
+      .extract(workbook, datasource)
+      .then((found) => !cancelled && setInfo(found))
+      .catch((e: Error) => !cancelled && toast(e.message, "error"));
+    return () => {
+      cancelled = true;
+    };
+  }, [workbook, datasource]);
+  if (!info) return null;
+  const run = (label: string, action: () => Promise<ExtractInfo>, done: string) => {
+    setBusy(label);
+    action()
+      .then((next) => {
+        setInfo(next);
+        toast(done);
+        onChanged();
+      })
+      .catch((e: Error) => toast(e.message, "error"))
+      .finally(() => setBusy(null));
+  };
+  const switchTo = (mode: "live" | "extract") => {
+    if (mode === info.mode) return;
+    run(
+      mode === "extract" ? "正在從來源建立萃取…" : "正在改成即時連線…",
+      () => editApi.extractMode(workbook, datasource, mode),
+      mode === "extract" ? "已建立萃取" : "已改成即時連線",
+    );
+  };
+  return (
+    <section className="dse-extract" aria-label="連線模式" data-mode={info.mode} data-busy={busy ? "true" : "false"}>
+      <div className="ds-grid-bar">
+        <h2>連線</h2>
+        {info.mode === "file" ? (
+          <span className="muted">檔案型的資料源一律匯入</span>
+        ) : (
+          <>
+            <label className="inline">
+              <input type="radio" name="extract-mode" checked={info.mode === "live"} disabled={!info.switchable || busy !== null} onChange={() => switchTo("live")} /> 即時
+            </label>
+            <label className="inline">
+              <input type="radio" name="extract-mode" checked={info.mode === "extract"} disabled={!info.switchable || busy !== null} onChange={() => switchTo("extract")} /> 萃取
+            </label>
+            {!info.switchable && <span className="muted">{info.reason}</span>}
+          </>
+        )}
+        {busy && <span className="muted">{busy}</span>}
+      </div>
+      {info.mode === "extract" && info.refreshable && (
+        <div className="dse-extract-row">
+          <label className="inline" title="增量更新時只取這個欄位大於現有最大值的列，附加在現有的資料之後">
+            增量更新的欄位
+            <select
+              aria-label="增量更新的欄位"
+              value={info.increment ?? ""}
+              disabled={busy !== null}
+              onChange={(e) => {
+                const increment = e.target.value || null;
+                run("儲存中…", () => editApi.saveExtract(workbook, datasource, increment), "已儲存萃取設定");
+              }}
+            >
+              <option value="">（無：只能完整更新）</option>
+              {info.increment_fields.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.caption}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" disabled={busy !== null} onClick={() => run("正在更新萃取…", () => editApi.refreshExtract(workbook, datasource, false), "已更新萃取")}>
+            立即更新萃取
+          </button>
+          {info.increment && (
+            <button type="button" disabled={busy !== null} onClick={() => run("正在增量更新…", () => editApi.refreshExtract(workbook, datasource, true), "已增量更新萃取")}>
+              增量更新
+            </button>
+          )}
+          <span className="muted">上次更新：{info.refreshed ? new Date(info.refreshed).toLocaleString() : "（取自報表中的萃取）"}</span>
+        </div>
+      )}
+      {info.mode === "extract" && info.refreshable && <DatasourceFilters workbook={workbook} datasource={datasource} stage="extract" onChanged={() => undefined} />}
+      {info.mode === "extract" && !info.refreshable && info.filters.length > 0 && (
+        <p className="muted">這份萃取有 {info.filters.length} 個萃取篩選（已在建立萃取時套用；來源不明，不能更新）。</p>
       )}
     </section>
   );

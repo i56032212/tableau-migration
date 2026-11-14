@@ -97,8 +97,18 @@ function dateWayOf(use: FieldUse, mode: Mode): string {
   return found ? found[0] : "year";
 }
 
-/** rowLevel：資料源篩選——只有逐列套用得了的篩選（沒有彙總的條件與頂部）。 */
-export function FilterDialog({ target, onClose, rowLevel = false }: { target: FilterTarget; onClose: () => void; rowLevel?: boolean }) {
+/** rowLevel：資料源篩選——只有逐列套用得了的篩選（沒有彙總的條件與頂部）；fromSource：萃取篩選——可選值取自萃取的來源。 */
+export function FilterDialog({
+  target,
+  onClose,
+  rowLevel = false,
+  fromSource = false,
+}: {
+  target: FilterTarget;
+  onClose: () => void;
+  rowLevel?: boolean;
+  fromSource?: boolean;
+}) {
   const editor = useEditor();
   const { sheet, fields, workbook } = editor;
   const existing = target.index !== null ? (sheet.filters[target.index] ?? null) : null;
@@ -171,7 +181,7 @@ export function FilterDialog({ target, onClose, rowLevel = false }: { target: Fi
     let cancelled = false;
     setDomain(null);
     editApi
-      .domain(workbook, use, { kind: "values", excludeFilter: existing?.id ?? null })
+      .domain(workbook, use, { kind: "values", excludeFilter: existing?.id ?? null, fromSource })
       .then((d) => {
         if (cancelled || d.kind !== "values") return;
         setDomain(d.values);
@@ -195,7 +205,7 @@ export function FilterDialog({ target, onClose, rowLevel = false }: { target: Fi
     if (mode !== "range") return;
     let cancelled = false;
     editApi
-      .domain(workbook, use, { kind: "range", worksheet: sheet.id, excludeFilter: existing?.id ?? null })
+      .domain(workbook, use, { kind: "range", worksheet: sheet.id, excludeFilter: existing?.id ?? null, fromSource })
       .then((d) => {
         if (cancelled || d.kind !== "range") return;
         setBounds({ min: d.min, max: d.max });

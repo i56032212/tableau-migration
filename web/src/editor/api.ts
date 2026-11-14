@@ -10,6 +10,21 @@ const part = encodeURIComponent;
 /** 建立或修改集合時送出的規則（固定成員、條件或 Top／Bottom N）。 */
 export type SetRuleBody = SetRuleIR;
 
+/** 資料源的萃取設定（資料來源分頁的「即時／萃取」） */
+export interface ExtractInfo {
+  mode: "live" | "extract" | "file";
+  switchable: boolean;
+  reason: string | null;
+  /** 可以從來源更新（知道來源資料庫與各欄的位置） */
+  refreshable: boolean;
+  increment: string | null;
+  row_limit: number | null;
+  filters: FilterIR[];
+  increment_fields: { id: string; caption: string }[];
+  /** 上次從來源更新的時間（ISO 8601） */
+  refreshed: string | null;
+}
+
 export interface FormulaCheck {
   ok: boolean;
   datatype?: string;
@@ -101,10 +116,10 @@ export const editApi = {
       body: JSON.stringify({ targets }),
     }).then((r) => r.worksheet),
   /** 資料源篩選（資料來源分頁的「篩選條件」） */
-  datasourceFilters: (workbook: string, datasource: string) =>
-    request<{ filters: FilterIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/filters`),
-  saveDatasourceFilters: (workbook: string, datasource: string, filters: FilterIR[]) =>
-    request<{ filters: FilterIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/filters`, {
+  datasourceFilters: (workbook: string, datasource: string, stage: "datasource" | "extract" = "datasource") =>
+    request<{ filters: FilterIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/filters?stage=${stage}`),
+  saveDatasourceFilters: (workbook: string, datasource: string, filters: FilterIR[], stage: "datasource" | "extract" = "datasource") =>
+    request<{ filters: FilterIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/filters?stage=${stage}`, {
       method: "PUT",
       body: JSON.stringify({ filters }),
     }),
@@ -264,7 +279,7 @@ export const editApi = {
   domain: (
     workbook: string,
     use: FieldUse,
-    options: { kind?: "values" | "range"; worksheet?: string; excludeFilter?: string | null } = {},
+    options: { kind?: "values" | "range"; worksheet?: string; excludeFilter?: string | null; fromSource?: boolean } = {},
   ) =>
     request<Domain>(`${edit(workbook)}/domain`, {
       method: "POST",
@@ -273,6 +288,25 @@ export const editApi = {
         kind: options.kind ?? null,
         worksheet: options.worksheet ?? null,
         exclude_filter: options.excludeFilter ?? null,
+        from_source: options.fromSource === true,
       }),
+    }),
+  /** 萃取設定：模式、能不能切換、增量更新的欄位、萃取篩選與上次更新的時間 */
+  extract: (workbook: string, datasource: string) => request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract`),
+  saveExtract: (workbook: string, datasource: string, increment: string | null) =>
+    request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract`, {
+      method: "PUT",
+      body: JSON.stringify({ increment }),
+    }),
+  /** 即時與萃取的切換（改成萃取時立即從來源建立資料） */
+  extractMode: (workbook: string, datasource: string, mode: "live" | "extract") =>
+    request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract/mode`, {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+  refreshExtract: (workbook: string, datasource: string, incremental: boolean) =>
+    request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract/refresh`, {
+      method: "POST",
+      body: JSON.stringify({ incremental }),
     }),
 };

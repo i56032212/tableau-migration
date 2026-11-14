@@ -100,6 +100,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .single-sheet.with-controls { display: flex; gap: 10px; width: min(1320px, 100%); }
 .single-sheet.with-controls .sheet-main { flex: 1; }
 .dse-filters { padding: 0 12px; }
+.dse-extract { padding: 0 12px; }
+.dse-extract .dse-filters { padding: 0; }
+.dse-extract-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 2px 0 6px; }
 .dse-filter-list { list-style: none; margin: 4px 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .dse-filter-list li { display: inline-flex; align-items: baseline; gap: 8px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 .sheet-controls { width: 210px; flex: none; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
