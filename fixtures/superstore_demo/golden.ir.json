@@ -1029,6 +1029,7 @@
             "continuous": true,
             "table_calc": null
           },
+          "nested": false,
           "manual_values": []
         }
       ],
@@ -1599,6 +1600,7 @@
             "continuous": true,
             "table_calc": null
           },
+          "nested": false,
           "manual_values": []
         }
       ],

@@ -661,6 +661,8 @@ def test_sorts(tmp_path: Path) -> None:
     assert (manual.kind, manual.manual_values) == ("manual", ["Technology", "Furniture"])
     assert alphabetic.kind == "alphabetic"
     assert (shelf.field, shelf.kind) == ("f_category", "by_field")
+    # 從座標軸、工具列排序（shelf-sort-v2）是巢狀排序；排序對話框的依欄位排序不是
+    assert shelf.nested and not computed.nested
 
 
 # ---------------------------------------------------------------- Table Calculation

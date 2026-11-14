@@ -550,7 +550,7 @@ class WorksheetQuery:
         self.row = ExprCompiler(self.analyzer, _RowEnv(self))
         self._names: dict[str, int] = {}
         self._canon: dict[Node, Node] = {}
-        self._sort_ctes: dict[str, tuple[str, str]] = {}
+        self._sort_ctes: dict[str, tuple[str, str, list[Dim]]] = {}
         self.model_plan: ModelPlan | None = None
         """Relationship 模型的連接方式（build 時決定）。"""
         self._guards: dict[tuple[int, int], list[str]] = {}
@@ -2158,12 +2158,20 @@ class WorksheetQuery:
                 continue
             node = self.measure_node(sort.by)
             nodes = self.aggregates_in(node)
-            self._guard(self._covered([d.use]), "依欄位排序", nodes)
+            # 巢狀排序：排序值在同一架上外層維度的每個值之內各自計算（各窗格各自排序）
+            group = [*self._outer_dims(d, dims), d] if sort.nested else [d]
+            self._guard(self._covered([g.use for g in group]), "依欄位排序", nodes)
             # 排序值依來源資料計算，不含 Table Calculation：可下推（INCLUDE／EXCLUDE LOD 相對於這個維度，
             # 在第 6 段另外計算，同樣可下推）
-            with self._dimension_lods(node, [d], rows_cte, 6) as source:
+            with self._dimension_lods(node, group, rows_cte, 6) as source:
                 agg_name, agg_cols, keys = self.aggregate(
-                    "sort_agg", nodes, [self.dim_sql(d.use)], source, 7, [d], pushdown=True
+                    "sort_agg",
+                    nodes,
+                    [self.dim_sql(g.use) for g in group],
+                    source,
+                    7,
+                    group,
+                    pushdown=True,
                 )
                 value = self._compile(
                     lambda node=node, agg_cols=agg_cols: self.compiler(
@@ -2171,17 +2179,29 @@ class WorksheetQuery:
                     ).post(node)
                 )
             name = self.name("sort")
+            key_cols = ", ".join(
+                f"{ident(key)} AS {ident(_sort_key(i))}" for i, key in enumerate(keys)
+            )
             self.cte(
                 7,
                 name,
-                f"SELECT {ident(keys[0])} AS {ident('__key')}, {value} AS {ident(VALUE_COL)} FROM {agg_name}",
+                f"SELECT {key_cols}, {value} AS {ident(VALUE_COL)} FROM {agg_name}",
                 pushdown=True,
             )
             col = f"__sort{len(result)}"
             direction = "DESC" if sort.order == "desc" else "ASC"
             result[d.key] = (col, f"{ident(col)} {direction} NULLS LAST")
-            self._sort_ctes[d.key] = (name, col)
+            self._sort_ctes[d.key] = (name, col, group)
         return result
+
+    def _outer_dims(self, d: Dim, dims: list[Dim]) -> list[Dim]:
+        """巢狀排序的範圍：同一架上在這個維度之前的離散維度（不在欄列架上的維度沒有外層）。"""
+        by_key = {x.key: x for x in dims}
+        for shelf in (self.worksheet.rows, self.worksheet.columns):
+            keys = [use_key(u) for u in shelf if not u.continuous]
+            if d.key in keys:
+                return [by_key[k] for k in keys[: keys.index(d.key)] if k in by_key]
+        return []
 
     def _column_headers(self, dims: list[Dim]) -> list[Dim]:
         """欄標題的維度（欄架上的離散維度），列架上也有離散維度時才回傳。資料依列優先排序，
@@ -2259,10 +2279,12 @@ class WorksheetQuery:
             joins = []
             selects = ["m.*"]
             for i, d in enumerate(sorted_dims):
-                cte, col = self._sort_ctes[d.key]
-                joins.append(
-                    f"LEFT JOIN {cte} s{i} ON s{i}.{ident('__key')} IS NOT DISTINCT FROM m.{ident(d.col)}"
+                cte, col, group = self._sort_ctes[d.key]
+                matched = " AND ".join(
+                    f"s{i}.{ident(_sort_key(j))} IS NOT DISTINCT FROM m.{ident(g.col)}"
+                    for j, g in enumerate(group)
                 )
+                joins.append(f"LEFT JOIN {cte} s{i} ON {matched}")
                 selects.append(f"s{i}.{ident(VALUE_COL)} AS {ident(col)}")
             base = self.cte(
                 7,
@@ -3094,6 +3116,11 @@ def relevant_domain_sql(
             }
         )
     return worksheet_sql(sub, ws.id, state, user)
+
+
+def _sort_key(index: int) -> str:
+    """依欄位排序的排序值所屬的維度鍵欄：一般只有一個（__key）；巢狀排序時外層維度在前。"""
+    return "__key" if index == 0 else f"__key{index}"
 
 
 def _find_worksheet(ir: IR, key: str) -> Worksheet:

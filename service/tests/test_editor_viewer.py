@@ -1799,6 +1799,25 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
             ("f_sub_category", True),
         ]
 
+        # 巢狀排序：列架加上 Sub-Category，依業績遞減、在每個 Region 之內各自排序
+        page.locator('.data-pane [data-field="f_sub_category"]').drag_to(
+            page.locator('[data-drop="rows"]')
+        )
+        settle(page)
+        page.locator('[data-shelf="rows"] .pill', has_text="Sub-Category").click()
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text="排序").first.hover()
+        menu(page, "排序…")
+        page.get_by_label("排序依據").select_option("by_field")
+        page.get_by_label("排序順序").select_option("desc")
+        page.locator(".sort-dialog").get_by_label("巢狀").check()
+        confirm(page, ".sort-dialog")
+        (sort,) = sheet()["sorts"]
+        assert (sort["field"], sort["kind"], sort["nested"]) == ("f_sub_category", "by_field", True)
+        page.locator('[data-shelf="rows"] .pill', has_text="Sub-Category").click()
+        menu(page, "移除")
+        settle(page)
+        assert [u["field"] for u in sheet()["rows"]] == ["f_region"]
+
         # 說明：顯示說明（自動產生的文字），再改成自訂的文字
         page.get_by_role("button", name="說明…").click()
         page.locator(".caption-dialog").get_by_label("顯示說明").check()

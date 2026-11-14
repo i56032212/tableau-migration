@@ -137,6 +137,8 @@ export interface SortIR {
   kind: "by_field" | "alphabetic" | "manual" | "data_source";
   order: "asc" | "desc";
   by: FieldUse | null;
+  /** 巢狀排序：在同一架上外層維度的每個值之內各自排序 */
+  nested?: boolean;
   manual_values: Scalar[];
 }
 

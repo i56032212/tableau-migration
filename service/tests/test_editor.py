@@ -1018,3 +1018,58 @@ def test_combined_sets(client: TestClient) -> None:
     # 來源的集合還在用：不能刪除
     removed = client.delete(f"{base}/calcs/{top['id']}")
     assert removed.status_code == 422, removed.text
+
+
+def test_nested_sort(client: TestClient) -> None:
+    """巢狀排序：Sub-Category 在每個 Region 之內各自依業績排序；不是巢狀時各 Region 的順序相同（依全部資料）。"""
+    sales = use("f_sales", agg="sum", continuous=True)
+    ws = blank(client, rows=[use("f_region"), use("f_sub_category")], columns=[sales])
+
+    def by_region(nested: bool) -> dict[str, list[tuple[str, float]]]:
+        ws["sorts"] = [
+            {
+                "field": "f_sub_category",
+                "kind": "by_field",
+                "order": "desc",
+                "by": sales,
+                "nested": nested,
+                "manual_values": [],
+            }
+        ]
+        saved = put(client, ws)
+        assert saved["sorts"][0]["nested"] is nested
+        table = render(client, "ws_sales_by_region")["table"]
+        groups: dict[str, list[tuple[str, float]]] = {}
+        for region, sub, value in zip(
+            column(table, "f_region"),
+            column(table, "f_sub_category"),
+            column(table, "sum(f_sales)"),
+            strict=True,
+        ):
+            groups.setdefault(region, []).append((sub, float(value)))
+        return groups
+
+    nested = by_region(True)
+    assert list(nested) == ["Central", "East", "South", "West"]
+    for rows in nested.values():
+        values = [v for _, v in rows]
+        assert values == sorted(values, reverse=True)  # 每個 Region 之內由大到小
+    flat = by_region(False)
+    orders = [[sub for sub, _ in rows] for rows in flat.values()]
+    assert all(order == orders[0] for order in orders)  # 各 Region 的順序相同
+    assert any(
+        [v for _, v in rows] != sorted((v for _, v in rows), reverse=True) for rows in flat.values()
+    )
+    # 只有依欄位排序可以是巢狀
+    ws["sorts"] = [
+        {
+            "field": "f_sub_category",
+            "kind": "alphabetic",
+            "order": "asc",
+            "by": None,
+            "nested": True,
+            "manual_values": [],
+        }
+    ]
+    refused = client.put("/api/edit/demo/worksheets/ws_sales_by_region", json={"worksheet": ws})
+    assert refused.status_code == 422

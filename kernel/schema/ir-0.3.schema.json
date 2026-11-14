@@ -6012,6 +6012,12 @@
           "default": null,
           "description": "kind 為 by_field 時的排序依據"
         },
+        "nested": {
+          "default": false,
+          "description": "巢狀排序（Tableau 2018.2 起從座標軸、工具列排序的預設）：排序值在同一架上外層維度的每個值之內各自計算（各窗格各自排序）；預設以這個維度所有資料的值排序，各窗格的順序相同",
+          "title": "Nested",
+          "type": "boolean"
+        },
         "manual_values": {
           "description": "kind 為 manual 時的順序",
           "items": {

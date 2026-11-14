@@ -368,6 +368,7 @@
             "continuous": true,
             "table_calc": null
           },
+          "nested": false,
           "manual_values": []
         }
       ],

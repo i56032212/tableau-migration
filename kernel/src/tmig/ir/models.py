@@ -1172,12 +1172,19 @@ class Sort(IRModel):
     kind: Literal["by_field", "alphabetic", "manual", "data_source"]
     order: Literal["asc", "desc"] = "asc"
     by: FieldUse | None = Field(default=None, description="kind 為 by_field 時的排序依據")
+    nested: bool = Field(
+        default=False,
+        description="巢狀排序（Tableau 2018.2 起從座標軸、工具列排序的預設）：排序值在同一架上外層維度的"
+        "每個值之內各自計算（各窗格各自排序）；預設以這個維度所有資料的值排序，各窗格的順序相同",
+    )
     manual_values: list[Scalar] = Field(default_factory=list, description="kind 為 manual 時的順序")
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         if (self.kind == "by_field") != (self.by is not None):
             raise ValueError("只有 kind 為 by_field 時必須、也只能指定 by")
+        if self.nested and self.kind != "by_field":
+            raise ValueError("只有依欄位排序可以是巢狀排序")
         if (self.kind == "manual") != bool(self.manual_values):
             raise ValueError("只有 kind 為 manual 時必須、也只能指定 manual_values")
         return self

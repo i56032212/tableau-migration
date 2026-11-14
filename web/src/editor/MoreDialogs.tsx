@@ -82,6 +82,12 @@ export function SortDialog({ use, onClose }: { use: FieldUse; onClose: () => voi
   const initialBy = current?.by ?? null;
   const [byField, setByField] = useState<string>(initialBy?.field ?? candidates.find((f) => f.role === "measure")?.id ?? candidates[0]?.id ?? "");
   const [byAgg, setByAgg] = useState<string>(initialBy?.agg ?? "sum");
+  // 巢狀排序：這個維度在欄或列架上、前面還有離散的維度時才有意義
+  const [nested, setNested] = useState(current?.nested === true);
+  const hasOuter = [sheet.rows, sheet.columns].some((shelf) => {
+    const discrete = shelf.filter((u) => !u.continuous);
+    return discrete.findIndex((u) => u.field === use.field) > 0;
+  });
   const target = fields.get(byField);
   const numeric = target?.datatype === "integer" || target?.datatype === "real";
   const aggs = numeric ? AGGREGATIONS : AGGREGATIONS.filter(([a]) => ["count", "countd", "min", "max"].includes(a));
@@ -132,7 +138,7 @@ export function SortDialog({ use, onClose }: { use: FieldUse; onClose: () => voi
         ? { field: target.id, agg: target.level === "aggregate" ? null : (aggs.some(([a]) => a === byAgg) ? byAgg : aggs[0][0]), date: null, continuous: true, table_calc: null }
         : null;
     editor.apply((s: SheetIR) =>
-      setSort(s, use.field, { kind, order: kind === "manual" ? "asc" : order, by, manual_values: kind === "manual" ? (members ?? []) : [] }),
+      setSort(s, use.field, { kind, order: kind === "manual" ? "asc" : order, by, nested: kind === "by_field" && nested && hasOuter, manual_values: kind === "manual" ? (members ?? []) : [] }),
     );
     onClose();
   };
@@ -180,6 +186,11 @@ export function SortDialog({ use, onClose }: { use: FieldUse; onClose: () => voi
                     </option>
                   ))}
                 </select>
+              </label>
+            )}
+            {hasOuter && (
+              <label className="inline" title="在外層維度的每個值之內各自排序（各窗格的順序可以不同）；不勾選時以所有資料的值排序">
+                <input type="checkbox" checked={nested} onChange={(e) => setNested(e.target.checked)} /> 巢狀（各窗格各自排序）
               </label>
             )}
           </>

@@ -2740,6 +2740,7 @@ class SheetParser:
                     # 依字母排序（alphabetic-sort 是較舊版本的寫法）
                     parsed = self._simple(element, element.get("column"), "alphabetic")
                 elif tag == "shelf-sorts":
+                    # 從座標軸、工具列或欄位標籤排序（2018.2 起）：巢狀排序，各窗格各自排序
                     for item in children(element, "shelf-sort-v2"):
                         found = self._by_field(
                             item,
@@ -2748,7 +2749,7 @@ class SheetParser:
                             item.get("direction"),
                         )
                         if found is not None:
-                            sorts.append(found)
+                            sorts.append(found.model_copy(update={"nested": True}))
                     continue
                 elif tag in ("rows", "cols"):
                     # 較舊版本的依量值排序（工具列的排序按鈕）：<rows><shelf-sort measure-to-sort-by>
