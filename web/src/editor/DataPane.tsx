@@ -473,6 +473,13 @@ export function DataPane({
           新資料夾…
         </button>
       </div>
+      {secondary.size > 0 && (
+        <div className="pane-actions">
+          <button type="button" title="Data Blending 的連結欄位（Tableau 的「編輯混合關係」）" onClick={() => editor.openDialog({ kind: "blends" })}>
+            混合關係…
+          </button>
+        </div>
+      )}
       {shown !== sheet.datasource && (
         <div className="pane-actions blend-actions">
           <span className="hint">量值放到檢視上即與主要資料源混合（Data Blending，依名稱相同的維度連結）</span>

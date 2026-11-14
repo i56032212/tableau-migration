@@ -165,6 +165,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 工具提示中的工作表（Viz in Tooltip）：不攔截滑鼠，文字下方是以標記篩選的工作表 */
 .viz-tooltip { position: fixed; z-index: 1000; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); padding: 6px 8px; font-size: 12px; max-width: calc(100vw - 8px); }
 .viz-tooltip-text { border-collapse: collapse; }
+.viz-tooltip-rich { white-space: pre-wrap; }
 .viz-tooltip-text td { padding: 1px 4px; vertical-align: top; }
 .viz-tooltip-text td.key { color: var(--muted); text-align: right; white-space: nowrap; }
 .viz-tooltip-sheet { display: flex; margin-top: 6px; max-width: 100%; }
@@ -648,3 +649,12 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .show-me-hint { margin: 6px 0 0; min-height: 2.6em; }
 .toolbar button.active, .editor-toolbar button.active { background: #e3ebf7; border-color: var(--accent); }
 @media (max-width: 720px) { .show-me { position: fixed; left: 16px; right: 16px; width: auto; } }
+
+/* 格式文字的編輯器（標題、工具提示、標籤、註解、文字物件） */
+.rich-text { display: flex; flex-direction: column; gap: 4px; }
+.rich-toolbar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.rich-toolbar button { min-width: 28px; }
+.rich-toolbar input[type="color"] { width: 32px; height: 26px; padding: 0; }
+.rich-editor { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; background: #fff; color: #333; white-space: pre-wrap; overflow: auto; max-height: 280px; min-width: min(420px, 60vw); outline: none; }
+.rich-editor:focus { border-color: var(--accent, #2563eb); }
+.rich-token { background: #e0e7ff; border-radius: 3px; padding: 0 3px; white-space: nowrap; user-select: all; }

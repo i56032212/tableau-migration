@@ -5,8 +5,13 @@ import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
 import { editApi } from "./api";
 import { useEditor } from "./context";
+import { type RichRun, RichTextEditor, type RichToken, plainText } from "./RichText";
 import {
   AGGREGATIONS,
+  allUses,
+  type Card,
+  cardMarks,
+  type Catalog,
   type CatalogField,
   DIRECTIONS,
   isMeasure,
@@ -18,8 +23,31 @@ import {
   type SheetIR,
   type SortIR,
   type TableCalcIR,
+  updateCard,
   useKey,
 } from "./model";
+
+/** 格式文字中可以插入的欄位與參數：檢視中的欄位（欄列架、標記卡，不重複）與參數。 */
+export function textTokens(
+  sheet: SheetIR,
+  fields: Map<string, CatalogField>,
+  catalog: Catalog,
+  options: { tableCalcs?: boolean; uses?: boolean } = {},
+): RichToken[] {
+  const tokens: RichToken[] = [];
+  if (options.uses !== false) {
+    const seen = new Set<string>();
+    for (const use of allUses(sheet)) {
+      if (isSpecial(use) || seen.has(useKey(use))) continue;
+      if (use.table_calc !== null && !options.tableCalcs) continue;
+      if (fields.get(use.field)?.level === "table_calc" && !options.tableCalcs) continue;
+      seen.add(useKey(use));
+      tokens.push({ label: pillLabel(use, fields, sheet.table_calcs), run: { use } });
+    }
+  }
+  for (const parameter of catalog.parameters) tokens.push({ label: `參數.${parameter.caption}`, run: { parameter: parameter.id } });
+  return tokens;
+}
 
 function display(value: Scalar): string {
   if (value === null) return "Null";
@@ -560,7 +588,7 @@ export function dateCalc(base: TableCalcIR, kind: "ytd" | "yoy", levels: { year:
 
 export interface AnnotationIR {
   kind: "mark" | "point" | "area";
-  text: { text?: string | null; use?: FieldUse | null; parameter?: string | null }[];
+  text: RichRun[];
   point?: AnnotationPointIR | null;
   top_left?: AnnotationPointIR | null;
   bottom_right?: AnnotationPointIR | null;
@@ -580,7 +608,6 @@ function axisOf(uses: FieldUse[], fields: Map<string, CatalogField>): FieldUse |
   return uses.find((u) => !isSpecial(u) && u.continuous && isMeasure(u, fields)) ?? null;
 }
 
-const plain = (annotation: AnnotationIR) => annotation.text.map((run) => run.text ?? "").join("");
 
 function numberOrNull(text: string): number | null {
   const value = Number(text);
@@ -598,7 +625,11 @@ export function AnnotationsDialog({ mark, onClose }: { mark: Record<string, Scal
   const xAxis = axisOf(sheet.columns, fields);
   const yAxis = axisOf(sheet.rows, fields);
   const [kind, setKind] = useState<AnnotationIR["kind"]>(mark ? "mark" : "point");
-  const [text, setText] = useState("");
+  const [text, setText] = useState<RichRun[]>([]);
+  // 加上一個註解後換一個新的編輯區（清空）
+  const [round, setRound] = useState(0);
+  // 標記的註解可以插入這個標記的欄位值；點與區域只有參數
+  const tokens = textTokens(sheet, fields, editor.catalog, { tableCalcs: true, uses: kind === "mark" });
   const [coords, setCoords] = useState({ x: "", y: "", x2: "", y2: "" });
   const [error, setError] = useState<string | null>(null);
   const point = (x: string, y: string): AnnotationPointIR => ({
@@ -610,31 +641,32 @@ export function AnnotationsDialog({ mark, onClose }: { mark: Record<string, Scal
   });
   const complete = (p: AnnotationPointIR) => (!xAxis || p.x !== null) && (!yAxis || p.y !== null);
   const add = () => {
-    if (!text.trim()) {
+    if (text.length === 0) {
       setError("請輸入註解的文字");
       return;
     }
     let annotation: AnnotationIR;
     if (kind === "mark") {
       if (!mark) return;
-      annotation = { kind, text: [{ text }], point: { x: null, x_axis: null, y: null, y_axis: null, mark }, offset: [40, -40] };
+      annotation = { kind, text, point: { x: null, x_axis: null, y: null, y_axis: null, mark }, offset: [40, -40] };
     } else if (kind === "point") {
       const at = point(coords.x, coords.y);
       if (!complete(at)) {
         setError("請輸入座標軸上的值");
         return;
       }
-      annotation = { kind, text: [{ text }], point: at, offset: [40, -40] };
+      annotation = { kind, text, point: at, offset: [40, -40] };
     } else {
       const [a, b] = [point(coords.x, coords.y), point(coords.x2, coords.y2)];
       if (!complete(a) || !complete(b)) {
         setError("請輸入區域兩個角落在座標軸上的值");
         return;
       }
-      annotation = { kind, text: [{ text }], top_left: a, bottom_right: b, offset: [0, 0] };
+      annotation = { kind, text, top_left: a, bottom_right: b, offset: [0, 0] };
     }
     editor.apply((s: SheetIR) => ({ ...s, annotations: [...((s.annotations as AnnotationIR[] | undefined) ?? []), annotation] }));
-    setText("");
+    setText([]);
+    setRound((n) => n + 1);
     setError(null);
   };
   const noAxis = !xAxis && !yAxis;
@@ -653,7 +685,7 @@ export function AnnotationsDialog({ mark, onClose }: { mark: Record<string, Scal
               {annotations.map((annotation, i) => (
                 <tr key={i}>
                   <td>{annotation.kind === "mark" ? "標記" : annotation.kind === "point" ? "點" : "區域"}</td>
-                  <td>{plain(annotation) || "（欄位的值）"}</td>
+                  <td>{plainText(annotation.text, textTokens(sheet, fields, editor.catalog, { tableCalcs: true }))}</td>
                   <td>
                     <button
                       type="button"
@@ -683,10 +715,7 @@ export function AnnotationsDialog({ mark, onClose }: { mark: Record<string, Scal
             </option>
           </select>
         </label>
-        <label className="inline">
-          註解的文字
-          <textarea aria-label="註解的文字" rows={3} value={text} onChange={(e) => setText(e.target.value)} />
-        </label>
+        <RichTextEditor key={`${round}:${kind}`} label="註解的文字" value={text} tokens={tokens} onChange={setText} rows={3} />
         {kind !== "mark" && noAxis && <p className="hint">檢視中沒有連續的量值座標軸，只能加標記的註解。</p>}
         {kind === "point" && (
           <div className="row">
@@ -799,6 +828,208 @@ export function ApplyFilterDialog({ filter, onClose }: { filter: string; onClose
         {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={() => void save()} disabled={saving || sheets === null}>
+            確定
+          </button>
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 標籤
+
+interface MarkLabelsIR {
+  show: boolean | null;
+  marks: "all" | "min_max" | "line_ends" | "selected" | "highlighted";
+  scope: "pane" | "cell" | "table" | "line";
+  field: FieldUse | null;
+  minimum: boolean;
+  maximum: boolean;
+  first: boolean;
+  last: boolean;
+  overlap: boolean;
+}
+
+const DEFAULT_LABELS: MarkLabelsIR = { show: null, marks: "all", scope: "pane", field: null, minimum: true, maximum: true, first: true, last: true, overlap: false };
+
+/**
+ * 標籤（Tableau 標記卡的「標籤」）：是否顯示標記標籤、自訂的標籤文字（文字、欄位值與參數值，可以設定格式）、
+ * 要標示的標記（全部、最小值／最大值、線條的兩端、選取的、醒目提示的）與是否允許重疊。
+ */
+export function LabelDialog({ card, onClose }: { card: Card; onClose: () => void }) {
+  const editor = useEditor();
+  const { sheet, fields } = editor;
+  const marks = cardMarks(sheet, card);
+  const [text, setText] = useState<RichRun[]>((marks.label_text as RichRun[] | undefined) ?? []);
+  const [labels, setLabels] = useState<MarkLabelsIR>({ ...DEFAULT_LABELS, ...((marks.labels as Partial<MarkLabelsIR> | null | undefined) ?? {}) });
+  const set = (patch: Partial<MarkLabelsIR>) => setLabels((current) => ({ ...current, ...patch }));
+  const tokens = textTokens(sheet, fields, editor.catalog, { tableCalcs: true });
+  const save = () => {
+    const changed = JSON.stringify(labels) !== JSON.stringify(DEFAULT_LABELS);
+    editor.apply((s: SheetIR) => updateCard(s, card, (m) => ({ ...m, label_text: text, labels: changed ? labels : null })));
+    onClose();
+  };
+  return (
+    <Modal title="標籤" onClose={onClose}>
+      <div className="action-form label-dialog">
+        <label className="inline">
+          顯示標記標籤
+          <select
+            aria-label="顯示標記標籤"
+            value={labels.show === null ? "" : labels.show ? "on" : "off"}
+            onChange={(e) => set({ show: e.target.value === "" ? null : e.target.value === "on" })}
+          >
+            <option value="">自動（標籤上有欄位時顯示）</option>
+            <option value="on">顯示</option>
+            <option value="off">不顯示</option>
+          </select>
+        </label>
+        <p className="hint">標籤的文字：留空白時依標籤上的欄位顯示。</p>
+        <RichTextEditor label="標籤的文字" value={text} tokens={tokens} onChange={setText} rows={3} />
+        <label className="inline">
+          要標示的標記
+          <select aria-label="要標示的標記" value={labels.marks} onChange={(e) => set({ marks: e.target.value as MarkLabelsIR["marks"] })}>
+            <option value="all">全部</option>
+            <option value="min_max">最小值／最大值</option>
+            <option value="line_ends">線條的兩端</option>
+            <option value="selected">選取的</option>
+            <option value="highlighted">醒目提示的</option>
+          </select>
+        </label>
+        {labels.marks === "min_max" && (
+          <>
+            <label className="inline">
+              範圍
+              <select aria-label="最小值與最大值的範圍" value={labels.scope} onChange={(e) => set({ scope: e.target.value as MarkLabelsIR["scope"] })}>
+                <option value="pane">窗格</option>
+                <option value="cell">儲存格</option>
+                <option value="table">整個表格</option>
+                <option value="line">每條線</option>
+              </select>
+            </label>
+            <label className="inline">
+              <input type="checkbox" checked={labels.minimum} onChange={(e) => set({ minimum: e.target.checked })} /> 標示最小值
+            </label>
+            <label className="inline">
+              <input type="checkbox" checked={labels.maximum} onChange={(e) => set({ maximum: e.target.checked })} /> 標示最大值
+            </label>
+          </>
+        )}
+        {labels.marks === "line_ends" && (
+          <>
+            <label className="inline">
+              <input type="checkbox" checked={labels.first} onChange={(e) => set({ first: e.target.checked })} /> 標示線條的起點
+            </label>
+            <label className="inline">
+              <input type="checkbox" checked={labels.last} onChange={(e) => set({ last: e.target.checked })} /> 標示線條的終點
+            </label>
+          </>
+        )}
+        <label className="inline">
+          <input type="checkbox" checked={labels.overlap} onChange={(e) => set({ overlap: e.target.checked })} /> 允許標籤與其他標記重疊
+        </label>
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={save}>
+            確定
+          </button>
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 編輯混合關係
+
+interface BlendIR {
+  datasource: string;
+  links: { primary: FieldUse; secondary: FieldUse }[];
+}
+
+const plainUse = (field: string): FieldUse => ({ field, agg: null, date: null, continuous: false, table_calc: null });
+
+/**
+ * 編輯混合關係（Tableau 的「資料＞編輯混合關係」）：各次要資料源與主要資料源以哪些欄位連結。預設以名稱相同的
+ * 維度自動連結；這裡可以改成自訂的對應（例如主要資料源的 Region 對應次要資料源的 Area）。檢視中有主要資料源的
+ * 連結欄位時，那個連結才作用。
+ */
+export function BlendsDialog({ onClose }: { onClose: () => void }) {
+  const editor = useEditor();
+  const { sheet, catalog } = editor;
+  const [blends, setBlends] = useState<BlendIR[]>(() => JSON.parse(JSON.stringify((sheet.blends as BlendIR[] | undefined) ?? [])) as BlendIR[]);
+  const [error, setError] = useState<string | null>(null);
+  const dimensions = (datasource: string) =>
+    (catalog.datasources.find((d) => d.id === datasource)?.fields ?? []).filter(
+      (f) => !f.hidden && f.role === "dimension" && f.level !== "aggregate" && f.level !== "table_calc" && f.datatype !== "spatial",
+    );
+  const primary = dimensions(sheet.datasource);
+  const change = (index: number, links: BlendIR["links"]) => setBlends(blends.map((b, i) => (i === index ? { ...b, links } : b)));
+  const save = () => {
+    if (blends.some((b) => b.links.length === 0)) {
+      setError("每個次要資料源至少要有一個連結欄位");
+      return;
+    }
+    editor.apply((s: SheetIR) => ({ ...s, blends }));
+    onClose();
+  };
+  return (
+    <Modal title="編輯混合關係" onClose={onClose}>
+      <div className="action-form blends-dialog">
+        {blends.length === 0 && <p className="hint">這張工作表沒有混合其他資料源；把另一個資料源的欄位放到檢視上即混合。</p>}
+        {blends.map((blend, index) => {
+          const secondary = dimensions(blend.datasource);
+          const caption = catalog.datasources.find((d) => d.id === blend.datasource)?.caption ?? blend.datasource;
+          return (
+            <fieldset key={blend.datasource} data-blend={blend.datasource}>
+              <legend>次要資料源：{caption}</legend>
+              {blend.links.map((link, n) => (
+                <div className="row" key={n}>
+                  <select
+                    aria-label={`連結 ${n + 1} 的主要資料源欄位`}
+                    value={link.primary.field}
+                    onChange={(e) => change(index, blend.links.map((l, i) => (i === n ? { ...l, primary: plainUse(e.target.value) } : l)))}
+                  >
+                    {primary.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.caption}
+                      </option>
+                    ))}
+                  </select>
+                  <span>＝</span>
+                  <select
+                    aria-label={`連結 ${n + 1} 的次要資料源欄位`}
+                    value={link.secondary.field}
+                    onChange={(e) => change(index, blend.links.map((l, i) => (i === n ? { ...l, secondary: plainUse(e.target.value) } : l)))}
+                  >
+                    {secondary.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.caption}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="link" aria-label={`移除連結 ${n + 1}`} onClick={() => change(index, blend.links.filter((_, i) => i !== n))}>
+                    移除
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                disabled={primary.length === 0 || secondary.length === 0}
+                onClick={() => change(index, [...blend.links, { primary: plainUse(primary[0].id), secondary: plainUse(secondary[0].id) }])}
+              >
+                新增連結
+              </button>
+            </fieldset>
+          );
+        })}
+        {error && <p className="error">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={save} disabled={blends.length === 0}>
             確定
           </button>
           <button type="button" onClick={onClose}>

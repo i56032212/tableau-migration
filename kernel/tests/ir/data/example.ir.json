@@ -298,6 +298,7 @@
             "table_calc": "tc_running_sales"
           }
         ],
+        "tooltip_text": [],
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
@@ -389,6 +390,7 @@
       "cluster": null,
       "forecast": null,
       "reference_lines": [],
+      "tooltips": true,
       "formats": {},
       "title": [],
       "totals": [],
@@ -503,6 +505,7 @@
             "table_calc": null
           }
         ],
+        "tooltip_text": [],
         "tooltip_sheets": [],
         "shape": null,
         "angle": null,
@@ -556,6 +559,7 @@
       "cluster": null,
       "forecast": null,
       "reference_lines": [],
+      "tooltips": true,
       "formats": {},
       "title": [],
       "totals": [],

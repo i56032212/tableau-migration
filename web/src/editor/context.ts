@@ -37,6 +37,8 @@ export type EditorDialog =
   | { kind: "direction"; tableCalc: string }
   /** 排序：資料來源順序、字母、依欄位或手動 */
   | { kind: "sort"; use: FieldUse }
+  /** 編輯混合關係：Data Blending 的次要資料源各自的連結欄位 */
+  | { kind: "blends" }
   /** 篩選套用到其他工作表（選取的工作表、使用此資料源的所有工作表） */
   | { kind: "apply-filter"; filter: string }
   /** 註解：mark 為檢視上選取的標記（維度的欄位鍵 → 值） */
@@ -54,6 +56,8 @@ export type EditorDialog =
   | { kind: "hierarchy"; datasource: string; name: string | null; field?: string }
   | { kind: "colors"; card: Card }
   | { kind: "tooltip"; card: Card }
+  /** 標籤：顯示與否、自訂的標籤文字、要標示的標記、允許重疊 */
+  | { kind: "labels"; card: Card }
   /** 欄位的地理角色與編輯位置 */
   | { kind: "geo"; datasource: string; field: string }
   /** 資料窗格的欄位選單：重新命名、註解、預設格式、別名 */

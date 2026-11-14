@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
-import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TooltipSheetInfo } from "./types";
+import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TextStyle, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
 export interface MarkEvent {
@@ -54,6 +54,37 @@ interface Tip {
   y: number;
   value: unknown;
   mark: Mark | null;
+  /** 自訂的工具提示文字（依滑過的標記組成）；沒有時列出 value 的各欄位 */
+  rich?: { text: string; style?: TextStyle }[] | null;
+}
+
+/** 自訂的工具提示（spec.usermeta.tooltip，見 kernel 的 _tooltip_template）。 */
+interface TooltipTemplate {
+  show: boolean;
+  runs: { text?: string; column?: string; value?: string; null?: boolean; style?: TextStyle }[];
+}
+
+/** 以標記的資料組成自訂的工具提示：欄位是 Null 時不顯示（除非 Null 設有別名）。 */
+function richTooltip(template: TooltipTemplate, record: Record<string, unknown>): { text: string; style?: TextStyle }[] {
+  const parts: { text: string; style?: TextStyle }[] = [];
+  for (const run of template.runs) {
+    if (run.text !== undefined) parts.push({ text: run.text, style: run.style });
+    else if (run.column !== undefined && (run.null || record[run.value ?? run.column] != null)) {
+      parts.push({ text: String(record[run.column] ?? ""), style: run.style });
+    }
+  }
+  return parts;
+}
+
+function tooltipRunStyle(style: TextStyle | undefined): React.CSSProperties | undefined {
+  if (!style) return undefined;
+  return {
+    fontWeight: style.bold ? 700 : undefined,
+    fontStyle: style.italic ? "italic" : undefined,
+    textDecoration: style.underline ? "underline" : undefined,
+    fontSize: style.size ? `${style.size}pt` : undefined,
+    color: style.color ?? undefined,
+  };
 }
 
 /** 工具提示中的工作表的狀態更新前等待的時間（滑過許多標記時不必每個都查詢） */
@@ -94,16 +125,26 @@ function VizTooltip({
       : [["", tip.value] as [string, unknown]];
   return createPortal(
     <div ref={ref} className="viz-tooltip" role="tooltip" style={position}>
-      <table className="viz-tooltip-text">
-        <tbody>
-          {lines.map(([key, value]) => (
-            <tr key={key}>
-              {key && <td className="key">{key}</td>}
-              <td>{String(value ?? "")}</td>
-            </tr>
+      {tip.rich ? (
+        <div className="viz-tooltip-rich" style={{ textAlign: tip.rich.find((r) => r.style?.align)?.style?.align ?? undefined }}>
+          {tip.rich.map((run, i) => (
+            <span key={i} style={tooltipRunStyle(run.style)}>
+              {run.text}
+            </span>
           ))}
-        </tbody>
-      </table>
+        </div>
+      ) : (
+        <table className="viz-tooltip-text">
+          <tbody>
+            {lines.map(([key, value]) => (
+              <tr key={key}>
+                {key && <td className="key">{key}</td>}
+                <td>{String(value ?? "")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {mark &&
         sheets.map((sheet) => (
           <div
@@ -529,14 +570,18 @@ export function WorksheetView({
     const scroll = applyFit(spec, fit, element.clientWidth);
     element.dataset.scroll = scroll.x && scroll.y ? "both" : scroll.y ? "y" : scroll.x ? "x" : "false";
     // 工具提示中的工作表：以自己的工具提示取代 Vega 的（文字相同，下方加上以標記篩選的工作表）
+    // 自訂的工具提示（文字與格式，或不顯示工具提示）也用自己的工具提示
+    const custom = spec.usermeta?.tooltip as TooltipTemplate | undefined;
     const tooltip = (_handler: unknown, event: MouseEvent, item: any, value: unknown) => {
-      if (value === null || value === undefined || value === "") {
+      if (value === null || value === undefined || value === "" || custom?.show === false) {
         setTip(null);
         return;
       }
       const row = item?.datum?.__row;
-      const mark = typeof row === "number" && records[row] ? markOf(records[row], dimensions) : null;
-      setTip({ x: event.clientX, y: event.clientY, value, mark });
+      const record = typeof row === "number" ? records[row] : undefined;
+      const mark = record ? markOf(record, dimensions) : null;
+      const rich = custom && custom.runs.length > 0 && record ? richTooltip(custom, record) : null;
+      setTip({ x: event.clientX, y: event.clientY, value, mark, rich });
     };
     // 畫好之前（例如地圖的形狀還在下載）標記為未完成：匯出、訂閱的截圖等它完成
     element.dataset.drawn = "false";
@@ -549,7 +594,7 @@ export function WorksheetView({
     let viewTimer: number | undefined;
     /** 平移、縮放過（放開滑鼠時不當成點選標記） */
     let moved = false;
-    embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips ? { tooltip } : {}) })
+    embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom ? { tooltip } : {}) })
       .then(async (result) => {
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
@@ -771,7 +816,7 @@ export function WorksheetView({
         )}
         {loading && !response && <div className="placeholder">載入中…</div>}
       </div>
-      {tip && vizTooltips && (
+      {tip && (
         <VizTooltip
           tip={tip}
           mark={tipMark}

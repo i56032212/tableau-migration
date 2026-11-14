@@ -1358,6 +1358,11 @@ class Marks(IRModel):
     )
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
+    tooltip_text: list[TextRun] = Field(
+        default_factory=list,
+        description="自訂的工具提示文字（Tableau 的「工具提示」編輯器）：文字、欄位值與參數值，各段帶著格式；"
+        "空的表示列出檢視中各欄位的名稱與值",
+    )
     tooltip_sheets: list[TooltipSheet] = Field(
         default_factory=list, description="工具提示中的工作表（Viz in Tooltip）"
     )
@@ -1548,6 +1553,17 @@ class Axis(IRModel):
     synchronized: bool = Field(
         default=False, description="雙軸與前一個軸同步（Synchronize Axis）：兩個量值使用相同的刻度"
     )
+    scale: Literal["linear", "log", "symlog"] = Field(
+        default="linear",
+        description="座標軸的刻度（編輯座標軸的「對數」）：線性、對數（只有正值）或對稱對數（可以有 0 與負值）",
+    )
+    ticks: bool = Field(
+        default=True, description="顯示主要刻度與刻度標籤（編輯座標軸的「主要刻度：無」為 False）"
+    )
+    tick_spacing: float | None = Field(
+        default=None, gt=0, description="主要刻度的固定間距（數值的座標軸）；None 為自動"
+    )
+    tick_origin: float | None = Field(default=None, description="固定間距的刻度的起點；None 為 0")
     label_color: HexColor | None = Field(
         default=None, description="座標軸刻度或標題（離散欄位的成員）文字的顏色；None 依工作表"
     )
@@ -1788,6 +1804,9 @@ class Worksheet(IRModel):
     cluster: ClusterSpec | None = Field(default=None, description="叢集（分析 → 叢集）")
     forecast: Forecast | None = Field(default=None, description="預測（分析 → 預測）")
     reference_lines: list[ReferenceLine] = Field(default_factory=list)
+    tooltips: bool = Field(
+        default=True, description="滑過標記時顯示工具提示（工具提示編輯器的「顯示工具提示」）"
+    )
     formats: dict[str, str] = Field(
         default_factory=dict,
         description="工作表上設定的數字格式（欄位鍵 → Tableau 格式字串），優先於欄位的預設格式",

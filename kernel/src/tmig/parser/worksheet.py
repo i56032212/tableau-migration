@@ -522,6 +522,7 @@ class SheetParser:
             sorts=sorts,
             table_calcs=table_calcs,
             reference_lines=reference_lines,
+            tooltips=self._tooltips(child(table, "tooltip-style")),
             annotations=annotations,
             cluster=cluster,
             forecast=forecast,
@@ -1422,6 +1423,10 @@ class SheetParser:
         tooltip = child(child(pane, "customized-tooltip"), "formatted-text")
         if tooltip is not None:
             self._tooltip_sheets(tooltip, marks)
+            # 自訂的工具提示文字（工具提示中的工作表另外記下，不在文字中）
+            marks.tooltip_text = self._text_runs(
+                tooltip, f"工作表「{self.name}」的自訂工具提示", skip=SHEET_TAG
+            )
         if marks.color is not None and color_ref is not None:
             marks.color_palette = self._color_palette(color_ref, marks.color)
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
@@ -1483,11 +1488,14 @@ class SheetParser:
 
     # ------------------------------------------------------------ 自訂文字、數字格式與標題
 
-    def _text_runs(self, formatted: etree._Element, what: str) -> list[TextRun]:
+    def _text_runs(
+        self, formatted: etree._Element, what: str, skip: re.Pattern[str] | None = None
+    ) -> list[TextRun]:
         """格式化文字（<formatted-text> 的各段 <run>）→ 文字與參照依序排列，各段帶著它的格式（字級、粗體、
         顏色等，例如 KPI 的大數字）。
 
         參照可能被拆在相鄰的幾段中，所以先串成一段再找，格式取參照開頭那一段的；認不得的 <…> 照原文保留。
+        skip：文字中不屬於內容的標記（工具提示中的工作表 <Sheet …>），先去掉。
         """
         text = ""
         styles: list[TextStyle | None] = []
@@ -1497,6 +1505,10 @@ class SheetParser:
             raw = raw.replace(LINE_BREAK, "\n").replace("\u00c6", "")
             text += raw
             styles += [run_style(run)] * len(raw)
+        if skip is not None:
+            for match in reversed(list(skip.finditer(text))):
+                text = text[: match.start()] + text[match.end() :]
+                del styles[match.start() : match.end()]
         text = text.rstrip()
         runs: list[TextRun] = []
 
@@ -1660,8 +1672,25 @@ class SheetParser:
                 )
             )
 
+    @staticmethod
+    def _tooltips(style: etree._Element | None) -> bool:
+        """是否顯示工具提示：<tooltip-style tooltip-mode='none'> 為不顯示（sticky、smooth 是顯示的方式）。"""
+        return style is None or style.get("tooltip-mode") != "none"
+
     def _check_label_text(self, uses: list[FieldUse], cards: list[Marks]) -> None:
-        """自訂標籤中的欄位必須在標記卡或欄列架上（查詢結果才有它的值）。"""
+        """自訂標籤中的欄位必須在標記卡或欄列架上（查詢結果才有它的值）。自訂工具提示中不在檢視中的欄位
+        不顯示（只影響工具提示的文字）。"""
+        for marks in cards:
+            absent = [r.use for r in marks.tooltip_text if r.use is not None and r.use not in uses]
+            if absent:
+                names = "、".join(self._caption_of(u) for u in absent)
+                self.ctx.ignore(
+                    self.el,
+                    f"工作表「{self.name}」的自訂工具提示用到不在檢視中的欄位 {names}：不顯示這些值",
+                )
+                marks.tooltip_text = [
+                    r for r in marks.tooltip_text if r.use is None or r.use in uses
+                ]
         for marks in cards:
             missing = [run.use for run in marks.label_text if run.use and run.use not in uses]
             if missing:

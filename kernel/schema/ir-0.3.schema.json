@@ -611,6 +611,50 @@
           "title": "Synchronized",
           "type": "boolean"
         },
+        "scale": {
+          "default": "linear",
+          "description": "座標軸的刻度（編輯座標軸的「對數」）：線性、對數（只有正值）或對稱對數（可以有 0 與負值）",
+          "enum": [
+            "linear",
+            "log",
+            "symlog"
+          ],
+          "title": "Scale",
+          "type": "string"
+        },
+        "ticks": {
+          "default": true,
+          "description": "顯示主要刻度與刻度標籤（編輯座標軸的「主要刻度：無」為 False）",
+          "title": "Ticks",
+          "type": "boolean"
+        },
+        "tick_spacing": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "主要刻度的固定間距（數值的座標軸）；None 為自動",
+          "title": "Tick Spacing"
+        },
+        "tick_origin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "固定間距的刻度的起點；None 為 0",
+          "title": "Tick Origin"
+        },
         "label_color": {
           "anyOf": [
             {
@@ -4001,6 +4045,14 @@
             "$ref": "#/$defs/FieldUse"
           },
           "title": "Tooltip",
+          "type": "array"
+        },
+        "tooltip_text": {
+          "description": "自訂的工具提示文字（Tableau 的「工具提示」編輯器）：文字、欄位值與參數值，各段帶著格式；空的表示列出檢視中各欄位的名稱與值",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Tooltip Text",
           "type": "array"
         },
         "tooltip_sheets": {
@@ -7479,6 +7531,12 @@
           },
           "title": "Reference Lines",
           "type": "array"
+        },
+        "tooltips": {
+          "default": true,
+          "description": "滑過標記時顯示工具提示（工具提示編輯器的「顯示工具提示」）",
+          "title": "Tooltips",
+          "type": "boolean"
         },
         "formats": {
           "additionalProperties": {

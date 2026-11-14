@@ -275,6 +275,34 @@ def test_sort_table_calc_wildcard_and_annotations(engine: str) -> None:
         page.locator('.data-pane [data-field="f_sales"]').dblclick()
         settle(page)
 
+        # 編輯座標軸：對數刻度、固定的刻度間距
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "編輯座標軸…")
+        page.get_by_label("座標軸的刻度").select_option("log")
+        page.get_by_label("主要刻度").select_option("fixed")
+        page.get_by_label("刻度間距").fill("200000")
+        page.locator(".axis-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".axis-dialog")).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+        (axis,) = sheet()["axes"]
+        assert (axis["scale"], axis["ticks"], axis["tick_spacing"], axis["tick_origin"]) == (
+            "log",
+            True,
+            200000.0,
+            None,
+        )
+        assert errors == []
+        # 改回線性、自動
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "編輯座標軸…")
+        page.get_by_label("座標軸的刻度").select_option("linear")
+        page.get_by_label("主要刻度").select_option("auto")
+        page.locator(".axis-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".axis-dialog")).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
         # 排序對話框：手動，把 West 移到最上面
         page.locator('[data-shelf="rows"] .pill', has_text="Region").click()
         menu(page, "排序", "排序…")
@@ -351,13 +379,20 @@ def test_sort_table_calc_wildcard_and_annotations(engine: str) -> None:
             ".editor-canvas .frozen-host > svg path[aria-roledescription='bar'][aria-label*='East']"
         ).click()
         page.locator(".selection-bar").get_by_role("button", name="💬 註解…").click()
-        page.get_by_label("註解的文字").fill("東區")
+        page.get_by_role("textbox", name="註解的文字").click()
+        page.keyboard.type("東區：")
+        # 標記的註解可以插入這個標記的欄位值
+        page.get_by_role("toolbar", name="註解的文字的格式").get_by_label("插入").select_option(
+            label="SUM(Sales)"
+        )
         page.locator(".annotations-dialog").get_by_role("button", name="加上註解").click()
+        expect(page.locator(".annotations-dialog table.list")).to_contain_text("東區：<SUM(Sales)>")
         settle(page)
-        expect(page.locator(".annotations-dialog table.list")).to_contain_text("東區")
         page.locator(".annotations-dialog").get_by_role("button", name="關閉").click()
         (annotation,) = sheet()["annotations"]
         assert (annotation["kind"], annotation["point"]["mark"]) == ("mark", {"f_region": "East"})
+        assert [r.get("text") for r in annotation["text"]] == ["東區：", None]
+        assert annotation["text"][1]["use"]["field"] == "f_sales"
         expect(
             page.locator(".editor-canvas .frozen-host > svg text", has_text="東區")
         ).to_have_count(1)
@@ -406,6 +441,248 @@ def test_sort_table_calc_wildcard_and_annotations(engine: str) -> None:
         settle(page)
         (calc,) = sheet()["table_calcs"]
         assert (calc["type"], calc["level"]["date"]["unit"]) == ("percent_difference", "year")
+        assert errors == []
+        browser.close()
+
+
+def test_rich_text_title_tooltip_and_labels(engine: str) -> None:
+    """格式文字的編輯器：標題（粗體、插入欄位）、自訂工具提示（檢視器滑過標記時顯示）、標籤的選項，
+    以及 dashboard 文字物件的格式與參數的值。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+
+    def confirm(page: Page, dialog: str) -> None:
+        """按下對話框的「確定」，等對話框關閉、變更存好。"""
+        page.locator(dialog).get_by_role("button", name="確定").click()
+        expect(page.locator(dialog)).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        page.locator('.data-pane [data-field="f_region"]').dblclick()
+        settle(page)
+        page.locator('.data-pane [data-field="f_sales"]').dblclick()
+        settle(page)
+        sales = {
+            "field": "f_sales",
+            "agg": "sum",
+            "date": None,
+            "continuous": True,
+            "table_calc": None,
+        }
+        region = {
+            "field": "f_region",
+            "agg": None,
+            "date": None,
+            "continuous": False,
+            "table_calc": None,
+        }
+
+        # 標題：粗體的文字，後面插入 SUM(Sales) 的值
+        page.get_by_role("button", name="標題…").click()
+        title = page.get_by_role("textbox", name="標題", exact=True)
+        title.click()
+        page.keyboard.type("各區業績：")
+        page.keyboard.press("Control+A")
+        page.get_by_role("toolbar", name="標題的格式").get_by_role("button", name="粗體").click()
+        page.keyboard.press("End")
+        page.get_by_role("toolbar", name="標題的格式").get_by_label("插入").select_option(
+            label="SUM(Sales)"
+        )
+        confirm(page, ".modal")
+        runs = sheet()["title"]
+        assert runs[0]["text"] == "各區業績：" and runs[0]["style"]["bold"] is True, runs
+        assert runs[1]["use"] == sales
+        expect(page.locator(".editor .worksheet-title")).to_contain_text("各區業績：")
+        expect(page.locator(".editor .worksheet-title")).to_contain_text("2,")  # 全部資料的合計
+
+        # 工具提示：兩行文字，各插入一個欄位；業績那一行改成紅色
+        page.locator(".mark-buttons").get_by_role("button", name="工具提示…").click()
+        tip = page.get_by_role("textbox", name="工具提示的文字")
+        bar_tools = page.get_by_role("toolbar", name="工具提示的文字的格式")
+        tip.click()
+        page.keyboard.type("區域：")
+        bar_tools.get_by_label("插入").select_option(label="Region")
+        page.keyboard.press("Enter")
+        page.keyboard.type("業績：")
+        bar_tools.get_by_label("插入").select_option(label="SUM(Sales)")
+        confirm(page, ".tooltip-dialog")
+        text = sheet()["marks"]["tooltip_text"]
+        assert [r.get("text") for r in text] == ["區域：", None, "\n業績：", None]
+        assert (text[1]["use"], text[3]["use"]) == (region, sales)
+        assert sheet()["tooltips"] is True
+
+        # 標籤：顯示、只標示最大值
+        page.locator(".mark-buttons").get_by_role("button", name="標籤…").click()
+        page.get_by_label("顯示標記標籤").select_option("on")
+        page.get_by_label("要標示的標記").select_option("min_max")
+        page.get_by_label("標示最小值").uncheck()
+        confirm(page, ".label-dialog")
+        labels = sheet()["marks"]["labels"]
+        assert (labels["show"], labels["marks"], labels["minimum"], labels["maximum"]) == (
+            True,
+            "min_max",
+            False,
+            True,
+        )
+        # 只有最大的 West 有標籤
+        shown = page.locator(".editor-canvas .frozen-host > svg [aria-roledescription='text mark']")
+        expect(shown).to_have_count(1)
+
+        # 檢視器：滑過 East 的長條，工具提示是自訂的文字
+        page.get_by_role("button", name="完成").click()
+        page.wait_for_url(f"{engine}/w/demo/s/ws_1")
+        page.wait_for_selector(".single-sheet .worksheet svg")
+        page.locator(
+            ".single-sheet .frozen-host > svg path[aria-roledescription='bar'][aria-label*='East']"
+        ).hover()
+        rich = page.locator(".viz-tooltip .viz-tooltip-rich")
+        expect(rich).to_contain_text("區域：East")
+        expect(rich).to_contain_text("業績：678,781")
+
+        # dashboard 的文字物件：粗體、16pt，後面插入參數的值
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
+        page.get_by_label("以浮動方式加入").check()
+        page.locator(".object-buttons").get_by_role("button", name="文字").click()
+        page.wait_for_selector('[data-saving="false"]')
+        page.locator(".dash-props").get_by_role("button", name="編輯文字…").click()
+        body = page.get_by_role("textbox", name="文字物件的內容")
+        tools = page.get_by_role("toolbar", name="文字物件的內容的格式")
+        body.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("前幾名：")
+        page.keyboard.press("Control+A")
+        tools.get_by_role("button", name="粗體").click()
+        tools.get_by_label("字級").select_option("16")
+        page.keyboard.press("End")
+        tools.get_by_label("插入").select_option(label="參數.前 N 名")
+        tools.get_by_label("對齊").select_option("center")
+        page.locator(".modal").get_by_role("button", name="確定").click()
+        page.wait_for_selector('[data-saving="false"]')
+        page.wait_for_timeout(300)
+        board = call(engine, "/api/edit/demo/dashboards/db_ee909b0c")["dashboard"]
+        zone = next(z for z in board["zones"] if z["kind"] == "text")
+        first, second = zone["content"]
+        assert (first["text"], first["style"]) == (
+            "前幾名：",
+            {
+                "bold": True,
+                "italic": None,
+                "underline": None,
+                "size": 16.0,
+                "color": None,
+                "font": None,
+                "align": "center",
+            },
+        )
+        assert second["parameter"] == "p_parameter_1" and second["style"]["align"] == "center"
+        assert zone["text"] == "前幾名：<參數.前 N 名>"
+        shown_text = page.locator(f".dash-editor .dashboard [data-zone='{zone['id']}'] .text")
+        expect(shown_text).to_have_text("前幾名：3")
+        expect(shown_text.locator("span").first).to_have_css("font-weight", "700")
+        assert errors == []
+        browser.close()
+
+
+def test_edit_blend_relationships(engine: str, tmp_path: Path) -> None:
+    """編輯混合關係：加入 Excel 的目標資料源後，把它的量值放到檢視上（以同名的 Region 自動連結），再把連結改成
+    主要資料源的 Region 對應次要資料源的 Area。"""
+    from openpyxl import Workbook
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    book = Workbook()
+    targets = book.active
+    assert targets is not None
+    targets.title = "Targets"
+    targets.append(["Region", "Area", "Target"])
+    # Region 與 Area 相反：連結欄位不同時目標對到不同的地區
+    for row in (["East", "West", 100], ["West", "East", 200], ["South", "South", 300]):
+        targets.append(row)
+    path = tmp_path / "Targets.xlsx"
+    book.save(path)
+    secondary = call(engine, "/api/edit/demo/datasources", {"path": str(path), "table": "Targets"})[
+        "datasource"
+    ]
+    catalog = call(engine, "/api/edit/demo/catalog")
+    fields = {
+        f["caption"]: f["id"]
+        for d in catalog["datasources"]
+        if d["id"] == secondary
+        for f in d["fields"]
+    }
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+
+    def targets_by_region() -> dict[str, Any]:
+        table = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})["table"]
+        region = table["keys"].index("f_region")
+        target = next(i for i, k in enumerate(table["keys"]) if fields["Target"] in k)
+        return {row[region]: row[target] for row in table["raw"]}
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        page.locator('.data-pane [data-field="f_region"]').dblclick()
+        settle(page)
+        # 資料窗格切到 Targets，把 Target 放到欄：混合（以同名的 Region 連結）
+        page.get_by_label("資料源").select_option(secondary)
+        page.locator(f'.data-pane [data-field="{fields["Target"]}"]').dblclick()
+        settle(page)
+        (blend,) = sheet()["blends"]
+        assert [
+            (link["primary"]["field"], link["secondary"]["field"]) for link in blend["links"]
+        ] == [("f_region", fields["Region"])]
+        found = targets_by_region()
+        assert (float(found["East"]), float(found["West"])) == (100.0, 200.0)
+
+        # 編輯混合關係：Region 改成對應 Area
+        page.locator(".data-pane").get_by_role("button", name="混合關係…").click()
+        page.get_by_label("連結 1 的次要資料源欄位").select_option(fields["Area"])
+        page.locator(".blends-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".blends-dialog")).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+        (blend,) = sheet()["blends"]
+        assert [
+            (link["primary"]["field"], link["secondary"]["field"]) for link in blend["links"]
+        ] == [("f_region", fields["Area"])]
+        found = targets_by_region()
+        assert (float(found["East"]), float(found["West"])) == (200.0, 100.0)
         assert errors == []
         browser.close()
 
@@ -569,6 +846,29 @@ def test_url_action_loads_the_web_object(engine: str) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
         page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
+
+        # 當作篩選器使用：自動產生篩選動作（來源是這張工作表，目標是 dashboard 上其他的工作表），取消時移除
+        def zones(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [z for item in items for z in (item, *zones(item["children"]))]
+
+        source = next(
+            z for z in zones(board()["zones"]) if z.get("worksheet") == "ws_sales_by_region"
+        )
+        page.locator(f'[data-tree-zone="{source["id"]}"]').click()
+        # （勾選的狀態依伺服器上的動作：建立之後才變成勾選）
+        page.get_by_label("當作篩選器使用").click()
+        expect(page.get_by_label("當作篩選器使用")).to_be_checked()
+        (generated,) = call(engine, "/api/edit/demo/outline")["actions"]
+        assert (generated["kind"], generated["activation"], generated["sources"]) == (
+            "filter",
+            "select",
+            ["ws_sales_by_region"],
+        )
+        on_board = {z["worksheet"] for z in zones(board()["zones"]) if z["kind"] == "worksheet"}
+        assert set(generated["targets"]) == on_board - {"ws_sales_by_region"}
+        page.get_by_label("當作篩選器使用").click()
+        expect(page.get_by_label("當作篩選器使用")).not_to_be_checked()
+        assert call(engine, "/api/edit/demo/outline")["actions"] == []
 
         # 匯出按鈕（Tableau 的「下載」物件）：格式改成 PowerPoint，再改成顯示／隱藏區塊，最後移除
         page.get_by_label("以浮動方式加入").check()

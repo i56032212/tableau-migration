@@ -11,6 +11,25 @@
     "measures": {
       "c1": "sum(f_sales)"
     },
+    "tooltip": {
+      "show": true,
+      "runs": [
+        {
+          "text": "Segment:\t",
+          "style": {
+            "color": "#787878"
+          }
+        },
+        {
+          "column": "c0_label",
+          "value": "c0",
+          "null": false,
+          "style": {
+            "bold": true
+          }
+        }
+      ]
+    },
     "title_color": "#333333",
     "title_font": {
       "family": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",

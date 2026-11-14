@@ -206,6 +206,55 @@ def test_synchronized_dual_axis_shares_the_scale(tmp_path: Path, db: Path) -> No
         assert spec["resolve"] == {"scale": {"y": resolve}}
 
 
+def test_log_scale_and_fixed_ticks(tmp_path: Path, db: Path) -> None:
+    """編輯座標軸的刻度：對數刻度、固定間距的主要刻度（起點預設 0）、不顯示主要刻度。"""
+    log = bars(rule("axis", space("sum:Sales:qk", "cols", scale="log")))
+    ir = parse(tmp_path, log)
+    assert ir.unsupported == []
+    (axis,) = ir.worksheets[0].axes
+    assert (axis.scale, axis.ticks, axis.tick_spacing) == ("log", True, None)
+    x = main_encoding(render(ir, db).spec)["x"]  # type: ignore[index]
+    assert x["scale"] == {"type": "log", "zero": False}
+
+    # 固定間距 250（起點 100）：100、350、600；資料的範圍 0 到各區的合計 1310
+    fixed = bars(
+        rule("axis", space("sum:Sales:qk", "cols", major_spacing="250", major_origin="100"))
+    )
+    ir = parse(tmp_path, fixed)
+    (axis,) = ir.worksheets[0].axes
+    assert (axis.scale, axis.tick_spacing, axis.tick_origin) == ("linear", 250.0, 100.0)
+    x = main_encoding(render(ir, db).spec)["x"]  # type: ignore[index]
+    assert x["axis"]["values"] == [100.0, 350.0, 600.0, 850.0, 1100.0]
+    assert "type" not in x.get("scale", {})
+    # 固定的範圍 0 到 500：刻度只到 500
+    ranged = bars(
+        rule(
+            "axis",
+            space(
+                "sum:Sales:qk", "cols", major_spacing="200", range_type="fixed", min="0", max="500"
+            ),
+        )
+    )
+    x = main_encoding(render(parse(tmp_path, ranged), db).spec)["x"]  # type: ignore[index]
+    assert x["axis"]["values"] == [0.0, 200.0, 400.0]
+
+    # 不顯示主要刻度；日期單位的間距（major-units）依自動
+    hidden = bars(
+        rule(
+            "axis",
+            space(
+                "sum:Sales:qk", "cols", major_show="false", major_spacing="3", major_units="months"
+            ),
+        )
+    )
+    ir = parse(tmp_path, hidden)
+    (axis,) = ir.worksheets[0].axes
+    assert (axis.ticks, axis.tick_spacing) == (False, None)
+    x = main_encoding(render(ir, db).spec)["x"]  # type: ignore[index]
+    assert (x["axis"]["labels"], x["axis"]["ticks"]) == (False, False)
+    assert "values" not in x["axis"]
+
+
 # ---------------------------------------------------------------- 離散欄位的標題
 
 

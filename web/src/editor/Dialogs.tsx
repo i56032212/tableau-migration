@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
 import { editApi, type FormulaCheck, type Outline } from "./api";
+import { textTokens } from "./MoreDialogs";
+import { type RichRun, RichTextEditor } from "./RichText";
 import { useEditor } from "./context";
 import {
   axisMeasures,
@@ -16,6 +18,7 @@ import {
   GEO_ROLES,
   type GeoAlias,
   type GeoRole,
+  isDate,
   isMeasure,
   isSpecial,
   type MarksIR,
@@ -265,23 +268,23 @@ export function FormatDialog({ use, onClose }: { use: FieldUse; onClose: () => v
 
 export function TitleDialog({ onClose }: { onClose: () => void }) {
   const editor = useEditor();
-  const runs = (editor.sheet.title as { text?: string | null; use?: FieldUse | null; parameter?: string | null }[] | undefined) ?? [];
-  const plain = runs.every((r) => r.text !== null && r.text !== undefined);
-  const [text, setText] = useState(plain ? runs.map((r) => r.text ?? "").join("") : "");
-  const save = (value: string) => {
-    editor.apply((s: SheetIR) => ({ ...s, title: value.trim() ? [{ text: value }] : [] }));
+  const [runs, setRuns] = useState<RichRun[]>((editor.sheet.title as RichRun[] | undefined) ?? []);
+  // 標題中可以插入檢視中的欄位（量值是全部資料的彙總，維度只有一個值時顯示它）與參數；Table Calculation 不行
+  const tokens = textTokens(editor.sheet, editor.fields, editor.catalog);
+  const save = (value: RichRun[]) => {
+    const blank = value.every((r) => r.text != null && !r.text.trim());
+    editor.apply((s: SheetIR) => ({ ...s, title: blank ? [] : value }));
     onClose();
   };
   return (
     <Modal title="編輯標題" onClose={onClose}>
-      {!plain && <p className="hint">目前的標題含有欄位或參數的值；儲存後改成這裡的文字。</p>}
-      <textarea aria-label="標題" rows={3} className="formula" value={text} placeholder={editor.sheet.name} onChange={(e) => setText(e.target.value)} />
-      <p className="hint">留空時以工作表名稱為標題。</p>
+      <RichTextEditor label="標題" value={runs} tokens={tokens} onChange={setRuns} rows={3} />
+      <p className="hint">留空時以工作表名稱為標題；「插入」可以放進欄位與參數的值。</p>
       <div className="dialog-actions">
-        <button type="button" className="primary" onClick={() => save(text)}>
+        <button type="button" className="primary" onClick={() => save(runs)}>
           確定
         </button>
-        <button type="button" onClick={() => save("")}>
+        <button type="button" onClick={() => save([])}>
           重設
         </button>
         <button type="button" onClick={onClose}>
@@ -304,6 +307,13 @@ interface AxisIR {
   reverse?: boolean;
   include_zero?: boolean;
   synchronized?: boolean;
+  /** 刻度：線性、對數或對稱對數 */
+  scale?: "linear" | "log" | "symlog";
+  /** 顯示主要刻度與刻度標籤 */
+  ticks?: boolean;
+  /** 主要刻度的固定間距與起點；null 為自動 */
+  tick_spacing?: number | null;
+  tick_origin?: number | null;
   [key: string]: unknown;
 }
 
@@ -319,6 +329,12 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
   const [reverse, setReverse] = useState(Boolean(current?.reverse));
   const [zero, setZero] = useState(current?.include_zero !== false);
   const [sync, setSync] = useState(Boolean(current?.synchronized));
+  const [scale, setScale] = useState<NonNullable<AxisIR["scale"]>>(current?.scale ?? "linear");
+  // 主要刻度：自動、固定的間距（與起點）或不顯示
+  const [tickMode, setTickMode] = useState<"auto" | "fixed" | "none">(current?.ticks === false ? "none" : current?.tick_spacing ? "fixed" : "auto");
+  const [spacing, setSpacing] = useState(current?.tick_spacing ? String(current.tick_spacing) : "");
+  const [origin, setOrigin] = useState(current?.tick_origin ? String(current.tick_origin) : "0");
+  const numeric = !isDate(editor.fields.get(use.field)) || isMeasure(use, editor.fields);
   const number = (text: string): Scalar => {
     if (!text.trim()) return null;
     const n = Number(text);
@@ -335,6 +351,10 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
       reverse,
       include_zero: zero,
       synchronized: sync,
+      scale: numeric ? scale : "linear",
+      ticks: tickMode !== "none",
+      tick_spacing: numeric && tickMode === "fixed" && Number(spacing) > 0 ? Number(spacing) : null,
+      tick_origin: numeric && tickMode === "fixed" && Number(spacing) > 0 && Number(origin) ? Number(origin) : null,
     };
     editor.apply((s: SheetIR) => {
       const list = (s.axes as AxisIR[] | undefined) ?? [];
@@ -372,6 +392,36 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
         <label className="inline">
           <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} /> 與前一個軸同步（雙軸）
         </label>
+        {numeric && (
+          <label className="inline" title="對數只能顯示正值；對稱對數可以有 0 與負值">
+            刻度
+            <select aria-label="座標軸的刻度" value={scale} onChange={(e) => setScale(e.target.value as NonNullable<AxisIR["scale"]>)}>
+              <option value="linear">線性</option>
+              <option value="log">對數</option>
+              <option value="symlog">對稱對數</option>
+            </select>
+          </label>
+        )}
+        <label className="inline">
+          主要刻度
+          <select aria-label="主要刻度" value={tickMode} onChange={(e) => setTickMode(e.target.value as "auto" | "fixed" | "none")}>
+            <option value="auto">自動</option>
+            {numeric && <option value="fixed">固定</option>}
+            <option value="none">無</option>
+          </select>
+        </label>
+        {numeric && tickMode === "fixed" && (
+          <div className="row">
+            <label>
+              刻度間距
+              <input aria-label="刻度間距" value={spacing} onChange={(e) => setSpacing(e.target.value)} />
+            </label>
+            <label>
+              刻度起點
+              <input aria-label="刻度起點" value={origin} onChange={(e) => setOrigin(e.target.value)} />
+            </label>
+          </div>
+        )}
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>
             確定
@@ -1373,6 +1423,10 @@ export function TooltipDialog({ card, onClose }: { card: Card; onClose: () => vo
   const editor = useEditor();
   const marks = cardMarks(editor.sheet, card);
   const [sheets, setSheets] = useState<TooltipSheetIR[]>(marks.tooltip_sheets ?? []);
+  // 自訂的工具提示文字與是否顯示工具提示
+  const [text, setText] = useState<RichRun[]>((marks.tooltip_text as RichRun[] | undefined) ?? []);
+  const [show, setShow] = useState(editor.sheet.tooltips !== false);
+  const tokens = textTokens(editor.sheet, editor.fields, editor.catalog, { tableCalcs: true });
   const [outline, setOutline] = useState<Outline | null>(null);
   useEffect(() => {
     editApi
@@ -1391,12 +1445,18 @@ export function TooltipDialog({ card, onClose }: { card: Card; onClose: () => vo
   const change = (index: number, update: Partial<TooltipSheetIR>) =>
     setSheets(sheets.map((s, i) => (i === index ? { ...s, ...update } : s)));
   const save = () => {
-    editor.apply((s) => updateCard(s, card, (m) => ({ ...m, tooltip_sheets: sheets })));
+    editor.apply((s) => ({ ...updateCard(s, card, (m) => ({ ...m, tooltip_sheets: sheets, tooltip_text: text })), tooltips: show }));
     onClose();
   };
   return (
-    <Modal title="工具提示中的工作表" onClose={onClose}>
+    <Modal title="工具提示" onClose={onClose}>
       <div className="tooltip-dialog">
+        <label className="inline">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> 顯示工具提示
+        </label>
+        <p className="hint">工具提示的文字：留空白時列出檢視中各欄位的名稱與值。</p>
+        <RichTextEditor label="工具提示的文字" value={text} tokens={tokens} onChange={setText} rows={4} />
+        <h4 className="dialog-subtitle">工具提示中的工作表</h4>
         {sheets.length === 0 && <p className="hint">滑過標記時，工具提示中顯示另一張工作表，以標記的值篩選。</p>}
         {sheets.map((sheet, i) => (
           <fieldset key={i} className="tooltip-sheet" data-tooltip-sheet={sheet.worksheet}>

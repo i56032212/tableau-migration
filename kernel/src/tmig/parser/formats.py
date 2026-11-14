@@ -666,6 +666,23 @@ def _range(target: Axis, item: etree._Element) -> None:
         target.include_zero = False
     if item.get("synchronized") == "true":
         target.synchronized = True
+    scale = item.get("scale")
+    if scale == "log" or scale == "symlog":
+        target.scale = scale
+    # 主要刻度：不顯示，或固定的間距與起點（數值；日期的間距帶單位，依自動）
+    if item.get("major-show") == "false":
+        target.ticks = False
+    spacing = _number(item.get("major-spacing"))
+    if spacing is not None and spacing > 0 and item.get("major-units") is None:
+        target.tick_spacing = spacing
+        target.tick_origin = _number(item.get("major-origin"))
+
+
+def _number(text: str | None) -> float | None:
+    try:
+        return float(text) if text is not None else None
+    except ValueError:
+        return None
 
 
 def _value(text: str | None) -> Scalar:

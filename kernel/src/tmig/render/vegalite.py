@@ -533,11 +533,51 @@ class _Builder:
                 scale["reverse"] = True
             if not temporal and (not setting.include_zero or start is not None):
                 scale["zero"] = False
+            if not temporal and setting.scale != "linear":
+                # 對數刻度不含 0（對稱對數可以）
+                scale["type"] = setting.scale
+                if setting.scale == "log":
+                    scale["zero"] = False
+            if not setting.ticks and setting.show:
+                axis.update(labels=False, ticks=False)
+            if not temporal and setting.tick_spacing is not None:
+                ticks = self.fixed_ticks(use, setting, start, end)
+                if ticks is not None:
+                    axis["values"] = ticks
             if scale:
                 encoding["scale"] = scale
         if axis:
             encoding["axis"] = axis
         return encoding
+
+    def fixed_ticks(self, use: FieldUse, setting: Axis, start: Any, end: Any) -> list[float] | None:
+        """固定間距的主要刻度（編輯座標軸的「主要刻度：固定」）：從起點（預設 0）起每隔一個間距一個，涵蓋
+        座標軸可能的範圍——固定的範圍，或資料的範圍（堆疊時是各標記的值相加，所以取正值、負值各自的總和為界；
+        超出座標軸的刻度不會畫出）。刻度太多（超過 1000 個）時依自動。"""
+        ch = self.channels.get(use_key(use))
+        step = setting.tick_spacing
+        if ch is None or step is None:
+            return None
+        numbers = [
+            float(v)
+            for v in (record.get(ch.name) for record in self.values)
+            if isinstance(v, int | float) and not isinstance(v, bool)
+        ]
+        # 堆疊時座標軸到各標記的值相加之處：正值、負值各自的總和為界
+        low = min(sum(v for v in numbers if v < 0), min(numbers, default=0.0))
+        high = max(sum(v for v in numbers if v > 0), max(numbers, default=0.0))
+        if setting.include_zero:
+            low, high = min(low, 0.0), max(high, 0.0)
+        if isinstance(start, int | float):
+            low = float(start)
+        if isinstance(end, int | float):
+            high = float(end)
+        origin = setting.tick_origin or 0.0
+        first = math.ceil((low - origin) / step - 1e-9)
+        last = math.floor((high - origin) / step + 1e-9)
+        if last < first or last - first > 1000:
+            return None
+        return [origin + n * step for n in range(first, last + 1)]
 
     def align_cells(
         self,
@@ -2053,6 +2093,9 @@ def build_spec(
     ):
         body = _small_multiples(builder, body, values, rows_dims, cols_dims, rows_meas, cols_meas)
 
+    tooltip = _tooltip_template(
+        ws, ir, channels, {p.id: p.value for p in ir.parameters} | (parameters or {})
+    )
     # 列數不含總計（與工作表的查詢、計算比對的筆數相同）
     marks_count = sum(1 for v in values if not v.get(TOTAL))
     spec: dict[str, Any] = {
@@ -2085,6 +2128,8 @@ def build_spec(
         spec["usermeta"]["background"] = spec["background"]
     if ws.text_color is not None:
         spec["usermeta"]["text_color"] = _css_color(ws.text_color)
+    if tooltip is not None:
+        spec["usermeta"]["tooltip"] = tooltip
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
     spec["usermeta"]["title_color"] = title_color or _title_color(ws)
     spec["usermeta"]["title_font"] = _title_font(ws)
@@ -3068,6 +3113,43 @@ def _text_lines(
             style = style.model_copy(update={"size": max(sizes)})
         result.append((line, style))
     return result
+
+
+def _tooltip_template(
+    ws: Worksheet, ir: IR, channels: dict[str, Channel], params: dict[str, Scalar]
+) -> dict[str, Any] | None:
+    """自訂的工具提示（usermeta.tooltip）；都是預設（顯示、列出各欄位的值）時為 None。
+
+    show：是否顯示工具提示。runs：自訂文字依序的各段——文字（text，參數已代入目前的值），或欄位的值
+    （column 為顯示文字的資料欄，value 為原始值的資料欄：Null 時不顯示，除非 Null 設有別名），各段帶著格式
+    （style）。檢視器以滑過的標記的資料組成工具提示。各標記卡的自訂文字不同時取第一個。"""
+    cards = [ws.marks, *(pane.marks for pane in ws.panes)]
+    text = next((marks.tooltip_text for marks in cards if marks.tooltip_text), [])
+    if ws.tooltips and not text:
+        return None
+    runs: list[dict[str, Any]] = []
+    for run in text:
+        item: dict[str, Any]
+        if run.text is not None:
+            item = {"text": run.text}
+        elif run.parameter is not None:
+            param = next((p for p in ir.parameters if p.id == run.parameter), None)
+            value = params.get(run.parameter)
+            if param is None or value is None:
+                continue
+            label = parameter_label(param, value)
+            item = {"text": label if label is not None else format_value(value, param.datatype)}
+        else:
+            assert run.use is not None
+            key = run.use.field if run.use.field in SPECIAL_FIELDS else use_key(run.use)
+            ch = channels.get(key)
+            if ch is None:
+                continue  # 不在檢視中的欄位沒有值
+            item = {"column": ch.label, "value": ch.name, "null": None in ch.aliases}
+        if run.style is not None:
+            item["style"] = run.style.model_dump(mode="json", exclude_none=True)
+        runs.append(item)
+    return {"show": ws.tooltips, "runs": runs}
 
 
 def compose_text(

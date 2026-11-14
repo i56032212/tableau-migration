@@ -713,9 +713,12 @@ export function MarksCard() {
         <button type="button" onClick={() => editor.openDialog({ kind: "colors", card })}>
           色彩…
         </button>
+        <button type="button" title="標記標籤：顯示與否、自訂文字、要標示的標記" onClick={() => editor.openDialog({ kind: "labels", card })}>
+          標籤…
+        </button>
         <button
           type="button"
-          title="工具提示中的工作表（Viz in Tooltip）"
+          title="工具提示的文字與格式、工具提示中的工作表（Viz in Tooltip）"
           onClick={() => editor.openDialog({ kind: "tooltip", card })}
         >
           工具提示…

@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { caseState, DashboardView } from "../Dashboard";
 import type { Button, Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
 import { ActionsDialog } from "./ActionsDialog";
+import { Modal } from "../Server";
+import { type RichRun, RichTextEditor, type RichToken, plainText } from "./RichText";
 import { editApi, type Outline } from "./api";
 import {
   DEVICE_NAMES,
@@ -160,6 +162,8 @@ export function DashboardEditor({
   const [floating, setFloating] = useState(false);
   const [controlSheet, setControlSheet] = useState<string>("");
   const [actionsOpen, setActionsOpen] = useState(false);
+  // 編輯格式文字的文字物件（區塊 id）
+  const [textZone, setTextZone] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [view, setView] = useState(() => caseState(ir, undefined));
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -293,6 +297,51 @@ export function DashboardEditor({
     if (z.kind === "worksheet" && z.worksheet) sheetsOnBoard.add(z.worksheet);
   });
   const controlTarget = outline.worksheets.find((w) => w.id === (controlSheet || [...sheetsOnBoard][0]));
+  /** 「當作篩選器使用」自動產生的篩選動作（這個 dashboard 上、來源只有這張工作表）。 */
+  const generatedFilter = (sheet: string) =>
+    (outline?.actions ?? []).find(
+      (a) => a.kind === "filter" && a.dashboard === dashboard!.id && a.sources.length === 1 && a.sources[0] === sheet && a.caption.endsWith(GENERATED),
+    );
+  /** dashboard 上其他使用同一個資料源的工作表。 */
+  const filterTargets = (sheet: string): string[] => {
+    const source = outline?.worksheets.find((w) => w.id === sheet)?.datasource;
+    const found: string[] = [];
+    walkZones(dashboard!.zones, (z) => {
+      const target = z.kind === "worksheet" ? z.worksheet : null;
+      if (target && target !== sheet && !found.includes(target) && outline?.worksheets.find((w) => w.id === target)?.datasource === source) {
+        found.push(target);
+      }
+    });
+    return found;
+  };
+  const useAsFilter = async (sheet: string, on: boolean) => {
+    try {
+      const existing = generatedFilter(sheet);
+      if (on && !existing) {
+        const name = outline?.worksheets.find((w) => w.id === sheet)?.name ?? sheet;
+        await editApi.saveAction(workbook, {
+          caption: `篩選：${name}${GENERATED}`,
+          kind: "filter",
+          activation: "select",
+          dashboard: dashboard!.id,
+          sources: [sheet],
+          targets: filterTargets(sheet),
+          clearing: "show_all",
+          fields: [],
+        });
+      } else if (!on && existing) {
+        await editApi.removeAction(workbook, existing.id);
+      }
+      await reloadOutline();
+      onChanged();
+    } catch (e) {
+      notify((e as Error).message, "error");
+    }
+  };
+
+  // 文字物件中可以插入的參數
+  const parameterTokens: RichToken[] = (outline?.parameters ?? []).map((p) => ({ label: `參數.${p.caption}`, run: { parameter: p.id } }));
+
   const zoneProps = selectedZone ? renderZoneProps(selectedZone.zone, selectedZone.parent) : null;
 
   /** 顯示／隱藏按鈕可以切換的區塊：這個 dashboard 上按鈕以外的區塊（最外層的容器除外）。 */
@@ -349,16 +398,36 @@ export function DashboardEditor({
             <input type="checkbox" checked={zone.show_title !== false} onChange={(e) => set({ show_title: e.target.checked })} /> 顯示標題
           </label>
         )}
+        {zone.kind === "worksheet" && zone.worksheet && (
+          <label className="inline" title="點選這張工作表的標記時，篩選 dashboard 上其他使用同一個資料源的工作表（自動產生一個篩選動作）">
+            <input
+              type="checkbox"
+              aria-label="當作篩選器使用"
+              checked={Boolean(generatedFilter(zone.worksheet))}
+              disabled={!generatedFilter(zone.worksheet) && filterTargets(zone.worksheet).length === 0}
+              onChange={(e) => void useAsFilter(zone.worksheet!, e.target.checked)}
+            />{" "}
+            當作篩選器使用
+          </label>
+        )}
         {zone.kind === "text" && (
-          <textarea
-            aria-label="文字"
-            rows={4}
-            className="formula"
-            defaultValue={zone.content && zone.content.length > 0 ? zone.content.map((r) => r.text ?? "").join("") : (zone.text ?? "")}
-            onBlur={(e) => {
-              if (e.target.value !== zone.text) set({ text: e.target.value, content: [] });
-            }}
-          />
+          <>
+            <textarea
+              aria-label="文字"
+              rows={4}
+              className="formula"
+              key={JSON.stringify(zone.content ?? zone.text)}
+              defaultValue={zone.content && zone.content.length > 0 ? plainText(zone.content, parameterTokens) : (zone.text ?? "")}
+              readOnly={(zone.content ?? []).some((r) => r.parameter || r.style)}
+              title={(zone.content ?? []).some((r) => r.parameter || r.style) ? "含格式或參數的值：以「編輯文字…」修改" : undefined}
+              onBlur={(e) => {
+                if (!e.target.readOnly && e.target.value !== zone.text) set({ text: e.target.value, content: [] });
+              }}
+            />
+            <button type="button" title="粗體、字級、顏色、對齊與參數的值" onClick={() => setTextZone(zone.id)}>
+              編輯文字…
+            </button>
+          </>
         )}
         {zone.kind === "image" && (
           <label className="inline">
@@ -1132,6 +1201,19 @@ export function DashboardEditor({
           {notice.text}
         </div>
       )}
+      {textZone && (
+        <ZoneTextDialog
+          zone={textZone}
+          dashboard={dashboard}
+          tokens={parameterTokens}
+          onClose={() => setTextZone(null)}
+          onSave={(runs) => {
+            // text 是沒有格式的純文字（參數以 <名稱> 表示），content 是各段的格式與參數
+            change(textZone, (z) => ({ ...z, text: plainText(runs, parameterTokens) || " ", content: runs }));
+            setTextZone(null);
+          }}
+        />
+      )}
       {actionsOpen && (
         <ActionsDialog
           workbook={workbook}
@@ -1145,5 +1227,45 @@ export function DashboardEditor({
         />
       )}
     </div>
+  );
+}
+
+/** 「當作篩選器使用」產生的篩選動作名稱的結尾（Tableau 為「Filter N (generated)」）。 */
+const GENERATED = "（自動產生）";
+
+/** 文字物件的格式文字（Tableau 的「編輯文字」）：粗體、斜體、底線、字級、顏色、對齊，可以插入參數的值。 */
+function ZoneTextDialog({
+  zone,
+  dashboard,
+  tokens,
+  onClose,
+  onSave,
+}: {
+  zone: string;
+  dashboard: Dashboard;
+  tokens: RichToken[];
+  onClose: () => void;
+  onSave: (runs: RichRun[]) => void;
+}) {
+  let found: Zone | null = null;
+  walkZones(dashboard.zones, (z) => {
+    if (z.id === zone) found = z;
+  });
+  const current = found as Zone | null;
+  const [runs, setRuns] = useState<RichRun[]>(() =>
+    current?.content && current.content.length > 0 ? (current.content as RichRun[]) : current?.text ? [{ text: current.text }] : [],
+  );
+  return (
+    <Modal title="編輯文字" onClose={onClose}>
+      <RichTextEditor label="文字物件的內容" value={runs} tokens={tokens} onChange={setRuns} rows={6} />
+      <div className="dialog-actions">
+        <button type="button" className="primary" onClick={() => onSave(runs)}>
+          確定
+        </button>
+        <button type="button" onClick={onClose}>
+          取消
+        </button>
+      </div>
+    </Modal>
   );
 }

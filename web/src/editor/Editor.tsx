@@ -37,7 +37,7 @@ import {
   TrendDialog,
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
-import { AnnotationsDialog, ApplyFilterDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
+import { AnnotationsDialog, ApplyFilterDialog, BlendsDialog, LabelDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
 import {
   type Card,
   type Catalog,
@@ -738,6 +738,8 @@ export function Editor({
       {dialog?.kind === "cluster" && <ClusterDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "colors" && <ColorsDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "tooltip" && <TooltipDialog card={dialog.card} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "labels" && <LabelDialog card={dialog.card} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "blends" && <BlendsDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "hierarchy" && (
         <HierarchyDialog
           datasource={dialog.datasource}

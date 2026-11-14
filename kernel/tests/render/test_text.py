@@ -133,6 +133,80 @@ def test_sheet_formats_labels_and_title_are_parsed(tmp_path: Path) -> None:
     assert ws.title == [TextRun(parameter=region_pick), TextRun(text=" sales")]
 
 
+def test_custom_tooltip_text(tmp_path: Path, db: Path) -> None:
+    """自訂的工具提示（<customized-tooltip>）：文字、欄位值與參數值各段帶著格式；工具提示中的工作表
+    （<Sheet …>）不算文字；不在檢視中的欄位不顯示。<tooltip-style tooltip-mode='none'> 為不顯示工具提示。"""
+    tooltip = (
+        "<customized-tooltip><formatted-text>"
+        f"<run bold='true'>&lt;{ref('none:Region:nk')}&gt;</run>"
+        "<run>&#198;&#10;Sales: </run>"
+        f"<run fontcolor='#ff0000'>&lt;{ref('sum:Sales:qk')}&gt;</run>"
+        f"<run> (&lt;[Parameters].[Parameter 2]&gt;) &lt;{ref('sum:Profit:qk')}&gt;</run>"
+        "<run>&#198;&#10;&lt;Sheet name=&quot;Other&quot; maxwidth=&quot;300&quot; "
+        "maxheight=&quot;300&quot; filter=&quot;&lt;All Fields&gt;&quot;&gt;</run>"
+        "</formatted-text></customized-tooltip>"
+    )
+    sheet = worksheet(
+        "Tips",
+        [REGION, SALES, PROFIT],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        pane_extra=tooltip,
+    )
+    other = worksheet(
+        "Other", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+    )
+    ir = parse(tmp_path, sheet + other)
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    region, sales = ws.rows[0], ws.columns[0]
+    region_pick = next(p.id for p in ir.parameters if p.caption == "Region Pick")
+    assert ws.tooltips is True
+    # SUM(Profit) 不在檢視中：不顯示；工具提示中的工作表另外記下
+    assert ws.marks.tooltip_text == [
+        TextRun(use=region, style=TextStyle(bold=True)),
+        TextRun(text="\nSales: "),
+        TextRun(use=sales, style=TextStyle(color="#ff0000")),
+        TextRun(text=" ("),
+        TextRun(parameter=region_pick),
+        TextRun(text=") "),
+    ]
+    assert [t.worksheet for t in ws.marks.tooltip_sheets] == [ir.worksheets[1].id]
+    assert any("自訂工具提示用到不在檢視中的欄位" in i.reason for i in ir.ignored)
+    spec = render(ir, db).spec
+    template = spec["usermeta"]["tooltip"]
+    assert template["show"] is True
+    assert [r.get("text") for r in template["runs"]] == [
+        None,
+        "\nSales: ",
+        None,
+        " (",
+        "East",
+        ") ",
+    ]
+    assert template["runs"][0]["style"] == {"bold": True}
+    # value 是原始值的資料欄（Null 時不顯示），column 是顯示文字的資料欄
+    assert spec["usermeta"]["dimensions"][template["runs"][0]["value"]] == "f_region"
+    assert spec["usermeta"]["measures"][template["runs"][2]["value"]] == "sum(f_sales)"
+    assert template["runs"][2]["style"] == {"color": "#ff0000"}
+    # 顯示文字的資料欄在資料中
+    values = spec["data"]["values"]
+    assert all(r["column"] in values[0] for r in template["runs"] if "column" in r)
+    # 參數的值依目前的狀態
+    changed = render(ir, db, {region_pick: "West"}).spec["usermeta"]["tooltip"]
+    assert [r.get("text") for r in changed["runs"]][4] == "West"
+
+    # 不顯示工具提示；沒有自訂文字也沒有關閉時不寫 usermeta.tooltip
+    hidden = sheet.replace(tooltip, "").replace(
+        "</table>", "<tooltip-style tooltip-mode='none' /></table>"
+    )
+    ir = parse(tmp_path, hidden)
+    assert ir.unsupported == [] and ir.worksheets[0].tooltips is False
+    assert render(ir, db).spec["usermeta"]["tooltip"] == {"show": False, "runs": []}
+    ir = parse(tmp_path, sheet.replace(tooltip, ""))
+    assert "tooltip" not in render(ir, db).spec["usermeta"]
+
+
 def test_sheet_name_title_is_the_default(tmp_path: Path) -> None:
     sheet = worksheet(
         "Sales", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
