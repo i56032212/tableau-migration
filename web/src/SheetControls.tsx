@@ -1,6 +1,6 @@
 // 工作表上顯示的控制項（Tableau 的「顯示篩選」「顯示參數」）：單獨檢視工作表時顯示在檢視的旁邊。
 
-import { FilterControl, ParameterControl } from "./Controls";
+import { FilterControl, ParameterControl, SetControl } from "./Controls";
 import { applyFilter } from "./Dashboard";
 import { stateFor, type ViewState } from "./state";
 import type { IR, Worksheet, Zone } from "./types";
@@ -34,6 +34,19 @@ export function SheetControls({
               control={control.control as Zone["control"]}
               value={value}
               onChange={(v) => onView({ ...view, parameters: { ...view.parameters, [parameter.id]: v } })}
+            />
+          );
+        }
+        if (control.kind === "set") {
+          const field = control.field?.field ?? "";
+          return (
+            <SetControl
+              key={`s${field}`}
+              ir={ir}
+              workbook={workbook}
+              field={field}
+              value={view.sets?.[field]}
+              onChange={(value) => onView({ ...view, sets: { ...(view.sets ?? {}), [field]: value } })}
             />
           );
         }

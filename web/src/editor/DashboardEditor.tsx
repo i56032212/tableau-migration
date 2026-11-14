@@ -1121,6 +1121,16 @@ export function DashboardEditor({
               參數：{p.caption}
             </button>
           ))}
+          {(outline.sets ?? []).map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              title="集合控制項：勾選的值是集合的成員"
+              onClick={() => add(makeZone("set", { field: { field: s.id, agg: null, date: null, continuous: false, table_calc: null } }, floating), { w: 220, h: 160 })}
+            >
+              集合：{s.caption}
+            </button>
+          ))}
         </div>
         {controlTarget && controlTarget.filters.length === 0 && <p className="hint">這張工作表沒有篩選；先在工作表上加入篩選。</p>}
         <div className="pane-section">版面配置</div>

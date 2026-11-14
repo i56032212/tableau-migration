@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { fileUrl } from "./api";
 import { isDesktop } from "./desktop";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
-import { FilterControl, HighlighterControl, ParameterControl } from "./Controls";
+import { FilterControl, HighlighterControl, ParameterControl, SetControl } from "./Controls";
 import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
 import { deviceLayout, useDevice, withDeviceLayout } from "./device";
 import { PageControl, pagesOf } from "./PageControl";
@@ -504,6 +504,16 @@ function ZoneContent({
       return <Legend response={renders[zone.worksheet!]} kind={zone.legend} />;
     case "page":
       return <PageControl workbook={workbook} worksheet={zone.worksheet!} {...pagesOf(ir, zone.worksheet!)} view={view} onView={onView} />;
+    case "set":
+      return (
+        <SetControl
+          ir={ir}
+          workbook={workbook}
+          field={zone.field!.field}
+          value={view.sets?.[zone.field!.field]}
+          onChange={(value) => onView({ ...view, sets: { ...(view.sets ?? {}), [zone.field!.field]: value } })}
+        />
+      );
     case "highlighter":
       return (
         <HighlighterControl

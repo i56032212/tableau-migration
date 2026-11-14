@@ -672,11 +672,18 @@ def _sync_controls(ir: IR, sheet: Worksheet) -> Worksheet:
         return sheet
     filtered = {f.field.field for f in sheet.filters if not isinstance(f, TupleFilter)}
     parameters = {p.id for p in ir.parameters}
+    sets = {
+        f.id
+        for ds in ir.datasources
+        for f in ds.fields
+        if f.set is not None and f.set.rule.kind == "members" and len(f.set.levels) == 1
+    }
     kept = [
         c
         for c in sheet.controls
         if (c.kind == "filter" and c.field is not None and c.field.field in filtered)
         or (c.kind == "parameter" and c.parameter in parameters)
+        or (c.kind == "set" and c.field is not None and c.field.field in sets)
     ]
     return (
         sheet if len(kept) == len(sheet.controls) else sheet.model_copy(update={"controls": kept})
@@ -1147,6 +1154,13 @@ def outline(ir: IR) -> dict[str, Any]:
         "parameters": [
             {"id": p.id, "caption": p.caption, "datatype": p.datatype, "allowed": p.allowed.kind}
             for p in ir.parameters
+        ],
+        # 可以放集合控制項的集合：固定成員、單一維度
+        "sets": [
+            {"id": f.id, "caption": f.caption}
+            for ds in ir.datasources
+            for f in ds.fields
+            if f.set is not None and f.set.rule.kind == "members" and len(f.set.levels) == 1
         ],
         "actions": [a.model_dump(mode="json") for a in ir.actions],
         "images": images,

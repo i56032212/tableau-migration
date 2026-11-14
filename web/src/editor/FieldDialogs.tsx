@@ -109,6 +109,25 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
       label: "編輯集合…",
       action: () => editor.openDialog({ kind: "set", datasource, levels: set.levels.map((l) => l.field), field: field.id }),
     });
+    // 顯示集合：單獨檢視工作表時，檢視旁邊顯示集合控制項（勾選的值是集合的成員）
+    if (set.rule.kind === "members" && set.levels.length === 1) {
+      const controls = (editor.sheet.controls as { kind: string; field: FieldUse | null }[] | undefined) ?? [];
+      const shown = controls.some((c) => c.kind === "set" && c.field?.field === field.id);
+      items.push({
+        label: "顯示集合",
+        checked: shown,
+        action: () =>
+          editor.apply((s) => {
+            const current = (s.controls as { kind: string; field: FieldUse | null }[] | undefined) ?? [];
+            return {
+              ...s,
+              controls: shown
+                ? current.filter((c) => !(c.kind === "set" && c.field?.field === field.id))
+                : [...current, { kind: "set", field: { field: field.id, agg: null, date: null, continuous: false, table_calc: null }, parameter: null, control: "multi_list", relevant: false }],
+            };
+          }),
+      });
+    }
     // 合併集合：與同一個維度上的另一個集合合併成新的集合
     items.push({
       label: "建立合併集合…",

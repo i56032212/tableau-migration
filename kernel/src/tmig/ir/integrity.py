@@ -574,6 +574,19 @@ def check_references(ir: IR) -> list[str]:
                         errors.append(f"{where}.button：區塊「{target}」不在此 dashboard 上")
             if zone.parameter is not None and zone.parameter not in params:
                 errors.append(f"{where}：參數「{zone.parameter}」不存在")
+            if zone.kind == "set" and zone.field is not None:
+                # 集合控制項：固定成員、單一層級的集合
+                target = next(
+                    (f for ds in ir.datasources for f in ds.fields if f.id == zone.field.field),
+                    None,
+                )
+                if (
+                    target is None
+                    or target.set is None
+                    or target.set.rule.kind != "members"
+                    or len(target.set.levels) != 1
+                ):
+                    errors.append(f"{where}：集合控制項的欄位必須是固定成員、單一維度的集合")
             if zone.worksheet is None:
                 continue
             sheet = sheets.get(zone.worksheet)

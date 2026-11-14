@@ -50,6 +50,8 @@ export interface Outline {
   dashboards: { id: string; name: string }[];
   stories: { id: string; name: string }[];
   parameters: { id: string; caption: string; datatype: string; allowed: "all" | "list" | "range" }[];
+  /** 可以放集合控制項的集合（固定成員、單一維度） */
+  sets?: { id: string; caption: string }[];
   actions: Action[];
   images: string[];
 }

@@ -334,6 +334,24 @@ def controlled_fields(ir: IR) -> set[str]:
         for control in ws.controls
         if control.kind == "filter" and control.field is not None
     }
+    # 集合控制項列出集合所在維度的值
+    set_fields = {
+        zone.field.field
+        for dashboard in ir.dashboards
+        for zone in iter_zones(dashboard.zones)
+        if zone.kind == "set" and zone.field is not None
+    } | {
+        control.field.field
+        for ws in ir.worksheets
+        for control in ws.controls
+        if control.kind == "set" and control.field is not None
+    }
+    found |= {
+        f.set.levels[0].field
+        for ds in ir.datasources
+        for f in ds.fields
+        if f.id in set_fields and f.set is not None
+    }
     return found | {ws.pages.field for ws in ir.worksheets if ws.pages is not None}
 
 

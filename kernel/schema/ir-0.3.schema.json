@@ -5802,7 +5802,8 @@
         "kind": {
           "enum": [
             "filter",
-            "parameter"
+            "parameter",
+            "set"
           ],
           "title": "Kind",
           "type": "string"
@@ -5817,7 +5818,7 @@
             }
           ],
           "default": null,
-          "description": "filter：篩選的欄位（工作表上要有這個篩選）"
+          "description": "filter：篩選的欄位（工作表上要有這個篩選）；set：集合欄位（集合控制項，改變集合的成員）"
         },
         "parameter": {
           "anyOf": [
@@ -8136,7 +8137,8 @@
             "title",
             "blank",
             "button",
-            "web"
+            "web",
+            "set"
           ],
           "title": "Kind",
           "type": "string"

@@ -1832,9 +1832,10 @@ class SheetControl(IRModel):
     """工作表上顯示的控制項（Tableau 的「顯示篩選」「顯示參數」，工作表視窗的 <card>）：單獨檢視工作表時
     顯示在檢視的旁邊；dashboard 上的控制項是各自的區塊（Zone）。"""
 
-    kind: Literal["filter", "parameter"]
+    kind: Literal["filter", "parameter", "set"]
     field: FieldUse | None = Field(
-        default=None, description="filter：篩選的欄位（工作表上要有這個篩選）"
+        default=None,
+        description="filter：篩選的欄位（工作表上要有這個篩選）；set：集合欄位（集合控制項，改變集合的成員）",
     )
     parameter: Id | None = Field(default=None, description="parameter：參數")
     control: ControlType
@@ -1846,8 +1847,8 @@ class SheetControl(IRModel):
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        if self.kind == "filter" and (self.field is None or self.parameter is not None):
-            raise ValueError("篩選控制項要有 field、不能有 parameter")
+        if self.kind in ("filter", "set") and (self.field is None or self.parameter is not None):
+            raise ValueError("篩選與集合控制項要有 field、不能有 parameter")
         if self.kind == "parameter" and (self.parameter is None or self.field is not None):
             raise ValueError("參數控制項要有 parameter、不能有 field")
         return self
@@ -2052,6 +2053,7 @@ ZoneKind = Literal[
     "blank",
     "button",
     "web",
+    "set",
 ]
 
 _ZONE_ATTRS = (
@@ -2079,6 +2081,8 @@ _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {
     "blank": (),
     "button": ("button",),
     "web": (),
+    # 集合控制項（Tableau 2020.2 的「顯示集合」）：field 為集合欄位
+    "set": ("field",),
 }
 
 

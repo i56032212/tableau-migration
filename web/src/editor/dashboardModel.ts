@@ -304,6 +304,8 @@ export function zoneLabel(zone: Zone, names: Map<string, string>): string {
       return `頁面：${names.get(zone.worksheet ?? "") ?? ""}`;
     case "highlighter":
       return `醒目提示：${names.get(zone.worksheet ?? "") ?? ""}`;
+    case "set":
+      return `集合：${names.get(`set:${zone.field?.field ?? ""}`) ?? zone.field?.field ?? ""}`;
     case "text":
       return `文字：${(zone.text ?? "").slice(0, 16)}`;
     case "image":

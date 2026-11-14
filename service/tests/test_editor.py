@@ -1172,3 +1172,87 @@ def test_extract_settings(client: TestClient, tmp_path: Path) -> None:
     back = client.post(f"{base}/extract/mode", json={"mode": "live"})
     assert back.status_code == 200 and back.json()["mode"] == "live"
     assert len(column(render(client, "ws_sales_by_region")["table"], "f_region")) == 4
+
+
+def test_set_controls(client: TestClient) -> None:
+    """集合控制項：工作表上的控制項（顯示集合）與 dashboard 的集合區塊；集合所在維度的值可以列出，
+    檢視器改變成員後 In／Out 跟著改變。"""
+    base = "/api/edit/demo/datasources/ds_orders"
+    made = client.post(
+        f"{base}/sets",
+        json={
+            "levels": ["f_region"],
+            "caption": "My Regions",
+            "rule": {"kind": "members", "mode": "include", "members": [["East"]]},
+        },
+    )
+    assert made.status_code == 200, made.text
+    set_id = made.json()["field"]["id"]
+    outline = client.get("/api/edit/demo/outline").json()
+    assert {"id": set_id, "caption": "My Regions"} in outline["sets"]
+
+    ws = blank(
+        client,
+        rows=[use("f_region"), use(set_id)],
+        columns=[use("f_sales", agg="sum", continuous=True)],
+    )
+    ws["controls"] = [
+        {
+            "kind": "set",
+            "field": use(set_id),
+            "parameter": None,
+            "control": "multi_list",
+            "relevant": False,
+        },
+        {
+            "kind": "set",
+            "field": use("f_region"),
+            "parameter": None,
+            "control": "multi_list",
+            "relevant": False,
+        },
+    ]
+    saved = put(client, ws)
+    assert [c["field"]["field"] for c in saved["controls"]] == [set_id]  # 不是集合的欄位移除
+
+    def inside(state: dict[str, Any] | None = None) -> dict[str, str]:
+        response = client.post(
+            "/api/workbooks/demo/worksheets/ws_sales_by_region/render", json=state or {}
+        )
+        assert response.status_code == 200, response.text
+        table = response.json()["table"]
+        return dict(zip(column(table, "f_region"), column(table, set_id), strict=True))
+
+    assert inside() == {"Central": "false", "East": "true", "South": "false", "West": "false"}
+    # 集合所在維度的值可以列出（控制項的可選值）
+    domain = client.post("/api/workbooks/demo/fields/f_region/domain")
+    assert domain.status_code == 200 and domain.json()["values"] == [
+        "Central",
+        "East",
+        "South",
+        "West",
+    ]
+    # 檢視器改變成員：South、West
+    changed = inside({"sets": {set_id: {"mode": "include", "members": [["South"], ["West"]]}}})
+    assert changed == {"Central": "false", "East": "false", "South": "true", "West": "true"}
+
+    # dashboard 的集合區塊
+    board = client.get("/api/edit/demo/dashboards/db_ee909b0c").json()["dashboard"]
+    zone = {
+        "id": "z900",
+        "kind": "set",
+        "x": 10,
+        "y": 10,
+        "w": 200,
+        "h": 160,
+        "field": use(set_id),
+        "children": [],
+        "source_ref": "/editor",
+    }
+    board["zones"].append(zone)
+    stored = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
+    assert stored.status_code == 200, stored.text
+    bad = {**zone, "id": "z901", "field": use("f_region")}
+    board["zones"].append(bad)
+    refused = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
+    assert refused.status_code == 422 and "集合控制項" in refused.json()["detail"]

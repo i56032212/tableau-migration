@@ -24,7 +24,7 @@ export interface MemberAlias {
 /** 集合的定義（只列出檢視器用到的部分：層級與固定成員） */
 export interface FieldSet {
   levels: FieldUse[];
-  rule: { kind: "members" | "top_n" | "condition"; mode?: "include" | "exclude" | "all"; members?: Scalar[][] };
+  rule: { kind: "members" | "top_n" | "condition" | "combined"; mode?: "include" | "exclude" | "all"; members?: Scalar[][] };
 }
 
 export interface DataField {
@@ -192,7 +192,9 @@ export type ZoneKind =
   | "title"
   | "blank"
   | "button"
-  | "web";
+  | "web"
+  /** 集合控制項（顯示集合）：field 為集合欄位 */
+  | "set";
 
 /** dashboard 按鈕：導覽、顯示或隱藏區塊、匯出。 */
 export interface Button {
@@ -233,7 +235,7 @@ export interface ZoneTextRun {
 
 /** 工作表上顯示的控制項：單獨檢視工作表時顯示在檢視的旁邊。 */
 export interface SheetControl {
-  kind: "filter" | "parameter";
+  kind: "filter" | "parameter" | "set";
   field?: FieldUse | null;
   parameter?: string | null;
   control: string;

@@ -11,7 +11,7 @@ import {
   parameterLabel,
   selectedValues,
 } from "./state";
-import type { FilterValue, IR, Parameter, QueryState, Scalar, Zone } from "./types";
+import type { FilterValue, IR, Parameter, QueryState, Scalar, SetValue, Zone } from "./types";
 
 interface FilterProps {
   ir: IR;
@@ -253,6 +253,64 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
           })}
         </div>
       )}
+    </fieldset>
+  );
+}
+
+/**
+ * 集合控制項（Tableau 2020.2 的「顯示集合」）：列出集合所在維度的值，勾選的是集合的成員；改變後使用這個集合的
+ * 工作表（In／Out、依集合的計算）跟著改變。只支援固定成員、單一維度的集合。
+ */
+export function SetControl({
+  ir,
+  workbook,
+  field,
+  value,
+  onChange,
+}: {
+  ir: IR;
+  workbook: string;
+  /** 集合欄位的 id */
+  field: string;
+  /** 目前的成員（集合動作或這個控制項改過的）；沒有時為集合原本的成員 */
+  value: SetValue | undefined;
+  onChange: (value: SetValue) => void;
+}) {
+  const data = ir.datasources.flatMap((d) => d.fields).find((f) => f.id === field);
+  const level = data?.set?.levels[0];
+  const key = level ? fieldKey(level) : "";
+  const [domain, setDomain] = useState<Scalar[]>([]);
+  useEffect(() => {
+    if (!key) return;
+    let cancelled = false;
+    api
+      .domain(workbook, key, "values")
+      .then((d) => !cancelled && setDomain(d.kind === "values" ? d.values : []))
+      .catch(() => !cancelled && setDomain([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [workbook, key]);
+  if (!data?.set || !level) return <div className="placeholder unsupported">找不到集合 {field}</div>;
+  const rule = data.set.rule;
+  const current: SetValue = value ?? { mode: rule.mode === "exclude" ? "exclude" : "include", members: rule.members ?? [] };
+  const listed = new Set(current.members.map((m) => JSON.stringify(m[0] ?? null)));
+  const inSet = (v: Scalar) => listed.has(JSON.stringify(v)) !== (current.mode === "exclude");
+  const toggle = (v: Scalar, on: boolean) => {
+    const members = domain.filter((d) => (JSON.stringify(d) === JSON.stringify(v) ? on : inSet(d))).map((d) => [d]);
+    onChange({ mode: "include", members });
+  };
+  return (
+    <fieldset className="control" data-control="set" data-set={field}>
+      <legend>{data.caption}</legend>
+      <div className="options">
+        {domain.map((v) => (
+          <label key={JSON.stringify(v)}>
+            <input type="checkbox" checked={inSet(v)} onChange={(e) => toggle(v, e.target.checked)} />
+            {memberLabel(ir, level, v)}
+          </label>
+        ))}
+      </div>
     </fieldset>
   );
 }

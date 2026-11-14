@@ -190,6 +190,36 @@ def test_field_menu(engine: str, tmp_path: Path) -> None:
             "right": ids["West Set"],
             "op": "union",
         }
+        # 顯示集合：單獨檢視工作表時有集合控制項，勾選 West 後查詢帶著新的成員
+        menu("Region Set", "顯示集合")
+        page.wait_for_selector('.editor[data-saving="false"]')
+        for caption in ("Region", "Region Set"):
+            pane.locator(f'li[data-field="{ids[caption]}"]').dblclick()
+            page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_timeout(300)
+        sheet = call(engine, f"/api/edit/{workbook}/worksheets/ws_1")["worksheet"]
+        assert [(c["kind"], c["field"]["field"]) for c in sheet["controls"]] == [
+            ("set", ids["Region Set"])
+        ]
+        page.goto(f"{engine}/w/{workbook}/s/ws_1")
+        control = page.locator('.single-sheet .sheet-controls fieldset[data-control="set"]')
+        control.locator("label").nth(2).wait_for()
+        boxes = control.locator("input[type=checkbox]")
+        # East（別名「東部」）、South、West：集合的成員是 East
+        assert [boxes.nth(i).is_checked() for i in range(3)] == [True, False, False]
+        with page.expect_response(
+            lambda r: r.url.endswith("/worksheets/ws_1/render") and r.request.method == "POST"
+        ) as rendered:
+            control.locator("label", has_text="West").locator("input").check()
+        posted = rendered.value.request.post_data_json
+        assert posted is not None
+        assert posted["sets"][ids["Region Set"]] == {
+            "mode": "include",
+            "members": [["East"], ["West"]],
+        }
+        assert rendered.value.ok
+        page.goto(f"{engine}/w/{workbook}/edit/ws_1")
+        page.wait_for_selector('.editor[data-saving="false"]')
         # 重新命名、隱藏
         menu("Quantity", "重新命名…")
         dialog = page.get_by_role("dialog")
