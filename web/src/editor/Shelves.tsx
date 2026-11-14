@@ -555,6 +555,15 @@ function tupleLabel(filter: FilterIR, fields: Map<string, CatalogField>): string
   return `${filter.mode === "exclude" ? "排除" : "包含"}（${names}）`;
 }
 
+/** 工作表上顯示的控制項（顯示篩選、顯示參數）。 */
+export interface SheetControlIR {
+  kind: "filter" | "parameter";
+  field: FieldUse | null;
+  parameter: string | null;
+  control: string;
+  relevant: boolean;
+}
+
 /** 篩選架：每個篩選一個膠囊（編輯、加入至內容、移除）。 */
 export function FiltersShelf() {
   const editor = useEditor();
@@ -564,6 +573,7 @@ export function FiltersShelf() {
     if (filter.kind === "tuple") return [{ label: "移除", action: () => apply((s) => removeUse(s, "filters", index)) }];
     const context = filter.stage === "context";
     const canContext = filter.stage === "dimension" || filter.stage === "top_n" || context;
+    const shown = ((sheet.controls as SheetControlIR[] | undefined) ?? []).find((c) => c.kind === "filter" && sameUse(c.field, filter.field));
     return [
       { label: "編輯篩選…", action: () => editor.openFilter({ use: filter.field, index }) },
       {
@@ -579,6 +589,33 @@ export function FiltersShelf() {
       },
       // 選取的工作表、使用此資料源的所有工作表（同一個篩選，檢視器中一起變更）
       { label: "套用到工作表…", checked: Boolean(filter.group), action: () => editor.openDialog({ kind: "apply-filter", filter: filter.id }) },
+      // 顯示篩選：單獨檢視工作表時，檢視旁邊顯示這個篩選的控制項
+      {
+        label: "顯示篩選",
+        checked: shown !== undefined,
+        action: () =>
+          apply((s) => {
+            const controls = (s.controls as SheetControlIR[] | undefined) ?? [];
+            if (shown) return { ...s, controls: controls.filter((c) => c !== shown && !(c.kind === "filter" && sameUse(c.field, filter.field))) };
+            const date = ["date", "datetime"].includes(fields.get(filter.field.field)?.datatype ?? "") && !filter.field.date;
+            const control =
+              filter.kind === "range" ? (date ? "date_range" : "range_slider") : filter.kind === "relative_date" ? "relative_date" : filter.kind === "condition" || filter.kind === "top_n" ? "condition" : "multi_list";
+            return { ...s, controls: [...controls, { kind: "filter", field: filter.field, parameter: null, control, relevant: false }] };
+          }),
+      },
+      ...(shown && filter.kind === "categorical"
+        ? [
+            {
+              label: "只顯示相關的值",
+              checked: shown.relevant === true,
+              action: () =>
+                apply((s) => ({
+                  ...s,
+                  controls: ((s.controls as SheetControlIR[] | undefined) ?? []).map((c) => (c.kind === "filter" && sameUse(c.field, filter.field) ? { ...c, relevant: !c.relevant } : c)),
+                })),
+            },
+          ]
+        : []),
       SEPARATOR,
       { label: "移除", action: () => apply((s) => removeUse(s, "filters", index)) },
     ];
@@ -738,6 +775,23 @@ export function MarksCard() {
           />
         </label>
       </div>
+      {marks.type === "line" && (
+        <label className="inline line-type" title="線條類型（Tableau 標記卡「路徑」的線條類型）">
+          線條類型
+          <select
+            aria-label="線條類型"
+            value={(marks.line_type as string | undefined) ?? "linear"}
+            onChange={(e) => {
+              const line_type = e.target.value;
+              apply((s) => updateCard(s, card, (m) => ({ ...m, line_type })));
+            }}
+          >
+            <option value="linear">直線</option>
+            <option value="step">階梯</option>
+            <option value="jump">跳躍</option>
+          </select>
+        </label>
+      )}
       {SLOTS.filter(([slot]) => slot !== "geometry" || spatialShown).map(([slot, label]) => (
         <MarkSlotRow key={slot} slot={slot} label={label} card={card} />
       ))}

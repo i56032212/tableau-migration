@@ -716,6 +716,33 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         page.wait_for_url(f"{engine}/w/demo/edit-d/db_ee909b0c")
         page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
 
+        # 篩選控制項的「只顯示相關的值」；垂直容器的「平均分配內容」
+        def find(zones: list[dict[str, Any]], zone_id: str) -> dict[str, Any]:
+            for zone in zones:
+                if zone["id"] == zone_id:
+                    return zone
+                try:
+                    return find(zone["children"], zone_id)
+                except KeyError:
+                    continue
+            raise KeyError(zone_id)
+
+        page.locator('[data-tree-zone="z12"]').click()
+        relevant = page.locator(".dash-props").get_by_label("只顯示相關的值")
+        relevant.click()
+        expect(relevant).to_be_checked()
+        settle(page)
+        assert find(board()["zones"], "z12")["relevant"] is True
+        page.locator('[data-tree-zone="z11"]').click()
+        evenly = page.locator(".dash-props").get_by_label("平均分配內容")
+        evenly.click()
+        expect(evenly).to_be_checked()
+        settle(page)
+        side = find(board()["zones"], "z11")
+        heights = [child["h"] for child in side["children"]]
+        assert side["distribute"] is True
+        assert max(heights) - min(heights) <= 1 and heights[0] > 96, heights
+
         # 選取工作表區塊後移除（版面配置與畫面都選得到）
         page.locator('[data-tree-zone="z10"]').click()
         expect(page.locator('[data-zone-props="z10"]')).to_be_visible()
@@ -1571,5 +1598,185 @@ def test_overlapping_labels_are_hidden(engine: str) -> None:
         found = page.evaluate(script)
         assert found["total"] > 100 and 0 < found["shown"] < found["total"]
         assert found["overlaps"] == 0
+        assert errors == []
+        browser.close()
+
+
+def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> None:
+    """總計的位置與「總計使用」、百分比、線條類型、個別成員的顏色，以及工作表上的篩選控制項
+    （顯示篩選、只顯示相關的值）在檢視器中的樣子。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def menu(page: Page, label: str) -> None:
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text=label).first.click()
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+
+    def records() -> list[dict[str, Any]]:
+        response = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})
+        assert response["unsupported"] is None, response
+        return response["spec"]["data"]["values"]
+
+    def confirm(page: Page, dialog: str) -> None:
+        page.locator(dialog).get_by_role("button", name="確定").click()
+        expect(page.locator(dialog)).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        page.locator('.data-pane [data-field="f_region"]').dblclick()
+        settle(page)
+        page.locator('.data-pane [data-field="f_sales"]').dblclick()
+        settle(page)
+
+        # 總計：欄總計放在上方，Sales 的總計改為各標記的平均
+        page.get_by_role("button", name="總計…").click()
+        dialog = page.locator(".totals-dialog")
+        dialog.get_by_label("顯示欄總計").check()
+        dialog.get_by_label("欄總計移至頂端").check()
+        dialog.get_by_label("SUM(Sales)的總計使用").select_option("avg")
+        confirm(page, ".totals-dialog")
+        saved = sheet()
+        assert (saved["totals"], saved["totals_top"], saved["totals_left"]) == (
+            ["rows"],
+            True,
+            False,
+        )
+        assert [(v["use"]["field"], v["agg"]) for v in saved["visual_totals"]] == [
+            ("f_sales", "avg")
+        ]
+        rows = records()
+        assert rows[0]["__total"] is True and rows[0]["c0_label"] == "Grand Total"
+        marks = [r["c1"] for r in rows if not r.get("__total")]
+        assert rows[0]["c1"] == pytest.approx(sum(marks) / len(marks))
+
+        # 百分比：占整個表的比例（總計使用改回自動：總計是 100%）
+        page.get_by_role("button", name="總計…").click()
+        page.locator(".totals-dialog").get_by_label("SUM(Sales)的總計使用").select_option("")
+        confirm(page, ".totals-dialog")
+        page.get_by_label("百分比", exact=True).select_option("table")
+        settle(page)
+        assert sheet()["percentages"] == "table"
+        rows = records()
+        assert sum(r["c1"] for r in rows if not r.get("__total")) == pytest.approx(1.0)
+        assert rows[0]["c1"] == pytest.approx(1.0)
+        assert rows[1]["c1_label"].endswith("%")
+        page.get_by_label("百分比", exact=True).select_option("")
+        settle(page)
+        assert sheet()["percentages"] is None
+
+        # 個別成員的顏色：Region 放到色彩，East 指定紅色
+        page.locator('.data-pane [data-field="f_region"]').drag_to(
+            page.locator('[data-drop="marks.color"]')
+        )
+        settle(page)
+        page.locator(".mark-buttons").get_by_role("button", name="色彩…").click()
+        swatch = page.locator(".colors-dialog").get_by_label("East的顏色")
+        expect(swatch).to_be_visible()
+        swatch.fill("#ff0000")
+        confirm(page, ".colors-dialog")
+        palette = sheet()["marks"]["color_palette"]
+        assert palette["kind"] == "discrete" and palette["palette"] is None
+        assert palette["assignments"] == [{"value": "East", "color": "#ff0000"}]
+        expect(
+            page.locator(
+                ".editor-canvas .frozen-host > svg path[aria-roledescription='bar'][aria-label*='East']"
+            ).first
+        ).to_have_attribute("fill", "#ff0000")
+
+        # 線條類型：線、階梯
+        page.get_by_label("標記類型").select_option("line")
+        settle(page)
+        page.get_by_label("線條類型").select_option("step")
+        settle(page)
+        assert sheet()["marks"]["line_type"] == "step"
+        page.get_by_label("線條類型").select_option("jump")
+        settle(page)
+        assert sheet()["marks"]["line_type"] == "jump"
+        page.get_by_label("標記類型").select_option("bar")
+        settle(page)
+
+        # 顯示篩選：Category（只選 Furniture）與 Sub-Category（只顯示相關的值）
+        for field, keep in (("f_category", "Furniture"), ("f_sub_category", None)):
+            page.locator(f'.data-pane [data-field="{field}"]').drag_to(
+                page.locator('[data-drop="filters"]')
+            )
+            page.wait_for_selector(".filter-dialog .value-list li")
+            if keep is not None:
+                for name in ("Office Supplies", "Technology"):
+                    page.locator(".value-list label", has_text=name).locator("input").uncheck()
+            page.locator(".filter-dialog").get_by_role("button", name="確定").click()
+            expect(page.locator(".filter-dialog")).to_have_count(0)
+            page.wait_for_timeout(300)
+            settle(page)
+        pills = page.locator('[data-shelf="filters"] .pill')
+        for index in (0, 1):  # Category、Sub-Category
+            pills.nth(index).click()
+            menu(page, "顯示篩選")
+            settle(page)
+        page.locator('[data-shelf="filters"] .pill', has_text="Sub-Category").click()
+        menu(page, "只顯示相關的值")
+        settle(page)
+        controls = sheet()["controls"]
+        assert [(c["field"]["field"], c["relevant"]) for c in controls] == [
+            ("f_category", False),
+            ("f_sub_category", True),
+        ]
+
+        # 複製、貼上格式：ws_1 的背景與文字顏色貼到 Sales by Region（欄位與篩選不變）
+        styled = {**sheet(), "background": "#112233", "text_color": "#eeeeee"}
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/ws_1",
+            data=json.dumps({"worksheet": styled}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+        page.reload()
+        settle(page)
+        page.get_by_role("button", name="複製格式").click()
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        before = call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
+        page.get_by_role("button", name="貼上格式").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        after = call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
+        assert (after["background"], after["text_color"]) == ("#112233", "#eeeeee")
+        assert (after["rows"], after["filters"]) == (before["rows"], before["filters"])
+        page.goto(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+
+        # 檢視器：工作表旁邊有兩個控制項；Sub-Category 只列出 Furniture 的子類別
+        page.get_by_role("button", name="完成").click()
+        page.wait_for_url(f"{engine}/w/demo/s/ws_1")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        panel = page.locator(".single-sheet .sheet-controls")
+        expect(panel.locator("fieldset.control")).to_have_count(2)
+        sub = panel.locator("fieldset.control", has_text="Sub-Category")
+        expect(sub.locator("li, option, label").filter(has_text="Chairs").first).to_be_visible()
+        expect(sub).not_to_contain_text("Phones")
+        # 改選 Technology：Sub-Category 的可選值跟著變
+        category = panel.locator("fieldset.control", has_text="Category").first
+        category.locator("label", has_text="Technology").locator("input").check()
+        expect(sub).to_contain_text("Phones")
         assert errors == []
         browser.close()

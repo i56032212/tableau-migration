@@ -22,6 +22,7 @@ from tmig.ir.models import (
     ControlType,
     Dashboard,
     DeviceLayout,
+    FieldUse,
     Size,
     TextRun,
     TextStyle,
@@ -208,6 +209,8 @@ class DashboardParser:
             return Zone(
                 kind="container",
                 layout=layout,
+                distribute=layout != "tiled"
+                and element.get("layout-strategy-id") == "distribute-evenly",
                 children=[self._zone(z) for z in child_zones],
                 **base,
             )
@@ -386,80 +389,27 @@ class DashboardParser:
         sheet = self._sheet(element, name)
         if sheet is None:
             return Zone(kind="blank", **base)
-        param = element.get("param", "")
-        key = instance_key(param)
-        parts = qualified_parts(param)
-        if len(parts) == 2 and parts[0] != sheet.ds.name:
-            # 其他資料源的欄位：工作表上的跨資料源篩選（篩選主要資料源中對應的欄位）
-            mapped = sheet.cross.get(f"[{parts[0]}].{key}")
-            if mapped is None:
-                self.ctx.flag(
-                    element,
-                    f"篩選控制項的欄位 {param} 是其他資料源的欄位，工作表「{name}」上沒有對應的"
-                    "跨資料源篩選",
-                )
-                return Zone(kind="blank", **base)
-            key = mapped
-        if key.startswith("[attr:") and key not in sheet.filter_kinds:
-            # ATTR(維度) 的篩選控制項：工作表上沒有這個篩選時，是同一個維度的類別篩選
-            dimension = "[none:" + key.removeprefix("[attr:")
-            if dimension in sheet.filter_kinds:
-                key = dimension
-        use = sheet.uses.get(key)
-        if use is None:
-            self.ctx.flag(element, f"篩選控制項的欄位 {param} 不在工作表「{name}」上")
+        found = filter_control(self.ctx, sheet, name, element)
+        if isinstance(found, str):
+            self.ctx.flag(element, found)
             return Zone(kind="blank", **base)
-        filter_kind = sheet.filter_kinds.get(key)
-        if filter_kind is None:
-            self.ctx.flag(element, f"篩選控制項的欄位 {param} 在工作表「{name}」上沒有篩選")
-            return Zone(kind="blank", **base)
-        # Top N 篩選的控制項：選取的成員是 Top N 篩選「一般」頁的選取（排名前先選取），樣式與一般的類別篩選相同
-        mode = element.get("mode")
-        control: ControlType
-        if filter_kind in ("relative_date", "condition"):
-            control = filter_kind
-        elif filter_kind == "range":
-            # 次要資料源的篩選（Data Blending）：欄位在其他資料源中
-            owner = next(
-                (
-                    state
-                    for state in self.ctx.datasources.values()
-                    if any(f.id == use.field for f in state.fields)
-                ),
-                sheet.ds,
-            )
-            datatype = owner.field_by_id(use.field).datatype
-            is_date = datatype in ("date", "datetime") and use.date is None
-            control = "date_range" if is_date else "range_slider"
-        elif mode is None:
-            control = "multi_list"
-        elif mode == "slider":
-            control = "single_slider"
-        elif mode in FILTER_MODES:
-            control = FILTER_MODES[mode]
-        else:
-            self.ctx.flag(element, f"篩選控制項的樣式 {mode} v0 不支援")
-            return Zone(kind="blank", **base)
-        return Zone(kind="filter", worksheet=sheet.id, field=use, control=control, **base)
+        use, control = found
+        return Zone(
+            kind="filter",
+            worksheet=sheet.id,
+            field=use,
+            control=control,
+            relevant=element.get("values") == "relevant",
+            **base,
+        )
 
     def _param_zone(self, element: etree._Element, base: dict) -> Zone:
-        ref = element.get("param", "")
-        param = self.ctx.parameter(ref)
-        if param is None:
-            self.ctx.flag(element, f"參數控制項的參數 {ref} 不存在")
+        found = parameter_control(self.ctx, element)
+        if isinstance(found, str):
+            self.ctx.flag(element, found)
             return Zone(kind="blank", **base)
-        mode = element.get("mode")
-        control: ControlType
-        if mode in PARAM_MODES:
-            control = PARAM_MODES[mode]
-        elif mode is None:
-            control = {"list": "single_dropdown", "range": "single_slider"}.get(
-                param.allowed.kind, "type_in"
-            )  # type: ignore[assignment]
-        else:
-            self.ctx.flag(element, f"參數控制項的樣式 {mode} v0 不支援")
-            return Zone(kind="blank", **base)
-        return Zone(kind="parameter", parameter=param.id, control=control, **base)
+        parameter, control = found
+        return Zone(kind="parameter", parameter=parameter, control=control, **base)
 
     def _check(self, element: etree._Element) -> None:
         for item in children(element):
@@ -592,3 +542,78 @@ def formatted_content(
     if not parameters and not styled and len(content) <= 1:
         content = []
     return "".join(plain).strip() or None, content
+
+
+def filter_control(
+    ctx: ParseContext, sheet: SheetState, name: str | None, element: etree._Element
+) -> tuple[FieldUse, ControlType] | str:
+    """篩選控制項（dashboard 的區塊，或工作表視窗的 <card type='filter'>）的欄位與樣式；無法移轉時回傳原因。"""
+    param = element.get("param", "")
+    key = instance_key(param)
+    parts = qualified_parts(param)
+    if len(parts) == 2 and parts[0] != sheet.ds.name:
+        # 其他資料源的欄位：工作表上的跨資料源篩選（篩選主要資料源中對應的欄位）
+        mapped = sheet.cross.get(f"[{parts[0]}].{key}")
+        if mapped is None:
+            return (
+                f"篩選控制項的欄位 {param} 是其他資料源的欄位，工作表「{name}」上沒有對應的"
+                "跨資料源篩選"
+            )
+        key = mapped
+    if key.startswith("[attr:") and key not in sheet.filter_kinds:
+        # ATTR(維度) 的篩選控制項：工作表上沒有這個篩選時，是同一個維度的類別篩選
+        dimension = "[none:" + key.removeprefix("[attr:")
+        if dimension in sheet.filter_kinds:
+            key = dimension
+    use = sheet.uses.get(key)
+    if use is None:
+        return f"篩選控制項的欄位 {param} 不在工作表「{name}」上"
+    filter_kind = sheet.filter_kinds.get(key)
+    if filter_kind is None:
+        return f"篩選控制項的欄位 {param} 在工作表「{name}」上沒有篩選"
+    # Top N 篩選的控制項：選取的成員是 Top N 篩選「一般」頁的選取（排名前先選取），樣式與一般的類別篩選相同
+    mode = element.get("mode")
+    control: ControlType
+    if filter_kind in ("relative_date", "condition"):
+        control = filter_kind
+    elif filter_kind == "range":
+        # 次要資料源的篩選（Data Blending）：欄位在其他資料源中
+        owner = next(
+            (
+                state
+                for state in ctx.datasources.values()
+                if any(f.id == use.field for f in state.fields)
+            ),
+            sheet.ds,
+        )
+        datatype = owner.field_by_id(use.field).datatype
+        is_date = datatype in ("date", "datetime") and use.date is None
+        control = "date_range" if is_date else "range_slider"
+    elif mode is None:
+        control = "multi_list"
+    elif mode == "slider":
+        control = "single_slider"
+    elif mode in FILTER_MODES:
+        control = FILTER_MODES[mode]
+    else:
+        return f"篩選控制項的樣式 {mode} v0 不支援"
+    return use, control
+
+
+def parameter_control(ctx: ParseContext, element: etree._Element) -> tuple[str, ControlType] | str:
+    """參數控制項（dashboard 的區塊，或工作表視窗的 <card type='parameter'>）的參數與樣式。"""
+    ref = element.get("param", "")
+    param = ctx.parameter(ref)
+    if param is None:
+        return f"參數控制項的參數 {ref} 不存在"
+    mode = element.get("mode")
+    control: ControlType
+    if mode in PARAM_MODES:
+        control = PARAM_MODES[mode]
+    elif mode is None:
+        control = {"list": "single_dropdown", "range": "single_slider"}.get(
+            param.allowed.kind, "type_in"
+        )  # type: ignore[assignment]
+    else:
+        return f"參數控制項的樣式 {mode} v0 不支援"
+    return param.id, control

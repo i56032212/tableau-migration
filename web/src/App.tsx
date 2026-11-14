@@ -53,6 +53,7 @@ import { StoryEditor } from "./editor/StoryEditor";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { PageControl, pagesOf } from "./PageControl";
+import { SheetControls } from "./SheetControls";
 import { WorksheetView } from "./WorksheetView";
 
 // 路由：/、/w/<報表>、/w/<報表>/d/<dashboard>、/w/<報表>/s/<工作表>、/w/<報表>/story/<Story>、
@@ -861,25 +862,28 @@ function WorkbookPage({
         />
       )}
       {worksheet && (
-        <div className="single-sheet">
-          {worksheet.pages && view && (
-            <PageControl
+        <div className={`single-sheet${(worksheet.controls ?? []).length > 0 ? " with-controls" : ""}`}>
+          <div className="sheet-main">
+            {worksheet.pages && view && (
+              <PageControl
+                workbook={workbook}
+                worksheet={worksheet.id}
+                {...pagesOf(ir, worksheet.id)}
+                view={view}
+                onView={changeView}
+              />
+            )}
+            <WorksheetView
+              key={refresh}
               workbook={workbook}
               worksheet={worksheet.id}
-              {...pagesOf(ir, worksheet.id)}
-              view={view}
-              onView={changeView}
+              state={stateFor(ir, worksheet.id, view)}
+              revision={refresh}
+              onDrill={(key, delta) => changeView(setDrill(view, worksheet.id, key, delta))}
+              tooltipState={(target, mark) => tooltipStateFor(ir, worksheet.id, target, view, mark)}
             />
-          )}
-          <WorksheetView
-            key={refresh}
-            workbook={workbook}
-            worksheet={worksheet.id}
-            state={stateFor(ir, worksheet.id, view)}
-            revision={refresh}
-            onDrill={(key, delta) => changeView(setDrill(view, worksheet.id, key, delta))}
-            tooltipState={(target, mark) => tooltipStateFor(ir, worksheet.id, target, view, mark)}
-          />
+          </div>
+          {view && <SheetControls ir={ir} workbook={workbook} worksheet={worksheet} view={view} onView={changeView} />}
         </div>
       )}
       {story && (

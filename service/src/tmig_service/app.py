@@ -78,7 +78,9 @@ from tmig.sqlgen.query import (
     custom_sql_parameters,
     domain_sql,
     pane_sql,
+    percentages,
     preview_sql,
+    relevant_domain_sql,
     title_sql,
     totals_sql,
     visual_totals,
@@ -109,9 +111,14 @@ IMAGE_TYPES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp
 
 
 class DomainRequest(BaseModel):
+    """worksheet：篩選控制項「只顯示相關的值」——只列出套用這張工作表上其他篩選（state 為檢視器目前的狀態）
+    之後還有資料的值。"""
+
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["values", "range"] | None = None
+    worksheet: str | None = None
+    state: QueryState | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -319,6 +326,12 @@ def controlled_fields(ir: IR) -> set[str]:
         for dashboard in ir.dashboards
         for zone in iter_zones(dashboard.zones)
         if zone.kind in ("filter", "highlighter") and zone.field is not None
+    }
+    found |= {
+        control.field.field
+        for ws in ir.worksheets
+        for control in ws.controls
+        if control.kind == "filter" and control.field is not None
     }
     return found | {ws.pages.field for ws in ir.worksheets if ws.pages is not None}
 
@@ -887,6 +900,21 @@ def create_app(
             }
             totals = [(t, data.run(t.query, datasource, database)) for t in total_queries]
             totals = visual_totals(sheet, query, result, totals)
+            if sheet.percentages is not None:
+                # 百分比（分析＞百分比）：量值換成占範圍合計的比例（合計另外查詢）
+                result, totals = percentages(
+                    ir,
+                    sheet.id,
+                    query,
+                    result,
+                    totals,
+                    lambda q: data.run(q, datasource, database),
+                    state,
+                    user,
+                )
+                if panes:
+                    panes = {}
+                    notes.append("使用百分比時，各標記卡一律以工作表的詳細程度呈現")
             title_fields: dict[str, str] = {}
             if title_queries is not None:
                 measures = title_queries.measures
@@ -1199,7 +1227,7 @@ def create_app(
         user: User,
         request: Annotated[DomainRequest | None, Body()] = None,
     ) -> dict[str, Any]:
-        loaded, _ = granted(wb, user)
+        loaded, grant = granted(wb, user)
         ir = loaded.ir
         try:
             use = parse_key(field)
@@ -1224,6 +1252,26 @@ def create_app(
         else:
             kind = "values"
         require_connect(loaded, [ds.id], user)
+        relevant = request.worksheet if request is not None and kind == "values" else None
+        if relevant is not None:
+            # 只顯示相關的值：以工作表上其他的篩選查詢這個欄位的值
+            sheet = next((w for w in ir.worksheets if relevant in (w.id, w.name)), None)
+            if sheet is None or not grant.worksheet_allowed(ir, sheet.id):
+                raise HTTPException(404, f"找不到工作表「{relevant}」")
+            assert request is not None
+            try:
+                query = relevant_domain_sql(ir, sheet.id, use, request.state, user)
+                source = next(d for d in ir.datasources if d.id == sheet.datasource)
+                found = data.run(query, source, lambda: workspace.database(wb, sheet.datasource))
+            except StateError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            except QueryError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            except SourceConnectionError as exc:
+                raise HTTPException(503, str(exc)) from exc
+            except ExecutionError as exc:
+                raise HTTPException(500, str(exc)) from exc
+            return {"kind": "values", "values": [_json(r[0]) for r in found.rows]}
         try:
             sql = domain_sql(ir, ds.id, use, kind, user)
             result = data.run_sql(

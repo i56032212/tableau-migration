@@ -3047,6 +3047,55 @@ def custom_sql_parameters(
     return result
 
 
+def relevant_domain_sql(
+    ir: IR,
+    worksheet: str,
+    use: FieldUse,
+    state: QueryState | None = None,
+    user: Identity | None = None,
+) -> WorksheetSql:
+    """篩選控制項的「只顯示相關的值」：套用工作表上其他的篩選（內容、維度階段，含檢視器目前的選取與
+    篩選動作）之後，這個欄位還有資料的值；這個欄位自己的篩選不算。結果只有一欄（欄位的值，依值排序）。"""
+    ws = _find_worksheet(ir, worksheet)
+    key = use_key(use)
+    primary = {f.id for ds in ir.datasources if ds.id == ws.datasource for f in ds.fields}
+    if use.field not in primary:
+        raise QueryError("次要資料源的欄位不支援「只顯示相關的值」", unsupported=True)
+    kept: list[Filter] = []
+    for flt in ws.filters:
+        if flt.stage not in ("context", "dimension"):
+            continue
+        fields = flt.fields if isinstance(flt, TupleFilter) else [flt.field]
+        if any(f.field not in primary for f in fields):
+            continue
+        if not isinstance(flt, TupleFilter) and use_key(flt.field) == key:
+            continue
+        kept.append(flt)
+    holder = Worksheet(
+        id=ws.id,
+        name=ws.name,
+        datasource=ws.datasource,
+        rows=[use.model_copy(update={"continuous": False})],
+        marks=Marks(type="automatic"),
+        filters=kept,
+        source_ref=ws.source_ref,
+    )
+    sub = ir.model_copy(
+        update={"worksheets": [holder if w.id == ws.id else w for w in ir.worksheets]}
+    )
+    if state is not None:
+        keys = {use_key(f.field) for f in kept if not isinstance(f, TupleFilter)}
+        state = state.model_copy(
+            update={
+                "filters": {k: v for k, v in state.filters.items() if k in keys},
+                "pages": {},
+                "drill": {},
+                "tooltip": None,
+            }
+        )
+    return worksheet_sql(sub, ws.id, state, user)
+
+
 def _find_worksheet(ir: IR, key: str) -> Worksheet:
     for ws in ir.worksheets:
         if key in (ws.id, ws.name):
@@ -3395,6 +3444,152 @@ def visual_totals(
             changed.append(tuple(values))
         result.append((total, QueryResult(rows.columns, changed)))
     return result
+
+
+def percentages(
+    ir: IR,
+    worksheet: str,
+    main: WorksheetSql,
+    marks: QueryResult,
+    totals: list[tuple[TotalQuery, QueryResult]],
+    run: Callable[[WorksheetSql], QueryResult],
+    state: QueryState | None = None,
+    user: Identity | None = None,
+) -> tuple[QueryResult, list[tuple[TotalQuery, QueryResult]]]:
+    """百分比（Tableau 的「分析＞百分比」）：各量值除以範圍的合計。
+
+    合計與總計相同，在範圍的詳細程度重新彙總底層資料（平均是範圍內所有資料列的平均，不是各標記的值
+    相加）：範圍保留的維度以外的維度（含標記卡上的）都去掉，另外查詢（run 執行）。總計與小計的列也換成
+    百分比（範圍中已經去掉的維度不算）。與量值篩選一起使用時，合計只算通過篩選的標記。
+    工作表的查詢（main）仍是原本的值，計算比對以它為準。"""
+    from tmig.data.executor import QueryResult  # 避免循環匯入（executor 也匯入本模組）
+
+    ws = _find_worksheet(ir, worksheet)
+    if ws.percentages is None:
+        return marks, totals
+    if ws.disaggregated:
+        raise QueryError("取消彙總量值與百分比一起使用尚不支援", unsupported=True)
+    measures = [c for c in main.columns if c.role == "measure" and c.use is not None]
+    if any(c.use is not None and c.use.table_calc is not None for c in measures):
+        raise QueryError("百分比與 Table Calculation 一起使用尚不支援", unsupported=True)
+    late = [f for f in main.state.filters if f.stage in ("measure", "table_calc")]
+    if any(f.stage == "table_calc" for f in late) or {f.id for f in late} - {
+        f.id for f in ws.filters
+    }:
+        raise QueryError(
+            "百分比與 Table Calculation 篩選、其他工作表的量值篩選一起使用尚不支援",
+            unsupported=True,
+        )
+    dims = [c.key for c in main.columns if c.role == "dimension"]
+    rows = [use_key(u) for u in ws.rows if use_key(u) in dims and not u.continuous]
+    cols = [use_key(u) for u in ws.columns if use_key(u) in dims and not u.continuous]
+    scope = {
+        "table": [],
+        "column": cols,
+        "row": rows,
+        "pane": rows[:-1] + cols[:-1],
+        "row_in_pane": rows + cols[:-1],
+        "column_in_pane": rows[:-1] + cols,
+        "cell": rows + cols,
+    }[ws.percentages]
+    keys = {c.key for c in measures}
+    restriction = _marks_filter(ws, main, marks) if late else None
+    cache: dict[tuple[str, ...], dict[tuple[Any, ...], dict[str, Any]]] = {}
+
+    def keep(use: FieldUse) -> bool:
+        return use.field in SPECIAL_FIELDS or use_key(use) in keys
+
+    def one(use: FieldUse | None) -> FieldUse | None:
+        return use if use is not None and keep(use) else None
+
+    def card(card_marks: Marks) -> Marks:
+        return card_marks.model_copy(
+            update={
+                "color": one(card_marks.color),
+                "size": one(card_marks.size),
+                "shape": one(card_marks.shape),
+                "angle": one(card_marks.angle),
+                "path": None,
+                "geometry": None,
+                "label": [u for u in card_marks.label if keep(u)],
+                "detail": [u for u in card_marks.detail if keep(u)],
+                "tooltip": [u for u in card_marks.tooltip if keep(u)],
+                "label_text": [],
+                "tooltip_text": [],
+                "tooltip_sheets": [],
+                "trend": None,
+            }
+        )
+
+    def denominators(kept: tuple[str, ...]) -> dict[tuple[Any, ...], dict[str, Any]]:
+        if kept in cache:
+            return cache[kept]
+        filters = [f for f in ws.filters if f.stage not in ("measure", "table_calc")]
+        if restriction is not None:
+            filters.append(restriction)
+        virtual = ws.model_copy(
+            update={
+                "rows": [u for u in ws.rows if keep(u) or use_key(u) in kept],
+                "columns": [u for u in ws.columns if keep(u) or use_key(u) in kept],
+                "marks": card(ws.marks),
+                "panes": [p.model_copy(update={"marks": card(p.marks)}) for p in ws.panes],
+                "sorts": [],
+                "filters": filters,
+                "reference_lines": [],
+                "annotations": [],
+                "totals": [],
+                "subtotals": [],
+                "visual_totals": [],
+                "percentages": None,
+                "pages": None,
+                "forecast": None,
+                "cluster": None,
+                "title": [],
+            }
+        )
+        sub = ir.model_copy(
+            update={"worksheets": [virtual if w.id == ws.id else w for w in ir.worksheets]}
+        )
+        scoped = state.model_copy(update={"pages": {}, "drill": {}}) if state is not None else None
+        query = worksheet_sql(sub, ws.id, scoped, user, ws if ws.blends else None)
+        result = run(query)
+        at = {key: i for i, key in enumerate(result.columns)}
+        missing = [k for k in kept if k not in at]
+        if missing:
+            raise QueryError(f"百分比的合計缺少欄位 {missing}", unsupported=True)
+        found = {
+            tuple(row[at[k]] for k in kept): {k: row[i] for k, i in at.items() if k in keys}
+            for row in result.rows
+        }
+        cache[kept] = found
+        return found
+
+    def divide(result: QueryResult, dropped: Sequence[str]) -> QueryResult:
+        kept = tuple(k for k in scope if k not in dropped)
+        lookup = denominators(kept)
+        at = {key: i for i, key in enumerate(result.columns)}
+        changed: list[tuple[Any, ...]] = []
+        for row in result.rows:
+            base = lookup.get(tuple(row[at[k]] for k in kept if k in at), {})
+            values = list(row)
+            for key in keys:
+                if key not in at:
+                    continue
+                values[at[key]] = _ratio(values[at[key]], base.get(key))
+            changed.append(tuple(values))
+        return QueryResult(result.columns, changed)
+
+    return divide(marks, ()), [(t, divide(r, t.dropped)) for t, r in totals]
+
+
+def _ratio(value: Any, whole: Any) -> Any:
+    """占合計的比例；合計為 0 或沒有值時為空，不是數字的量值（例如字串的 ATTR）不變。"""
+    if value is None or isinstance(value, bool | str):
+        return value
+    try:
+        return float(value) / float(whole) if whole else None
+    except (TypeError, ValueError):
+        return value
 
 
 def _visual_total(values: list[Any], agg: str) -> Any:

@@ -209,3 +209,76 @@ def test_nested_subtotals(tmp_path: Path, db: Path) -> None:
     assert [v["rows_dim"] for v in values].index("South｜Total") == [
         v["rows_dim"] for v in values
     ].index("West｜Furniture｜2023") - 1
+
+
+def test_totals_on_top_and_left(tmp_path: Path, db: Path) -> None:
+    """欄總計在上方（<rows onTop='true'>）、列總計在左側（<cols onLeft='true'>）：總計與小計在各組之前。"""
+    sheet = with_totals(nested("none:Region:nk"), "rows").replace(
+        "<rows total='true'>", "<rows total='true' onTop='true'>", 1
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    assert ir.worksheets[0].totals_top and not ir.worksheets[0].totals_left
+    values = render_with_totals(ir, db).spec["data"]["values"]
+    assert [v["rows_dim"] for v in values] == [
+        GRAND_TOTAL,
+        "East｜Total",
+        "East｜Furniture",
+        "East｜Technology",
+        "North｜Total",
+        "North｜Office",
+        "South｜Total",
+        "South｜Furniture",
+        "South｜Office",
+        "West｜Total",
+        "West｜Furniture",
+        "West｜Technology",
+    ]
+
+    cross = worksheet(
+        "Cross",
+        [REGION, CATEGORY, SALES, YEAR],
+        rows=ref("none:Region:nk"),
+        cols=f"({ref('none:Category:nk')} / {ref('yr:Order Date:ok')})",
+        mark="Text",
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+    )
+    cross = cross.replace(
+        "<rows>", f"<subtotals><column>{ref('none:Category:nk')}</column></subtotals><rows>", 1
+    )
+    cross = with_totals(cross, "rows", "cols").replace(
+        "<cols total='true'>", "<cols total='true' onLeft='true'>", 1
+    )
+    (tmp_path / "left").mkdir()
+    ir = parse(tmp_path / "left", cross)
+    assert ir.worksheets[0].totals_left and not ir.worksheets[0].totals_top
+    spec = render_with_totals(ir, db).spec
+    assert main_encoding(spec)["x"]["sort"] == [  # type: ignore[index]
+        GRAND_TOTAL,
+        "Furniture｜Total",
+        "Furniture｜2023",
+        "Furniture｜2024",
+        "Office｜Total",
+        "Office｜2024",
+        "Technology｜Total",
+        "Technology｜2023",
+        "Technology｜2024",
+    ]
+    # 列的總計仍在最下方
+    assert list(dict.fromkeys(v["c0_label"] for v in spec["data"]["values"]))[-1] == GRAND_TOTAL
+
+    # 只有欄維度：表頭依資料的順序，總計欄放在最前面
+    only = worksheet(
+        "Only",
+        [CATEGORY, SALES],
+        cols=ref("none:Category:nk"),
+        mark="Text",
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+    )
+    only = with_totals(only, "cols").replace(
+        "<cols total='true'>", "<cols total='true' onLeft='true'>", 1
+    )
+    (tmp_path / "only").mkdir()
+    ir = parse(tmp_path / "only", only)
+    values = render_with_totals(ir, db).spec["data"]["values"]
+    assert [v["c0_label"] for v in values] == [GRAND_TOTAL, "Furniture", "Office", "Technology"]

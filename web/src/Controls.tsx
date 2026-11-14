@@ -11,7 +11,7 @@ import {
   parameterLabel,
   selectedValues,
 } from "./state";
-import type { FilterValue, IR, Parameter, Scalar, Zone } from "./types";
+import type { FilterValue, IR, Parameter, QueryState, Scalar, Zone } from "./types";
 
 interface FilterProps {
   ir: IR;
@@ -19,6 +19,8 @@ interface FilterProps {
   zone: Zone;
   state: Record<string, FilterValue> | undefined;
   onChange: (key: string, value: FilterValue) => void;
+  /** 「只顯示相關的值」的控制項：這張工作表目前的查詢狀態（其他篩選改變時重新取得可選值） */
+  query?: QueryState;
 }
 
 /**
@@ -96,7 +98,7 @@ export function FilterControl(props: FilterProps) {
   return <SelectionControl {...props} />;
 }
 
-function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) {
+function SelectionControl({ ir, workbook, zone, state, onChange, query }: FilterProps) {
   const use = zone.field!;
   const key = fieldKey(use);
   const control = zone.control ?? "multi_list";
@@ -106,15 +108,28 @@ function SelectionControl({ ir, workbook, zone, state, onChange }: FilterProps) 
   const [open, setOpen] = useState(control !== "multi_dropdown");
   const value = currentFilter(ir, zone.worksheet!, key, state);
 
+  // 只顯示相關的值：帶著工作表上其他篩選目前的狀態（自己的選取不算）
+  const relevant = useMemo(() => {
+    if (!zone.relevant || isRange || !query || !zone.worksheet) return null;
+    const { [key]: _own, ...filters } = query.filters ?? {};
+    return JSON.stringify({ worksheet: zone.worksheet, state: { ...query, filters } });
+  }, [zone.relevant, zone.worksheet, isRange, query, key]);
   useEffect(() => {
+    let cancelled = false;
     api
-      .domain(workbook, key, isRange ? "range" : "values")
+      .domain(workbook, key, isRange ? "range" : "values", relevant ? JSON.parse(relevant) : undefined)
       .then((d) => {
+        if (cancelled) return;
         if (d.kind === "values") setDomain(d.values);
         else setBounds({ min: d.min, max: d.max });
       })
-      .catch(() => setDomain([]));
-  }, [workbook, key, isRange]);
+      .catch(() => {
+        if (!cancelled) setDomain([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workbook, key, isRange, relevant]);
 
   const title = fieldCaption(ir, use);
   if (isRange) {

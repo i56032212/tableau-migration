@@ -38,6 +38,7 @@ import {
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
 import { AnnotationsDialog, ApplyFilterDialog, BlendsDialog, LabelDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
+import { TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
 import {
   type Card,
   type Catalog,
@@ -246,6 +247,26 @@ function AnalyticsCard() {
         />{" "}
         彙總量值
       </label>
+      <label className="hint percent-of" title="量值顯示成占範圍合計的比例（Tableau 的「分析＞百分比」）">
+        百分比{" "}
+        <select
+          aria-label="百分比"
+          value={(sheet.percentages as string | null | undefined) ?? ""}
+          onChange={(e) => {
+            const percentages = e.target.value || null;
+            editor.apply((s) => ({ ...s, percentages }));
+          }}
+        >
+          <option value="">無</option>
+          <option value="table">表</option>
+          <option value="column">欄</option>
+          <option value="row">列</option>
+          <option value="pane">窗格</option>
+          <option value="row_in_pane">窗格中的列</option>
+          <option value="column_in_pane">窗格中的欄</option>
+          <option value="cell">儲存格</option>
+        </select>
+      </label>
       <ul className="analytics-list">
         {lines.map((line, i) => (
           <li key={i}>
@@ -303,6 +324,8 @@ export function Editor({
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
   const [dialog, setDialog] = useState<EditorDialog | null>(null);
+  // 這個視窗中複製過格式（可以貼到其他工作表）
+  const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "info" | "error" } | null>(null);
   const [pending, setPending] = useState(0);
   // 引擎中目前的工作表（存檔完成的版本）：檢視以它決定要不要查詢
@@ -530,11 +553,33 @@ export function Editor({
           <label className="inline" title="每一列的合計（右側的總計欄）">
             <input type="checkbox" checked={totals.has("columns")} onChange={() => toggleTotal("columns")} /> 顯示列總計
           </label>
+          <button type="button" title="總計的位置、色彩與「總計使用」" onClick={() => setDialog({ kind: "totals" })}>
+            總計…
+          </button>
           <button type="button" onClick={() => setDialog({ kind: "title" })}>
             標題…
           </button>
           <button type="button" onClick={() => setDialog({ kind: "sheet-format" })}>
             格式…
+          </button>
+          <button
+            type="button"
+            title="複製這張工作表的格式（Tableau 的「格式＞複製格式」）"
+            onClick={() => {
+              copyFormat(sheet);
+              setCopied(true);
+              notify("已複製格式；到其他工作表按「貼上格式」", "info");
+            }}
+          >
+            複製格式
+          </button>
+          <button
+            type="button"
+            disabled={!copied && !hasCopiedFormat()}
+            title="套用複製的格式（背景、字型、文字顏色、格線與分隔線、對齊；欄位、篩選與資料不變）"
+            onClick={() => apply((s) => pasteFormat(s))}
+          >
+            貼上格式
           </button>
           <button
             type="button"
@@ -740,6 +785,7 @@ export function Editor({
       {dialog?.kind === "tooltip" && <TooltipDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "labels" && <LabelDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "blends" && <BlendsDialog onClose={() => setDialog(null)} />}
+      {dialog?.kind === "totals" && <TotalsDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "hierarchy" && (
         <HierarchyDialog
           datasource={dialog.datasource}

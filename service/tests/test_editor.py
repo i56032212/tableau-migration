@@ -808,3 +808,55 @@ def test_geography_and_map_api(client: TestClient) -> None:
         "/api/geo/x/manifest",
     ):
         assert client.get(path).status_code == 404
+
+
+def test_sheet_controls_and_relevant_values(client: TestClient) -> None:
+    """工作表上的控制項（顯示篩選、顯示參數）與「只顯示相關的值」：可選值只列出套用其他篩選之後
+    還有資料的值（自己的選取不算），檢視器目前的選取也算。"""
+    ws = sheet(client, "ws_sales_by_region")
+    category = next(f for f in ws["filters"] if f["field"]["field"] == "f_category")
+    category.update(mode="include", values=["Furniture"])
+    sub = {
+        **category,
+        "id": "flt_sub",
+        "field": use("f_sub_category"),
+        "mode": "include",
+        "values": ["Chairs"],
+    }
+    ws["filters"] = [category, sub, *(f for f in ws["filters"] if f["id"] != category["id"])]
+    ws["controls"] = [
+        {
+            "kind": "filter",
+            "field": use("f_sub_category"),
+            "parameter": None,
+            "control": "multi_list",
+            "relevant": True,
+        },
+        {
+            "kind": "filter",
+            "field": use("f_segment"),  # 工作表上沒有這個篩選：存檔時移除
+            "parameter": None,
+            "control": "multi_list",
+            "relevant": False,
+        },
+    ]
+    saved = put(client, ws)
+    assert [c["field"]["field"] for c in saved["controls"]] == ["f_sub_category"]
+
+    domain = "/api/workbooks/demo/fields/f_sub_category/domain"
+    everything = client.post(domain).json()["values"]
+    assert len(everything) == 17  # 工作表上有控制項的欄位可以列出可選值
+    furniture = ["Bookcases", "Chairs", "Furnishings", "Tables"]
+    relevant = client.post(domain, json={"worksheet": "ws_sales_by_region"})
+    assert relevant.status_code == 200, relevant.text
+    assert relevant.json()["values"] == furniture  # 自己的選取（Chairs）不算
+    # 檢視器把 Category 改成 Technology
+    state = {"filters": {"f_category": {"mode": "include", "values": ["Technology"]}}}
+    changed = client.post(domain, json={"worksheet": "ws_sales_by_region", "state": state})
+    assert changed.json()["values"] == ["Accessories", "Copiers", "Machines", "Phones"]
+    assert client.post(domain, json={"worksheet": "ws_nope"}).status_code == 404
+
+    # 移除篩選時控制項一併移除
+    ws = sheet(client, "ws_sales_by_region")
+    ws["filters"] = [f for f in ws["filters"] if f["id"] != "flt_sub"]
+    assert put(client, ws)["controls"] == []

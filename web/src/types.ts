@@ -173,6 +173,8 @@ export interface Worksheet {
   filters: Filter[];
   /** 頁面架：每一頁是這個維度的一個值 */
   pages?: FieldUse | null;
+  /** 工作表上顯示的篩選與參數控制項（顯示篩選、顯示參數） */
+  controls?: SheetControl[];
   /** 存檔時的頁；null 為第一頁 */
   page?: Scalar;
 }
@@ -229,6 +231,15 @@ export interface ZoneTextRun {
   style?: TextStyle | null;
 }
 
+/** 工作表上顯示的控制項：單獨檢視工作表時顯示在檢視的旁邊。 */
+export interface SheetControl {
+  kind: "filter" | "parameter";
+  field?: FieldUse | null;
+  parameter?: string | null;
+  control: string;
+  relevant?: boolean;
+}
+
 /** 工作表的顯示大小（Tableau 的「調整」）。 */
 export type FitMode = "standard" | "fit_width" | "fit_height" | "entire_view";
 
@@ -266,6 +277,10 @@ export interface Zone {
   layout?: "tiled" | "horizontal" | "vertical" | null;
   /** 固定大小（像素），沿父容器的排列方向 */
   fixed?: number | null;
+  /** 水平或垂直容器的「平均分配內容」 */
+  distribute?: boolean;
+  /** 篩選控制項「只顯示相關的值」 */
+  relevant?: boolean;
   hidden?: boolean;
   show_title?: boolean;
   /** 沒有時表示沒有外距、內距、框線與背景 */

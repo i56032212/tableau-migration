@@ -1842,3 +1842,61 @@ def test_group_and_bin_definitions_and_comments(tmp_path: Path) -> None:
     top_n = next(p for p in ir.parameters if p.caption == "Top N")
     assert qty_bin is not None and qty_bin.size == ParamRef(parameter=top_n.id)
     assert fields["f_region"].comment == "銷售區域"
+
+
+# ---------------------------------------------------------------- 工作表上的控制項、只顯示相關的值
+
+
+def test_worksheet_cards_and_relevant_values(tmp_path: Path) -> None:
+    """工作表視窗的 <card type='filter'|'parameter'>（顯示篩選、顯示參數）成為工作表的控制項；
+    values='relevant' 是「只顯示相關的值」，dashboard 的篩選區塊相同；容器的 distribute-evenly。"""
+    sheets = worksheet(
+        "With Region",
+        BASIC,
+        rows=ref("none:Category:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=slices("none:Region:nk"),
+    )
+    board = f"""
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-flow' param='horz' layout-strategy-id='distribute-evenly' w='100000' x='0' y='0'>
+          <zone h='100000' id='2' name='With Region' w='50000' x='0' y='0' />
+          <zone h='100000' id='3' mode='checkdropdown' name='With Region' param='{ref("none:Region:nk")}' type-v2='filter' values='relevant' w='50000' x='50000' y='0' />
+        </zone>
+      </zones>
+    </dashboard>"""
+    windows = f"""<windows>
+      <window class='worksheet' name='With Region'>
+        <cards>
+          <edge name='left'><strip size='160'><card type='pages' /><card type='filters' /><card type='marks' /></strip></edge>
+          <edge name='right'><strip size='160'>
+            <card mode='radiolist' param='{ref("none:Region:nk")}' type='filter' values='relevant' />
+            <card mode='compact' param='[Parameters].[Parameter 2]' type='parameter' />
+            <card param='{ref("none:Category:nk")}' type='filter' />
+            <card pane-specification-id='0' param='{ref("sum:Sales:qk")}' type='color' />
+          </strip></edge>
+        </cards>
+      </window>
+    </windows>"""
+    xml = b.workbook(worksheets=sheets, dashboards=board, extra=SHARED).replace(
+        "<windows />", windows
+    )
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    controls = ir.worksheets[0].controls
+    assert [(c.kind, c.control, c.relevant) for c in controls] == [
+        ("filter", "single_list", True),
+        ("parameter", "single_dropdown", False),
+    ]
+    # 工作表上沒有這個篩選的控制項不顯示（不列為不支援）
+    assert any(
+        "Category" in item.reason and "不顯示這個控制項" in item.reason for item in ir.ignored
+    )
+    assert controls[0].field is not None and controls[0].field.field == "f_region"
+    assert controls[1].parameter == ir.parameters[1].id
+    container, *_ = ir.dashboards[0].zones
+    assert container.distribute and container.layout == "horizontal"
+    zone = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "filter")
+    assert zone.relevant

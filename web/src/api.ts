@@ -99,10 +99,11 @@ export const api = {
       `${wb(id)}/datasources/${encodeURIComponent(datasource)}/preview?${query.toString()}`,
     );
   },
-  domain: (id: string, fieldKey: string, kind?: "values" | "range") =>
+  /** relevant：「只顯示相關的值」——只列出套用這張工作表上其他篩選（目前的狀態）之後還有資料的值 */
+  domain: (id: string, fieldKey: string, kind?: "values" | "range", relevant?: { worksheet: string; state: QueryState }) =>
     request<Domain>(`${wb(id)}/fields/${encodeURIComponent(fieldKey)}/domain`, {
       method: "POST",
-      body: JSON.stringify(kind ? { kind } : {}),
+      body: JSON.stringify({ ...(kind ? { kind } : {}), ...(relevant ?? {}) }),
     }),
   /** 桌面版：開啟中的檔案、開啟、存成報表套件、關閉 */
   desktopDocuments: () => request<DesktopDocument[]>("/api/desktop/documents"),

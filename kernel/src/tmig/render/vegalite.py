@@ -84,6 +84,7 @@ from tmig.render.fonts import (
     resolve,
 )
 from tmig.render.format import (
+    PERCENT_DEFAULT,
     PERCENT_TABLE_CALCS,
     axis_format,
     display_format,
@@ -158,6 +159,8 @@ VL_MARKS = {
     "polygon": "line",
 }
 ROW = "__row"
+NEXT = "__next"
+"""跳躍的線：同一條線上下一個點的位置（_Builder.jump_layers）。"""
 TOTAL = "__total"
 HEADER_LINE_HEIGHT = 15
 """多層欄標題分行顯示時的行高（像素；9pt 的字）。"""
@@ -819,17 +822,77 @@ class _Builder:
             encoding["order"] = {"field": self.ch(marks.path).name}
         elif mark == "polygon":
             vl_mark["order"] = None  # 沒有路徑時依資料的順序連接（而不是依 x 排序）
+        # 線條類型（階梯、跳躍）：量值在橫軸時線沿縱軸前進
+        jump: list[dict[str, Any]] | None = None
+        if (
+            marks.line_type != "linear"
+            and mark == "line"
+            and vl_mark["type"] == "line"
+            and bool(rows_meas) != bool(cols_meas)
+        ):
+            if marks.line_type == "step":
+                vl_mark["interpolate"] = "step-before" if cols_meas else "step-after"
+            else:
+                jump = self.jump_layers(marks, vl_mark, encoding, vertical=bool(cols_meas))
         if label_field is not None:
             labels = self.label_layers(
                 marks, encoding, vl_mark, label_type, label_field, rows_meas, cols_meas
             )
             if labels:
-                return {"encoding": encoding, "layer": [{"mark": vl_mark}, *labels]}, mark
+                return {
+                    "encoding": encoding,
+                    "layer": [*(jump or [{"mark": vl_mark}]), *labels],
+                }, mark
         if mark == "text":
             lines = self.line_layers(marks, vl_mark, encoding)
             if lines is not None:
                 return lines, mark
+        if jump is not None:
+            return {"encoding": encoding, "layer": jump}, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    def jump_layers(
+        self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any], vertical: bool
+    ) -> list[dict[str, Any]] | None:
+        """跳躍的線（Tableau 線條類型的 Jump）：每個點畫一段到下一個點的位置的水平線，不畫垂直的連接。
+        以 window 找出同一條線上下一個點的位置，畫成線段（rule）；另有透明的點供停留與選取。"""
+        axis, end = ("y", "y2") if vertical else ("x", "x2")
+        position = encoding.get(axis)
+        if not isinstance(position, dict) or "field" not in position:
+            return None
+        series = [d["field"] for d in encoding.get("detail", []) if "field" in d]
+        for name in ("color", "size", "strokeDash", "row", "column"):
+            enc = encoding.get(name)
+            if (
+                isinstance(enc, dict)
+                and "field" in enc
+                and enc.get("type") in ("nominal", "ordinal")
+            ):
+                series.append(enc["field"])
+        continuous = position.get("type") in ("quantitative", "temporal")
+        order = (
+            self.ch(marks.path).name
+            if marks.path is not None
+            else position["field"]
+            if continuous
+            else ROW
+        )
+        window = {
+            "window": [{"op": "lead", "field": position["field"], "as": NEXT}],
+            "sort": [{"field": order}],
+            "groupby": list(dict.fromkeys(f for f in series if f != position["field"])),
+        }
+        rule = {
+            k: v for k, v in vl_mark.items() if k in ("color", "opacity", "strokeWidth", "clip")
+        }
+        return [
+            {
+                "transform": [window, {"filter": f"isValid(datum['{NEXT}'])"}],
+                "mark": {**rule, "type": "rule", "tooltip": True},
+                "encoding": {end: {"field": NEXT}},
+            },
+            {"mark": {"type": "point", "opacity": 0, "tooltip": True}},
+        ]
 
     def line_layers(
         self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any]
@@ -1836,14 +1899,21 @@ def build_spec(
     for n, column in enumerate(c for c in columns if c.role != "sort" and c.use is not None):
         assert column.use is not None
         data_field = fields[column.use.field]
+        # 百分比（分析＞百分比）：量值是占範圍合計的比例，以百分比顯示
+        percent = (
+            ws.percentages is not None
+            and column.role == "measure"
+            and column.use.table_calc is None
+            and column.datatype in ("integer", "real")
+        )
         channels[column.key] = Channel(
             name=f"c{n}",
             label=f"c{n}_label",
-            title=caption(data_field, column.use, ws),
+            title=caption(data_field, column.use, ws) + ("（合計百分比）" if percent else ""),
             role="measure" if column.role == "measure" else "dimension",
-            datatype=column.datatype,
+            datatype="real" if percent else column.datatype,
             use=column.use,
-            format=value_format(ws, data_field, column.use),
+            format=PERCENT_DEFAULT if percent else value_format(ws, data_field, column.use),
             aliases=member_aliases(data_field, column.use) if column.role == "dimension" else {},
             is_set=data_field.set is not None,
             fiscal=fiscal.get(data_field.id, 1),
@@ -1868,13 +1938,17 @@ def build_spec(
                     record[channels[key].name] = None
                     record[channels[key].label] = total.label(key)
             record[TOTAL] = True
+        # 欄總計在上方：列架的總計與小計放在各組之前（表頭依資料的順序）；欄架的見 _column_order
+        # （列與欄都有離散維度時；只有欄維度時表頭也依資料的順序，列總計在左側即放在前面）
+        first = (ws.totals_top and "rows" in total.shelves) or (
+            ws.totals_left and total.shelves == ("columns",) and COLUMN_ORDER not in result.columns
+        )
         if total.group is None:
-            values += records
+            values = records + values if first else values + records
         else:
             keys = [channels[k].label for k in total.group if k in channels]
-            values = after_groups(
-                values, records, lambda r, keys=keys: tuple(r.get(k) for k in keys)
-            )
+            place = before_groups if first else after_groups
+            values = place(values, records, lambda r, keys=keys: tuple(r.get(k) for k in keys))
     pane_values = {
         i: _records(channels, pane_result) for i, (_, pane_result) in (panes or {}).items()
     }
@@ -2042,7 +2116,9 @@ def build_spec(
     column_order: list[Any] = []
     if cols_dims and any(ORDER in v for v in values):
         column_field = "cols_dim" if len(cols_dims) > 1 else builder.ch(cols_dims[0]).label
-        column_order = _column_order(values, column_field, [builder.ch(u) for u in cols_dims])
+        column_order = _column_order(
+            values, column_field, [builder.ch(u) for u in cols_dims], ws.totals_left
+        )
     for channel in ("row", "column"):
         # 分面依資料的順序（查詢已依排序設定排好）；Vega-Lite 的分面不指定時會依字母排序
         facet = (body.get("facet") or body.get("encoding", {})).get(channel)
@@ -3273,9 +3349,11 @@ def _dropped(record: dict[str, Any], ch: Channel) -> bool:
     )
 
 
-def _column_order(values: list[dict[str, Any]], field: str, members: list[Channel]) -> list[Any]:
+def _column_order(
+    values: list[dict[str, Any]], field: str, members: list[Channel], left: bool = False
+) -> list[Any]:
     """欄標題的順序：工作表的標記依名次（只看欄維度自己的排序，與列無關）；小計緊接在它的組
-    （前段的標題相同的最後一欄）之後，總計在最後。"""
+    （前段的標題相同的最後一欄）之後，總計在最後。left（列總計在左側）：小計在它的組之前，總計在最前。"""
     order: list[Any] = []
     headers: dict[Any, tuple[Any, ...]] = {}
     marks = [v for v in values if not v.get(TOTAL) and v.get(ORDER) is not None]
@@ -3296,7 +3374,10 @@ def _column_order(values: list[dict[str, Any]], field: str, members: list[Channe
             kept.append(record.get(ch.label))
         group = tuple(kept)
         same = [i for i, v in enumerate(order) if kept and headers[v][: len(group)] == group]
-        order.insert(same[-1] + 1 if same else len(order), value)
+        if left:
+            order.insert(same[0] if same else 0, value)
+        else:
+            order.insert(same[-1] + 1 if same else len(order), value)
     return order
 
 
@@ -3340,6 +3421,28 @@ def after_groups[RowT](
         result.append(row)
         result += after.get(i, [])
     return result + tail
+
+
+def before_groups[RowT](
+    rows: Sequence[RowT], inserted: Sequence[RowT], group: Callable[[RowT], Hashable]
+) -> list[RowT]:
+    """小計放在各組之前（欄總計在上方）：組相同的第一筆之前；找不到所屬的組時放在最前。"""
+    first: dict[Hashable, int] = {}
+    for i, row in enumerate(rows):
+        first.setdefault(group(row), i)
+    before: dict[int, list[RowT]] = {}
+    head: list[RowT] = []
+    for row in inserted:
+        i = first.get(group(row))
+        if i is None:
+            head.append(row)
+        else:
+            before.setdefault(i, []).append(row)
+    result: list[RowT] = list(head)
+    for i, row in enumerate(rows):
+        result += before.get(i, [])
+        result.append(row)
+    return result
 
 
 def _exclude_totals_from_color(spec: dict[str, Any], mark: str, text: str) -> None:

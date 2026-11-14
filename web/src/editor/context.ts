@@ -39,6 +39,7 @@ export type EditorDialog =
   | { kind: "sort"; use: FieldUse }
   /** 編輯混合關係：Data Blending 的次要資料源各自的連結欄位 */
   | { kind: "blends" }
+  | { kind: "totals" }
   /** 篩選套用到其他工作表（選取的工作表、使用此資料源的所有工作表） */
   | { kind: "apply-filter"; filter: string }
   /** 註解：mark 為檢視上選取的標記（維度的欄位鍵 → 值） */

@@ -95,6 +95,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .zone-box { position: absolute; inset: 0; box-sizing: border-box; overflow: hidden; }
 .zone-container { pointer-events: none; }
 .single-sheet { width: min(1100px, 100%); height: 640px; background: var(--panel); border: 1px solid var(--line); padding: 8px; }
+.single-sheet .sheet-main { width: 100%; height: 100%; display: flex; flex-direction: column; min-width: 0; }
+.single-sheet .sheet-main > .worksheet { flex: 1; min-height: 0; height: auto; }
+.single-sheet.with-controls { display: flex; gap: 10px; width: min(1320px, 100%); }
+.single-sheet.with-controls .sheet-main { flex: 1; }
+.sheet-controls { width: 210px; flex: none; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 
 .worksheet { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; }
 .worksheet-overlay { position: absolute; top: 0; right: 2px; z-index: 1; font-size: 11px; opacity: 0; transition: opacity 0.15s; }

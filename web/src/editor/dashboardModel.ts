@@ -96,7 +96,8 @@ export function isRegular(zone: Zone): boolean {
   return true;
 }
 
-/** 水平或垂直容器：子區塊依陣列的順序沿排列方向排列（固定大小的不變，其餘依原本的大小比例分配）。 */
+/** 水平或垂直容器：子區塊依陣列的順序沿排列方向排列（固定大小的不變，其餘依原本的大小比例分配；
+ * 「平均分配內容」時等分）。 */
 function flow(placed: Zone, original: Zone): Zone {
   const horizontal = placed.layout === "horizontal";
   const start = (z: { x: number; y: number }) => (horizontal ? z.x : z.y);
@@ -119,7 +120,8 @@ function flow(placed: Zone, original: Zone): Zone {
   const free = visible.filter((c) => c.fixed === null || c.fixed === undefined);
   const known = free.filter((c) => span(c) > 0);
   const average = known.length > 0 ? known.reduce((s, c) => s + span(c), 0) / known.length : 1;
-  const weight = (c: Zone) => (span(c) > 0 ? span(c) : average);
+  // 平均分配內容：沒有固定大小的子區塊等分
+  const weight = (c: Zone) => (placed.distribute ? 1 : span(c) > 0 ? span(c) : average);
   const totalWeight = free.reduce((s, c) => s + weight(c), 0) || 1;
   const available = Math.max(0, span(placed) - lead - trail - gap * Math.max(0, visible.length - 1) - fixedTotal);
   let cursor = start(placed) + lead;

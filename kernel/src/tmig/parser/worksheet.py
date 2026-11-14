@@ -104,6 +104,7 @@ from tmig.parser.formats import (
     pane_label_font,
     pane_label_match,
     pane_labels,
+    pane_line_type,
     pane_mark_size,
     pane_trend_line,
     reference_styles,
@@ -266,6 +267,8 @@ KNOWN = frozenset(
         # 趨勢線（不分組的因子 <excluded-factors><column>）
         "trendline",
         "excluded-factors",
+        # 百分比（_percentages）
+        "percentages",
     }
 )
 OPAQUE = frozenset(
@@ -325,6 +328,17 @@ DISTRIBUTIONS = frozenset({"percentile", "stdev", "quantiles", "confidence", "me
 LINE_PATTERNS = {"solid": "solid", "dashed": "dashed", "dotted": "dotted", "dash-dot": "dashed"}
 REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
 REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
+PercentMode = Literal["table", "column", "row", "pane", "row_in_pane", "column_in_pane", "cell"]
+PERCENT_MODES: dict[str, PercentMode] = {
+    "table": "table",
+    "column": "column",
+    "row": "row",
+    "pane": "pane",
+    "row-in-pane": "row_in_pane",
+    "column-in-pane": "column_in_pane",
+    "cell-in-pane": "cell",
+}
+"""百分比的範圍：<percentages mode> → Worksheet.percentages。"""
 KNOWN_UNSUPPORTED = {
     # 類別篩選以外的「開啟活頁簿時篩選到最新的值」（類別篩選的見 CategoricalFilter.latest）
     "preset": "篩選的「開啟報表時篩選到最新的值」（<preset type='last-values'>）",
@@ -530,6 +544,9 @@ class SheetParser:
             title=title,
             totals=totals,
             totals_colored=totals_colored,
+            percentages=self._percentages(child(table, "view")),
+            totals_top=bool(totals or subtotals) and self._shelf_flag(table, "rows", "onTop"),
+            totals_left=bool(totals or subtotals) and self._shelf_flag(table, "cols", "onLeft"),
             subtotals=subtotals,
             visual_totals=visual_totals,
             axes=sheet_formats.axes,
@@ -1446,6 +1463,7 @@ class SheetParser:
                 if use is not None:
                     marks.trend.excluded.append(use)
         marks.mark_size = pane_mark_size(pane)
+        marks.line_type = pane_line_type(pane)
         marks.labels = self._labels(pane)
         return marks, dims
 
@@ -1806,6 +1824,22 @@ class SheetParser:
                 continue
             totals.append(shelf)  # type: ignore[arg-type]
         return totals
+
+    def _percentages(self, view: etree._Element | None) -> PercentMode | None:
+        """百分比（分析＞百分比）：<view> 的 <percentages enabled='true' mode='…'>。"""
+        element = child(view, "percentages")
+        if element is None or element.get("enabled") != "true":
+            return None
+        mode = PERCENT_MODES.get(element.get("mode") or "")
+        if mode is None:
+            self.ctx.flag(element, f"百分比的範圍 {element.get('mode')} v0 不支援")
+        return mode
+
+    @staticmethod
+    def _shelf_flag(table: etree._Element, tag: str, attr: str) -> bool:
+        """欄列架的設定：<rows onTop='true'>（欄總計在上方）、<cols onLeft='true'>（列總計在左側）。"""
+        element = child(table, tag)
+        return element is not None and element.get(attr) == "true"
 
     @staticmethod
     def _totals_colored(style: etree._Element | None) -> bool:

@@ -31,6 +31,7 @@ from tmig.ir.models import (
     ParameterAction,
     Scalar,
     SetAction,
+    SheetControl,
     Story,
     TooltipSheet,
     TupleFilter,
@@ -41,7 +42,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.parser.context import DsState, ParseContext, SharedView, TooltipRef
-from tmig.parser.dashboard import DashboardParser
+from tmig.parser.dashboard import DashboardParser, filter_control, parameter_control
 from tmig.parser.datasource import (
     DatasourceParser,
     add_calc_field,
@@ -56,6 +57,7 @@ from tmig.parser.twbx import (
     WorkbookPackage,
     child,
     children,
+    descendants,
     load_workbook_package,
     local_name,
     text_of,
@@ -267,6 +269,7 @@ class WorkbookParser:
             if sheet is not None:
                 worksheets.append(sheet)
         self._tooltip_sheets(worksheets, root)
+        self._sheet_controls(worksheets, child(root, "windows"))
 
         for window in children(child(root, "windows"), "window"):
             simple_id = child(window, "simple-id")
@@ -467,6 +470,42 @@ class WorkbookParser:
             if use not in uses:
                 uses.append(use)
         return uses
+
+    def _sheet_controls(self, worksheets: list[Worksheet], windows: etree._Element | None) -> None:
+        """工作表上顯示的控制項（顯示篩選、顯示參數）：工作表視窗的 <cards> 中的 <card type='filter'>、
+        <card type='parameter'>；無法移轉的控制項只是不顯示（篩選本身照常套用）。"""
+        by_name = {w.name: w for w in worksheets}
+        for window in children(windows, "window"):
+            name = window.get("name", "")
+            ws, sheet = by_name.get(name), self.ctx.sheets.get(name)
+            if window.get("class") != "worksheet" or ws is None or sheet is None:
+                continue
+            controls: list[SheetControl] = []
+            for card in descendants(window, "card"):
+                kind = card.get("type")
+                if kind == "filter":
+                    found = filter_control(self.ctx, sheet, name, card)
+                    if isinstance(found, str):
+                        self.ctx.ignore(card, f"工作表「{name}」上的{found}：不顯示這個控制項")
+                        continue
+                    use, control = found
+                    item = SheetControl(
+                        kind="filter",
+                        field=use,
+                        control=control,
+                        relevant=card.get("values") == "relevant",
+                    )
+                elif kind == "parameter":
+                    param = parameter_control(self.ctx, card)
+                    if isinstance(param, str):
+                        self.ctx.ignore(card, f"工作表「{name}」上的{param}：不顯示這個控制項")
+                        continue
+                    item = SheetControl(kind="parameter", parameter=param[0], control=param[1])
+                else:
+                    continue
+                if item not in controls:
+                    controls.append(item)
+            ws.controls = controls
 
     def _fits(self, windows: etree._Element | None) -> None:
         """工作表的顯示大小：工作表視窗的 <viewpoint>，與 dashboard 視窗中各工作表的 <viewpoint>

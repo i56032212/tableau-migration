@@ -23,6 +23,7 @@ import {
   isSpecial,
   type MarksIR,
   markUses,
+  MEASURE_NAMES,
   pillLabel,
   sameUse,
   type SheetIR,
@@ -1573,19 +1574,50 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
   const [reverse, setReverse] = useState(Boolean(palette?.reverse));
   const [steps, setSteps] = useState<string>(palette?.steps ? String(palette.steps) : "");
   const choices = editor.catalog.palettes.filter((p) => (continuousColor ? p.kind !== "regular" : p.kind === "regular"));
+  // 個別成員的顏色（離散的色彩）：成員為資料中的值；Measure Names 為檢視中的量值（值是量值的欄位鍵）
+  const discreteColor = colorUse !== null && !continuousColor;
+  const [members, setMembers] = useState<{ value: Scalar; label: string }[]>([]);
+  const [assigned, setAssigned] = useState<Record<string, { value: Scalar; color: string }>>(() =>
+    Object.fromEntries(
+      ((palette?.assignments as { value: Scalar; color: string }[] | undefined) ?? []).map((a) => [JSON.stringify(a.value), a]),
+    ),
+  );
+  const colorKey = colorUse ? useKey(colorUse) : "";
+  useEffect(() => {
+    if (!colorUse || !discreteColor) return;
+    if (colorUse.field === MEASURE_NAMES) {
+      setMembers(editor.sheet.measure_values.map((u) => ({ value: useKey(u), label: pillLabel(u, editor.fields, editor.sheet.table_calcs) })));
+      return;
+    }
+    let cancelled = false;
+    editApi
+      .domain(editor.workbook, colorUse, { kind: "values", worksheet: editor.sheet.id })
+      .then((domain) => {
+        if (cancelled || domain.kind !== "values") return;
+        setMembers(domain.values.slice(0, 200).map((value) => ({ value, label: value === null ? "Null" : String(value) })));
+      })
+      .catch(() => setMembers([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colorKey, discreteColor]);
+  const paletteColors = (editor.catalog.palettes.find((p) => p.name === (paletteName || "tableau10_10_0")) ?? editor.catalog.palettes.find((p) => p.kind === "regular"))?.colors ?? [];
   const save = () => {
     editor.apply((s: SheetIR) =>
       updateCard(s, card, (m) => {
         const next: MarksIR = { ...m, mark_color: useMarkColor ? markColor.toLowerCase() : null, opacity: opacity >= 100 ? null : opacity / 100, stroke: useStroke ? stroke.toLowerCase() : null };
         if (colorUse) {
-          if (!paletteName) next.color_palette = null;
+          const assignments = discreteColor ? Object.values(assigned) : [];
+          if (!paletteName && assignments.length === 0) next.color_palette = null;
+          else if (!paletteName) next.color_palette = { kind: "discrete", palette: null, assignments, colors: [], diverging: false, reverse: false, steps: null };
           else {
             const chosen = editor.catalog.palettes.find((p) => p.name === paletteName);
             next.color_palette = {
               ...(palette ?? {}),
               kind: continuousColor ? "continuous" : "discrete",
               palette: paletteName,
-              assignments: continuousColor ? [] : ((palette?.assignments as unknown[]) ?? []),
+              assignments,
               colors: [],
               diverging: chosen?.kind === "diverging",
               reverse,
@@ -1629,6 +1661,42 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
                 分段
                 <input type="number" min={2} aria-label="分段數" value={steps} placeholder="連續" onChange={(e) => setSteps(e.target.value)} />
               </label>
+            )}
+            {discreteColor && members.length > 0 && (
+              <fieldset className="member-colors">
+                <legend>個別成員的顏色</legend>
+                {members.map((member, i) => {
+                  const key = JSON.stringify(member.value);
+                  const chosen = assigned[key]?.color;
+                  return (
+                    <label className="inline" key={key}>
+                      <input
+                        type="color"
+                        aria-label={`${member.label}的顏色`}
+                        value={chosen ?? paletteColors[i % Math.max(1, paletteColors.length)] ?? "#4e79a7"}
+                        onChange={(e) => setAssigned((current) => ({ ...current, [key]: { value: member.value, color: e.target.value.toLowerCase() } }))}
+                      />
+                      {member.label}
+                      {chosen && (
+                        <button
+                          type="button"
+                          className="link"
+                          title="改回色盤的顏色"
+                          onClick={() =>
+                            setAssigned((current) => {
+                              const next = { ...current };
+                              delete next[key];
+                              return next;
+                            })
+                          }
+                        >
+                          重設
+                        </button>
+                      )}
+                    </label>
+                  );
+                })}
+              </fieldset>
             )}
           </>
         )}

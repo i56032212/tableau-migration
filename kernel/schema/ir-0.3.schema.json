@@ -4098,6 +4098,17 @@
           "default": null,
           "description": "折線或多邊形的連接順序"
         },
+        "line_type": {
+          "default": "linear",
+          "description": "線的類型（標記卡「路徑」的線條類型）：linear＝直線連接，step＝階梯（水平線到下一個點再垂直），jump＝跳躍（只有水平線，不畫垂直的連接）",
+          "enum": [
+            "linear",
+            "step",
+            "jump"
+          ],
+          "title": "Line Type",
+          "type": "string"
+        },
         "geometry": {
           "anyOf": [
             {
@@ -5679,6 +5690,75 @@
         "by"
       ],
       "title": "SetTop",
+      "type": "object"
+    },
+    "SheetControl": {
+      "additionalProperties": false,
+      "description": "工作表上顯示的控制項（Tableau 的「顯示篩選」「顯示參數」，工作表視窗的 <card>）：單獨檢視工作表時\n顯示在檢視的旁邊；dashboard 上的控制項是各自的區塊（Zone）。",
+      "properties": {
+        "kind": {
+          "enum": [
+            "filter",
+            "parameter"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "filter：篩選的欄位（工作表上要有這個篩選）"
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "parameter：參數",
+          "title": "Parameter"
+        },
+        "control": {
+          "enum": [
+            "single_dropdown",
+            "multi_dropdown",
+            "single_list",
+            "multi_list",
+            "range_slider",
+            "single_slider",
+            "date_range",
+            "type_in",
+            "relative_date",
+            "condition"
+          ],
+          "title": "Control",
+          "type": "string"
+        },
+        "relevant": {
+          "default": false,
+          "description": "篩選控制項「只顯示相關的值」：可選值只列出套用工作表上其他篩選之後還有資料的值；預設列出資料庫中所有的值",
+          "title": "Relevant",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "control"
+      ],
+      "title": "SheetControl",
       "type": "object"
     },
     "ShelfStyle": {
@@ -7572,6 +7652,40 @@
           "title": "Totals Colored",
           "type": "boolean"
         },
+        "totals_top": {
+          "default": false,
+          "description": "欄總計在上方（Tableau 的「欄總計移至頂端」，<rows onTop='true'>）：列架的總計列與小計放在各組的資料之前；預設在最下方",
+          "title": "Totals Top",
+          "type": "boolean"
+        },
+        "totals_left": {
+          "default": false,
+          "description": "列總計在左側（Tableau 的「列總計移至左側」，<cols onLeft='true'>）：欄架的總計欄與小計放在各組的資料之前；預設在最右邊",
+          "title": "Totals Left",
+          "type": "boolean"
+        },
+        "percentages": {
+          "anyOf": [
+            {
+              "enum": [
+                "table",
+                "column",
+                "row",
+                "pane",
+                "row_in_pane",
+                "column_in_pane",
+                "cell"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "百分比（Tableau 的「分析＞百分比」）：量值顯示成占範圍合計的比例——table 整個表、column 欄（每一欄的合計）、row 列、pane 窗格、row_in_pane 窗格中的列、column_in_pane 窗格中的欄、cell 儲存格；合計與總計相同，在範圍的詳細程度重新彙總。None 為不使用",
+          "title": "Percentages"
+        },
         "subtotals": {
           "description": "小計：欄列架上這些離散維度的每個值之後加一列（或一欄）合計，在去掉同一架上之後維度的詳細程度重新彙總（Tableau 的「自動」）",
           "items": {
@@ -7819,6 +7933,14 @@
           "default": null,
           "description": "地圖的底圖設定；None 為預設（Light 樣式）"
         },
+        "controls": {
+          "description": "工作表上顯示的篩選與參數控制項（顯示篩選、顯示參數）",
+          "items": {
+            "$ref": "#/$defs/SheetControl"
+          },
+          "title": "Controls",
+          "type": "array"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -7982,6 +8104,12 @@
           "default": null,
           "title": "Control"
         },
+        "relevant": {
+          "default": false,
+          "description": "篩選控制項「只顯示相關的值」（values='relevant'）：可選值只列出套用工作表上其他篩選之後還有資料的值",
+          "title": "Relevant",
+          "type": "boolean"
+        },
         "legend": {
           "anyOf": [
             {
@@ -8095,6 +8223,12 @@
           "default": null,
           "description": "固定大小（像素）：沿父容器排列方向的寬或高，視窗縮放時不變",
           "title": "Fixed"
+        },
+        "distribute": {
+          "default": false,
+          "description": "水平或垂直容器的「平均分配內容」（layout-strategy-id='distribute-evenly'）：沒有固定大小的子區塊沿排列方向等分",
+          "title": "Distribute",
+          "type": "boolean"
         },
         "hidden": {
           "default": false,

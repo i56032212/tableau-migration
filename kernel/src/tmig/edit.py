@@ -601,12 +601,29 @@ def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR
         raise EditError(f"找不到工作表 {sheet.id}")
     if any(w.name == sheet.name and w.id != sheet.id for w in ir.worksheets):
         raise EditError(f"已經有名為「{sheet.name}」的工作表")
-    sheet = _sync_blends(ir, sheet)
+    sheet = _sync_controls(ir, _sync_blends(ir, sheet))
     updated = ir.model_copy(
         update={"worksheets": [sheet if w.id == sheet.id else w for w in ir.worksheets]}
     )
     updated = _sync_filter_groups(updated, sheet)
     return _validated(updated, "工作表的參照不正確"), sheet
+
+
+def _sync_controls(ir: IR, sheet: Worksheet) -> Worksheet:
+    """工作表上的控制項（顯示篩選、顯示參數）：篩選已經移除、參數不存在的控制項一併移除。"""
+    if not sheet.controls:
+        return sheet
+    filtered = {f.field.field for f in sheet.filters if not isinstance(f, TupleFilter)}
+    parameters = {p.id for p in ir.parameters}
+    kept = [
+        c
+        for c in sheet.controls
+        if (c.kind == "filter" and c.field is not None and c.field.field in filtered)
+        or (c.kind == "parameter" and c.parameter in parameters)
+    ]
+    return (
+        sheet if len(kept) == len(sheet.controls) else sheet.model_copy(update={"controls": kept})
+    )
 
 
 def _grouped_copy(source: Filter, target_id: str) -> Filter:

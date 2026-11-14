@@ -6,7 +6,7 @@ import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor } from "./context";
 import { hierarchyCandidates } from "./Dialogs";
 import { fieldMenu } from "./FieldDialogs";
-import { PopupMenu } from "./Shelves";
+import { PopupMenu, type SheetControlIR } from "./Shelves";
 import {
   blendSources,
   buildMap,
@@ -399,6 +399,8 @@ export function DataPane({
   onEditDatasource?: (id: string) => void;
 }) {
   const editor = useEditor();
+  const parameterShown = (id: string) =>
+    ((editor.sheet.controls as SheetControlIR[] | undefined) ?? []).some((c) => c.kind === "parameter" && c.parameter === id);
   const { catalog, sheet } = editor;
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
@@ -573,6 +575,23 @@ export function DataPane({
             <span className="field-icon">≡</span>
             <span className="field-name">{p.caption}</span>
             <span className="field-actions">
+              <button
+                type="button"
+                className="link"
+                aria-pressed={parameterShown(p.id)}
+                title={parameterShown(p.id) ? "隱藏參數控制項" : "顯示參數：單獨檢視工作表時，檢視旁邊顯示這個參數的控制項"}
+                onClick={() =>
+                  editor.apply((s) => {
+                    const controls = (s.controls as SheetControlIR[] | undefined) ?? [];
+                    if (controls.some((c) => c.kind === "parameter" && c.parameter === p.id))
+                      return { ...s, controls: controls.filter((c) => !(c.kind === "parameter" && c.parameter === p.id)) };
+                    const control = p.allowed.kind === "list" ? "single_dropdown" : p.allowed.kind === "range" ? "single_slider" : "type_in";
+                    return { ...s, controls: [...controls, { kind: "parameter", field: null, parameter: p.id, control, relevant: false }] };
+                  })
+                }
+              >
+                {parameterShown(p.id) ? "◉" : "○"}
+              </button>
               <button type="button" className="link" title="編輯參數" onClick={() => editor.openDialog({ kind: "parameter", parameter: p.id })}>
                 ✎
               </button>

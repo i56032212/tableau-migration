@@ -692,3 +692,44 @@ def test_header_vertical_alignment_and_orientation(tmp_path: Path, db: Path) -> 
     axis = render(ir, db).spec["encoding"]["y"]["axis"]
     assert (axis["labelAngle"], axis["labelAlign"]) == (-90, "center")
     assert axis["minExtent"] < 40  # 一行字的寬度
+
+
+def test_step_and_jump_lines(tmp_path: Path, db: Path) -> None:
+    """線條類型（標記卡「路徑」）：階梯是 step 內插（量值在橫軸時先垂直），跳躍只畫到下一個點的水平線。"""
+
+    def line(kind: str, across: bool = True, color: bool = False) -> str:
+        measure, date = ref("sum:Sales:qk"), ref("tmn:Order Date:qk")
+        return worksheet(
+            "Trend",
+            [MONTH, SALES, REGION],
+            rows=measure if across else date,
+            cols=date if across else measure,
+            mark="Line",
+            encodings=f"<color column='{ref('none:Region:nk')}' />" if color else "",
+            pane_extra="<style><style-rule element='mark'>"
+            f"<format attr='line-interpolation' value='{kind}' /></style-rule></style>",
+        )
+
+    for n, (kind, across, expected) in enumerate(
+        [("step", True, "step-after"), ("step", False, "step-before"), ("linear", True, None)]
+    ):
+        (tmp_path / str(n)).mkdir()
+        ir = parse(tmp_path / str(n), line(kind, across))
+        assert ir.unsupported == []
+        assert ir.worksheets[0].marks.line_type == kind
+        spec = render(ir, db).spec
+        assert spec["mark"].get("interpolate") == expected
+
+    (tmp_path / "jump").mkdir()
+    ir = parse(tmp_path / "jump", line("jump", color=True))
+    assert ir.worksheets[0].marks.line_type == "jump"
+    spec = render(ir, db).spec
+    segments, points = spec["layer"]
+    assert segments["mark"]["type"] == "rule" and points["mark"]["type"] == "point"
+    window, valid = segments["transform"]
+    x = spec["encoding"]["x"]["field"]
+    assert window["window"] == [{"op": "lead", "field": x, "as": "__next"}]
+    assert window["groupby"] == [spec["encoding"]["color"]["field"]]  # 各條線各自找下一個點
+    assert window["sort"] == [{"field": x}]
+    assert segments["encoding"] == {"x2": {"field": "__next"}}
+    assert "__next" in valid["filter"]

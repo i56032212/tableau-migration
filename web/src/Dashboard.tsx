@@ -483,6 +483,7 @@ function ZoneContent({
           zone={zone}
           state={view.sheetFilters[zone.worksheet!]}
           onChange={(key, value) => setFilter(zone.worksheet!, key, value)}
+          query={zone.relevant ? stateFor(ir, zone.worksheet!, view) : undefined}
         />
       );
     case "parameter": {

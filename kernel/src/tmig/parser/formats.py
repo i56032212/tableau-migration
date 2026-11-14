@@ -488,6 +488,20 @@ def pane_mark_size(pane: etree._Element) -> float | None:
     return found
 
 
+def pane_line_type(pane: etree._Element) -> Literal["linear", "step", "jump"]:
+    """標記卡（<pane>）的線條類型：<style-rule element='mark'> 的 line-interpolation（step、jump；
+    其餘為直線）。"""
+    found: Literal["linear", "step", "jump"] = "linear"
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "mark":
+            continue
+        for item in children(rule, "format"):
+            if item.get("attr") == "line-interpolation" and item.get("field") is None:
+                value = (item.get("value") or "").lower()
+                found = "step" if value == "step" else "jump" if value == "jump" else "linear"
+    return found
+
+
 RUN_ALIGN: dict[str, Literal["left", "center", "right"]] = {
     "0": "left",
     "1": "center",

@@ -462,6 +462,11 @@ export function DashboardEditor({
             </select>
           </label>
         )}
+        {zone.kind === "filter" && ["multi_list", "multi_dropdown", "single_list", "single_dropdown"].includes(zone.control ?? "") && (
+          <label className="inline" title="可選值只列出套用工作表上其他篩選之後還有資料的值（預設列出資料庫中所有的值）">
+            <input type="checkbox" checked={zone.relevant === true} onChange={(e) => set({ relevant: e.target.checked })} /> 只顯示相關的值
+          </label>
+        )}
         {zone.kind === "parameter" && (
           <label className="inline">
             控制項
@@ -614,6 +619,19 @@ export function DashboardEditor({
               <option value="vertical">垂直</option>
               <option value="tiled">並排（各自定位）</option>
             </select>
+          </label>
+        )}
+        {zone.kind === "container" && (zone.layout === "horizontal" || zone.layout === "vertical") && (
+          <label className="inline" title="沒有固定大小的子區塊沿排列方向等分（Tableau 的「平均分配內容」）">
+            <input
+              type="checkbox"
+              checked={zone.distribute === true}
+              onChange={(e) => {
+                const distribute = e.target.checked;
+                change(zone.id, (z) => placeZone({ ...z, distribute }, z));
+              }}
+            />{" "}
+            平均分配內容
           </label>
         )}
         {floatingZone && (

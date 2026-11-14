@@ -1369,6 +1369,11 @@ class Marks(IRModel):
     shape: FieldUse | None = None
     angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
     path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")
+    line_type: Literal["linear", "step", "jump"] = Field(
+        default="linear",
+        description="線的類型（標記卡「路徑」的線條類型）：linear＝直線連接，step＝階梯（水平線到下一個點再垂直），"
+        "jump＝跳躍（只有水平線，不畫垂直的連接）",
+    )
     geometry: FieldUse | None = Field(
         default=None,
         description="地圖上標記的形狀：Geometry (generated)（地理角色的區域），或空間欄位的 COLLECT"
@@ -1760,6 +1765,46 @@ class MapViewport(IRModel):
         return self
 
 
+ControlType = Literal[
+    "single_dropdown",
+    "multi_dropdown",
+    "single_list",
+    "multi_list",
+    "range_slider",
+    "single_slider",
+    "date_range",
+    "type_in",
+    "relative_date",
+    "condition",
+]
+"""篩選控制項；relative_date、condition 為顯示目前的相對日期或條件（檢視器尚不能修改）。"""
+
+
+class SheetControl(IRModel):
+    """工作表上顯示的控制項（Tableau 的「顯示篩選」「顯示參數」，工作表視窗的 <card>）：單獨檢視工作表時
+    顯示在檢視的旁邊；dashboard 上的控制項是各自的區塊（Zone）。"""
+
+    kind: Literal["filter", "parameter"]
+    field: FieldUse | None = Field(
+        default=None, description="filter：篩選的欄位（工作表上要有這個篩選）"
+    )
+    parameter: Id | None = Field(default=None, description="parameter：參數")
+    control: ControlType
+    relevant: bool = Field(
+        default=False,
+        description="篩選控制項「只顯示相關的值」：可選值只列出套用工作表上其他篩選之後還有資料的值；"
+        "預設列出資料庫中所有的值",
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.kind == "filter" and (self.field is None or self.parameter is not None):
+            raise ValueError("篩選控制項要有 field、不能有 parameter")
+        if self.kind == "parameter" and (self.parameter is None or self.field is not None):
+            raise ValueError("參數控制項要有 parameter、不能有 field")
+        return self
+
+
 class MapOptions(IRModel):
     """地圖的設定（地圖 → 背景地圖、地圖圖層，與存檔時的顯示範圍）。底圖由平台內建的地理資料畫出
     （Natural Earth），沒有街道、地形與衛星影像。"""
@@ -1824,6 +1869,24 @@ class Worksheet(IRModel):
         default=False,
         description="依量值著色時總計也上色、納入色階的範圍（Tableau 色彩的「包含總計」）；"
         "預設與 Tableau 相同，總計不上色",
+    )
+    totals_top: bool = Field(
+        default=False,
+        description="欄總計在上方（Tableau 的「欄總計移至頂端」，<rows onTop='true'>）：列架的總計列與小計"
+        "放在各組的資料之前；預設在最下方",
+    )
+    totals_left: bool = Field(
+        default=False,
+        description="列總計在左側（Tableau 的「列總計移至左側」，<cols onLeft='true'>）：欄架的總計欄與小計"
+        "放在各組的資料之前；預設在最右邊",
+    )
+    percentages: (
+        Literal["table", "column", "row", "pane", "row_in_pane", "column_in_pane", "cell"] | None
+    ) = Field(
+        default=None,
+        description="百分比（Tableau 的「分析＞百分比」）：量值顯示成占範圍合計的比例——table 整個表、"
+        "column 欄（每一欄的合計）、row 列、pane 窗格、row_in_pane 窗格中的列、column_in_pane 窗格中的欄、"
+        "cell 儲存格；合計與總計相同，在範圍的詳細程度重新彙總。None 為不使用",
     )
     subtotals: list[FieldUse] = Field(
         default_factory=list,
@@ -1900,6 +1963,10 @@ class Worksheet(IRModel):
     map: MapOptions | None = Field(
         default=None, description="地圖的底圖設定；None 為預設（Light 樣式）"
     )
+    controls: list[SheetControl] = Field(
+        default_factory=list,
+        description="工作表上顯示的篩選與參數控制項（顯示篩選、顯示參數）",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -1931,19 +1998,6 @@ ZoneKind = Literal[
     "button",
     "web",
 ]
-ControlType = Literal[
-    "single_dropdown",
-    "multi_dropdown",
-    "single_list",
-    "multi_list",
-    "range_slider",
-    "single_slider",
-    "date_range",
-    "type_in",
-    "relative_date",
-    "condition",
-]
-"""篩選控制項；relative_date、condition 為顯示目前的相對日期或條件（檢視器尚不能修改）。"""
 
 _ZONE_ATTRS = (
     "worksheet",
@@ -2047,6 +2101,11 @@ class Zone(IRModel):
     field: FieldUse | None = Field(default=None, description="篩選控制項與醒目提示控制項的欄位")
     parameter: Id | None = Field(default=None, description="參數控制項的參數")
     control: ControlType | None = None
+    relevant: bool = Field(
+        default=False,
+        description="篩選控制項「只顯示相關的值」（values='relevant'）：可選值只列出套用工作表上其他篩選之後"
+        "還有資料的值",
+    )
     legend: Literal["color", "size", "shape"] | None = None
     text: str | None = None
     content: list[TextRun] = Field(
@@ -2066,6 +2125,11 @@ class Zone(IRModel):
     )
     fixed: int | None = Field(
         default=None, ge=0, description="固定大小（像素）：沿父容器排列方向的寬或高，視窗縮放時不變"
+    )
+    distribute: bool = Field(
+        default=False,
+        description="水平或垂直容器的「平均分配內容」（layout-strategy-id='distribute-evenly'）："
+        "沒有固定大小的子區塊沿排列方向等分",
     )
     hidden: bool = Field(default=False, description="使用者隱藏的區塊（例如以按鈕切換顯示的容器）")
     show_title: bool = Field(default=True, description="工作表區塊是否顯示標題")
