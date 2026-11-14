@@ -4074,6 +4074,14 @@
           ],
           "default": null
         },
+        "shape_assignments": {
+          "description": "形狀欄位中指定給各值的形狀；其餘的值依預設形狀調色盤的順序",
+          "items": {
+            "$ref": "#/$defs/ShapeAssignment"
+          },
+          "title": "Shape Assignments",
+          "type": "array"
+        },
         "angle": {
           "anyOf": [
             {
@@ -5690,6 +5698,55 @@
         "by"
       ],
       "title": "SetTop",
+      "type": "object"
+    },
+    "ShapeAssignment": {
+      "additionalProperties": false,
+      "description": "形狀欄位中指定給一個值的形狀（Tableau 的「編輯形狀」）。",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "欄位的值（Null 為 None，日期為 ISO 8601 字串）",
+          "title": "Value"
+        },
+        "shape": {
+          "enum": [
+            "circle",
+            "square",
+            "plus",
+            "times",
+            "asterisk",
+            "diamond",
+            "triangle",
+            "down_triangle",
+            "left_triangle",
+            "right_triangle"
+          ],
+          "title": "Shape",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "shape"
+      ],
+      "title": "ShapeAssignment",
       "type": "object"
     },
     "SheetControl": {

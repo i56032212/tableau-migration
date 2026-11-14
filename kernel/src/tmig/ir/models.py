@@ -1230,6 +1230,28 @@ class ColorAssignment(IRModel):
     color: HexColor
 
 
+ShapeName = Literal[
+    "circle",
+    "square",
+    "plus",
+    "times",
+    "asterisk",
+    "diamond",
+    "triangle",
+    "down_triangle",
+    "left_triangle",
+    "right_triangle",
+]
+"""Tableau 預設形狀調色盤的形狀，依調色盤的順序。"""
+
+
+class ShapeAssignment(IRModel):
+    """形狀欄位中指定給一個值的形狀（Tableau 的「編輯形狀」）。"""
+
+    value: Scalar = Field(description="欄位的值（Null 為 None，日期為 ISO 8601 字串）")
+    shape: ShapeName
+
+
 class ColorPalette(IRModel):
     """顏色欄位的色彩設定（Tableau 的「編輯色彩」）。
 
@@ -1367,6 +1389,10 @@ class Marks(IRModel):
         default_factory=list, description="工具提示中的工作表（Viz in Tooltip）"
     )
     shape: FieldUse | None = None
+    shape_assignments: list[ShapeAssignment] = Field(
+        default_factory=list,
+        description="形狀欄位中指定給各值的形狀；其餘的值依預設形狀調色盤的順序",
+    )
     angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
     path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")
     line_type: Literal["linear", "step", "jump"] = Field(

@@ -1,10 +1,13 @@
 // 桌面版的 Story 編輯器：故事點的新增、排序、說明文字與顯示的 dashboard 或工作表，Story 的標題、大小與導覽。
 
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import type { ViewState } from "../state";
 import type { IR, Story, StoryPoint } from "../types";
-import { StoryView } from "../Story";
+import { capturePoint, StoryView } from "../Story";
 import { editApi } from "./api";
 import { useEditHistory, useNotice } from "./history";
+
+const EMPTY_VIEW: ViewState = { sheetFilters: {}, parameters: {}, actions: {}, selections: {} };
 
 function nextPointId(story: Story): string {
   let max = 0;
@@ -41,6 +44,11 @@ export function StoryEditor({
     },
   );
   const [selected, setSelected] = useState<string | null>(null);
+  // 預覽中目前的檢視狀態（在故事點上操作之後的）：「更新」把它記到故事點
+  const live = useRef<{ point: string; view: ViewState } | null>(null);
+  const onView = useCallback((point: StoryPoint, view: ViewState) => {
+    live.current = { point: point.id, view };
+  }, []);
   const story = history.current;
   if (history.error) return <main className="error">無法編輯：{history.error}</main>;
   if (!story) return <main>載入中…</main>;
@@ -51,6 +59,13 @@ export function StoryEditor({
     p.dashboard ? (ir.dashboards.find((d) => d.id === p.dashboard)?.name ?? p.dashboard) : (ir.worksheets.find((w) => w.id === p.worksheet)?.name ?? p.worksheet);
   const setPoint = (pointId: string, patch: Partial<StoryPoint>) =>
     apply((s) => ({ ...s, points: s.points.map((p) => (p.id === pointId ? { ...p, ...patch } : p)) }));
+  /** 預覽中目前故事點的狀態；範圍類的篩選記不下來時提醒。 */
+  const capture = () => {
+    if (!current || live.current?.point !== current.id) return null;
+    const { state, skipped } = capturePoint(ir, live.current.view);
+    if (skipped.length > 0) notify(`範圍類的篩選（${skipped.join("、")}）無法記到故事點，其餘的已記下`, "error");
+    return state;
+  };
   const move = (pointId: string, delta: number) =>
     apply((s) => {
       const points = [...s.points];
@@ -264,6 +279,34 @@ export function StoryEditor({
         </label>
         <button
           type="button"
+          title="把預覽中目前的篩選、參數與選取記到這個故事點（Tableau 故事點的「更新」）"
+          onClick={() => {
+            const captured = capture();
+            if (current && captured) setPoint(current.id, captured);
+          }}
+        >
+          更新故事點
+        </button>
+        <button
+          type="button"
+          title="以預覽中目前的狀態新增一個故事點（Tableau 的「另存為新的故事點」）"
+          onClick={() => {
+            const captured = capture();
+            if (!current || !captured) return;
+            apply((s) => {
+              const point: StoryPoint = { ...current, ...captured, id: nextPointId(s), caption: current.caption ? `${current.caption} (2)` : "" };
+              setSelected(point.id);
+              const index = s.points.findIndex((p) => p.id === current.id);
+              const points = [...s.points];
+              points.splice(index + 1, 0, point);
+              return { ...s, points };
+            });
+          }}
+        >
+          另存為新的故事點
+        </button>
+        <button
+          type="button"
           onClick={() =>
             current &&
             apply((s) => {
@@ -287,9 +330,10 @@ export function StoryEditor({
             workbook={workbook}
             ir={ir}
             story={{ ...story, active: current.id }}
-            base={{ sheetFilters: {}, parameters: {}, actions: {}, selections: {} }}
+            base={EMPTY_VIEW}
             cases={[]}
             onNavigate={() => undefined}
+            onView={onView}
           />
         )}
       </div>

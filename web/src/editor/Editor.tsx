@@ -38,7 +38,7 @@ import {
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
 import { AnnotationsDialog, ApplyFilterDialog, BlendsDialog, LabelDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
-import { TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
+import { ShapesDialog, TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
 import {
   type Card,
   type Catalog,
@@ -786,6 +786,7 @@ export function Editor({
       {dialog?.kind === "labels" && <LabelDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "blends" && <BlendsDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "totals" && <TotalsDialog onClose={() => setDialog(null)} />}
+      {dialog?.kind === "shapes" && <ShapesDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "hierarchy" && (
         <HierarchyDialog
           datasource={dialog.datasource}

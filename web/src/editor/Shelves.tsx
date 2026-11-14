@@ -750,6 +750,11 @@ export function MarksCard() {
         <button type="button" onClick={() => editor.openDialog({ kind: "colors", card })}>
           色彩…
         </button>
+        {marks.shape && (
+          <button type="button" title="各成員的形狀（Tableau 的「編輯形狀」）" onClick={() => editor.openDialog({ kind: "shapes", card })}>
+            形狀…
+          </button>
+        )}
         <button type="button" title="標記標籤：顯示與否、自訂文字、要標示的標記" onClick={() => editor.openDialog({ kind: "labels", card })}>
           標籤…
         </button>

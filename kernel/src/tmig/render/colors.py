@@ -16,10 +16,10 @@ from __future__ import annotations
 import datetime as dt
 import itertools
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
-from tmig.ir.models import ColorPalette, Scalar
+from tmig.ir.models import ColorPalette, Scalar, ShapeAssignment, ShapeName
 from tmig.render.palettes import (
     AUTOMATIC_DIVERGING,
     AUTOMATIC_SEQUENTIAL,
@@ -85,6 +85,58 @@ def discrete_scale(
     )
     colors = [assigned.get(value_key(raw[label]), fallback[i]) for i, label in enumerate(labels)]
     return {"domain": labels, "range": colors}
+
+
+SHAPE_ORDER: tuple[ShapeName, ...] = (
+    "circle",
+    "square",
+    "plus",
+    "times",
+    "asterisk",
+    "diamond",
+    "triangle",
+    "down_triangle",
+    "left_triangle",
+    "right_triangle",
+)
+"""Tableau 預設形狀調色盤的順序。"""
+VEGA_SHAPES: dict[ShapeName, str] = {
+    "circle": "circle",
+    "square": "square",
+    "plus": "cross",
+    # 叉號與星號：Vega 沒有內建的形狀，以路徑畫出（單位大小的範圍為 -1 到 1）
+    "times": "M-1,-0.7L-0.7,-1L0,-0.3L0.7,-1L1,-0.7L0.3,0L1,0.7L0.7,1L0,0.3L-0.7,1L-1,0.7L-0.3,0Z",
+    "asterisk": "M0,-1L0.26,-0.36L0.95,-0.31L0.42,0.14L0.59,0.81L0,0.44L-0.59,0.81L-0.42,0.14L-0.95,-0.31L-0.26,-0.36Z",
+    "diamond": "diamond",
+    "triangle": "triangle-up",
+    "down_triangle": "triangle-down",
+    "left_triangle": "triangle-left",
+    "right_triangle": "triangle-right",
+}
+
+
+def shape_scale(
+    assignments: Sequence[ShapeAssignment], pairs: Iterable[tuple[Any, Any]]
+) -> dict[str, Any] | None:
+    """形狀的比例尺：domain 為資料中的顯示值（成員依原值排序，與色彩相同），range 為各值的形狀。
+    指定的形狀優先，其餘的成員依預設形狀調色盤的順序。pairs：（顯示值、原值）。"""
+    assigned: dict[tuple[str, Any], ShapeName] = {
+        value_key(item.value): item.shape for item in assignments
+    }
+    labels: list[Any] = []
+    raw: dict[Any, Any] = {}
+    for label, value in pairs:
+        if label not in raw:
+            raw[label] = value
+            labels.append(label)
+    if not labels:
+        return None
+    labels.sort(key=lambda label: _member_order(raw[label]))
+    shapes: list[ShapeName] = [
+        assigned.get(value_key(raw[label]), SHAPE_ORDER[i % len(SHAPE_ORDER)])
+        for i, label in enumerate(labels)
+    ]
+    return {"domain": labels, "range": [VEGA_SHAPES[s] for s in shapes]}
 
 
 def _member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str]:

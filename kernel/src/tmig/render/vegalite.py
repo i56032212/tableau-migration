@@ -73,7 +73,7 @@ from tmig.ir.models import (
 from tmig.planner.state import use_key
 from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
-from tmig.render.colors import continuous_scale, discrete_scale
+from tmig.render.colors import continuous_scale, discrete_scale, shape_scale
 from tmig.render.fonts import (
     DEFAULT_SIZE,
     LABEL_COLOR,
@@ -1564,7 +1564,19 @@ class _Builder:
             encoding["size"] = {"field": ch.name, "type": "quantitative", "title": ch.title}
         if marks.shape is not None:
             ch = self.ch(marks.shape)
-            encoding["shape"] = {"field": ch.label, "type": "nominal", "title": ch.title}
+            shape: dict[str, Any] = {"field": ch.label, "type": "nominal", "title": ch.title}
+            encoding["shape"] = shape
+            # 指定的形狀與 Tableau 預設形狀調色盤的順序（成員依原值排序，不隨工作表的排序改變）
+            shapes = shape_scale(
+                marks.shape_assignments,
+                (
+                    (r.get(ch.label), r.get(ch.name))
+                    for r in self.records_of(marks)
+                    if not r.get(TOTAL)
+                ),
+            )
+            if shapes is not None:
+                shape["scale"] = shapes
         for use in marks.detail:
             ch = self.ch(use)
             if ch.role == "dimension":

@@ -62,6 +62,7 @@ from tmig.ir.models import (
     RangeFilter,
     ReferenceLine,
     Scalar,
+    ShapeAssignment,
     Sort,
     TableCalc,
     TableCalcPreset,
@@ -72,7 +73,15 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.ir.scope import calc_references
-from tmig.parser.colors import color_encodings, hex_color, label_color, mark_style, parse_color
+from tmig.parser.colors import (
+    color_encodings,
+    hex_color,
+    label_color,
+    mark_style,
+    parse_color,
+    parse_shapes,
+    shape_encodings,
+)
 from tmig.parser.context import (
     DsState,
     FilterKind,
@@ -1386,6 +1395,7 @@ class SheetParser:
         dims: list[FieldUse] = []
         singles = {"color": "color", "size": "size", "shape": "shape", "wedge-size": "angle"}
         color_ref: str | None = None
+        shape_ref: str | None = None
         shapes: list[tuple[str, FieldUse, etree._Element]] = []
         for enc in children(child(pane, "encodings")):
             tag = local_name(enc)
@@ -1415,6 +1425,8 @@ class SheetParser:
                 setattr(marks, attr_name, use)
                 if tag == "color":
                     color_ref = enc.get("column")
+                elif tag == "shape":
+                    shape_ref = enc.get("column")
             elif tag == "path":
                 marks.path = use
             elif tag == "geometry" or (tag in ("lod", "text", "tooltip") and self._spatial(use)):
@@ -1446,6 +1458,8 @@ class SheetParser:
             )
         if marks.color is not None and color_ref is not None:
             marks.color_palette = self._color_palette(color_ref, marks.color)
+        if marks.shape is not None and shape_ref is not None:
+            marks.shape_assignments = self._shapes(shape_ref, pane)
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
         if mark_type == "density":
             marks.density = density_style(pane)
@@ -1495,6 +1509,23 @@ class SheetParser:
         if enc is None:
             return None
         return parse_color(enc, self._measure_key if use.field == MEASURE_NAMES else None)
+
+    def _shapes(self, ref: str, pane: etree._Element) -> list[ShapeAssignment]:
+        """形狀欄位的形狀設定（編輯形狀）：工作表的 <style> 優先，其次是資料源的 <style>。自訂的圖片形狀
+        認不得，依預設的形狀呈現（不影響數字）。"""
+        assert self.ds is not None
+        source = shape_encodings(child(self.ds.element, "style"))
+        sheet = shape_encodings(child(child(self.el, "table"), "style"))
+        enc = {**source, **sheet}.get(instance_key(ref))
+        if enc is None:
+            return []
+        assignments, unknown = parse_shapes(enc)
+        if unknown:
+            self.ctx.ignore(
+                pane,
+                f"工作表「{self.name}」的形狀 {'、'.join(unknown[:3])} 不是內建的形狀，依預設的形狀呈現",
+            )
+        return assignments
 
     def _measure_key(self, ref: str) -> str | None:
         """Measure Names 的值（量值的欄位實例）→ 量值的欄位鍵；不在這張工作表的量值回傳 None。"""

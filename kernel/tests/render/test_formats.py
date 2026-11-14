@@ -733,3 +733,39 @@ def test_step_and_jump_lines(tmp_path: Path, db: Path) -> None:
     assert window["sort"] == [{"field": x}]
     assert segments["encoding"] == {"x2": {"field": "__next"}}
     assert "__next" in valid["filter"]
+
+
+def test_shape_palette(tmp_path: Path, db: Path) -> None:
+    """形狀的調色盤（編輯形狀）：指定的形狀優先，其餘的成員依 Tableau 預設調色盤的順序；成員依值排序。"""
+    region = ref("none:Region:nk")
+    sheet = worksheet(
+        "Shapes",
+        [REGION, CATEGORY, SALES, PROFIT],
+        rows=ref("sum:Sales:qk"),
+        cols=ref("sum:Profit:qk"),
+        mark="Shape",
+        encodings=f"<shape column='{region}' /><lod column='{ref('none:Category:nk')}' />",
+    )
+    sheet = sheet.replace(
+        "<style />",
+        "<style><style-rule element='mark'>"
+        f"<encoding attr='shape' field='{region}' type='shape'>"
+        "<map to='diamond'><bucket>&quot;West&quot;</bucket></map>"
+        "<map to=':filled/star'><bucket>&quot;East&quot;</bucket></map>"
+        "<map to=':Arrows/up'><bucket>&quot;North&quot;</bucket></map>"
+        "</encoding></style-rule></style>",
+        1,
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    marks = ir.worksheets[0].marks
+    assert [(a.value, a.shape) for a in marks.shape_assignments] == [
+        ("West", "diamond"),
+        ("East", "asterisk"),
+    ]
+    assert any(":Arrows/up" in item.reason for item in ir.ignored)
+    scale = render(ir, db).spec["encoding"]["shape"]["scale"]
+    assert scale["domain"] == ["East", "North", "South", "West"]
+    east, north, south, west = scale["range"]
+    assert east.startswith("M0,-1")  # 星號以路徑畫出
+    assert (north, south, west) == ("square", "cross", "diamond")  # 其餘依預設的順序：方形、加號

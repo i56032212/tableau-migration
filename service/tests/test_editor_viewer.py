@@ -826,11 +826,43 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         caption.fill("全公司概況")
         caption.press("Tab")
         settle(page)
+        # 在預覽中改了參數（滑桿）與篩選，「更新故事點」把目前的狀態記下來
+        slider = page.locator(
+            '.story-preview fieldset[data-control="single_slider"] input[type=range]'
+        )
+        before = slider.input_value()
+        slider.focus()
+        page.keyboard.press("ArrowRight")
+        expect(slider).not_to_have_value(before)
+        after = slider.input_value()
+        segment = page.locator(".story-preview fieldset.control", has_text="Segment")
+        segment.locator("button").first.click()
+        segment.locator("label", has_text="Corporate").locator("input").uncheck()
+        page.get_by_role("button", name="更新故事點").click()
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
+        (parameter,) = saved["points"][0]["parameters"].items()
+        assert float(parameter[1]) == float(after) != float(before)
+        (captured,) = saved["points"][0]["filters"]
+        assert (captured["worksheet"], captured["field"]["field"], captured["mode"]) == (
+            "ws_region_share_by_year",
+            "f_segment",
+            "include",
+        )
+        assert captured["values"] and "Corporate" not in captured["values"]
+        # 存檔後預覽回到記下的狀態（滑桿仍是改過的值）；另存為新的故事點
+        expect(slider).to_have_value(after)
+        page.get_by_role("button", name="另存為新的故事點").click()
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
+        assert [p["parameters"] for p in saved["points"]] == [dict([parameter])] * 2
+        assert saved["points"][1]["filters"] == [captured]
+        page.locator('.story-editor [data-point="sp1"]').first.click()
         page.get_by_label("新增故事點").select_option("s:ws_monthly_profit")
         settle(page)
         saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
-        assert [p["caption"] for p in saved["points"]] == ["全公司概況", ""]
-        assert saved["points"][1]["worksheet"] == "ws_monthly_profit"
+        assert [p["caption"] for p in saved["points"]] == ["全公司概況", "全公司概況 (2)", ""]
+        assert saved["points"][2]["worksheet"] == "ws_monthly_profit"
         page.get_by_role("button", name="完成").click()
         page.wait_for_url(f"{engine}/w/demo/story/{story['id']}")
         expect(page.locator(".story-points button.active")).to_have_text("全公司概況")
@@ -1701,6 +1733,20 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
                 ".editor-canvas .frozen-host > svg path[aria-roledescription='bar'][aria-label*='East']"
             ).first
         ).to_have_attribute("fill", "#ff0000")
+
+        # 形狀：標記類型改成形狀，Region 放到形狀，East 指定星號
+        page.get_by_label("標記類型").select_option("shape")
+        settle(page)
+        page.locator('.data-pane [data-field="f_region"]').drag_to(
+            page.locator('[data-drop="marks.shape"]')
+        )
+        settle(page)
+        page.locator(".mark-buttons").get_by_role("button", name="形狀…").click()
+        page.locator(".shapes-dialog").get_by_label("East的形狀").select_option("asterisk")
+        confirm(page, ".shapes-dialog")
+        assert sheet()["marks"]["shape_assignments"] == [{"value": "East", "shape": "asterisk"}]
+        shapes = records()  # 規格中形狀的比例尺：East 是星號（路徑），其餘依預設的順序
+        assert shapes
 
         # 線條類型：線、階梯
         page.get_by_label("標記類型").select_option("line")

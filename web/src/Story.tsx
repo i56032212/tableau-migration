@@ -36,6 +36,37 @@ export function pointDashboard(point: StoryPoint, dashboard: Dashboard): Dashboa
   return { ...dashboard, zones: replace(dashboard.zones) };
 }
 
+/**
+ * 把目前的檢視狀態記成故事點的狀態（Tableau 故事點的「更新」）：類別篩選的選取、參數值、篩選動作的選取與
+ * 醒目顯示的標記。範圍類的篩選（滑桿、日期範圍）記不下來，回傳在 skipped 中（欄位鍵）。
+ */
+export function capturePoint(
+  ir: IR,
+  view: ViewState,
+): { state: Pick<StoryPoint, "filters" | "actions" | "selections" | "parameters">; skipped: string[] } {
+  const filters: StoryPoint["filters"] = [];
+  const skipped: string[] = [];
+  for (const [sheetId, values] of Object.entries(view.sheetFilters)) {
+    const sheet = ir.worksheets.find((w) => w.id === sheetId);
+    for (const [key, value] of Object.entries(values)) {
+      const own = sheet?.filters.find((f) => "field" in f && f.field && fieldKey(f.field) === key);
+      if (!own || !("field" in own) || !own.field) continue;
+      if (value.mode === "include" || value.mode === "exclude") {
+        filters.push({ worksheet: sheetId, field: own.field, mode: value.mode, values: value.values ?? [] });
+      } else if (value.mode === "all") {
+        filters.push({ worksheet: sheetId, field: own.field, mode: "exclude", values: [] });
+      } else skipped.push(key);
+    }
+  }
+  const actions = Object.entries(view.actions)
+    .filter(([, marks]) => marks.length > 0)
+    .map(([action, marks]) => ({ action, marks }));
+  const selections = Object.entries(view.selections)
+    .filter(([, marks]) => marks.length > 0)
+    .map(([worksheet, marks]) => ({ worksheet, marks }));
+  return { state: { filters, actions, selections, parameters: { ...view.parameters } }, skipped };
+}
+
 function initialIndex(story: Story): number {
   return Math.max(0, story.points.findIndex((p) => p.id === story.active));
 }
@@ -48,13 +79,15 @@ interface Props {
   base: ViewState;
   cases: CaseInfo[];
   onNavigate: (target: { dashboard?: string | null; worksheet?: string | null; story?: string | null }) => void;
+  /** Story 編輯器：目前故事點的檢視狀態（操作之後的） */
+  onView?: (point: StoryPoint, view: ViewState) => void;
 }
 
 /**
  * Story：上方為標題與故事點導覽（說明文字、序號或圓點，兩側可有上一個／下一個箭頭），下方顯示目前故事點的
  * dashboard 或工作表。在故事點上操作（篩選、選取）只影響目前的畫面，切換故事點時回到記下的狀態。
  */
-export function StoryView({ workbook, ir, story, base, cases, onNavigate }: Props) {
+export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView }: Props) {
   const [index, setIndex] = useState(() => initialIndex(story));
   useEffect(() => setIndex(initialIndex(story)), [story]);
   const point = story.points[Math.min(index, story.points.length - 1)];
@@ -63,6 +96,7 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate }: Prop
   const [changed, setChanged] = useState<{ point: StoryPoint; base: ViewState; view: ViewState } | null>(null);
   const view = changed && changed.point === point && changed.base === base ? changed.view : captured;
   const setView = (next: ViewState) => setChanged({ point, base, view: next });
+  useEffect(() => onView?.(point, view), [onView, point, view]);
 
   const found = point.dashboard ? ir.dashboards.find((d) => d.id === point.dashboard) : undefined;
   const dashboard = useMemo(() => (found ? pointDashboard(point, found) : undefined), [found, point]);

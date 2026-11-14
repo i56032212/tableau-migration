@@ -27,7 +27,7 @@ from collections.abc import Callable
 
 from lxml import etree
 
-from tmig.ir.models import ColorAssignment, ColorPalette, Scalar
+from tmig.ir.models import ColorAssignment, ColorPalette, Scalar, ShapeAssignment, ShapeName
 from tmig.parser.fields import instance_key
 from tmig.parser.twbx import child, children
 
@@ -107,6 +107,61 @@ def parse_color(
         center=_float(enc.get("center")),
         full_range=enc.get("symmetric") == "false",
     )
+
+
+SHAPES: dict[str, ShapeName] = {
+    "circle": "circle",
+    "square": "square",
+    "plus": "plus",
+    "times": "times",
+    "x": "times",
+    "asterisk": "asterisk",
+    "star": "asterisk",
+    "diamond": "diamond",
+    "triangle": "triangle",
+    "up-triangle": "triangle",
+    "down-triangle": "down_triangle",
+    "left-triangle": "left_triangle",
+    "right-triangle": "right_triangle",
+}
+"""形狀對應的 to（預設調色盤的名稱；實心調色盤為 :filled/<名稱>）→ 形狀。"""
+
+
+def shape_encodings(style: etree._Element | None) -> dict[str, etree._Element]:
+    """<style> 中標記的形狀編碼：欄位實例鍵 → <encoding attr='shape'>。"""
+    found: dict[str, etree._Element] = {}
+    for rule in children(style, "style-rule"):
+        if rule.get("element") != "mark":
+            continue
+        for enc in children(rule, "encoding"):
+            field = enc.get("field")
+            if enc.get("attr") == "shape" and field and "\n" not in field:
+                found.setdefault(instance_key(field), enc)
+    return found
+
+
+def parse_shapes(enc: etree._Element) -> tuple[list[ShapeAssignment], list[str]]:
+    """一個形狀編碼 → 各值的形狀，以及認不得的形狀（自訂的圖片形狀等，依預設的形狀呈現）。"""
+    assignments: list[ShapeAssignment] = []
+    unknown: list[str] = []
+    seen: set[tuple[str, Scalar]] = set()
+    for item in children(enc, "map"):
+        to = item.get("to") or ""
+        shape = SHAPES.get(to.rsplit("/", 1)[-1].lower()) if to.count("/") <= 1 else None
+        if shape is None or (("/" in to) and not to.lower().startswith(":filled/")):
+            if to and to not in unknown:
+                unknown.append(to)
+            continue
+        for bucket in children(item, "bucket"):
+            parsed = _bucket(bucket.text or "", None)
+            if parsed is None:
+                continue
+            (value,) = parsed
+            key = (type(value).__name__, value)
+            if key not in seen:
+                seen.add(key)
+                assignments.append(ShapeAssignment(value=value, shape=shape))
+    return assignments, unknown
 
 
 def mark_style(pane: etree._Element) -> tuple[str | None, float | None, str | None]:

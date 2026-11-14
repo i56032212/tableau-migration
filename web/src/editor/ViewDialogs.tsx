@@ -1,10 +1,11 @@
 // 檢視層級的對話框與操作：總計（位置、總計使用）、複製與貼上格式。
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal } from "../Server";
-import type { FieldUse } from "../types";
+import type { FieldUse, Scalar } from "../types";
+import { editApi } from "./api";
 import { useEditor } from "./context";
-import { allUses, isMeasure, pillLabel, type SheetIR, useKey } from "./model";
+import { allUses, type Card, cardMarks, isMeasure, pillLabel, type SheetIR, updateCard, useKey } from "./model";
 
 type TotalAgg = "sum" | "avg" | "min" | "max";
 interface VisualTotalIR {
@@ -108,6 +109,96 @@ export function TotalsDialog({ onClose }: { onClose: () => void }) {
             <p className="hint">自動：在總計的詳細程度重新彙總底層資料；其餘：畫面上各標記的值再計算。</p>
           </fieldset>
         )}
+        <div className="dialog-actions">
+          <button type="button" className="primary" onClick={save}>
+            確定
+          </button>
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 形狀
+
+const SHAPES: [string, string][] = [
+  ["circle", "● 圓形"],
+  ["square", "■ 方形"],
+  ["plus", "✚ 加號"],
+  ["times", "✖ 叉號"],
+  ["asterisk", "★ 星號"],
+  ["diamond", "◆ 菱形"],
+  ["triangle", "▲ 三角形"],
+  ["down_triangle", "▼ 倒三角形"],
+  ["left_triangle", "◀ 向左三角形"],
+  ["right_triangle", "▶ 向右三角形"],
+];
+
+/** 形狀（Tableau 標記卡「形狀」的「編輯形狀」）：為形狀欄位的各成員指定形狀；「自動」依預設調色盤的順序。 */
+export function ShapesDialog({ card, onClose }: { card: Card; onClose: () => void }) {
+  const editor = useEditor();
+  const marks = cardMarks(editor.sheet, card);
+  const use = marks.shape as FieldUse | null;
+  const [members, setMembers] = useState<Scalar[]>([]);
+  const [assigned, setAssigned] = useState<Record<string, { value: Scalar; shape: string }>>(() =>
+    Object.fromEntries(
+      ((marks.shape_assignments as { value: Scalar; shape: string }[] | undefined) ?? []).map((a) => [JSON.stringify(a.value), a]),
+    ),
+  );
+  const key = use ? useKey(use) : "";
+  useEffect(() => {
+    if (!use) return;
+    let cancelled = false;
+    editApi
+      .domain(editor.workbook, use, { kind: "values", worksheet: editor.sheet.id })
+      .then((domain) => {
+        if (!cancelled && domain.kind === "values") setMembers(domain.values.slice(0, 200));
+      })
+      .catch(() => setMembers([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  const save = () => {
+    editor.apply((s: SheetIR) => updateCard(s, card, (m) => ({ ...m, shape_assignments: Object.values(assigned) })));
+    onClose();
+  };
+  return (
+    <Modal title="形狀" onClose={onClose}>
+      <div className="action-form shapes-dialog">
+        {members.length === 0 && <p className="hint">沒有可以指定形狀的成員。</p>}
+        {members.map((value, i) => {
+          const id = JSON.stringify(value);
+          const label = value === null ? "Null" : String(value);
+          return (
+            <label className="inline" key={id}>
+              {label}
+              <select
+                aria-label={`${label}的形狀`}
+                value={assigned[id]?.shape ?? ""}
+                onChange={(e) =>
+                  setAssigned((current) => {
+                    const next = { ...current };
+                    if (e.target.value) next[id] = { value, shape: e.target.value };
+                    else delete next[id];
+                    return next;
+                  })
+                }
+              >
+                <option value="">自動（{SHAPES[i % SHAPES.length][1]}）</option>
+                {SHAPES.map(([shape, text]) => (
+                  <option key={shape} value={shape}>
+                    {text}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>
             確定
