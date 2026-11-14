@@ -635,6 +635,13 @@ def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
             for other in sorted(calc_references(own, use.field)):
                 if other in owner and owner[other] not in order:
                     order.append(owner[other])
+    for flt in sheet.filters:
+        # 次要資料源的篩選（只留下連結欄位的值有對應到通過篩選的資料的標記）
+        if isinstance(flt, TupleFilter) or flt.field.field not in owner:
+            continue
+        ds = owner[flt.field.field]
+        if used and ds != primary and ds not in order:
+            order.append(ds)
     # 次要資料源的維度：與 Tableau 相同以 ATTR 彙總（連結欄位的每個值只有一個值時是那個值，否則是 *）
     plain = {
         use.field

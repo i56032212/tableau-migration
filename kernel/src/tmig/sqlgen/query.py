@@ -502,6 +502,15 @@ class WorksheetQuery:
         self.user = user
         self.worksheet = _find_worksheet(ir, worksheet)
         self.datasource = next(ds for ds in ir.datasources if ds.id == self.worksheet.datasource)
+        if self.worksheet.blends:
+            # Data Blending：次要資料源的篩選套用在次要資料源的查詢（tmig.sqlgen.blend），不在這裡
+            own = {f.id for f in self.datasource.fields}
+            kept = [
+                f
+                for f in self.worksheet.filters
+                if isinstance(f, TupleFilter) or f.field.field in own
+            ]
+            self.worksheet = self.worksheet.model_copy(update={"filters": kept})
         if state is not None and state.sets:
             self.datasource = with_set_values(self.datasource, state.sets)
         self.state = apply_state(ir, self.worksheet, state or QueryState())
@@ -2958,13 +2967,18 @@ def _find_worksheet(ir: IR, key: str) -> Worksheet:
 
 
 def worksheet_sql(
-    ir: IR, worksheet: str, state: QueryState | None = None, user: Identity | None = None
+    ir: IR,
+    worksheet: str,
+    state: QueryState | None = None,
+    user: Identity | None = None,
+    detail: Worksheet | None = None,
 ) -> WorksheetSql:
+    """detail：總計與小計的查詢（totals_sql）中原本的工作表（Data Blending 的連結依原本的檢視）。"""
     ws = _find_worksheet(ir, worksheet)
     if ws.blends:
         from tmig.sqlgen.blend import blend_sql  # blend 也匯入本模組
 
-        query = blend_sql(ir, worksheet, state, user)
+        query = blend_sql(ir, worksheet, state, user, detail)
     else:
         query = WorksheetQuery(ir, worksheet, state, user).build()
     query.analytics = analytics_plan(ir, ws, query.columns)
@@ -3151,8 +3165,6 @@ def totals_sql(
         return []
     if ws.disaggregated:
         raise QueryError("取消彙總量值與總計、小計一起使用尚不支援", unsupported=True)
-    if ws.blends:
-        raise QueryError("Data Blending 與總計、小計一起使用尚不支援", unsupported=True)
     dims = {c.key for c in main.columns if c.role == "dimension"}
     headers = {
         "rows": [u for u in ws.rows if use_key(u) in dims and not u.continuous],
@@ -3172,7 +3184,14 @@ def totals_sql(
     if late - own:
         raise QueryError("總計與工作表以外的量值篩選一起使用尚不支援", unsupported=True)
     measure_filtered = any(f.stage == "measure" for f in main.state.filters)
-    restriction = _marks_filter(ws, main, marks) if measure_filtered else None
+    # Data Blending 的次要資料源的篩選：沒有對應到通過篩選的資料的標記不顯示，總計也只合計顯示的標記
+    primary_fields = {f.id for ds in ir.datasources if ds.id == ws.datasource for f in ds.fields}
+    secondary_filtered = bool(ws.blends) and any(
+        not isinstance(f, TupleFilter) and f.field.field not in primary_fields
+        for f in main.state.filters
+    )
+    restricted = measure_filtered or secondary_filtered
+    restriction = _marks_filter(ws, main, marks) if restricted else None
     # 列與欄的每一種組合（右下角等交叉處）；只有總計時與以前相同：列、欄、兩者
     combos: list[list[tuple[str, list[FieldUse], str]]] = []
     rows_opts: list[tuple[list[FieldUse], str] | None] = [*options["rows"], None]
@@ -3217,7 +3236,7 @@ def totals_sql(
             TotalQuery(
                 tuple(shelf for shelf, _, _ in combo),
                 dropped,
-                worksheet_sql(sub, ws.id, state, user),
+                worksheet_sql(sub, ws.id, state, user, ws if ws.blends else None),
                 labels,
                 group,
             )

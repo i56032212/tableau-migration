@@ -21,12 +21,20 @@
 主要資料源中引用次要資料源欄位的計算欄位（例如 SUM([Sales]) / SUM([Targets].[Target])）拆成各資料源各自彙總的
 部分與合併後的運算（_CalcSplit）；次要資料源的維度以 ATTR 彙總（文字欄位對到多個值時為 *）。
 
-尚不支援：次要資料源的篩選與 Table Calculation，以及與總計一起使用。
+次要資料源的維度篩選（工作表的 filters 中欄位是次要資料源欄位的篩選）套用在次要資料源的查詢；主要資料源中連結
+欄位的值沒有對應到通過篩選的資料時，那些標記不顯示（INNER JOIN），篩選包含 Null 時保留次要資料源完全沒有對應
+資料的標記（另外查出不篩選時有哪些連結值，__u）。
+
+總計與小計（blend_sql 的 detail）：主要資料源在總計的層級查詢（__p），連結欄位的值取自原本檢視層級的查詢（__d），
+次要資料源在連結欄位的層級算出的值依總計範圍內出現的連結值再彙總（__t；加總型的彙總）。這兩項的算法 Tableau 的
+說明文件沒有寫明，依公開資料推定。
+
+尚不支援：次要資料源的量值篩選與 Table Calculation。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from tmig.formula.analyze import Analyzer, Target
 from tmig.formula.ast import Call, FieldRef, Lod, Node, map_children, walk
@@ -38,11 +46,13 @@ from tmig.ir.models import (
     MEASURE_VALUES,
     Blend,
     Calc,
+    CategoricalFilter,
     DataField,
     Datasource,
     ExtractConnection,
     FieldUse,
     FileConnection,
+    Filter,
     JoinRelation,
     LiveConnection,
     Marks,
@@ -51,6 +61,7 @@ from tmig.ir.models import (
     ProjectRelation,
     Relation,
     TableRelation,
+    TupleFilter,
     UnionRelation,
     Worksheet,
     is_federated,
@@ -73,13 +84,21 @@ from tmig.sqlgen.sql import cast, ident, null_safe_equal
 ROW = "__blend_row"
 """主要資料源查詢的列號：合併後依它排回主要資料源的顯示順序。"""
 PRIMARY = "__p"
+DETAIL = "__d"
+"""總計的查詢中，原本檢視層級的主要資料源查詢（連結欄位的值）。"""
 NUMERIC = frozenset({"integer", "real"})
 TEMPORAL = frozenset({"date", "datetime"})
 
 
 def blend_sql(
-    ir: IR, worksheet: str, state: QueryState | None = None, user: Identity | None = None
+    ir: IR,
+    worksheet: str,
+    state: QueryState | None = None,
+    user: Identity | None = None,
+    detail: Worksheet | None = None,
 ) -> WorksheetSql:
+    """detail：總計與小計的查詢（tmig.sqlgen.query.totals_sql）。worksheet 是去掉維度後的工作表，detail 是原本的
+    工作表：連結依原本的檢視，次要資料源在連結欄位的層級算出的值，依總計範圍內出現的連結值再彙總。"""
     ws = _find_worksheet(ir, worksheet)
     datasources = {d.id: d for d in ir.datasources}
     owners: dict[str, Blend] = {}
@@ -98,9 +117,8 @@ def blend_sql(
                 unsupported=True,
             )
         split.add(use)
-    hidden = {u.field for u in calcs}
-    primary_ws = _primary_worksheet(ws, {**owners, **dict.fromkeys(hidden, ws.blends[0])})
-    primary_ws = split.primary_worksheet(primary_ws)
+    hidden = dict.fromkeys((u.field for u in calcs), ws.blends[0])
+    primary_ws = split.primary_worksheet(_primary_worksheet(ws, {**owners, **hidden}, set(owners)))
     if any(f'"{field_id}"' in primary_ws.model_dump_json() for field_id in hidden):
         raise QueryError(
             "Data Blending：引用次要資料源欄位的計算欄位只能放在欄列架與標記卡上"
@@ -108,14 +126,17 @@ def blend_sql(
             unsupported=True,
         )
     primary = split.primary
-    primary_ir = _with(
-        ir.model_copy(
-            update={"datasources": [primary if d.id == primary.id else d for d in ir.datasources]}
-        ),
-        primary_ws,
+    base_ir = ir.model_copy(
+        update={"datasources": [primary if d.id == primary.id else d for d in ir.datasources]}
     )
+    primary_ir = _with(base_ir, primary_ws)
     used = _unique([u for u in view if u.field in owners])
-    if not used and not calcs:
+    # 次要資料源的篩選（欄位是次要資料源的欄位）：篩選次要資料源的資料
+    filtered: dict[str, list[Filter]] = {}
+    for flt in ws.filters:
+        if not isinstance(flt, TupleFilter) and flt.field.field in owners:
+            filtered.setdefault(owners[flt.field.field].datasource, []).append(flt)
+    if not used and not calcs and not filtered:
         return WorksheetQuery(primary_ir, ws.id, state, user).build()
     for use in used:
         if use.table_calc is not None:
@@ -126,7 +147,11 @@ def blend_sql(
         (n, blend, [u for u in used if owners[u.field] is blend], split.uses(blend.datasource))
         for n, blend in enumerate(ws.blends)
     ]
-    blends = [(n, blend, uses, parts) for n, blend, uses, parts in blends if uses or parts]
+    blends = [
+        (n, blend, uses, parts)
+        for n, blend, uses, parts in blends
+        if uses or parts or blend.datasource in filtered
+    ]
     # 主要或次要資料源有 Live 連線（或次要資料源是 Relationship 模型）：各資料源分開查詢，結果在本機合併
     staged = isinstance(primary.connection, LiveConnection) or any(
         separate(datasources[blend.datasource]) for _, blend, _, _ in blends
@@ -138,15 +163,61 @@ def blend_sql(
     dims = [c for c in main.columns if c.role == "dimension" and c.use is not None]
     ctes = [f"{ident(PRIMARY)} AS (\n{main.sql.rstrip()}\n)"]
     stages = [BlendStage(PRIMARY, primary, main)] if staged else []
+    guards = list(main.guards)
+    # 連結欄位的來源：檢視的層級（總計時是原本的工作表，另外查詢）
+    link_dims = dims
+    if detail is not None:
+        detail_ws = _primary_worksheet(detail, {**owners, **hidden}, set(owners))
+        detail_main = WorksheetQuery(_with(base_ir, detail_ws), ws.id, state, user).build()
+        link_dims = [c for c in detail_main.columns if c.role == "dimension" and c.use is not None]
+        ctes.append(f"{ident(DETAIL)} AS (\n{detail_main.sql.rstrip()}\n)")
+        guards += detail_main.guards
+        if staged:
+            stages.append(BlendStage(DETAIL, primary, detail_main))
+    local: list[str] = []
     joins: list[str] = []
+    conditions_where: list[str] = []
     attach: dict[str, str] = {}
     federated: dict[str, FederatedBlend] = {}
     extra: list[tuple[str, OutputColumn]] = []
     notes: list[str] = []
+    effective = list(main.state.filters)
+    applied = list(main.state.applied)
+    unfiltered = state.model_copy(update={"filters": {}}) if state is not None else None
+
+    def secondary_query(
+        n: int, name: str, source: Datasource, holder: Worksheet, state: QueryState | None
+    ) -> WorksheetSql:
+        """次要資料源的一段查詢：分開執行的一段，或同一段 DuckDB 查詢中的 CTE（資料表在附加的 DuckDB 檔）。"""
+        alias = f"__blend{n}"
+        target = source if staged else _attached(source, alias)
+        sub = ir.model_copy(
+            update={
+                "datasources": [target if d.id == source.id else d for d in ir.datasources],
+                "worksheets": [holder],
+            }
+        )
+        built = WorksheetQuery(sub, holder.id, state, user).build()
+        connection = source.connection
+        if staged:
+            stages.append(BlendStage(name, source, built))
+        else:
+            if isinstance(connection, FileConnection) and is_federated(connection):
+                # 跨資料庫的 join：資料庫的資料表在執行前取回，與匯入的檔案一起附加
+                previous = federated.get(alias)
+                federated[alias] = FederatedBlend(
+                    connection=connection,
+                    sql=built.sql if previous is None else f"{previous.sql}\n;\n{built.sql}",
+                    parameters=built.parameters,
+                )
+            ctes.append(f"{ident(name)} AS (\n{built.sql.rstrip()}\n)")
+            attach[alias] = source.id
+        return built
+
     for n, blend, uses, parts in blends:
         secondary = split.secondary(blend.datasource)
         pairs: list[tuple[OutputColumn, FieldUse]] = []
-        for column in dims:
+        for column in link_dims:
             assert column.use is not None
             for link in blend.links:
                 found = link.secondary_for(column.use)
@@ -157,10 +228,10 @@ def blend_sql(
                 f"Data Blending：檢視中沒有與次要資料源「{secondary.caption}」的連結欄位",
                 unsupported=True,
             )
-        alias = f"__blend{n}"
         # 次要資料源的維度（ATTR）：連結欄位的一個值對到多個值時顯示 *（與 Tableau 相同；文字欄位）
         starred: dict[str, FieldUse] = {}
         by_id = {f.id: f for f in secondary.fields}
+        measures = list(uses)
         for index, use in enumerate(uses):
             data_field = by_id[use.field]
             if use.agg != "attr" or use.date is not None or data_field.datatype != "string":
@@ -180,45 +251,105 @@ def blend_sql(
                 source_ref="/blend",
             )
             secondary = _with_field(secondary, star)
-            uses[index] = FieldUse(field=star.id, continuous=False)
+            measures[index] = FieldUse(field=star.id, continuous=False)
             starred[star.id] = use
-        source = secondary if staged else _attached(secondary, alias)
-        holder = _secondary_worksheet(ws, secondary.id, [f for _, f in pairs], [*uses, *parts])
-        sub = ir.model_copy(
-            update={
-                "datasources": [source if d.id == secondary.id else d for d in ir.datasources],
-                "worksheets": [holder],
-            }
-        )
-        built = WorksheetQuery(sub, holder.id, state, user).build()
+        # 總計：各連結值的結果再彙總的方式（平均另外取加總與筆數）
+        rules: dict[str, str] = {}
+        if detail is not None:
+            rules = _total_rules(secondary, measures, starred, split.parts_of(blend.datasource))
+            for use in list(measures):
+                if use.agg == "avg":
+                    for agg in ("sum", "count"):
+                        helper = use.model_copy(update={"agg": agg})
+                        if all(use_key(helper) != use_key(m) for m in measures):
+                            measures.append(helper)
+                            rules[use_key(helper)] = "hidden"
+        links = [f for _, f in pairs]
+        own_filters = filtered.get(blend.datasource, [])
+        holder = _secondary_worksheet(ws, secondary.id, links, [*measures, *parts], own_filters)
         name = f"__s{n}"
-        connection = secondary.connection
-        if staged:
-            stages.append(BlendStage(name, secondary, built))
-        else:
-            if isinstance(connection, FileConnection) and is_federated(connection):
-                # 跨資料庫的 join：資料庫的資料表在執行前取回，與匯入的檔案一起附加
-                federated[alias] = FederatedBlend(
-                    connection=connection, sql=built.sql, parameters=built.parameters
-                )
-            ctes.append(f"{ident(name)} AS (\n{built.sql.rstrip()}\n)")
-            attach[alias] = secondary.id
+        built = secondary_query(n, name, secondary, holder, state)
         types = {c.key: c.datatype for c in built.columns}
-        conditions = [
-            _link_condition(
-                f"{ident(PRIMARY)}.{ident(column.key)}",
-                column.datatype,
-                f"{ident(name)}.{ident(use_key(found))}",
-                types[use_key(found)],
-            )
-            for column, found in pairs
+
+        def link_conditions(
+            left: str,
+            right: str,
+            pairs: list[tuple[OutputColumn, FieldUse]] = pairs,
+            types: dict[str, str] = types,
+        ) -> str:
+            return _link_conditions(left, right, pairs, types)
+
+        # 次要資料源的篩選：連結欄位的值沒有對應到通過篩選的資料時，主要資料源的那些標記不顯示；篩選包含 Null 時
+        # 保留次要資料源完全沒有對應資料的標記（與 Tableau 相同，推定）
+        secondary_ids = set(by_id)
+        restricting = [
+            f
+            for f in built.state.filters
+            if not isinstance(f, TupleFilter)
+            and f.field.field in secondary_ids
+            and not (isinstance(f, CategoricalFilter) and f.mode == "all")
         ]
-        joins.append(f"LEFT JOIN {ident(name)} ON {' AND '.join(conditions)}")
+        effective += [f for f in built.state.filters if f not in effective]
+        applied += [key for key in built.state.applied if key not in applied]
+        source_name = name
+        if detail is not None:
+            # 總計：連結欄位的層級算出的值，依總計範圍內出現的連結值再彙總
+            source_name = f"__t{n}"
+            kept = [c.key for c in dims]
+            pairs_sql = ", ".join(
+                dict.fromkeys(
+                    f"{ident(DETAIL)}.{ident(key)}" for key in [*kept, *(c.key for c, _ in pairs)]
+                )
+            )
+            items = [f"{ident('d')}.{ident(key)}" for key in kept]
+            items += [
+                f"{_reaggregate(rule, key, name)} AS {ident(key)}"
+                for key, rule in rules.items()
+                if rule != "hidden"
+            ]
+            group = f" GROUP BY {', '.join(str(i + 1) for i in range(len(kept)))}" if kept else ""
+            local.append(
+                f"{ident(source_name)} AS (\nSELECT {', '.join(items) or '1 AS ' + ident('__one')} "
+                f"FROM (SELECT DISTINCT {pairs_sql} FROM {ident(DETAIL)}) AS {ident('d')} "
+                f"LEFT JOIN {ident(name)} ON {link_conditions('d', name)}{group}\n)"
+            )
+            on = " AND ".join(
+                null_safe_equal(
+                    f"{ident(PRIMARY)}.{ident(key)}", f"{ident(source_name)}.{ident(key)}"
+                )
+                for key in kept
+            )
+            joins.append(f"LEFT JOIN {ident(source_name)} ON {on or 'TRUE'}")
+        elif not restricting:
+            joins.append(f"LEFT JOIN {ident(name)} ON {link_conditions(PRIMARY, name)}")
+        elif not all(_admits_null(f) for f in restricting):
+            joins.append(f"INNER JOIN {ident(name)} ON {link_conditions(PRIMARY, name)}")
+        else:
+            # 篩選包含 Null：另外查出次要資料源（不篩選）有哪些連結值
+            other = f"__u{n}"
+            plain = _secondary_worksheet(ws, secondary.id, links, [], [])
+            secondary_query(
+                n, other, secondary, plain.model_copy(update={"id": f"{ws.id}__all"}), unfiltered
+            )
+            hit = ident("__hit")
+            joins.append(
+                f"LEFT JOIN (SELECT *, TRUE AS {hit} FROM {ident(name)}) AS {ident(name)} "
+                f"ON {link_conditions(PRIMARY, name)}"
+            )
+            joins.append(
+                f"LEFT JOIN (SELECT *, TRUE AS {hit} FROM {ident(other)}) AS {ident(other)} "
+                f"ON {link_conditions(PRIMARY, other)}"
+            )
+            conditions_where.append(
+                f"({ident(name)}.{hit} IS NOT NULL OR {ident(other)}.{hit} IS NULL)"
+            )
         part_keys = {use_key(u) for u in parts}
         for column in built.columns:
-            located = f"{ident(name)}.{ident(column.key)}"
+            located = f"{ident(source_name)}.{ident(column.key)}"
+            if rules.get(column.key) == "hidden":
+                continue
             if column.key in part_keys:
-                split.located(column.key, name)
+                split.located(column.key, source_name)
             elif column.key in starred:
                 original = starred[column.key]
                 shown_as = OutputColumn(use_key(original), column.role, "string", original)
@@ -227,10 +358,17 @@ def blend_sql(
                 extra.append((located, column))
         where = ""
         if staged:
+            connection = secondary.connection
             where = "在它的資料庫" if isinstance(connection, LiveConnection) else "另外查詢、"
         notes.append(
-            f"次要資料源「{secondary.caption}」{where}以 {', '.join(use_key(f) for _, f in pairs)} "
+            f"次要資料源「{secondary.caption}」{where}以 {', '.join(use_key(f) for f in links)} "
             "彙總後依連結欄位 LEFT JOIN"
+            + ("；總計依範圍內出現的連結值再彙總" if detail is not None else "")
+            + (
+                "；次要資料源的篩選：沒有對應到通過篩選的資料的標記不顯示"
+                if restricting and detail is None
+                else ""
+            )
         )
 
     for key in split.primary_keys():
@@ -249,11 +387,19 @@ def blend_sql(
             + " 各資料源各自彙總後，在合併的結果上計算"
         )
     select = (
-        f"SELECT {', '.join(outputs)}\nFROM {ident(PRIMARY)}\n"
+        ("WITH " + ",\n".join(local) + "\n" if local and staged else "")
+        + f"SELECT {', '.join(outputs)}\nFROM {ident(PRIMARY)}\n"
         + "\n".join(joins)
+        + (f"\nWHERE {' AND '.join(conditions_where)}" if conditions_where else "")
         + f"\nORDER BY {ident(PRIMARY)}.{ident(ROW)}"
     )
     columns = [*shown, *(c for _, c in extra), *(c for _, c in computed), *sorts]
+    merged = replace(
+        main.state,
+        filters=effective,
+        applied=applied,
+        skipped=[key for key in main.state.skipped if key not in applied],
+    )
     if staged:
         notes.insert(
             0,
@@ -269,13 +415,13 @@ def blend_sql(
             sql=f"{text}-- Data Blending：依連結欄位合併各資料源的結果\n{select}\n",
             columns=columns,
             plan=plan,
-            state=main.state,
+            state=merged,
             main=select,
             stages=stages,
         )
     sql = (
         "WITH "
-        + ",\n".join(ctes)
+        + ",\n".join([*ctes, *local])
         + "\n-- Data Blending：依連結欄位合併次要資料源\n"
         + select
         + "\n"
@@ -286,12 +432,99 @@ def blend_sql(
         sql=sql,
         columns=columns,
         plan=plan,
-        state=main.state,
+        state=merged,
         main=select,
-        guards=main.guards,
+        guards=guards,
         attach=attach,
         federated=federated,
     )
+
+
+def _link_conditions(
+    left: str, right: str, pairs: list[tuple[OutputColumn, FieldUse]], types: dict[str, str]
+) -> str:
+    """連結欄位相等：left 的欄（主要資料源的欄位鍵）對 right 的欄（次要資料源的欄位鍵）。"""
+    return " AND ".join(
+        _link_condition(
+            f"{ident(left)}.{ident(column.key)}",
+            column.datatype,
+            f"{ident(right)}.{ident(use_key(found))}",
+            types[use_key(found)],
+        )
+        for column, found in pairs
+    )
+
+
+def _admits_null(flt: Filter) -> bool:
+    """篩選保留 Null（次要資料源沒有對應資料的標記仍顯示）。"""
+    if isinstance(flt, CategoricalFilter):
+        return (None in flt.values) if flt.mode == "include" else (None not in flt.values)
+    return bool(getattr(flt, "include_null", False))
+
+
+TOTAL_AGGS = {
+    "sum": "sum",
+    "count": "sum",
+    "min": "min",
+    "max": "max",
+    "attr": "attr",
+    "avg": "avg",
+}
+"""次要資料源的彙總在總計中由各連結值的結果再彙總的方式（加總型的彙總；與 Tableau 相同，相異計數、中位數等
+非加總型的彙總不能這樣算）。"""
+
+
+def _total_rules(
+    secondary: Datasource,
+    measures: list[FieldUse],
+    starred: dict[str, FieldUse],
+    parts: list[_Part],
+) -> dict[str, str]:
+    """總計：次要資料源各欄（欄位鍵）再彙總的方式；不能再彙總的列為不支援。"""
+    captions = {f.id: f.caption for f in secondary.fields}
+    rules: dict[str, str] = {}
+
+    def unsupported(what: str) -> QueryError:
+        return QueryError(
+            f"Data Blending：次要資料源「{secondary.caption}」的 {what} 與總計、小計一起使用尚不支援"
+            "（總計由各連結值的結果再彙總，只支援加總、計數、最小、最大、平均與 ATTR）",
+            unsupported=True,
+        )
+
+    for use in measures:
+        if use.field in starred:
+            rules[use_key(use)] = "star"
+        elif use.agg in TOTAL_AGGS and use.date is None:
+            rules[use_key(use)] = TOTAL_AGGS[use.agg]
+        else:
+            raise unsupported(
+                f"「{captions.get(use.field, use.field)}」（{use.agg or '彙總的計算欄位'}）"
+            )
+    for part in parts:
+        rule = TOTAL_AGGS.get((part.agg or "").lower())
+        if rule is None or rule == "avg":
+            formula = part.field.calc.formula if part.field.calc is not None else part.field.id
+            raise unsupported(formula)
+        rules[use_key(part.use)] = rule
+    return rules
+
+
+def _reaggregate(rule: str, key: str, source: str) -> str:
+    """總計：連結欄位的層級算出的一欄，依範圍內的連結值再彙總。"""
+    column = f"{ident(source)}.{ident(key)}"
+    if rule in ("sum", "min", "max"):
+        return f"{rule}({column})"
+    if rule == "avg":
+        base = key.removeprefix("avg(")
+        total = f"{ident(source)}.{ident('sum(' + base)}"
+        count = f"{ident(source)}.{ident('count(' + base)}"
+        return f"(sum({total}) / NULLIF(sum({count}), 0))"
+    if rule == "star":
+        return (
+            f"(CASE WHEN min({column}) = max({column}) THEN min({column}) "
+            f"WHEN count({column}) > 0 THEN '*' END)"
+        )
+    return f"(CASE WHEN min({column}) IS NOT DISTINCT FROM max({column}) THEN min({column}) END)"
 
 
 PART_PREFIX = "blend_part_"
@@ -303,6 +536,8 @@ class _Part:
     datasource: str
     field: DataField
     use: FieldUse
+    agg: str | None = None
+    """這個部分是哪個彙總函式的呼叫（SUM、MIN…；引用彙總的計算欄位時為 None）：總計再彙總用。"""
     source: str | None = None
     """合併時所在的查詢（__p 或 __s0…）。"""
 
@@ -443,7 +678,8 @@ class _CalcSplit:
                 calc=Calc(formula=text, level="aggregate"),
                 source_ref="/blend",
             )
-            part = _Part(side, data_field, FieldUse(field=field_id, continuous=True))
+            agg = node.name if isinstance(node, Call) else None
+            part = _Part(side, data_field, FieldUse(field=field_id, continuous=True), agg)
             self.parts[(side, text)] = part
             if side == self.primary.id:
                 self.primary = _with_field(self.primary, data_field)
@@ -466,6 +702,9 @@ class _CalcSplit:
 
     def secondary(self, datasource: str) -> Datasource:
         return self.datasources[datasource]
+
+    def parts_of(self, datasource: str) -> list[_Part]:
+        return [p for p in self.parts.values() if p.datasource == datasource]
 
     def uses(self, datasource: str) -> list[FieldUse]:
         return [p.use for p in self.parts.values() if p.datasource == datasource]
@@ -656,8 +895,12 @@ def _unique(uses: list[FieldUse]) -> list[FieldUse]:
     return result
 
 
-def _primary_worksheet(ws: Worksheet, owners: dict[str, Blend]) -> Worksheet:
-    """去掉次要資料源欄位的工作表（主要資料源的查詢）。"""
+def _primary_worksheet(
+    ws: Worksheet, owners: dict[str, Blend], secondary_fields: set[str] | None = None
+) -> Worksheet:
+    """去掉次要資料源欄位的工作表（主要資料源的查詢）；secondary_fields：次要資料源的欄位（它們的篩選
+    套用在次要資料源的查詢）。"""
+    foreign = secondary_fields if secondary_fields is not None else set(owners)
 
     def keep(uses: list[FieldUse]) -> list[FieldUse]:
         return [u for u in uses if u.field not in owners]
@@ -691,15 +934,22 @@ def _primary_worksheet(ws: Worksheet, owners: dict[str, Blend]) -> Worksheet:
             "panes": panes,
             "measure_values": values,
             "measure_aliases": [a for a in ws.measure_aliases if a.use in values],
+            "filters": [
+                f for f in ws.filters if isinstance(f, TupleFilter) or f.field.field not in foreign
+            ],
             "blends": [],
         }
     )
 
 
 def _secondary_worksheet(
-    ws: Worksheet, datasource: str, links: list[FieldUse], measures: list[FieldUse]
+    ws: Worksheet,
+    datasource: str,
+    links: list[FieldUse],
+    measures: list[FieldUse],
+    filters: list[Filter],
 ) -> Worksheet:
-    """次要資料源的查詢：連結欄位為維度、次要資料源的量值在標籤上；沒有工作表的篩選與排序。"""
+    """次要資料源的查詢：連結欄位為維度、次要資料源的量值在標籤上；篩選只有次要資料源自己的篩選，沒有排序。"""
     return ws.model_copy(
         update={
             "id": f"{ws.id}__blend",
@@ -710,7 +960,7 @@ def _secondary_worksheet(
             "panes": [],
             "measure_values": [],
             "measure_aliases": [],
-            "filters": [],
+            "filters": filters,
             "sorts": [],
             "table_calcs": [],
             "reference_lines": [],

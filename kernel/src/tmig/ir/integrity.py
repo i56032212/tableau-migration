@@ -341,7 +341,14 @@ def check_references(ir: IR) -> list[str]:
         elif use.table_calc not in table_calcs:
             errors.append(f"{where}：Table Calculation「{use.table_calc}」不存在")
 
-    def check_filter(flt: Filter, ds_id: str, where: str, table_calcs: set[str] | None) -> None:
+    def check_filter(
+        flt: Filter,
+        ds_id: str,
+        where: str,
+        table_calcs: set[str] | None,
+        extra: set[str] | None = None,
+    ) -> None:
+        """extra：另外允許的欄位（Data Blending 的次要資料源的欄位：次要資料源的篩選）。"""
         if isinstance(flt, TupleFilter):
             for i, use in enumerate(flt.fields):
                 check_use(use, ds_id, f"{where}.fields[{i}]", None)
@@ -351,7 +358,7 @@ def check_references(ir: IR) -> list[str]:
                 if not any(fid in found for found in fields_by_ds.values()):
                     errors.append(f"{where}.source_fields[{i}]：欄位「{fid}」不存在")
             return
-        check_use(flt.field, ds_id, f"{where}.field", table_calcs)
+        check_use(flt.field, ds_id, f"{where}.field", table_calcs, extra=extra)
         if (
             isinstance(flt, TopNFilter)
             and isinstance(flt.count, ParamRef)
@@ -467,7 +474,7 @@ def check_references(ir: IR) -> list[str]:
             if alias.use not in ws.measure_values:
                 errors.append(f"{base}.measure_aliases[{i}]：量值不在 Measure Values 卡上")
         for flt in ws.filters:
-            check_filter(flt, ws.datasource, f"{base}.filters[{flt.id}]", tcs)
+            check_filter(flt, ws.datasource, f"{base}.filters[{flt.id}]", tcs, blended)
         for i, srt in enumerate(ws.sorts):
             if srt.field not in fields_by_ds[ws.datasource]:
                 errors.append(
@@ -544,7 +551,13 @@ def check_references(ir: IR) -> list[str]:
             if sheet is None:
                 errors.append(f"{where}：工作表「{zone.worksheet}」不存在")
             elif zone.field is not None:
-                check_use(zone.field, sheet.datasource, f"{where}.field", None)
+                # 次要資料源的篩選（Data Blending）的控制項：欄位是次要資料源的欄位
+                secondary = {
+                    fid
+                    for blend in sheet.blends
+                    for fid in fields_by_ds.get(blend.datasource, set())
+                }
+                check_use(zone.field, sheet.datasource, f"{where}.field", None, extra=secondary)
             elif zone.kind == "page" and sheet.pages is None:
                 errors.append(f"{where}：工作表「{zone.worksheet}」沒有頁面架")
 

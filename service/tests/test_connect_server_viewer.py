@@ -365,3 +365,28 @@ def test_blend_live_primary_with_excel_secondary(dsn: str, engine: str, tmp_path
         "South": ("75", "Null"),
         "West": ("200", "150"),
     }
+    # 總計：實績在 PostgreSQL 重新彙總，目標依出現的地區再加總（North 只在次要資料源中，不算）
+    saved["totals"] = ["rows"]
+    saved = call(engine, f"/api/edit/{wb}/worksheets/ws_1", {"worksheet": saved}, "PUT")[
+        "worksheet"
+    ]
+    body = call(engine, f"/api/workbooks/{wb}/worksheets/ws_1/render", {})
+    assert body.get("unsupported") in (None, [])
+    rows = {row[0]: tuple(row[1:]) for row in body["table"]["rows"]}
+    assert rows["Grand Total"] == ("425.75", "450")
+    # 次要資料源的篩選（Excel 的 region = East）：只留下 East，總計只合計顯示的標記
+    saved["filters"] = [
+        {
+            "kind": "categorical",
+            "id": "flt_target_region",
+            "field": {"field": g["region"]},
+            "stage": "dimension",
+            "mode": "include",
+            "values": ["East"],
+            "source_ref": "/editor",
+        }
+    ]
+    call(engine, f"/api/edit/{wb}/worksheets/ws_1", {"worksheet": saved}, "PUT")
+    body = call(engine, f"/api/workbooks/{wb}/worksheets/ws_1/render", {})
+    rows = {row[0]: tuple(row[1:]) for row in body["table"]["rows"]}
+    assert rows == {"East": ("150.75", "300"), "Grand Total": ("150.75", "300")}

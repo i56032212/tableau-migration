@@ -963,7 +963,7 @@ def _blending_check(r: CensusReport, dss: list[DatasourceInfo]) -> Check:
     if published:
         detail += f"；Published Data Source：{_quote(published)}"
     else:
-        detail += "（次要資料源只支援彙總的量值，解析時另列不支援的用法）"
+        detail += "（次要資料源的量值篩選與 Table Calculation 尚不支援，解析時另列）"
     return Check(
         key="no_blending", title=title, status="fail" if published else "warn", detail=detail
     )

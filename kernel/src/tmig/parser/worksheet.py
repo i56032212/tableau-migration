@@ -947,14 +947,16 @@ class SheetParser:
         for use in uses:
             if use.field in own and own[use.field].calc is not None:
                 referenced |= calc_references(own, use.field)
+        filtered = {name for name in self.secondaries if self._secondary_filters(view, name)}
         for name, secondary in self.secondaries.items():
             ids = {f.id for f in secondary.fields}
-            if not any(u.field in ids for u in uses) and not (referenced & ids):
+            if (
+                not any(u.field in ids for u in uses)
+                and not (referenced & ids)
+                and name not in filtered
+            ):
                 continue
             label = f"工作表「{self.name}」混合次要資料源「{secondary.caption}」（Data Blending）"
-            if totals:
-                self.ctx.flag(view, f"{label}並加上總計或小計，v0 不支援")
-                return None
             links = self._links(name, secondary)
             if not links:
                 self.ctx.flag(view, f"{label}：找不到連結欄位")
@@ -985,6 +987,20 @@ class SheetParser:
                 return None
             blends.append(Blend(datasource=secondary.id, links=links))
         return blends
+
+    def _secondary_filters(self, view: etree._Element, name: str) -> list[etree._Element]:
+        """次要資料源自己的篩選（篩選的欄位是次要資料源的欄位、沒有對應到主要資料源的欄位）。"""
+        assert self.ds is not None
+        found: list[etree._Element] = []
+        for element in children(view, "filter"):
+            parts = qualified_parts(element.get("column", ""))
+            if len(parts) != 2 or parts[0] != name:
+                continue
+            target_el = child(element, "target")
+            target = target_el.get("field", "") if target_el is not None else ""
+            if qualified_parts(target)[:1] != [self.ds.name]:
+                found.append(element)
+        return found
 
     def _override_fields(
         self, element: etree._Element | None, name: str, secondary: DsState, label: str
@@ -2309,6 +2325,49 @@ class SheetParser:
             self._cross_filter(element, parser, filters, kinds)
         return filters, kinds
 
+    def _secondary_filter(
+        self,
+        element: etree._Element,
+        name: str,
+        filters: list[Filter],
+        kinds: dict[str, FilterKind],
+    ) -> bool:
+        """次要資料源（Data Blending）的維度篩選：篩選次要資料源的資料；主要資料源中連結欄位的值沒有對應到
+        通過篩選的資料時，那些標記不顯示（見 tmig.sqlgen.blend）。篩選留在工作表的 filters 中（欄位是次要
+        資料源的欄位）。回傳是否加入。"""
+        secondary = self.secondaries[name]
+        column = element.get("column", "")
+        key = instance_key(column)
+
+        def resolve(ref: str) -> FieldUse | str:
+            inst = self.secondary_instances.get(name, {}).get(instance_key(ref))
+            if inst is None:
+                return use_from_name(secondary, instance_key(ref))
+            if children(inst, "table-calc"):
+                return "次要資料源的 Table Calculation（Data Blending）尚不支援"
+            return use_from_instance(secondary, inst)
+
+        parsed = FilterParser(self.ctx, secondary, resolve, "worksheet").parse(element)
+        if parsed is None:
+            return False
+        label = f"工作表「{self.name}」以次要資料源「{secondary.caption}」的欄位 {column} 篩選"
+        if isinstance(parsed, TupleFilter) or parsed.stage != "dimension":
+            self.ctx.flag(
+                element,
+                f"{label}：Data Blending 只支援次要資料源的維度篩選（量值、條件、Top N 尚不支援）",
+            )
+            return False
+        if parsed.kind not in ("categorical", "range", "relative_date"):
+            self.ctx.flag(element, f"{label}：{parsed.kind} 篩選（Data Blending）尚不支援")
+            return False
+        filters.append(parsed)
+        # 篩選控制項以 [次要資料源].[欄位實例] 找到這個篩選
+        own = f"[{name}].{key}#filter"
+        kinds[own] = parsed.kind
+        self.uses[own] = parsed.field
+        self.cross[f"[{name}].{key}"] = own
+        return True
+
     def _cross_filter(
         self,
         element: etree._Element,
@@ -2327,6 +2386,9 @@ class SheetParser:
         column = element.get("column", "")
         target_el = child(element, "target")
         target = target_el.get("field", "") if target_el is not None else ""
+        owner = qualified_parts(column)[0]
+        if qualified_parts(target)[:1] != [self.ds.name] and owner in self.secondaries:
+            return self._secondary_filter(element, owner, filters, kinds)
         if qualified_parts(target)[:1] != [self.ds.name]:
             self.ctx.flag(
                 element,

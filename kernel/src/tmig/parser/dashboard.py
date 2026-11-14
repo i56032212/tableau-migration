@@ -421,7 +421,16 @@ class DashboardParser:
         if filter_kind in ("relative_date", "condition"):
             control = filter_kind
         elif filter_kind == "range":
-            datatype = sheet.ds.field_by_id(use.field).datatype
+            # 次要資料源的篩選（Data Blending）：欄位在其他資料源中
+            owner = next(
+                (
+                    state
+                    for state in self.ctx.datasources.values()
+                    if any(f.id == use.field for f in state.fields)
+                ),
+                sheet.ds,
+            )
+            datatype = owner.field_by_id(use.field).datatype
             is_date = datatype in ("date", "datetime") and use.date is None
             control = "date_range" if is_date else "range_slider"
         elif mode is None:

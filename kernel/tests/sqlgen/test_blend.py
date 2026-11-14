@@ -16,6 +16,7 @@ from tmig.data.executor import execute_query
 from tmig.ir import IR, Blend, BlendLink, CategoricalFilter, FieldUse
 from tmig.ir.integrity import check_references, iter_zones
 from tmig.parser.workbook import parse_workbook
+from tmig.planner.state import use_key
 from tmig.render.vegalite import build_spec
 from tmig.sqlgen.query import QueryError, totals_sql, worksheet_sql
 
@@ -314,13 +315,73 @@ def test_unsupported_blends_are_flagged(tmp_path: Path, folder: Path) -> None:
     assert ir.worksheets == []
 
 
-def test_totals_with_blending_are_unsupported(tmp_path: Path, folder: Path) -> None:
-    sheet = blended(rows=ref("none:Region:nk"), cols=target_ref("sum:Target:qk"))
-    ir = parse(tmp_path, folder, sheet)
+def totals_of(ir: IR, folder: Path, state: object = None) -> dict[tuple[str, ...], list[dict]]:
+    """各種總計（去掉的維度）→ 總計的各列。"""
+    ws = ir.worksheets[0]
+    db = folder / f"{ws.datasource}.duckdb"
+    main = worksheet_sql(ir, ws.id, state)  # type: ignore[arg-type]
+    marks = execute_query(db, main)
+    found = {}
+    for total in totals_sql(ir, ws.id, main, state, None, marks):  # type: ignore[arg-type]
+        found[tuple(total.dropped)] = execute_query(db, total.query).records()
+    return found
+
+
+def test_totals_with_blending(tmp_path: Path, folder: Path) -> None:
+    """總計與小計：主要資料源的量值在總計的層級重新彙總；次要資料源的量值在連結欄位的層級算出後，依總計範圍內
+    出現的連結值再彙總（加總、平均等加總型的彙總）；引用次要資料源欄位的計算欄位以總計的各部分計算。
+    （Tableau 的說明文件沒有寫明，依公開資料推定。）"""
+    avg = instance("[Target]", "Avg", "[avg:Target:qk]", "quantitative")
+    sheet = blended(
+        rows=f"({ref('none:Region:nk')} / {ref('none:Category:nk')})",
+        cols=f"({ref('sum:Sales:qk')} + {ref('usr:Calculation_att:qk')})",
+        instances=[REGION, CATEGORY, SALES, ATTAINMENT],
+        secondary=[TARGET, avg],
+        encodings=(
+            f"<text column='{target_ref('sum:Target:qk')}' />"
+            f"<tooltip column='{target_ref('avg:Target:qk')}' />"
+        ),
+    )
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS)
+    assert ir.unsupported == []
+    ids = fields(ir)
+    region, category = ir.worksheets[0].rows
+    ws = ir.worksheets[0].model_copy(update={"totals": ["rows"], "subtotals": [region]})
+    ir = ir.model_copy(update={"worksheets": [ws]})
+    sales, target = f"sum({ids['Sales']})", f"sum({ids['Targets.Target']})"
+    average, attainment = f"avg({ids['Targets.Target']})", ids["Attainment"]
+
+    def values(record: dict) -> tuple:
+        return (record[sales], record[target], record[average], record[attainment])
+
+    totals = totals_of(ir, folder)
+    # 總計：目標是各地區（連結欄位）的目標再加總，不因類別重複；Central 只在次要資料源中，不算
+    (grand,) = totals[(use_key(region), use_key(category))]
+    assert values(grand) == (1310.0, 1350.0, 1350.0 / 4, 1310.0 / 1350.0)
+    # 各地區的小計
+    subtotals = {r[ids["Region"]]: values(r) for r in totals[(use_key(category),)]}
+    assert subtotals == {
+        "East": (350.0, 400.0, 200.0, 0.875),
+        "North": (60.0, None, None, None),
+        "South": (100.0, 50.0, 50.0, 2.0),
+        "West": (800.0, 900.0, 900.0, 800.0 / 900.0),
+    }
+    # 非加總型的彙總（中位數等）不能由各連結值的結果再彙總
+    median = FieldUse(field=ids["Targets.Target"], agg="median", continuous=True)
+    other = ws.model_copy(update={"marks": ws.marks.model_copy(update={"label": [median]})})
+    with pytest.raises(QueryError, match="總計、小計一起使用尚不支援"):
+        totals_of(ir.model_copy(update={"worksheets": [other]}), folder)
+
+
+def test_totals_with_secondary_filter(tmp_path: Path, folder: Path) -> None:
+    """次要資料源的篩選與總計：總計只合計顯示的標記。"""
+    sheet = filtered_sheet(year_filter(["2024"]))
+    ir = parse(tmp_path, folder, sheet, secondary_columns=YEAR_TEXT)
+    ids = fields(ir)
     ws = ir.worksheets[0].model_copy(update={"totals": ["rows"]})
     ir = ir.model_copy(update={"worksheets": [ws]})
-    with pytest.raises(QueryError, match="Data Blending"):
-        totals_sql(ir, ws.id, worksheet_sql(ir, ws.id))
+    ((grand,),) = totals_of(ir, folder).values()
+    assert (grand[f"sum({ids['Sales']})"], grand[f"sum({ids['Targets.Target']})"]) == (450.0, 150.0)
 
 
 def test_editor_adds_and_removes_blends(tmp_path: Path, folder: Path) -> None:
@@ -483,11 +544,17 @@ def test_cross_datasource_filter(tmp_path: Path, folder: Path) -> None:
     )
     assert {r[ids["Region"]] for r in run(ir, folder)} == {"East", "West"}
 
-    # 沒有對應到主要資料源的欄位：次要資料源自己的篩選，尚不支援
+    # 沒有對應到主要資料源的欄位：次要資料源自己的篩選（見 test_secondary_filters）
     sheet = orders_sheet("Secondary", cross_filter(["East"], target=False))
-    xml = b.workbook(b.extract_datasource() + targets_datasource(), worksheets=sheet)
-    ir = parse_workbook(b.write_twb(tmp_path, xml))
-    assert any("沒有對應到主要資料源的欄位" in u.reason for u in ir.unsupported)
+    ir = parse(tmp_path, folder, sheet)
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    assert [blend.datasource for blend in ws.blends] == [ir.datasources[1].id]
+    assert [f.field.field for f in ws.filters if isinstance(f, CategoricalFilter)] == [
+        fields(ir)["Targets.Region"]
+    ]
+    # 檢視中沒有次要資料源的欄位：只留下連結欄位的值有對應到通過篩選的資料的標記
+    assert {r[ids["Region"]] for r in run(ir, folder)} == {"East"}
 
 
 def test_related_global_filter_and_control(tmp_path: Path, folder: Path) -> None:
@@ -693,3 +760,119 @@ def test_editor_calc_referencing_another_datasource(tmp_path: Path, folder: Path
     # 移走後不再混合
     ir, saved = replace_worksheet(ir, ws)
     assert saved.blends == []
+
+
+YEAR_TEXT = b.calc(
+    "Calculation_year", "Year Text", "STR(YEAR([Order Date]))", "string", "dimension"
+)
+
+
+def year_filter(members: list[str], exclude: bool = False) -> str:
+    """次要資料源（Targets）的 Year Text 的篩選；%null% 是 Null。"""
+    level = "[none:Calculation_year:nk]"
+    items = "".join(
+        f"<groupfilter function='member' level='{level}' member='{m}' />"
+        for m in (m if m == "%null%" else f"&quot;{m}&quot;" for m in members)
+    )
+    column = target_ref("none:Calculation_year:nk")
+    if exclude:
+        inner = (
+            "<groupfilter function='except' user:ui-enumeration='exclusive'>"
+            f"<groupfilter function='level-members' level='{level}' />{items}</groupfilter>"
+        )
+    else:
+        inner = (
+            f"<groupfilter function='union' user:ui-enumeration='inclusive'>{items}</groupfilter>"
+        )
+    return f"<filter class='categorical' column='{column}'>{inner}</filter>"
+
+
+def filtered_sheet(view_extra: str) -> str:
+    year = instance("[Calculation_year]", "None", "[none:Calculation_year:nk]")
+    deps = (
+        f"<datasource-dependencies datasource='{TARGETS}'>{TARGET}{year}</datasource-dependencies>"
+    )
+    return worksheet(
+        "Filtered",
+        [REGION, SALES],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        encodings=f"<text column='{target_ref('sum:Target:qk')}' />",
+        datasources=SOURCES,
+        view_extra=deps + view_extra,
+    )
+
+
+def test_secondary_filters(tmp_path: Path, folder: Path) -> None:
+    """次要資料源的維度篩選：篩選次要資料源的資料（目標只合計通過篩選的列）；主要資料源中連結欄位的值沒有
+    對應到通過篩選的資料時，那些標記不顯示。篩選包含 Null 時，次要資料源完全沒有對應資料的標記仍顯示。
+    （Tableau 的說明文件沒有寫明，依公開資料推定。）"""
+    from tmig.planner.state import FilterValue, QueryState
+
+    def result(view_extra: str, state: QueryState | None = None) -> dict[object, tuple]:
+        ir = parse(tmp_path, folder, filtered_sheet(view_extra), secondary_columns=YEAR_TEXT)
+        assert ir.unsupported == [] and check_references(ir) == []
+        ids = fields(ir)
+        ws = ir.worksheets[0]
+        query = worksheet_sql(ir, ws.id, state)
+        found = execute_query(folder / f"{ws.datasource}.duckdb", query).records()
+        target, sales = f"sum({ids['Targets.Target']})", f"sum({ids['Sales']})"
+        return {r[ids["Region"]]: (r[sales], r[target]) for r in found}
+
+    # 2024 年的目標：East 只合計 2024 年的 100；West 只有 2023 年的目標、North 沒有目標，不顯示
+    assert result(year_filter(["2024"])) == {"East": (350.0, 100.0), "South": (100.0, 50.0)}
+    # 包含 Null：次要資料源完全沒有對應資料的 North 仍顯示；West 的資料都被篩選掉，不顯示
+    with_null = {"East": (350.0, 100.0), "North": (60.0, None), "South": (100.0, 50.0)}
+    assert result(year_filter(["2024", "%null%"])) == with_null
+    # 排除 2023（沒有排除 Null）
+    assert result(year_filter(["2023"], exclude=True)) == with_null
+    # 篩選控制項改成 2023
+    ir = parse(tmp_path, folder, filtered_sheet(year_filter(["2024"])), secondary_columns=YEAR_TEXT)
+    key = fields(ir)["Targets.Year Text"]
+    state = QueryState(filters={key: FilterValue(mode="include", values=["2023"])})
+    assert result(year_filter(["2024"]), state) == {"East": (350.0, 300.0), "West": (800.0, 900.0)}
+    query = worksheet_sql(ir, ir.worksheets[0].id, state)
+    assert query.state.applied == [key] and query.state.skipped == []
+    # 全部（不設限）：與沒有篩選相同
+    everything = QueryState(filters={key: FilterValue(mode="all")})
+    assert result(year_filter(["2024"]), everything) == {
+        "East": (350.0, 400.0),
+        "North": (60.0, None),
+        "South": (100.0, 50.0),
+        "West": (800.0, 900.0),
+    }
+
+
+def test_secondary_filter_control_on_dashboard(tmp_path: Path, folder: Path) -> None:
+    """dashboard 上次要資料源的篩選控制項：控制工作表上次要資料源的篩選（欄位是次要資料源的欄位）。"""
+    sheet = filtered_sheet(year_filter(["2024"]))
+    column = target_ref("none:Calculation_year:nk")
+    board = f"""
+    <dashboard name='Board'>
+      <size maxheight='600' maxwidth='800' minheight='600' minwidth='800' sizing-mode='fixed' />
+      <zones>
+        <zone h='100000' id='1' type-v2='layout-basic' w='100000' x='0' y='0'>
+          <zone h='50000' id='2' name='Filtered' w='100000' x='0' y='0' />
+          <zone h='50000' id='3' mode='checkdropdown' name='Filtered' param='{column}' type-v2='filter' w='100000' x='0' y='50000' />
+        </zone>
+      </zones>
+    </dashboard>"""
+    xml = b.workbook(
+        b.extract_datasource() + targets_datasource(YEAR_TEXT), worksheets=sheet, dashboards=board
+    )
+    ir = parse_workbook(b.write_twb(tmp_path, xml))
+    assert ir.unsupported == []
+    assert check_references(ir) == []
+    ids = fields(ir)
+    control = next(z for z in iter_zones(ir.dashboards[0].zones) if z.kind == "filter")
+    assert control.worksheet == ir.worksheets[0].id
+    assert control.field == FieldUse(field=ids["Targets.Year Text"])
+    # 控制項的可選值來自次要資料源
+    from tmig.data.executor import execute
+    from tmig.sqlgen.query import domain_sql
+
+    parse(tmp_path, folder, sheet, secondary_columns=YEAR_TEXT)  # 建立資料檔
+    secondary = ir.datasources[1].id
+    assert control.field is not None
+    sql = domain_sql(ir, secondary, control.field, "values")
+    assert [r[0] for r in execute(folder / f"{secondary}.duckdb", sql).rows] == ["2023", "2024"]

@@ -146,7 +146,7 @@ def run_all(runtime: DataRuntime, ir: IR, folder: Path) -> list[dict[str, Any]]:
     for name, convert in COMBOS.items():
         changed = convert(ir)
         query = worksheet_sql(changed, ws.id)
-        assert [s.name for s in query.stages] == ["__p", "__s0"], name
+        assert [s.name for s in query.stages][:2] == ["__p", "__s0"], name
         primary = next(d for d in changed.datasources if d.id == ws.datasource)
         found = runtime.run(query, primary, folder / f"{primary.id}.duckdb").records()
         assert found == expected, name
@@ -291,3 +291,57 @@ def test_calcs_and_secondary_dimensions(runtime: DataRuntime, folder: Path, tmp_
         "South": ("2024", 2.0, 0.0),
         "West": ("2023", 800.0 / 900.0, 100.0),
     }
+
+
+def test_secondary_filters_and_totals(runtime: DataRuntime, folder: Path, tmp_path: Path) -> None:
+    """次要資料源的篩選（含 Null）與總計、小計：各種 Live 的組合都與都是萃取時相同。"""
+    from tmig.sqlgen.query import totals_sql
+
+    from .test_blend import (
+        ATTAINMENT,
+        BLEND_CALCS,
+        TARGET,
+        YEAR_TEXT,
+        filtered_sheet,
+        year_filter,
+    )
+
+    def totals(ir: IR, run: Any) -> list[list[dict[str, Any]]]:
+        ws = ir.worksheets[0]
+        main = worksheet_sql(ir, ws.id)
+        marks = run(main)
+        return [run(t.query).records() for t in totals_sql(ir, ws.id, main, None, None, marks)]
+
+    def compare(ir: IR) -> list[list[dict[str, Any]]]:
+        ws = ir.worksheets[0]
+        db = folder / f"{ws.datasource}.duckdb"
+        expected = totals(ir, lambda q: execute_query(db, q))
+        assert expected and all(expected)
+        for name, convert in COMBOS.items():
+            changed = convert(ir)
+            primary = next(d for d in changed.datasources if d.id == ws.datasource)
+            assert totals(changed, lambda q, p=primary: runtime.run(q, p, db)) == expected, name
+        return expected
+
+    # 篩選 2024 年與 Null（North 沒有目標仍顯示，West 的目標都被篩選掉）
+    sheet = filtered_sheet(year_filter(["2024", "%null%"]))
+    ir = parse(tmp_path, folder, sheet, secondary_columns=YEAR_TEXT)
+    ids = fields(ir)
+    found = run_all(runtime, ir, folder)
+    assert [r[ids["Region"]] for r in found] == ["East", "North", "South"]
+    ws = ir.worksheets[0].model_copy(update={"totals": ["rows"]})
+    ((grand,),) = compare(ir.model_copy(update={"worksheets": [ws]}))
+    assert (grand[f"sum({ids['Sales']})"], grand[f"sum({ids['Targets.Target']})"]) == (510.0, 150.0)
+    # 總計與各地區的小計、引用次要資料源欄位的計算欄位
+    sheet = blended(
+        rows=f"({ref('none:Region:nk')} / {ref('none:Category:nk')})",
+        cols=f"({ref('sum:Sales:qk')} + {ref('usr:Calculation_att:qk')})",
+        instances=[REGION, CATEGORY, SALES, ATTAINMENT],
+        secondary=[TARGET],
+        encodings=f"<text column='{target_ref('sum:Target:qk')}' />",
+    )
+    ir = parse(tmp_path, folder, sheet, columns=BLEND_CALCS)
+    region = ir.worksheets[0].rows[0]
+    ws = ir.worksheets[0].model_copy(update={"totals": ["rows"], "subtotals": [region]})
+    results = compare(ir.model_copy(update={"worksheets": [ws]}))
+    assert sorted(len(rows) for rows in results) == [1, 4]
