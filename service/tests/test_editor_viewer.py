@@ -536,7 +536,13 @@ def test_rich_text_title_tooltip_and_labels(engine: str) -> None:
         page.get_by_label("顯示標記標籤").select_option("on")
         page.get_by_label("要標示的標記").select_option("min_max")
         page.get_by_label("標示最小值").uncheck()
+        page.get_by_label("標籤的垂直對齊").select_option("top")
+        page.get_by_label("標籤的水平對齊").select_option("center")
         confirm(page, ".label-dialog")
+        assert (sheet()["marks"]["label_valign"], sheet()["marks"]["cell_align"]) == (
+            "top",
+            "center",
+        )
         labels = sheet()["marks"]["labels"]
         assert (labels["show"], labels["marks"], labels["minimum"], labels["maximum"]) == (
             True,
@@ -1727,6 +1733,17 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         settle(page)
         assert sheet()["percentages"] is None
 
+        # 下拉線：一律顯示（長條圖只有量值的座標軸有），再關掉
+        page.get_by_label("下拉線", exact=True).select_option("always")
+        settle(page)
+        assert sheet()["drop_lines"] == {"x": True, "y": True, "when": "always", "labels": False}
+        response = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})
+        names = [layer.get("name") for layer in response["spec"].get("layer", [])]
+        assert any(str(name).startswith("__deco_drop") for name in names), names
+        page.get_by_label("下拉線", exact=True).select_option("")
+        settle(page)
+        assert sheet()["drop_lines"] is None
+
         # 個別成員的顏色：Region 放到色彩，East 指定紅色
         page.locator('.data-pane [data-field="f_region"]').drag_to(
             page.locator('[data-drop="marks.color"]')
@@ -1856,6 +1873,21 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         assert (after["rows"], after["filters"]) == (before["rows"], before["filters"])
         page.goto(f"{engine}/w/demo/edit/ws_1")
         settle(page)
+
+        # 格式：儲存格大小、對齊，並套用到所有工作表（整份報表一致）
+        page.get_by_role("button", name="格式…").click()
+        page.get_by_label("列的儲存格大小").fill("28")
+        page.get_by_label("儲存格的水平對齊").select_option("center")
+        page.get_by_label("標題的垂直對齊").select_option("center")
+        page.get_by_role("button", name="套用到所有工作表").click()
+        expect(page.locator(".toast", has_text="已把格式套用到其他").first).to_be_visible()
+        settle(page)
+        formatted = sheet()
+        assert formatted["row_style"]["cell"] == 28
+        assert (formatted["cell_align"], formatted["label_valign"]) == ("center", "center")
+        other = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
+        assert other["row_style"]["cell"] == 28 and other["background"] == "#112233"
+        assert other["rows"] and other["cell_align"] == "center"
 
         # 檢視器：工作表旁邊有兩個控制項；Sub-Category 只列出 Furniture 的子類別
         page.get_by_role("button", name="完成").click()

@@ -49,6 +49,7 @@ from tmig.ir.models import (
     ClusterSpec,
     ColorPalette,
     DataField,
+    DropLines,
     FieldUse,
     Filter,
     Forecast,
@@ -110,6 +111,7 @@ from tmig.parser.fields import (
 )
 from tmig.parser.formats import (
     pane_cell_align,
+    pane_cell_valign,
     pane_label_font,
     pane_label_match,
     pane_labels,
@@ -555,6 +557,7 @@ class SheetParser:
             totals=totals,
             totals_colored=totals_colored,
             percentages=self._percentages(child(table, "view")),
+            drop_lines=self._drop_lines(table),
             totals_top=bool(totals or subtotals) and self._shelf_flag(table, "rows", "onTop"),
             totals_left=bool(totals or subtotals) and self._shelf_flag(table, "cols", "onLeft"),
             subtotals=subtotals,
@@ -1466,6 +1469,7 @@ class SheetParser:
             marks.density = density_style(pane)
         marks.label_color = label_color(pane)
         marks.cell_align = pane_cell_align(pane)
+        marks.label_valign = pane_cell_valign(pane)
         marks.label_font = pane_label_font(pane)
         marks.label_match = pane_label_match(pane)
         marks.trend, reason = pane_trend_line(pane)
@@ -1856,6 +1860,23 @@ class SheetParser:
                 continue
             totals.append(shelf)  # type: ignore[arg-type]
         return totals
+
+    @staticmethod
+    def _drop_lines(table: etree._Element) -> DropLines | None:
+        """下拉線：標記卡（<pane>）的 <dropline x-axis y-axis drop-when haslabel>；drop-when 為 never 時不顯示。
+        各標記卡的設定相同，取第一個。"""
+        for item in descendants(table, "dropline"):
+            when = item.get("drop-when")
+            if when not in ("selected", "always"):
+                continue
+            lines = DropLines(
+                x=item.get("x-axis") != "false",
+                y=item.get("y-axis") != "false",
+                when="always" if when == "always" else "selected",
+                labels=item.get("haslabel") == "true",
+            )
+            return lines if lines.x or lines.y else None
+        return None
 
     def _percentages(self, view: etree._Element | None) -> PercentMode | None:
         """百分比（分析＞百分比）：<view> 的 <percentages enabled='true' mode='…'>。"""
@@ -2842,12 +2863,7 @@ class SheetParser:
                 self.ctx.ignore(item, IGNORED_ELEMENTS[tag])
                 continue
             if tag == "dropline":
-                # Drop Lines：預設只在選取標記時顯示
-                if item.get("drop-when") == "always":
-                    self.ctx.flag(item, "一律顯示的 Drop Lines v0 不支援")
-                else:
-                    self.ctx.ignore(item, "Drop Lines（選取標記時才顯示）：新平台不顯示")
-                continue
+                continue  # 下拉線：Worksheet.drop_lines（_drop_lines）
             if tag == "preset" and _latest_preset(item):
                 continue  # 類別篩選的「開啟報表時篩選到最新的值」：CategoricalFilter.latest
             if tag == "forecast-specification":

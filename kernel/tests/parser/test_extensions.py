@@ -338,7 +338,7 @@ def test_natural_sort_is_alphabetic(tmp_path: Path, sort: str) -> None:
 
 
 def test_old_shelf_sort_and_drop_lines(tmp_path: Path) -> None:
-    """較舊版本的依量值排序（<view><rows><shelf-sort>）；選取時才顯示的 Drop Lines 記為略過。"""
+    """較舊版本的依量值排序（<view><rows><shelf-sort>）；下拉線（<dropline>）。"""
     sort = (
         f"<rows><shelf-sort direction='DESC' measure-to-sort-by='{ref('sum:Sales:qk')}'>"
         f"<dimensions-to-sort><dimension>{ref('none:Region:nk')}</dimension></dimensions-to-sort>"
@@ -358,14 +358,26 @@ def test_old_shelf_sort_and_drop_lines(tmp_path: Path) -> None:
     (sort_ir,) = ir.worksheets[0].sorts
     assert (sort_ir.field, sort_ir.kind, sort_ir.order) == ("f_region", "by_field", "desc")
     assert sort_ir.by == FieldUse(field="f_sales", agg="sum", continuous=True)
-    assert any("Drop Lines" in u.reason for u in ir.ignored)
+    # 下拉線：選取標記時才顯示（只到橫軸）
+    lines = ir.worksheets[0].drop_lines
+    assert lines is not None and (lines.x, lines.y, lines.when) == (True, False, "selected")
 
     always = drop.replace("selected", "always")
     sheets = worksheet(
         "S", BASIC, rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"), pane_extra=always
     )
     ir = parse(tmp_path, b.workbook(worksheets=sheets))
-    assert reasons(ir) == ["一律顯示的 Drop Lines v0 不支援"]
+    assert reasons(ir) == []
+    lines = ir.worksheets[0].drop_lines
+    assert lines is not None and lines.when == "always"
+    never = worksheet(
+        "S",
+        BASIC,
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        pane_extra=drop.replace("selected", "never"),
+    )
+    assert parse(tmp_path, b.workbook(worksheets=never)).worksheets[0].drop_lines is None
 
 
 # ---------------------------------------------------------------- I1 自動與範圍尺寸

@@ -949,6 +949,7 @@
         "label_text": [],
         "label_color": null,
         "cell_align": null,
+        "label_valign": null,
         "detail": [],
         "tooltip": [
           {
@@ -1132,6 +1133,7 @@
       "blends": [],
       "map": null,
       "controls": [],
+      "drop_lines": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -1175,6 +1177,7 @@
         "label_text": [],
         "label_color": null,
         "cell_align": null,
+        "label_valign": null,
         "detail": [],
         "tooltip": [
           {
@@ -1317,6 +1320,7 @@
       "blends": [],
       "map": null,
       "controls": [],
+      "drop_lines": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -1368,6 +1372,7 @@
         "label_text": [],
         "label_color": null,
         "cell_align": null,
+        "label_valign": null,
         "detail": [],
         "tooltip": [
           {
@@ -1497,6 +1502,7 @@
       "blends": [],
       "map": null,
       "controls": [],
+      "drop_lines": null,
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -1545,6 +1551,7 @@
         "label_text": [],
         "label_color": null,
         "cell_align": null,
+        "label_valign": null,
         "detail": [],
         "tooltip": [
           {
@@ -1701,6 +1708,7 @@
       "blends": [],
       "map": null,
       "controls": [],
+      "drop_lines": null,
       "source_ref": "/workbook/worksheets/worksheet[4]"
     }
   ],

@@ -612,6 +612,27 @@ def pane_cell_align(pane: etree._Element) -> Literal["left", "center", "right"] 
     return found
 
 
+def pane_cell_valign(pane: etree._Element) -> Literal["top", "center", "bottom"] | None:
+    """標記卡（<pane>）的 <style-rule element='cell'> 的 vertical-align：標籤的垂直對齊。"""
+    found: Literal["top", "center", "bottom"] | None = None
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "cell":
+            continue
+        for item in children(rule, "format"):
+            if item.get("attr") == "vertical-align" and item.get("field") is None:
+                value = item.get("value")
+                found = (
+                    "top"
+                    if value == "top"
+                    else "bottom"
+                    if value == "bottom"
+                    else "center"
+                    if value in ("center", "middle")
+                    else None
+                )
+    return found
+
+
 def _align(value: str | None) -> Literal["left", "center", "right"] | None:
     """水平對齊：left、center、right；auto（預設）與其他值為 None。"""
     if value == "left" or value == "center" or value == "right":

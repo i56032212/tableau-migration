@@ -247,6 +247,21 @@ function AnalyticsCard() {
         />{" "}
         彙總量值
       </label>
+      <label className="hint drop-lines" title="從標記畫到座標軸的虛線（Tableau 的「分析＞下拉線」）；連續的座標軸才有">
+        下拉線{" "}
+        <select
+          aria-label="下拉線"
+          value={(sheet.drop_lines as { when?: string } | null | undefined)?.when ?? ""}
+          onChange={(e) => {
+            const when = e.target.value;
+            editor.apply((s) => ({ ...s, drop_lines: when ? { x: true, y: true, labels: false, ...((s.drop_lines as object | null) ?? {}), when } : null }));
+          }}
+        >
+          <option value="">無</option>
+          <option value="selected">選取標記時</option>
+          <option value="always">一律顯示</option>
+        </select>
+      </label>
       <label className="hint percent-of" title="量值顯示成占範圍合計的比例（Tableau 的「分析＞百分比」）">
         百分比{" "}
         <select

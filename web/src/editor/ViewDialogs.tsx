@@ -278,6 +278,23 @@ function storedFormat(): Record<string, unknown> | null {
   return copiedFormat;
 }
 
+/**
+ * 把一張工作表的格式套用到報表中其他所有的工作表（Tableau 的「格式＞活頁簿」：整份報表一致的字型、顏色與線條）；
+ * 回傳套用的工作表數。
+ */
+export async function applyFormatToAll(workbook: string, source: SheetIR): Promise<number> {
+  const format = Object.fromEntries(FORMAT_KEYS.filter((key) => key in source).map((key) => [key, source[key]]));
+  const outline = await editApi.outline(workbook);
+  let count = 0;
+  for (const other of outline.worksheets) {
+    if (other.id === source.id) continue;
+    const worksheet = await editApi.worksheet(workbook, other.id);
+    await editApi.saveWorksheet(workbook, { ...worksheet, ...structuredClone(format) });
+    count += 1;
+  }
+  return count;
+}
+
 /** 複製格式：記下這張工作表的格式設定（同一個視窗中可以貼到其他工作表）。 */
 export function copyFormat(sheet: SheetIR): void {
   copiedFormat = Object.fromEntries(FORMAT_KEYS.filter((key) => key in sheet).map((key) => [key, sheet[key]]));

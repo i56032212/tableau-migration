@@ -1400,6 +1400,11 @@ class Marks(IRModel):
         default=None,
         description="文字表儲存格中文字的水平對齊（Format > 窗格的對齊）；None 依工作表的設定或預設",
     )
+    label_valign: Literal["top", "center", "bottom"] | None = Field(
+        default=None,
+        description="標記標籤的垂直對齊（標籤的「對齊」）：在標記的上方、中間或下方；None 為自動"
+        "（水平對齊見 cell_align）",
+    )
     detail: list[FieldUse] = Field(default_factory=list)
     tooltip: list[FieldUse] = Field(default_factory=list)
     tooltip_text: list[TextRun] = Field(
@@ -1854,6 +1859,18 @@ class SheetControl(IRModel):
         return self
 
 
+class DropLines(IRModel):
+    """下拉線（Tableau 的「分析＞下拉線」）：從標記畫到座標軸的線。"""
+
+    x: bool = Field(default=True, description="畫到橫軸（從標記往下的垂直線）")
+    y: bool = Field(default=True, description="畫到縱軸（從標記往左的水平線）")
+    when: Literal["selected", "always"] = Field(
+        default="selected",
+        description="selected＝選取標記時才顯示（Tableau 的預設），always＝一律顯示",
+    )
+    labels: bool = Field(default=False, description="在座標軸上標示值（尚未畫出）")
+
+
 class MapOptions(IRModel):
     """地圖的設定（地圖 → 背景地圖、地圖圖層，與存檔時的顯示範圍）。底圖由平台內建的地理資料畫出
     （Natural Earth），沒有街道、地形與衛星影像。"""
@@ -2022,6 +2039,9 @@ class Worksheet(IRModel):
     controls: list[SheetControl] = Field(
         default_factory=list,
         description="工作表上顯示的篩選與參數控制項（顯示篩選、顯示參數）",
+    )
+    drop_lines: DropLines | None = Field(
+        default=None, description="下拉線；None 為不顯示（連續的座標軸才有下拉線）"
     )
     source_ref: SourceRef
 

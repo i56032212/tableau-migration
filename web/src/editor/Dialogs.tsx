@@ -5,6 +5,7 @@ import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
 import { editApi, type FormulaCheck, type Outline } from "./api";
 import { textTokens } from "./MoreDialogs";
+import { applyFormatToAll } from "./ViewDialogs";
 import { type RichRun, RichTextEditor } from "./RichText";
 import { useEditor } from "./context";
 import {
@@ -1759,8 +1760,10 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
   const [titleSize, setTitleSize] = useState<string>(fonts.title?.size ? String(fonts.title.size) : "");
   const [rowStyle, setRowStyle] = useState<ShelfStyleIR>(rows);
   const [colStyle, setColStyle] = useState<ShelfStyleIR>(cols);
-  const save = () => {
-    editor.apply((s: SheetIR) => {
+  // 對齊：文字表儲存格的水平對齊與標題成員的垂直對齊（空的為預設）
+  const [cellAlign, setCellAlign] = useState<string>((sheet.cell_align as string | null | undefined) ?? "");
+  const [headerValign, setHeaderValign] = useState<string>((sheet.label_valign as string | null | undefined) ?? "");
+  const build = (s: SheetIR): SheetIR => {
       const nextFonts = { ...((s.fonts as Record<string, unknown>) ?? {}) } as Record<string, Record<string, unknown>>;
       const worksheetFont: Record<string, unknown> = { ...(nextFonts.worksheet ?? {}), family: family || null, size: size ? Number(size) : null };
       if (Object.values(worksheetFont).some((v) => v !== null && v !== undefined)) nextFonts.worksheet = worksheetFont;
@@ -1768,9 +1771,29 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
       const title: Record<string, unknown> = { ...(nextFonts.title ?? {}), size: titleSize ? Number(titleSize) : null };
       if (Object.values(title).some((v) => v !== null && v !== undefined)) nextFonts.title = title;
       else delete nextFonts.title;
-      return { ...s, background, text_color: textColor, fonts: nextFonts, row_style: rowStyle, column_style: colStyle };
-    });
+      return {
+        ...s,
+        background,
+        text_color: textColor,
+        fonts: nextFonts,
+        row_style: rowStyle,
+        column_style: colStyle,
+        cell_align: cellAlign || null,
+        label_valign: headerValign || null,
+      };
+  };
+  const save = () => {
+    editor.apply(build);
     onClose();
+  };
+  /** 套用到所有工作表：這張工作表存好之後，其他工作表換上同樣的格式（整份報表一致，Tableau 的「格式＞活頁簿」）。 */
+  const saveAll = () => {
+    const updated = build(editor.sheet);
+    editor.apply(build);
+    onClose();
+    applyFormatToAll(editor.workbook, updated)
+      .then((count) => editor.notify(`已把格式套用到其他 ${count} 張工作表`))
+      .catch((e: Error) => editor.notify(e.message, "error"));
   };
   const shelf = (label: string, value: ShelfStyleIR, set: (v: ShelfStyleIR) => void) => (
     <fieldset className="prop-group">
@@ -1798,6 +1821,17 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
             onChange={(e) => set({ ...value, divider: e.target.checked ? {} : null, header_divider: e.target.checked ? {} : null })}
           />{" "}
           分隔線
+        </label>
+        <label title="離散欄位每個成員的高度（列）或寬度（欄），像素（Tableau 的「格式＞儲存格大小」）；空白為預設">
+          儲存格大小
+          <input
+            type="number"
+            min={1}
+            aria-label={`${label}的儲存格大小`}
+            placeholder="預設"
+            value={value.cell ?? ""}
+            onChange={(e) => set({ ...value, cell: e.target.value ? Math.max(1, Math.round(Number(e.target.value))) : null })}
+          />
         </label>
       </div>
       <div className="row">
@@ -1865,11 +1899,34 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
             <input type="number" min={6} max={72} aria-label="標題的字級" placeholder="15" value={titleSize} onChange={(e) => setTitleSize(e.target.value)} />
           </label>
         </div>
+        <div className="row">
+          <label title="文字表儲存格中文字的水平對齊（Tableau 的「格式＞對齊」）">
+            儲存格的對齊
+            <select aria-label="儲存格的水平對齊" value={cellAlign} onChange={(e) => setCellAlign(e.target.value)}>
+              <option value="">自動</option>
+              <option value="left">靠左</option>
+              <option value="center">置中</option>
+              <option value="right">靠右</option>
+            </select>
+          </label>
+          <label title="列標題成員的垂直對齊">
+            標題的垂直對齊
+            <select aria-label="標題的垂直對齊" value={headerValign} onChange={(e) => setHeaderValign(e.target.value)}>
+              <option value="">預設（上）</option>
+              <option value="top">上</option>
+              <option value="center">中</option>
+              <option value="bottom">下</option>
+            </select>
+          </label>
+        </div>
         {shelf("列", rowStyle, setRowStyle)}
         {shelf("欄", colStyle, setColStyle)}
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>
             確定
+          </button>
+          <button type="button" title="其他工作表也換上這份格式（整份報表一致的字型、顏色與線條）" onClick={saveAll}>
+            套用到所有工作表
           </button>
           <button type="button" onClick={onClose}>
             取消

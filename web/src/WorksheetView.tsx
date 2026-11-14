@@ -190,7 +190,8 @@ function highlight(spec: Spec, rows: number[]) {
   const test = `indexof([${rows.join(",")}], datum.__row) >= 0`;
   visitSpecs(spec, (node) => {
     // 只標示選取（醒目提示）標記的標籤（後端以 __label_s 為名稱前綴、預設不顯示）
-    if (typeof node.name === "string" && node.name.startsWith("__label_s")) node.transform = [{ filter: test }];
+    // 選取標記時才顯示的下拉線（__drop_s）同樣只畫選取的標記
+    if (typeof node.name === "string" && (node.name.startsWith("__label_s") || node.name.startsWith("__drop_s"))) node.transform = [{ filter: test }];
     if (node.mark && !isReferenceLayer(node))
       node.encoding = { ...(node.encoding ?? {}), opacity: { condition: { test, value: 1 }, value: 0.25 } };
   });

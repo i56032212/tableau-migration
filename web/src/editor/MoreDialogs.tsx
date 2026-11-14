@@ -877,10 +877,15 @@ export function LabelDialog({ card, onClose }: { card: Card; onClose: () => void
   const [text, setText] = useState<RichRun[]>((marks.label_text as RichRun[] | undefined) ?? []);
   const [labels, setLabels] = useState<MarkLabelsIR>({ ...DEFAULT_LABELS, ...((marks.labels as Partial<MarkLabelsIR> | null | undefined) ?? {}) });
   const set = (patch: Partial<MarkLabelsIR>) => setLabels((current) => ({ ...current, ...patch }));
+  // 對齊：水平（標籤在標記的左、中、右）與垂直（上、中、下）；空的為自動
+  const [align, setAlign] = useState<string>((marks.cell_align as string | null | undefined) ?? "");
+  const [valign, setValign] = useState<string>((marks.label_valign as string | null | undefined) ?? "");
   const tokens = textTokens(sheet, fields, editor.catalog, { tableCalcs: true });
   const save = () => {
     const changed = JSON.stringify(labels) !== JSON.stringify(DEFAULT_LABELS);
-    editor.apply((s: SheetIR) => updateCard(s, card, (m) => ({ ...m, label_text: text, labels: changed ? labels : null })));
+    editor.apply((s: SheetIR) =>
+      updateCard(s, card, (m) => ({ ...m, label_text: text, labels: changed ? labels : null, cell_align: align || null, label_valign: valign || null })),
+    );
     onClose();
   };
   return (
@@ -941,6 +946,24 @@ export function LabelDialog({ card, onClose }: { card: Card; onClose: () => void
         )}
         <label className="inline">
           <input type="checkbox" checked={labels.overlap} onChange={(e) => set({ overlap: e.target.checked })} /> 允許標籤與其他標記重疊
+        </label>
+        <label className="inline" title="標籤相對於標記的位置（Tableau 標籤的「對齊」）；文字表是儲存格中的對齊">
+          水平對齊
+          <select aria-label="標籤的水平對齊" value={align} onChange={(e) => setAlign(e.target.value)}>
+            <option value="">自動</option>
+            <option value="left">靠左</option>
+            <option value="center">置中</option>
+            <option value="right">靠右</option>
+          </select>
+        </label>
+        <label className="inline">
+          垂直對齊
+          <select aria-label="標籤的垂直對齊" value={valign} onChange={(e) => setValign(e.target.value)}>
+            <option value="">自動</option>
+            <option value="top">上</option>
+            <option value="center">中</option>
+            <option value="bottom">下</option>
+          </select>
         </label>
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>

@@ -161,6 +161,8 @@ VL_MARKS = {
 }
 ROW = "__row"
 NEXT = "__next"
+DROP_LINE_COLOR = "#666666"
+"""下拉線的顏色。"""
 """跳躍的線：同一條線上下一個點的位置（_Builder.jump_layers）。"""
 TOTAL = "__total"
 HEADER_LINE_HEIGHT = 15
@@ -297,6 +299,8 @@ class _Builder:
         self.label_fields: dict[int, str] = {}
         """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
         self.label_count = 0
+        self.drop_count = 0
+        """下拉線圖層的編號。"""
         """標記標籤圖層的編號（圖層名稱與旗標欄各自不同）。"""
         self.text_styles: dict[int, TextStyle] = {}
         """自訂標籤文字的格式（標記卡的 id → 各行相同的格式，或第一行的格式）。"""
@@ -835,6 +839,7 @@ class _Builder:
                 vl_mark["interpolate"] = "step-before" if cols_meas else "step-after"
             else:
                 jump = self.jump_layers(marks, vl_mark, encoding, vertical=bool(cols_meas))
+        drops = self.drop_layers(encoding) if mark not in ("text", "pie", "polygon") else []
         if label_field is not None:
             labels = self.label_layers(
                 marks, encoding, vl_mark, label_type, label_field, rows_meas, cols_meas
@@ -842,15 +847,56 @@ class _Builder:
             if labels:
                 return {
                     "encoding": encoding,
-                    "layer": [*(jump or [{"mark": vl_mark}]), *labels],
+                    "layer": [*(jump or [{"mark": vl_mark}]), *drops, *labels],
                 }, mark
         if mark == "text":
             lines = self.line_layers(marks, vl_mark, encoding)
             if lines is not None:
                 return lines, mark
         if jump is not None:
-            return {"encoding": encoding, "layer": jump}, mark
+            return {"encoding": encoding, "layer": [*jump, *drops]}, mark
+        if drops:
+            return {"encoding": encoding, "layer": [{"mark": vl_mark}, *drops]}, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    def drop_layers(self, encoding: dict[str, Any]) -> list[dict[str, Any]]:
+        """下拉線：從標記到連續座標軸的虛線（到橫軸是往下的垂直線，到縱軸是往左的水平線）。
+
+        一律顯示的是裝飾圖層（__deco_drop）；選取標記時才顯示的（__drop_s）預設不畫，檢視器選取標記後
+        改成只畫選取的標記（與只標示選取標記的標籤相同）。"""
+        settings = self.ws.drop_lines
+        if settings is None:
+            return []
+
+        def continuous(channel: str) -> bool:
+            enc = encoding.get(channel)
+            return isinstance(enc, dict) and enc.get("type") in ("quantitative", "temporal")
+
+        if not ("x" in encoding and "y" in encoding):
+            return []
+        prefix = "__deco_drop" if settings.when == "always" else "__drop_s"
+        hidden: list[dict[str, Any]] = [] if settings.when == "always" else [{"filter": "false"}]
+        rule = {"type": "rule", "strokeDash": [3, 3], "strokeWidth": 1, "tooltip": None}
+        plain = {"color": {"value": DROP_LINE_COLOR}, "size": {"value": 1}}
+        layers: list[dict[str, Any]] = []
+        ends: list[tuple[str, dict[str, Any]]] = []
+        if settings.x and continuous("x"):
+            ends.append(("x", {"y2": {"value": "height"}}))
+        if settings.y and continuous("y"):
+            ends.append(("y", {"x2": {"value": 0}}))
+        for axis, end in ends:
+            self.drop_count += 1
+            layers.append(
+                {
+                    "name": f"{prefix}{axis}{self.drop_count}",
+                    "transform": list(hidden),
+                    "mark": dict(rule),
+                    "encoding": {**end, **plain},
+                }
+            )
+        if layers and settings.labels:
+            self.notes.append("下拉線在座標軸上的標籤尚未畫出")
+        return layers
 
     def jump_layers(
         self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any], vertical: bool
@@ -971,6 +1017,7 @@ class _Builder:
                 POINT_DIAMETER * size / 2,
                 extreme,
                 stacked,
+                marks.label_valign,
             )
 
         layers: list[dict[str, Any]]
@@ -4933,6 +4980,7 @@ def _label_layer(
     radius: float = POINT_DIAMETER / 2,
     extreme: Literal["max", "min"] | None = None,
     stacked: bool = False,
+    valign: Literal["top", "center", "bottom"] | None = None,
 ) -> dict[str, Any]:
     """標籤：長條在尾端（stacked：依標記卡上的維度堆疊時在各段內側），圓點、形狀與方塊在右邊（對齊設為
     置中時在標記中央、靠左時在左邊；與 Tableau 相同），折線與區域在點的上方；折線的最大值（extreme）
@@ -4946,7 +4994,20 @@ def _label_layer(
     if "size" in encoding:
         layer["size"] = {"value": font.size}  # 大小上的欄位決定標記的大小，不是標籤的字級
     if vl_type in ("cell", "circle", "square", "point"):
-        if align == "center":
+        if valign in ("top", "bottom"):
+            # 垂直對齊：標籤在標記的上方或下方；水平沒有指定時置中
+            gap = radius + 4
+            mark.update(
+                baseline="bottom" if valign == "top" else "top",
+                dy=-gap if valign == "top" else gap,
+            )
+            if align == "left":
+                mark.update(align="right", dx=-gap)
+            elif align == "right":
+                mark.update(align="left", dx=gap)
+            else:
+                mark.update(align="center")
+        elif align == "center":
             mark.update(align="center", baseline="middle")
         elif align == "left":
             mark.update(align="right", baseline="middle", dx=-(radius + 4))
@@ -4965,7 +5026,17 @@ def _label_layer(
     elif extreme == "min":
         mark.update(align="left", baseline="top", dx=3, dy=2)
     else:
-        mark.update(baseline="bottom", dy=-4)
+        # 折線與區域：預設在點的上方；垂直對齊可以改到中間或下方，水平對齊改到左邊或右邊
+        if valign == "bottom":
+            mark.update(baseline="top", dy=4)
+        elif valign == "center":
+            mark.update(baseline="middle")
+        else:
+            mark.update(baseline="bottom", dy=-4)
+        if align == "left":
+            mark.update(align="right", dx=-4)
+        elif align == "right":
+            mark.update(align="left", dx=4)
     if match and "field" in encoding.get("color", {}):
         layer["color"] = encoding["color"]
     elif stacked:

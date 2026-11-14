@@ -769,3 +769,78 @@ def test_shape_palette(tmp_path: Path, db: Path) -> None:
     east, north, south, west = scale["range"]
     assert east.startswith("M0,-1")  # 星號以路徑畫出
     assert (north, south, west) == ("square", "cross", "diamond")  # 其餘依預設的順序：方形、加號
+
+
+def test_drop_lines(tmp_path: Path, db: Path) -> None:
+    """下拉線：從標記到連續座標軸的虛線；一律顯示的是裝飾圖層，選取時才顯示的預設不畫（檢視器選取後才畫）。"""
+
+    def scatter(when: str, x_axis: str = "true") -> str:
+        return worksheet(
+            "Scatter",
+            [REGION, SALES, PROFIT],
+            rows=ref("sum:Sales:qk"),
+            cols=ref("sum:Profit:qk"),
+            mark="Circle",
+            encodings=f"<lod column='{ref('none:Region:nk')}' />",
+            pane_extra=f"<dropline drop-when='{when}' haslabel='false' x-axis='{x_axis}' y-axis='true' />",
+        )
+
+    ir = parse(tmp_path, scatter("always"))
+    assert ir.unsupported == []
+    spec = render(ir, db).spec
+    marks, to_x, to_y = spec["layer"]
+    assert marks["mark"]["type"] == "circle"
+    assert (to_x["name"], to_y["name"]) == ("__deco_dropx1", "__deco_dropy2")
+    assert to_x["encoding"]["y2"] == {"value": "height"} and to_y["encoding"]["x2"] == {"value": 0}
+    assert to_x["mark"]["type"] == "rule" and to_x["transform"] == []
+
+    (tmp_path / "selected").mkdir()
+    ir = parse(tmp_path / "selected", scatter("selected", x_axis="false"))
+    spec = render(ir, db).spec
+    _, only = spec["layer"]
+    assert only["name"] == "__drop_sy1" and only["transform"] == [{"filter": "false"}]
+
+    # 長條圖：只有量值的座標軸有下拉線
+    bars = worksheet(
+        "Bars",
+        [REGION, SALES],
+        rows=ref("sum:Sales:qk"),
+        cols=ref("none:Region:nk"),
+        pane_extra="<dropline drop-when='always' haslabel='false' x-axis='true' y-axis='true' />",
+    )
+    (tmp_path / "bars").mkdir()
+    spec = render(parse(tmp_path / "bars", bars), db).spec
+    assert [layer.get("name") for layer in spec["layer"][1:]] == ["__deco_dropy1"]
+
+
+def test_label_vertical_alignment(tmp_path: Path, db: Path) -> None:
+    """標籤的對齊：垂直對齊（標記卡樣式的 cell vertical-align）把標籤放在標記的上方或下方。"""
+
+    def dots(valign: str, align: str | None = None) -> str:
+        formats = f"<format attr='vertical-align' value='{valign}' />"
+        if align is not None:
+            formats += f"<format attr='text-align' value='{align}' />"
+        return worksheet(
+            "Dots",
+            [REGION, SALES, PROFIT],
+            rows=ref("sum:Sales:qk"),
+            cols=ref("sum:Profit:qk"),
+            mark="Circle",
+            encodings=f"<text column='{ref('none:Region:nk')}' />",
+            pane_extra=f"<style><style-rule element='cell'>{formats}</style-rule></style>",
+        )
+
+    def label(xml: str, name: str) -> dict[str, Any]:
+        (tmp_path / name).mkdir()
+        ir = parse(tmp_path / name, xml)
+        assert ir.unsupported == []
+        spec = render(ir, db).spec
+        return next(layer["mark"] for layer in spec["layer"] if layer["mark"]["type"] == "text")
+
+    top = label(dots("top"), "top")
+    assert (top["align"], top["baseline"]) == ("center", "bottom") and top["dy"] < 0
+    bottom = label(dots("bottom", "right"), "bottom")
+    assert (bottom["align"], bottom["baseline"]) == ("left", "top")
+    assert bottom["dy"] > 0 and bottom["dx"] > 0
+    middle = label(dots("center"), "middle")
+    assert (middle["align"], middle["baseline"]) == ("left", "middle")  # 與預設相同：在標記的右邊
