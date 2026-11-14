@@ -249,11 +249,9 @@ class DashboardParser:
                 return Zone(kind="blank", **base)
             return self._button_zone(element, button, base)
         if kind_attr == "web":
+            # 沒有網址的網頁物件：空白，由網址動作載入（UrlAction.target）
             url = (element.get("param") or "").strip()
-            if not url:
-                self.ctx.ignore(element, "沒有指定網址的網頁區塊：以空白區塊呈現")
-                return Zone(kind="blank", **base)
-            return Zone(kind="web", url=url, **base)
+            return Zone(kind="web", url=url or None, **base)
         if kind_attr == "highlighter":
             # 醒目提示控制項：選擇欄位的值，工作表中這個值的標記醒目、其餘淡化（不影響數字）
             sheet = self._sheet(element, name)

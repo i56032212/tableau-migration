@@ -33,7 +33,14 @@ export interface EditorContextValue {
 }
 
 export type EditorDialog =
+  /** 表計算：計算類型與選項、計算方向、計算層級與重新開始間隔 */
   | { kind: "direction"; tableCalc: string }
+  /** 排序：資料來源順序、字母、依欄位或手動 */
+  | { kind: "sort"; use: FieldUse }
+  /** 篩選套用到其他工作表（選取的工作表、使用此資料源的所有工作表） */
+  | { kind: "apply-filter"; filter: string }
+  /** 註解：mark 為檢視上選取的標記（維度的欄位鍵 → 值） */
+  | { kind: "annotations"; mark: Record<string, Scalar> | null }
   | { kind: "format"; use: FieldUse }
   | { kind: "title" }
   | { kind: "sheet-format" }

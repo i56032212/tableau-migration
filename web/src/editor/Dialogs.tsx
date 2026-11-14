@@ -1,6 +1,6 @@
 // 編輯器的對話框：計算欄位、計算方向（指定維度）、數字格式、標題、座標軸、參考線、趨勢線、參數、階層與色彩。
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
 import { editApi, type FormulaCheck, type Outline } from "./api";
@@ -147,103 +147,6 @@ export function CalcDialog({
             取消
           </button>
         </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------- 計算方向：指定維度
-
-export function DirectionDialog({ tableCalc, onClose }: { tableCalc: string; onClose: () => void }) {
-  const editor = useEditor();
-  const { sheet, fields } = editor;
-  const tc = sheet.table_calcs.find((t) => t.id === tableCalc);
-  // 檢視中的維度（欄列架、標記卡），不重複
-  const view = useMemo(() => {
-    const all = [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks)].filter((u) => !isSpecial(u) && !isMeasure(u, fields));
-    const unique: FieldUse[] = [];
-    for (const u of all) if (!unique.some((v) => sameUse(u, v))) unique.push(u);
-    return unique;
-  }, [sheet, fields]);
-  const initial = useMemo(() => {
-    if (!tc) return [] as FieldUse[];
-    if (tc.instances.length > 0) return tc.instances.filter((u) => view.some((v) => sameUse(u, v)));
-    return view.filter((u) => tc.addressing.includes(u.field));
-  }, [tc, view]);
-  const [order, setOrder] = useState<FieldUse[]>(() => [...initial, ...view.filter((u) => !initial.some((v) => sameUse(u, v)))]);
-  const [chosen, setChosen] = useState<Set<string>>(() => new Set(initial.map(useKey)));
-  const [restart, setRestart] = useState<string>(tc?.restart ? useKey(tc.restart) : "");
-  if (!tc) return null;
-  const move = (i: number, delta: number) => {
-    const next = [...order];
-    const [item] = next.splice(i, 1);
-    next.splice(Math.max(0, Math.min(next.length, i + delta)), 0, item);
-    setOrder(next);
-  };
-  const save = () => {
-    const addressed = order.filter((u) => chosen.has(useKey(u)));
-    const ids = [...new Set(addressed.map((u) => u.field))];
-    // 同一欄位只勾選部分的實例（例如年而不是月）時記下實例
-    const partial = view.some((u) => ids.includes(u.field) && !chosen.has(useKey(u)));
-    const restartUse = addressed.find((u) => useKey(u) === restart) ?? null;
-    editor.apply((s: SheetIR) => ({
-      ...s,
-      table_calcs: s.table_calcs.map((t) =>
-        t.id === tc.id ? { ...t, preset: "specific", addressing: ids, instances: partial ? addressed : [], restart: restartUse, inferred: false } : t,
-      ),
-    }));
-    onClose();
-  };
-  return (
-    <Modal title="計算方向：指定維度" onClose={onClose}>
-      <ul className="direction-list">
-        {order.map((u, i) => (
-          <li key={useKey(u)}>
-            <label>
-              <input
-                type="checkbox"
-                checked={chosen.has(useKey(u))}
-                onChange={(e) => {
-                  const next = new Set(chosen);
-                  if (e.target.checked) next.add(useKey(u));
-                  else next.delete(useKey(u));
-                  setChosen(next);
-                }}
-              />{" "}
-              {pillLabel(u, fields, sheet.table_calcs)}
-            </label>
-            <span>
-              <button type="button" className="link" aria-label="上移" onClick={() => move(i, -1)}>
-                ▲
-              </button>
-              <button type="button" className="link" aria-label="下移" onClick={() => move(i, 1)}>
-                ▼
-              </button>
-            </span>
-          </li>
-        ))}
-      </ul>
-      <p className="hint">勾選的維度為計算的方向（依序）；沒有勾選的維度把資料分成各自計算的區段。</p>
-      <label className="inline">
-        重新開始間隔
-        <select aria-label="重新開始間隔" value={restart} onChange={(e) => setRestart(e.target.value)}>
-          <option value="">無</option>
-          {order
-            .filter((u) => chosen.has(useKey(u)))
-            .map((u) => (
-              <option key={useKey(u)} value={useKey(u)}>
-                {pillLabel(u, fields, sheet.table_calcs)}
-              </option>
-            ))}
-        </select>
-      </label>
-      <div className="dialog-actions">
-        <button type="button" className="primary" onClick={save} disabled={chosen.size === 0}>
-          確定
-        </button>
-        <button type="button" onClick={onClose}>
-          取消
-        </button>
       </div>
     </Modal>
   );

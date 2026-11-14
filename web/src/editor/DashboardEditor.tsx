@@ -4,7 +4,7 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { caseState, DashboardView } from "../Dashboard";
-import type { Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
+import type { Button, Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
 import { ActionsDialog } from "./ActionsDialog";
 import { editApi, type Outline } from "./api";
 import {
@@ -295,6 +295,16 @@ export function DashboardEditor({
   const controlTarget = outline.worksheets.find((w) => w.id === (controlSheet || [...sheetsOnBoard][0]));
   const zoneProps = selectedZone ? renderZoneProps(selectedZone.zone, selectedZone.parent) : null;
 
+  /** 顯示／隱藏按鈕可以切換的區塊：這個 dashboard 上按鈕以外的區塊（最外層的容器除外）。 */
+  function toggleTargets(self: string): { id: string; label: string }[] {
+    const found: { id: string; label: string }[] = [];
+    const root = dashboard!.zones[0]?.id;
+    walkZones(dashboard!.zones, (z) => {
+      if (z.id !== self && z.id !== root) found.push({ id: z.id, label: zoneLabel(z, names) });
+    });
+    return found;
+  }
+
   function renderZoneProps(zone: Zone, parent: Zone | null) {
     const floatingZone = isFloating(dashboard!, zone.id);
     const root = dashboard!.zones[0]?.id === zone.id;
@@ -357,9 +367,15 @@ export function DashboardEditor({
           </label>
         )}
         {zone.kind === "web" && (
-          <label className="inline">
+          <label className="inline" title="留空白時是空白的網頁物件，由網址動作載入（動作的「網址目標」）">
             網址
-            <input aria-label="網址" defaultValue={zone.url ?? ""} onBlur={(e) => set({ url: e.target.value })} />
+            <input
+              aria-label="網址"
+              key={zone.url ?? ""}
+              defaultValue={zone.url ?? ""}
+              placeholder="空白：由網址動作載入"
+              onBlur={(e) => set({ url: e.target.value.trim() || null })}
+            />
           </label>
         )}
         {zone.kind === "filter" && (
@@ -405,6 +421,66 @@ export function DashboardEditor({
         {zone.kind === "button" && zone.button && (
           <>
             <label className="inline">
+              動作
+              <select
+                aria-label="按鈕的動作"
+                value={zone.button.action}
+                onChange={(e) => {
+                  const action = e.target.value as Button["action"];
+                  const base = { ...zone.button!, target_dashboard: null, target_worksheet: null, target_story: null, zones: [] as string[], export: null as Button["export"] };
+                  if (action === "navigate") {
+                    const target = outline!.dashboards.find((d) => d.id !== dashboard!.id) ?? outline!.dashboards[0];
+                    set({ button: { ...base, action, target_dashboard: target?.id ?? null, target_worksheet: target ? null : (outline!.worksheets[0]?.id ?? null) } });
+                  } else if (action === "toggle") {
+                    // 顯示／隱藏：預設切換第一個其他的區塊（下面可以改）
+                    const first = toggleTargets(zone.id)[0];
+                    if (first) set({ button: { ...base, action, zones: [first.id] } });
+                  } else {
+                    set({ button: { ...base, action, export: "pdf" } });
+                  }
+                }}
+              >
+                <option value="navigate">導覽</option>
+                <option value="toggle" disabled={toggleTargets(zone.id).length === 0}>
+                  顯示／隱藏區塊
+                </option>
+                <option value="export">匯出</option>
+              </select>
+            </label>
+            {zone.button.action === "export" && (
+              <label className="inline">
+                格式
+                <select
+                  aria-label="匯出的格式"
+                  value={zone.button.export ?? "pdf"}
+                  onChange={(e) => set({ button: { ...zone.button!, export: e.target.value as Button["export"] } })}
+                >
+                  <option value="pdf">PDF</option>
+                  <option value="image">圖片</option>
+                  <option value="powerpoint">PowerPoint</option>
+                </select>
+              </label>
+            )}
+            {zone.button.action === "toggle" && (
+              <div className="check-list" role="group" aria-label="顯示或隱藏的區塊">
+                {toggleTargets(zone.id).map((target) => (
+                  <label key={target.id}>
+                    <input
+                      type="checkbox"
+                      checked={zone.button!.zones.includes(target.id)}
+                      onChange={(e) => {
+                        const zones = e.target.checked ? [...zone.button!.zones, target.id] : zone.button!.zones.filter((id) => id !== target.id);
+                        // 至少要有一個區塊
+                        if (zones.length > 0) set({ button: { ...zone.button!, zones } });
+                      }}
+                    />{" "}
+                    {target.label}
+                  </label>
+                ))}
+              </div>
+            )}
+            {zone.button.action === "navigate" && (
+            <label className="inline">
               目標
               <select
                 aria-label="按鈕的目標"
@@ -449,9 +525,15 @@ export function DashboardEditor({
                 ))}
               </select>
             </label>
+            )}
             <label className="inline">
               文字
-              <input aria-label="按鈕的文字" defaultValue={zone.button.caption ?? ""} onBlur={(e) => set({ button: { ...zone.button!, caption: e.target.value || null } })} />
+              <input
+                aria-label="按鈕的文字"
+                key={zone.button.caption ?? ""}
+                defaultValue={zone.button.caption ?? ""}
+                onBlur={(e) => set({ button: { ...zone.button!, caption: e.target.value || null } })}
+              />
             </label>
           </>
         )}
@@ -857,6 +939,36 @@ export function DashboardEditor({
             }}
           >
             導覽按鈕
+          </button>
+          <button
+            type="button"
+            title="匯出這個 dashboard（PDF、圖片或 PowerPoint；Tableau 的「下載」物件）"
+            onClick={() =>
+              add(
+                makeZone(
+                  "button",
+                  {
+                    button: {
+                      action: "export",
+                      target_dashboard: null,
+                      target_worksheet: null,
+                      zones: [],
+                      export: "pdf",
+                      caption: "匯出 PDF",
+                      tooltip: null,
+                      image: null,
+                      image_hidden: null,
+                      color: null,
+                      background: null,
+                    },
+                  },
+                  floating,
+                ),
+                { w: 160, h: 40 },
+              )
+            }
+          >
+            匯出按鈕
           </button>
         </div>
         <label className="inline hint">

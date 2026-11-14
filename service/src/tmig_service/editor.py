@@ -24,6 +24,7 @@ from tmig.edit import (
     add_dashboard,
     add_story,
     add_worksheet,
+    apply_filter_to_worksheets,
     catalog,
     check_formula,
     duplicate_dashboard,
@@ -62,7 +63,7 @@ from tmig.field_edit import (
     upsert_group,
     upsert_set,
 )
-from tmig.ir import FieldUse, MemberAlias, ParamRef
+from tmig.ir import FieldUse, MemberAlias, ParamRef, TupleFilter
 from tmig.ir.models import GeoAlias, GeoRole, Scalar, SetRule
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
@@ -74,6 +75,13 @@ from tmig_service.app import Workspace, current_user
 class WorksheetBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     worksheet: dict[str, Any]
+
+
+class ApplyFilterBody(BaseModel):
+    """篩選套用到的其他工作表（空的表示只套用到這張工作表）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    targets: list[str]
 
 
 class NewWorksheetBody(BaseModel):
@@ -414,6 +422,44 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         if body.worksheet.get("id") != worksheet:
             raise HTTPException(422, "工作表的 id 與網址不符")
         sheet = edit(request, workbook, lambda ir: replace_worksheet(ir, body.worksheet))
+        return {"worksheet": sheet.model_dump(mode="json")}
+
+    @router.get("/{workbook}/worksheets/{worksheet}/filters/{filter_id}/apply")
+    def get_apply_filter(
+        workbook: str, worksheet: str, filter_id: str, request: Request
+    ) -> dict[str, Any]:
+        """這個篩選可以套用到的其他工作表（同一個資料源）與目前是否已套用（同一個篩選群組）。"""
+        ir = workspace(request).get(workbook).ir
+        sheet = next((w for w in ir.worksheets if w.id == worksheet), None)
+        found = next((f for f in sheet.filters if f.id == filter_id), None) if sheet else None
+        if sheet is None or found is None or isinstance(found, TupleFilter):
+            raise HTTPException(404, "找不到這個篩選")
+        return {
+            "worksheets": [
+                {
+                    "id": other.id,
+                    "name": other.name,
+                    "applied": found.group is not None
+                    and any(
+                        not isinstance(f, TupleFilter) and f.group == found.group
+                        for f in other.filters
+                    ),
+                }
+                for other in ir.worksheets
+                if other.id != sheet.id and other.datasource == sheet.datasource
+            ]
+        }
+
+    @router.post("/{workbook}/worksheets/{worksheet}/filters/{filter_id}/apply")
+    def post_apply_filter(
+        workbook: str, worksheet: str, filter_id: str, body: ApplyFilterBody, request: Request
+    ) -> dict[str, Any]:
+        """把篩選套用到其他工作表（選取的工作表、使用此資料源的所有工作表），或改回只套用到這張。"""
+        sheet = edit(
+            request,
+            workbook,
+            lambda ir: apply_filter_to_worksheets(ir, worksheet, filter_id, body.targets),
+        )
         return {"worksheet": sheet.model_dump(mode="json")}
 
     @router.post("/{workbook}/worksheets")

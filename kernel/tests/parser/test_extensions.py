@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tmig.ir import IR, CategoricalFilter, FieldUse, ParamRef, TupleFilter, iter_zones
+from tmig.ir.integrity import check_references
 from tmig.parser.workbook import parse_workbook
 
 from . import builder as b
@@ -1202,6 +1203,64 @@ def test_url_action(tmp_path: Path) -> None:
     ]
     assert (act.url.escape, act.url.delimiter) == (False, ";")
     assert any("<[Nope]> 找不到欄位" in u.reason for u in ir.ignored)
+    # 沒有寫開啟的位置：dashboard 上有網頁物件時載入其中，否則在新分頁
+    assert (act.url.target, act.url.zone) == ("auto", None)
+
+
+def test_url_action_targets(tmp_path: Path) -> None:
+    """網址動作開啟的位置（URL Target）：新分頁、dashboard 上指定的網頁物件，或預設（有網頁物件時載入其中）。"""
+
+    def url_action(n: int, inner: str) -> str:
+        return (
+            f"<action caption='Open {n}' name='[Action{n}]'>"
+            "<activation type='on-select' />"
+            "<source dashboard='Board' type='sheet' worksheet='Source' />"
+            f"<link caption='Open {n}' expression='https://example.com/?r=&lt;[Region]&gt;'>"
+            f"{inner}</link></action>"
+        )
+
+    actions = "".join(
+        [
+            url_action(1, "<url-action-type>default-zone-or-browser</url-action-type>"),
+            url_action(2, "<url-action-type>browser</url-action-type>"),
+            url_action(
+                3,
+                "<url-action-type>specific-zone</url-action-type>"
+                "<url-action-target>8</url-action-target>",
+            ),
+            url_action(
+                4,
+                "<url-action-type>specific-zone</url-action-type>"
+                "<url-action-target>99</url-action-target>",
+            ),
+        ]
+    )
+    web = "<zone h='10000' id='8' type-v2='web' w='10000' x='0' y='0' />"
+    xml = action_workbook(action_filter(), actions=actions).replace("</zones>", f"{web}</zones>", 1)
+    ir = parse(tmp_path, xml)
+    assert reasons(ir) == []
+    board = next(d for d in ir.dashboards if d.name == "Board")
+    assert [z.id for z in iter_zones(board.zones) if z.kind == "web"] == ["z8"]
+    found = {a.caption: (a.url.target, a.url.zone) for a in ir.actions if a.url is not None}
+    assert found == {
+        "Open 1": ("auto", None),
+        "Open 2": ("browser", None),
+        "Open 3": ("zone", "z8"),
+        "Open 4": ("auto", None),  # 找不到指定的網頁物件：改回預設
+    }
+    assert all(a.activation == "select" for a in ir.actions if a.url is not None)
+    assert any("指定的網頁物件（99）找不到" in u.reason for u in ir.ignored)
+    assert check_references(ir) == []
+    # 指定的網頁物件要在動作所屬的 dashboard 上
+    broken = ir.model_copy(
+        update={
+            "actions": [
+                a.model_copy(update={"dashboard": None}) if a.caption == "Open 3" else a
+                for a in ir.actions
+            ]
+        }
+    )
+    assert any("沒有網頁物件「z8」" in e for e in check_references(broken))
 
 
 def test_parameter_and_navigate_actions(tmp_path: Path) -> None:
@@ -1694,8 +1753,8 @@ def test_buttons_and_web_zones(tmp_path: Path) -> None:
     )
     assert by_id["z6"].hidden
     assert (by_id["z8"].kind, by_id["z8"].url) == ("web", "https://example.com/")
-    assert by_id["z9"].kind == "blank"
-    assert any("沒有指定網址的網頁區塊" in u.reason for u in ir.ignored)
+    # 沒有網址的網頁物件：空白，由網址動作載入
+    assert (by_id["z9"].kind, by_id["z9"].url) == ("web", None)
 
 
 def test_button_targets_that_cannot_migrate(tmp_path: Path) -> None:

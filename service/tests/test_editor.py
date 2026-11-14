@@ -115,6 +115,282 @@ def test_quick_table_calc_from_editor(client: TestClient) -> None:
         assert values == sorted(values) and len(values) > 1
 
 
+def use(field: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "field": field,
+        "agg": None,
+        "date": None,
+        "continuous": False,
+        "table_calc": None,
+        **extra,
+    }
+
+
+def blank(client: TestClient, **parts: Any) -> dict[str, Any]:
+    """把 Sales by Region 換成指定的欄列架（沒有篩選、排序、標記卡上的欄位與 Table Calculation）。"""
+    ws = sheet(client, "ws_sales_by_region")
+    marks = {
+        **ws["marks"],
+        "color": None,
+        "size": None,
+        "label": [],
+        "detail": [],
+        "tooltip": [],
+        "color_palette": None,
+    }
+    ws.update(filters=[], sorts=[], table_calcs=[], panes=[], subtotals=[], totals=[], marks=marks)
+    ws.update(parts)
+    return ws
+
+
+def put(client: TestClient, ws: dict[str, Any]) -> dict[str, Any]:
+    response = client.put(f"/api/edit/demo/worksheets/{ws['id']}", json={"worksheet": ws})
+    assert response.status_code == 200, response.text
+    return response.json()["worksheet"]
+
+
+def column(table: dict[str, Any], key: str) -> list[Any]:
+    index = table["keys"].index(key)
+    return [row[index] for row in table["raw"]]
+
+
+def test_sort_dialog_options(client: TestClient) -> None:
+    """排序對話框：手動排列成員、依另一個欄位的彙總、資料來源順序。"""
+    sales = use("f_sales", agg="sum", continuous=True)
+    ws = blank(client, rows=[use("f_region")], columns=[sales])
+    manual = ["West", "Central", "South", "East"]
+    ws["sorts"] = [
+        {"field": "f_region", "kind": "manual", "order": "asc", "by": None, "manual_values": manual}
+    ]
+    put(client, ws)
+    assert column(render(client, "ws_sales_by_region")["table"], "f_region") == manual
+    # 依不在檢視中的欄位（利潤的平均）遞減
+    by = use("f_profit", agg="avg", continuous=True)
+    ws["sorts"] = [
+        {"field": "f_region", "kind": "by_field", "order": "desc", "by": by, "manual_values": []}
+    ]
+    put(client, ws)
+    regions = column(render(client, "ws_sales_by_region")["table"], "f_region")
+    ws["columns"] = [by]
+    ws["sorts"] = []
+    put(client, ws)
+    table = render(client, "ws_sales_by_region")["table"]
+    profit = dict(zip(column(table, "f_region"), column(table, "avg(f_profit)"), strict=True))
+    assert regions == sorted(profit, key=lambda r: -float(profit[r]))
+    # 資料來源順序
+    ws["sorts"] = [
+        {
+            "field": "f_region",
+            "kind": "data_source",
+            "order": "asc",
+            "by": None,
+            "manual_values": [],
+        }
+    ]
+    put(client, ws)
+    assert sorted(column(render(client, "ws_sales_by_region")["table"], "f_region")) == sorted(
+        manual
+    )
+
+
+def test_date_table_calcs_from_editor(client: TestClient) -> None:
+    """編輯器的「年初至今總計」「年成長率」「複合成長率」與表計算對話框的選項（相對於、計算層級、重新開始間隔）。"""
+    year = use("f_order_date", date={"kind": "part", "unit": "year"})
+    quarter = use("f_order_date", date={"kind": "part", "unit": "quarter"})
+    sales = use("f_sales", agg="sum", continuous=True)
+
+    def calc(calc_id: str, kind: str, options: dict[str, Any], **extra: Any) -> dict[str, Any]:
+        return {
+            "id": calc_id,
+            "type": kind,
+            "preset": "specific",
+            "addressing": ["f_order_date"],
+            "instances": [year, quarter],
+            "level": None,
+            "restart": None,
+            "inferred": False,
+            "options": options,
+            "nested": [],
+            "source_ref": "/editor",
+            **extra,
+        }
+
+    ws = blank(client, rows=[year, quarter], columns=[sales])
+    put(client, ws)
+    table = render(client, "ws_sales_by_region")["table"]
+    keys = [
+        (int(y), int(q))
+        for y, q in zip(
+            column(table, "year(f_order_date)"),
+            column(table, "quarter(f_order_date)"),
+            strict=True,
+        )
+    ]
+    base = dict(zip(keys, [float(v) for v in column(table, "sum(f_sales)")], strict=True))
+    assert len({y for y, _ in keys}) >= 2 and len(keys) >= 8
+
+    def values(tc: dict[str, Any]) -> dict[tuple[Any, Any], Any]:
+        edited = dict(ws)
+        edited["table_calcs"] = [tc]
+        edited["columns"] = [{**sales, "table_calc": tc["id"]}]
+        put(client, edited)
+        found = render(client, "ws_sales_by_region")["table"]
+        return dict(zip(keys, column(found, f"sum(f_sales)#{tc['id']}"), strict=True))
+
+    # 年初至今總計：每一年重新累計
+    ytd = values(calc("tc_ytd", "running_total", {"aggregation": "sum"}, restart=year))
+    for (y, q), value in ytd.items():
+        expected = sum(v for (y2, q2), v in base.items() if y2 == y and q2 <= q)
+        assert float(value) == pytest.approx(expected)
+    # 年成長率：每一季與前一年的同一季比較（計算層級是年）
+    yoy = values(calc("tc_yoy", "percent_difference", {"offset": -1}, level=year))
+    for (y, q), value in yoy.items():
+        previous = base.get((y - 1, q))
+        if previous is None:
+            assert value in (None, "")  # 第一年沒有前一年
+        else:
+            assert float(value) == pytest.approx((base[(y, q)] - previous) / abs(previous))
+    # 複合成長率：相對於第一個，POWER(目前 / 第一個, 1 / 相隔的標記數) - 1
+    first = base[keys[0]]
+    compound = values(
+        calc("tc_cagr", "percent_difference", {"relative_to": "first", "compounded": True})
+    )
+    for n, key in enumerate(keys[1:], start=1):
+        assert float(compound[key]) == pytest.approx((base[key] / first) ** (1 / n) - 1)
+    # 相對於最後一個的差異
+    last = values(calc("tc_last", "difference", {"relative_to": "last"}))
+    for key in keys:
+        assert float(last[key]) == pytest.approx(base[key] - base[keys[-1]])
+
+
+def test_wildcard_filter_and_annotations(client: TestClient) -> None:
+    """萬用字元篩選（與 Tableau 寫進 .twb 的公式相同）與註解（標記、點、區域）。"""
+    sales = use("f_sales", agg="sum", continuous=True)
+    ws = blank(client, rows=[use("f_region")], columns=[sales])
+
+    def wildcard(condition: str) -> list[Any]:
+        ws["filters"] = [
+            {
+                "kind": "condition",
+                "id": "flt_region_wildcard",
+                "field": use("f_region"),
+                "stage": "dimension",
+                "condition": condition,
+                "mode": "all",
+                "values": [],
+                "group": None,
+                "source_ref": "/editor",
+            }
+        ]
+        put(client, ws)
+        return sorted(column(render(client, "ws_sales_by_region")["table"], "f_region"))
+
+    assert wildcard("CONTAINS(LOWER([Region]), LOWER('ST'))") == ["East", "West"]
+    assert wildcard("STARTSWITH(LOWER([Region]), LOWER('c'))") == ["Central"]
+    assert wildcard("ENDSWITH(LOWER([Region]), LOWER('TH'))") == ["South"]
+    assert wildcard("LOWER([Region]) = LOWER('east')") == ["East"]
+    assert wildcard("ISNULL([Region]) OR (NOT(CONTAINS(LOWER([Region]), LOWER('st'))))") == [
+        "Central",
+        "South",
+    ]
+    # 註解：標記（East）、點與區域（Sales 的座標軸上的值）
+    ws["filters"] = []
+    point = {"x": 300000, "x_axis": sales, "y": None, "y_axis": None, "mark": None}
+    ws["annotations"] = [
+        {
+            "kind": "mark",
+            "text": [{"text": "東區最高"}],
+            "point": {
+                "x": None,
+                "x_axis": None,
+                "y": None,
+                "y_axis": None,
+                "mark": {"f_region": "East"},
+            },
+            "offset": [40, -40],
+        },
+        {"kind": "point", "text": [{"text": "目標"}], "point": point, "offset": [40, -40]},
+        {
+            "kind": "area",
+            "text": [{"text": "達標範圍"}],
+            "top_left": point,
+            "bottom_right": {**point, "x": 600000},
+            "offset": [0, 0],
+        },
+    ]
+    saved = put(client, ws)
+    assert [a["kind"] for a in saved["annotations"]] == ["mark", "point", "area"]
+    rendered = render(client, "ws_sales_by_region")
+    assert rendered.get("unsupported") in (None, [])
+    import json
+
+    text = json.dumps(rendered["spec"], ensure_ascii=False)
+    assert all(label in text for label in ("東區最高", "目標", "達標範圍"))
+
+
+def test_apply_filter_to_worksheets(client: TestClient) -> None:
+    """套用到工作表：選取的工作表上各有一個相同、同群組的篩選；改了內容一起改；改回僅此工作表時移除。"""
+    ws = sheet(client, "ws_sales_by_region")
+    category = next(f for f in ws["filters"] if f["field"]["field"] == "f_category")
+    category.update(mode="include", values=["Furniture"])
+    put(client, ws)
+    base = f"/api/edit/demo/worksheets/ws_sales_by_region/filters/{category['id']}/apply"
+    listed = client.get(base).json()["worksheets"]
+    assert {w["id"] for w in listed} == {
+        "ws_monthly_profit",
+        "ws_region_share_by_year",
+        "ws_sub_category_profit",
+    }
+    assert not any(w["applied"] for w in listed)
+    applied = client.post(base, json={"targets": ["ws_monthly_profit", "ws_sub_category_profit"]})
+    assert applied.status_code == 200, applied.text
+    group = next(f for f in applied.json()["worksheet"]["filters"] if f["id"] == category["id"])[
+        "group"
+    ]
+    assert group == f"group:{category['id']}"
+
+    def grouped(worksheet: str) -> list[dict[str, Any]]:
+        return [f for f in sheet(client, worksheet)["filters"] if f.get("group") == group]
+
+    for target in ("ws_monthly_profit", "ws_sub_category_profit"):
+        (copy,) = grouped(target)
+        assert (copy["field"]["field"], copy["mode"], copy["values"]) == (
+            "f_category",
+            "include",
+            ["Furniture"],
+        )
+        assert copy["id"] != category["id"]
+    assert grouped("ws_region_share_by_year") == []
+    assert {w["id"] for w in client.get(base).json()["worksheets"] if w["applied"]} == {
+        "ws_monthly_profit",
+        "ws_sub_category_profit",
+    }
+    # 檢視的結果：Sub-Category Profit 只剩 Furniture 的子類別
+    table = render(client, "ws_sub_category_profit")["table"]
+    assert set(column(table, "f_sub_category")) == {"Bookcases", "Chairs", "Furnishings", "Tables"}
+    # 在這張工作表上改了篩選：其他工作表上的一起改
+    ws = sheet(client, "ws_sales_by_region")
+    next(f for f in ws["filters"] if f["id"] == category["id"]).update(values=["Technology"])
+    put(client, ws)
+    assert all(
+        grouped(t)[0]["values"] == ["Technology"]
+        for t in ("ws_monthly_profit", "ws_sub_category_profit")
+    )
+    # 改成只套用到 Monthly Profit：Sub-Category Profit 上的移除
+    assert client.post(base, json={"targets": ["ws_monthly_profit"]}).status_code == 200
+    assert len(grouped("ws_monthly_profit")) == 1 and grouped("ws_sub_category_profit") == []
+    # 僅此工作表：都移除，篩選不再有群組
+    only = client.post(base, json={"targets": []}).json()["worksheet"]
+    assert next(f for f in only["filters"] if f["id"] == category["id"])["group"] is None
+    assert grouped("ws_monthly_profit") == []
+    # 動作產生的篩選、不存在的篩選
+    assert client.get(base.replace(category["id"], "flt_nope")).status_code == 404
+    assert (
+        client.post(base.replace(category["id"], "flt_nope"), json={"targets": []}).status_code
+        == 422
+    )
+
+
 def test_add_duplicate_delete_worksheets(client: TestClient) -> None:
     created = client.post("/api/edit/demo/worksheets", json={}).json()["worksheet"]
     assert created["name"] == "工作表 1" and created["rows"] == []
@@ -389,6 +665,61 @@ def test_dashboard_story_and_action_api(client: TestClient) -> None:
         },
     )
     assert missing.status_code == 422  # 醒目提示動作要有 highlight
+
+
+def test_url_action_target_is_a_web_object(client: TestClient) -> None:
+    """網址動作的目標：dashboard 上的網頁物件（可以是空白的）；網頁物件移除後改回預設。"""
+    board = client.get("/api/edit/demo/dashboards/db_ee909b0c").json()["dashboard"]
+    web = {
+        "id": "z900",
+        "kind": "web",
+        "x": 600,
+        "y": 400,
+        "w": 300,
+        "h": 200,
+        "source_ref": "/editor",
+    }
+    board["zones"].append(web)
+    saved = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
+    assert saved.status_code == 200, saved.text
+
+    def url_action(**url: object) -> dict[str, object]:
+        return {
+            "action": {
+                "caption": "開啟區域頁",
+                "kind": "url",
+                "activation": "select",
+                "dashboard": "db_ee909b0c",
+                "sources": ["ws_sales_by_region"],
+                "url": {
+                    "template": "https://example.com/region?name=<Region>",
+                    "fields": [{"placeholder": "<Region>", "key": "f_region"}],
+                    **url,
+                },
+            }
+        }
+
+    created = client.post("/api/edit/demo/actions", json=url_action(target="zone", zone="z900"))
+    assert created.status_code == 200, created.text
+    action = created.json()["action"]
+    assert (action["url"]["target"], action["url"]["zone"]) == ("zone", "z900")
+    # 指定的區塊不是這個 dashboard 上的網頁物件
+    refused = client.post("/api/edit/demo/actions", json=url_action(target="zone", zone="z1"))
+    assert refused.status_code == 422 and "網頁物件" in refused.json()["detail"]
+    # zone 與 target 要一致
+    assert client.post("/api/edit/demo/actions", json=url_action(target="zone")).status_code == 422
+    # 沒有寫目標：預設（有網頁物件時載入其中，否則新分頁）
+    default = client.post("/api/edit/demo/actions", json=url_action()).json()["action"]
+    assert (default["url"]["target"], default["url"]["zone"]) == ("auto", None)
+    # 移除網頁物件：指向它的動作改回預設
+    board["zones"] = [z for z in board["zones"] if z["id"] != "z900"]
+    saved = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
+    assert saved.status_code == 200, saved.text
+    actions = {a["id"]: a for a in client.get("/api/workbooks/demo/ir").json()["actions"]}
+    assert (actions[action["id"]]["url"]["target"], actions[action["id"]]["url"]["zone"]) == (
+        "auto",
+        None,
+    )
 
 
 def test_desktop_export_writes_the_file(client: TestClient, tmp_path: Path) -> None:

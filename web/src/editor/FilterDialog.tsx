@@ -20,7 +20,38 @@ import {
 } from "./model";
 
 type Mode = "values" | "range" | "relative";
-type Tab = "general" | "condition" | "top";
+type Tab = "general" | "wildcard" | "condition" | "top";
+
+/** 萬用字元的比對方式（Tableau 篩選對話框的「萬用字元」頁）。 */
+const WILDCARDS: [string, string, (ref: string, text: string) => string][] = [
+  ["contains", "包含", (ref, text) => `CONTAINS(LOWER(${ref}), LOWER(${text}))`],
+  ["starts", "開頭為", (ref, text) => `STARTSWITH(LOWER(${ref}), LOWER(${text}))`],
+  ["ends", "結尾為", (ref, text) => `ENDSWITH(LOWER(${ref}), LOWER(${text}))`],
+  ["exact", "完全符合", (ref, text) => `LOWER(${ref}) = LOWER(${text})`],
+];
+
+const quote = (text: string) => `'${text.replace(/'/g, "''")}'`;
+
+/** 萬用字元篩選的條件公式（與 Tableau 寫進 .twb 的相同）：不分大小寫；排除時 Null 也留下。 */
+export function wildcardFormula(ref: string, kind: string, text: string, exclude: boolean): string {
+  const make = WILDCARDS.find(([key]) => key === kind)?.[2] ?? WILDCARDS[0][2];
+  const formula = make(ref, quote(text));
+  return exclude ? `ISNULL(${ref}) OR (NOT(${formula}))` : formula;
+}
+
+/** 條件公式是否為萬用字元篩選（這個欄位的）：比對方式、文字與是否排除。 */
+export function parseWildcard(condition: string, ref: string): { kind: string; text: string; exclude: boolean } | null {
+  for (const exclude of [false, true]) {
+    for (const [kind] of WILDCARDS) {
+      const [head, tail] = wildcardFormula(ref, kind, "\u0000", exclude).split("'\u0000'");
+      if (condition.startsWith(head) && condition.endsWith(tail) && condition.length >= head.length + tail.length + 2) {
+        const literal = condition.slice(head.length, condition.length - tail.length);
+        if (literal.startsWith("'") && literal.endsWith("'")) return { kind, text: literal.slice(1, -1).replace(/''/g, "'"), exclude };
+      }
+    }
+  }
+  return null;
+}
 
 /** 日期欄位的篩選方式（Tableau 把日期拖到篩選架時先問的那一步）。 */
 const DATE_WAYS: [string, string, FieldUse["date"], Mode][] = [
@@ -74,7 +105,13 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
   const field = fields.get(use.field);
   const measure = isMeasure(use, fields);
   const [mode, setMode] = useState<Mode>(() => initialMode(existing, use, field, measure));
-  const [tab, setTab] = useState<Tab>(existing?.kind === "condition" ? "condition" : existing?.kind === "top_n" ? "top" : "general");
+  // 萬用字元：字串欄位（不是日期的部分）
+  const textual = field?.datatype === "string" && use.date === null && !measure;
+  const wildcard = existing?.kind === "condition" && field && textual ? parseWildcard(String(existing.condition ?? ""), formulaRef(field)) : null;
+  const [tab, setTab] = useState<Tab>(wildcard ? "wildcard" : existing?.kind === "condition" ? "condition" : existing?.kind === "top_n" ? "top" : "general");
+  const [wildKind, setWildKind] = useState(wildcard?.kind ?? "contains");
+  const [wildText, setWildText] = useState(wildcard?.text ?? "");
+  const [wildExclude, setWildExclude] = useState(wildcard?.exclude ?? false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -187,10 +224,12 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
     try {
       const id = existing?.id ?? (await editor.newId("flt", field?.caption ?? use.field));
       const context = existing?.stage === "context";
+      // 套用到其他工作表的篩選（同一個群組）改了內容仍是同一個篩選
+      const group = (existing?.group as string | null | undefined) ?? null;
       let filter: FilterIR;
       if (mode === "range") {
         const stage = measure ? (use.table_calc !== null || field?.level === "table_calc" ? "table_calc" : "measure") : context ? "context" : "dimension";
-        filter = { kind: "range", id, field: use, stage, min: parse(low), max: parse(high), include_null: includeNull, group: null, source_ref: EDITOR_REF };
+        filter = { kind: "range", id, field: use, stage, min: parse(low), max: parse(high), include_null: includeNull, group, source_ref: EDITOR_REF };
       } else if (mode === "relative") {
         const n = Math.max(1, Math.floor(count));
         const [first, last] =
@@ -206,7 +245,20 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
           include_future: relative !== "to_date",
           include_null: false,
           anchor: anchor || null,
-          group: null,
+          group,
+          source_ref: EDITOR_REF,
+        };
+      } else if (tab === "wildcard") {
+        if (!field || !wildText) throw new Error("請輸入比對的文字");
+        filter = {
+          kind: "condition",
+          id,
+          field: use,
+          stage: context ? "context" : "dimension",
+          condition: wildcardFormula(formulaRef(field), wildKind, wildText, wildExclude),
+          mode: "all",
+          values: [],
+          group,
           source_ref: EDITOR_REF,
         };
       } else if (tab === "condition") {
@@ -220,7 +272,7 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
                 return `${ref} ${condOp} ${condValue.trim() || "0"}`;
               })();
         if (!formula) throw new Error("請輸入條件");
-        filter = { kind: "condition", id, field: use, stage: context ? "context" : "dimension", condition: formula, mode: "all", values: [], group: null, source_ref: EDITOR_REF };
+        filter = { kind: "condition", id, field: use, stage: context ? "context" : "dimension", condition: formula, mode: "all", values: [], group, source_ref: EDITOR_REF };
       } else if (tab === "top") {
         const by = topBy.trim();
         if (!by) throw new Error("請選擇排名的依據");
@@ -234,7 +286,7 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
           by,
           mode: "all",
           values: [],
-          group: null,
+          group,
           source_ref: EDITOR_REF,
         };
       } else {
@@ -250,7 +302,7 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
           mode: everything ? "all" : exclude ? "exclude" : "include",
           values: everything ? [] : values,
           ranges: [],
-          group: null,
+          group,
           ...(latest && isDate(field) && !measure ? { latest: true } : {}),
           source_ref: EDITOR_REF,
         };
@@ -303,6 +355,7 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
               {(
                 [
                   ["general", "一般"],
+                  ...(textual ? [["wildcard", "萬用字元"]] : []),
                   ["condition", "條件"],
                   ["top", "頂部"],
                 ] as [Tab, string][]
@@ -312,6 +365,28 @@ export function FilterDialog({ target, onClose }: { target: FilterTarget; onClos
                 </button>
               ))}
             </div>
+            {tab === "wildcard" && (
+              <div className="filter-condition">
+                <label className="inline">
+                  比對的文字
+                  <input aria-label="比對的文字" value={wildText} onChange={(e) => setWildText(e.target.value)} />
+                </label>
+                <label className="inline">
+                  比對方式
+                  <select aria-label="比對方式" value={wildKind} onChange={(e) => setWildKind(e.target.value)}>
+                    {WILDCARDS.map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="inline">
+                  <input type="checkbox" checked={wildExclude} onChange={(e) => setWildExclude(e.target.checked)} /> 排除
+                </label>
+                <p className="hint">不分大小寫；排除時沒有值（Null）的資料列也留下。</p>
+              </div>
+            )}
             {tab === "general" && (
               <div className="filter-values">
                 <div className="filter-tools">

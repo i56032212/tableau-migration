@@ -150,6 +150,30 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
     }
     return next;
   };
+  // 網址動作載入的網頁（網頁物件的區塊 id → 網址）；切換 dashboard 時回到原本的網址
+  const [webUrls, setWebUrls] = useState<Record<string, string>>({});
+  useEffect(() => setWebUrls({}), [workbook, dashboard.id]);
+  /** 網址動作開啟的位置（Tableau 的 URL Target）：dashboard 上網頁物件的區塊 id；null 為新分頁。
+   * 預設（auto）有網頁物件時載入第一個；指定的網頁物件不在這個版面（例如裝置版面）時也是。 */
+  const webTarget = (action: Action): string | null => {
+    const target = action.url?.target ?? "auto";
+    if (target === "browser") return null;
+    const webs: Zone[] = [];
+    const visit = (zones: Zone[]) =>
+      zones.forEach((z) => {
+        if (z.kind === "web") webs.push(z);
+        visit(z.children);
+      });
+    visit(dashboard.zones);
+    return (webs.find((z) => target === "zone" && z.id === action.url?.zone) ?? webs[0])?.id ?? null;
+  };
+  /** 執行網址動作：載入網頁物件（只有 http、https 的網址），否則在新分頁開啟（hover 時不開新分頁）。 */
+  const openUrl = (action: Action, values: Record<string, Scalar>[], newTab = true) => {
+    const url = actionUrl(action, values, parameterValues());
+    const zone = /^https?:\/\//i.test(url) ? webTarget(action) : null;
+    if (zone) setWebUrls((current) => (current[zone] === url ? current : { ...current, [zone]: url }));
+    else if (newTab) window.open(url, "_blank", "noopener");
+  };
   const navigateTo = (actions: Action[]) => {
     for (const action of actions) {
       if (action.kind === "navigate") {
@@ -172,11 +196,9 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
         sets: applySetActions(ir, selectActions, marks, view.sets ?? {}),
         highlights: applyHighlights(selectActions, worksheet, marks, view.highlights ?? NO_HIGHLIGHTS),
       });
-      // 選取時執行的網址動作：在新分頁開啟（點選的當下開啟，瀏覽器不會擋）
+      // 選取時執行的網址動作：載入 dashboard 的網頁物件，或在新分頁開啟（點選的當下開啟，瀏覽器不會擋）
       for (const action of selectActions) {
-        if (action.kind === "url" && values.length > 0) {
-          window.open(actionUrl(action, values, parameterValues()), "_blank", "noopener");
-        }
+        if (action.kind === "url" && values.length > 0) openUrl(action, values);
       }
       const menuActions = sourceActions(ir, worksheet, dashboard.id, "menu");
       const origin = dashboardRef.current?.getBoundingClientRect();
@@ -193,6 +215,10 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
     if (hover.length === 0) return;
     const marks = event.kind === "hover" && event.mark ? [event.mark] : [];
     const values = event.kind === "hover" && event.values ? [event.values] : [];
+    // 暫留時執行的網址動作：只載入 dashboard 的網頁物件（不開新分頁）
+    for (const action of hover) {
+      if (action.kind === "url" && values.length > 0) openUrl(action, values, false);
+    }
     const result = runActions(hover, marks, view.actions);
     const parameters = applyParameters(hover, values, view.parameters);
     const sets = applySetActions(ir, hover, marks, view.sets ?? NO_SETS);
@@ -336,6 +362,7 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
                 setParameter={setParameter}
                 onView={onView}
                 onButton={onButton}
+                webUrl={webUrls[zone.id]}
                 targetsShown={
                   zone.button?.action === "toggle"
                     ? zone.button.zones.some((id) => {
@@ -353,7 +380,20 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
       {menu && (
         <div className="action-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
           {menu.actions.map((action) =>
-            action.kind === "url" ? (
+            action.kind === "url" && webTarget(action) ? (
+              // 載入 dashboard 的網頁物件
+              <button
+                type="button"
+                role="menuitem"
+                key={action.id}
+                onClick={() => {
+                  openUrl(action, menu.values);
+                  setMenu(null);
+                }}
+              >
+                {action.caption || "開啟連結"}
+              </button>
+            ) : action.kind === "url" ? (
               <a
                 role="menuitem"
                 key={action.id}
@@ -394,6 +434,8 @@ interface ZoneProps {
   setParameter: (id: string, value: Scalar) => void;
   onView: (view: ViewState) => void;
   onButton: (button: Button) => void;
+  /** 網頁物件：網址動作載入的網址（沒有時是區塊自己的網址） */
+  webUrl?: string;
   /** 顯示／隱藏按鈕的區塊目前是否顯示 */
   targetsShown: boolean;
 }
@@ -412,6 +454,7 @@ function ZoneContent({
   setParameter,
   onView,
   onButton,
+  webUrl,
   targetsShown,
 }: ZoneProps) {
   switch (zone.kind) {
@@ -495,19 +538,24 @@ function ZoneContent({
       );
     case "image":
       return <img className="zone-image" src={fileUrl(workbook, zone.image!)} alt="" />;
-    case "web":
-      // 只嵌入 http(s) 網頁；沙箱中的網頁不能存取檢視器
-      return /^https?:\/\//i.test(zone.url ?? "") ? (
-        <iframe
-          className="zone-web"
-          src={zone.url!}
-          title={zone.url!}
-          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-          referrerPolicy="no-referrer"
-        />
-      ) : (
-        <div className="placeholder">網頁：{zone.url}</div>
-      );
+    case "web": {
+      // 只嵌入 http(s) 網頁；沙箱中的網頁不能存取檢視器。網址動作載入的網址優先；
+      // 沒有網址的網頁物件在動作載入之前是空白的
+      const url = webUrl ?? zone.url ?? "";
+      if (/^https?:\/\//i.test(url)) {
+        return (
+          <iframe
+            className="zone-web"
+            src={url}
+            title={url}
+            data-url={url}
+            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+            referrerPolicy="no-referrer"
+          />
+        );
+      }
+      return url ? <div className="placeholder">網頁：{url}</div> : <div className="zone-web empty" />;
+    }
     case "button":
       return <DashboardButton workbook={workbook} button={zone.button!} shown={targetsShown} onClick={onButton} />;
     default:

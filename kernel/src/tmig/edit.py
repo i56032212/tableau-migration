@@ -43,7 +43,7 @@ from tmig.ir import (
     iter_zones,
 )
 from tmig.ir.integrity import check_references
-from tmig.ir.models import GeoAlias, GeoRole, GeoSettings
+from tmig.ir.models import Filter, GeoAlias, GeoRole, GeoSettings
 from tmig.ir.scope import DatasourceScope, ForeignSource, calc_references
 from tmig.render.palettes import PALETTES
 
@@ -605,7 +605,112 @@ def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR
     updated = ir.model_copy(
         update={"worksheets": [sheet if w.id == sheet.id else w for w in ir.worksheets]}
     )
+    updated = _sync_filter_groups(updated, sheet)
     return _validated(updated, "工作表的參照不正確"), sheet
+
+
+def _grouped_copy(source: Filter, target_id: str) -> Filter:
+    """篩選套用到另一張工作表時的複本：內容相同，id 是那張工作表上自己的。"""
+    return source.model_copy(update={"id": target_id})
+
+
+def _sync_filter_groups(ir: IR, sheet: Worksheet) -> IR:
+    """套用到多張工作表的篩選（同一個 group）是同一個篩選：這張工作表上的改了，其他工作表上同群組、同欄位的
+    一併改成相同的內容（.twb 匯入的群組，欄位不同的不動）。"""
+    own = {
+        f.group: f for f in sheet.filters if not isinstance(f, TupleFilter) and f.group is not None
+    }
+    if not own:
+        return ir
+    changed = False
+    worksheets: list[Worksheet] = []
+    for other in ir.worksheets:
+        if other.id == sheet.id:
+            worksheets.append(other)
+            continue
+        filters: list[Filter] = []
+        for flt in other.filters:
+            source = (
+                None if isinstance(flt, TupleFilter) or flt.group is None else own.get(flt.group)
+            )
+            if (
+                source is not None
+                and not isinstance(flt, TupleFilter)
+                and flt.field == source.field
+                and flt != _grouped_copy(source, flt.id)
+            ):
+                filters.append(_grouped_copy(source, flt.id))
+                changed = True
+            else:
+                filters.append(flt)
+        worksheets.append(other.model_copy(update={"filters": filters}))
+    return ir.model_copy(update={"worksheets": worksheets}) if changed else ir
+
+
+def apply_filter_to_worksheets(
+    ir: IR, worksheet: str, filter_id: str, targets: list[str]
+) -> tuple[IR, Worksheet]:
+    """把工作表上的篩選套用到其他工作表（Tableau 的「套用到工作表＞選取的工作表、使用此資料源的所有工作表」）：
+    targets 為其他要套用的工作表（要用同一個資料源）；空的表示只套用到這張工作表。
+
+    套用的工作表上各有一個內容相同、同一個群組（group）的篩選：那張工作表原本同欄位的篩選由它取代；不再套用的
+    工作表上同群組的篩選移除。檢視器中同群組的篩選一起變更。"""
+    sheet = next((w for w in ir.worksheets if w.id == worksheet), None)
+    if sheet is None:
+        raise EditError(f"找不到工作表 {worksheet}")
+    source = next((f for f in sheet.filters if f.id == filter_id), None)
+    if source is None or isinstance(source, TupleFilter):
+        raise EditError("找不到這個篩選，或它是動作、排除產生的篩選（不能套用到其他工作表）")
+    wanted = [t for t in dict.fromkeys(targets) if t != worksheet]
+    by_id = {w.id: w for w in ir.worksheets}
+    for target in wanted:
+        other = by_id.get(target)
+        if other is None:
+            raise EditError(f"找不到工作表 {target}")
+        if other.datasource != sheet.datasource:
+            raise EditError(f"「{other.name}」用的是另一個資料源，不能套用這個篩選")
+    old_group = source.group
+    group = (old_group or f"group:{source.id}") if wanted else None
+    shared = source.model_copy(update={"group": group})
+    taken = {f.id for w in ir.worksheets for f in w.filters}
+    worksheets: list[Worksheet] = []
+    for other in ir.worksheets:
+        if other.id == worksheet:
+            filters: list[Filter] = [shared if f.id == filter_id else f for f in other.filters]
+            sheet = other.model_copy(update={"filters": filters})
+            worksheets.append(sheet)
+            continue
+        # 原本同群組的篩選：仍要套用的留下（改成最新的內容），不再套用的移除
+        kept: list[Filter] = []
+        found = False
+        for flt in other.filters:
+            grouped = (
+                old_group is not None
+                and not isinstance(flt, TupleFilter)
+                and flt.group == old_group
+            )
+            same_field = not isinstance(flt, TupleFilter) and flt.field == source.field
+            if other.id in wanted and (grouped or same_field) and not found:
+                kept.append(_grouped_copy(shared, flt.id))
+                found = True
+            elif not grouped:
+                kept.append(flt)
+        if other.id in wanted and not found:
+            new_id = _next_id(taken, f"{source.id}_{other.id}")
+            taken.add(new_id)
+            kept.append(_grouped_copy(shared, new_id))
+        worksheets.append(
+            other if kept == other.filters else other.model_copy(update={"filters": kept})
+        )
+    updated = ir.model_copy(update={"worksheets": worksheets})
+    return _validated(updated, "篩選套用到工作表後的參照不正確"), sheet
+
+
+def _next_id(taken: set[str], base: str) -> str:
+    candidate, n = base, 2
+    while candidate in taken:
+        candidate, n = f"{base}_{n}", n + 1
+    return candidate
 
 
 def _sync_blends(ir: IR, sheet: Worksheet) -> Worksheet:
@@ -1016,7 +1121,25 @@ def replace_dashboard(ir: IR, dashboard: dict[str, Any] | Dashboard) -> tuple[IR
     updated = ir.model_copy(
         update={"dashboards": [board if d.id == board.id else d for d in ir.dashboards]}
     )
-    return _validated(updated, "dashboard 的參照不正確"), board
+    return _validated(_sync_url_targets(updated, board), "dashboard 的參照不正確"), board
+
+
+def _sync_url_targets(ir: IR, board: Dashboard) -> IR:
+    """網址動作指定的網頁物件被移除（或不再是網頁物件）時，改回預設：dashboard 上有網頁物件時載入其中，
+    否則在新分頁開啟（與 Tableau 相同，移除網頁物件後動作仍可執行）。"""
+    layouts = [board.zones, *(layout.zones for layout in board.layouts)]
+    webs = {z.id for zones in layouts for z in iter_zones(zones) if z.kind == "web"}
+
+    def fixed(action: Action) -> Action:
+        url = action.url
+        if action.dashboard != board.id or url is None or url.zone is None or url.zone in webs:
+            return action
+        return action.model_copy(
+            update={"url": url.model_copy(update={"target": "auto", "zone": None})}
+        )
+
+    actions = [fixed(a) for a in ir.actions]
+    return ir if actions == ir.actions else ir.model_copy(update={"actions": actions})
 
 
 def add_dashboard(
@@ -1412,6 +1535,7 @@ __all__ = [
     "add_dashboard",
     "add_story",
     "add_worksheet",
+    "apply_filter_to_worksheets",
     "catalog",
     "check_formula",
     "duplicate_dashboard",

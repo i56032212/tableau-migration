@@ -229,6 +229,187 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         browser.close()
 
 
+def test_sort_table_calc_wildcard_and_annotations(engine: str) -> None:
+    """排序對話框（手動、依欄位）、表計算對話框與以日期層級計算的快速表計算、萬用字元篩選、套用到工作表與註解。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def menu(page: Page, *labels: str) -> None:
+        for i, label in enumerate(labels):
+            item = page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text=label).first
+            if i < len(labels) - 1:
+                item.hover()
+            else:
+                item.click()
+
+    def sheet(worksheet: str = "ws_1") -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{worksheet}")["worksheet"]
+
+    def table(worksheet: str = "ws_1") -> dict[str, Any]:
+        return call(engine, f"/api/workbooks/demo/worksheets/{worksheet}/render", {})["table"]
+
+    def values(key: str) -> list[Any]:
+        data = table()
+        index = data["keys"].index(key)
+        return [row[index] for row in data["raw"]]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        page.locator('.data-pane [data-field="f_region"]').dblclick()
+        settle(page)
+        page.locator('.data-pane [data-field="f_sales"]').dblclick()
+        settle(page)
+
+        # 排序對話框：手動，把 West 移到最上面
+        page.locator('[data-shelf="rows"] .pill', has_text="Region").click()
+        menu(page, "排序", "排序…")
+        page.get_by_label("排序依據").select_option("manual")
+        members = page.locator(".manual-sort .value-list li")
+        expect(members).to_have_count(4)
+        members.filter(has_text="West").click()
+        page.get_by_role("button", name="移到最上面").click()
+        page.locator(".sort-dialog").get_by_role("button", name="確定").click()
+        settle(page)
+        assert values("f_region") == ["West", "Central", "East", "South"]
+        (sort,) = sheet()["sorts"]
+        assert (sort["kind"], sort["manual_values"][0]) == ("manual", "West")
+        # 依欄位：利潤的平均遞減
+        page.locator('[data-shelf="rows"] .pill', has_text="Region").click()
+        menu(page, "排序", "排序…")
+        page.get_by_label("排序依據").select_option("by_field")
+        page.get_by_label("排序順序").select_option("desc")
+        page.get_by_label("排序的欄位").select_option("f_profit")
+        page.get_by_label("排序的彙總").select_option("avg")
+        page.locator(".sort-dialog").get_by_role("button", name="確定").click()
+        settle(page)
+        (sort,) = sheet()["sorts"]
+        assert (sort["kind"], sort["order"], sort["by"]["field"], sort["by"]["agg"]) == (
+            "by_field",
+            "desc",
+            "f_profit",
+            "avg",
+        )
+
+        # 萬用字元篩選：Region 包含 st（East、West）
+        page.locator('[data-shelf="rows"] .pill', has_text="Region").click()
+        menu(page, "篩選…")
+        page.wait_for_selector(".filter-dialog .value-list li")
+        page.locator(".filter-dialog").get_by_role("tab", name="萬用字元").click()
+        page.get_by_label("比對的文字").fill("ST")
+        page.locator(".filter-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".filter-dialog")).to_have_count(0)
+        settle(page)
+        assert sorted(values("f_region")) == ["East", "West"]
+        (flt,) = sheet()["filters"]
+        assert flt["condition"] == "CONTAINS(LOWER([Region]), LOWER('ST'))"
+        # 重新開啟時回到萬用字元頁，改成排除
+        page.locator('[data-shelf="filters"] .pill', has_text="Region").click()
+        menu(page, "編輯篩選…")
+        expect(page.get_by_label("比對的文字")).to_have_value("ST")
+        page.locator(".filter-dialog").get_by_label("排除").check()
+        page.locator(".filter-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".filter-dialog")).to_have_count(0)
+        settle(page)
+        assert sorted(values("f_region")) == ["Central", "South"]
+
+        # 套用到工作表：Sub-Category Profit 也加上這個篩選
+        page.locator('[data-shelf="filters"] .pill', has_text="Region").click()
+        menu(page, "套用到工作表…")
+        page.locator(".apply-filter-dialog label", has_text="Sub-Category Profit").locator(
+            "input"
+        ).check()
+        page.locator(".apply-filter-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".apply-filter-dialog")).to_have_count(0)
+        settle(page)
+        group = sheet()["filters"][0]["group"]
+        assert group
+        copies = [f for f in sheet("ws_sub_category_profit")["filters"] if f.get("group") == group]
+        assert [f["condition"] for f in copies] == [sheet()["filters"][0]["condition"]]
+        # 移除篩選
+        page.locator('[data-shelf="filters"] .pill', has_text="Region").click()
+        menu(page, "移除")
+        settle(page)
+
+        # 註解：選取 East 的標記後加上標記的註解
+        # （固定的標題與座標軸是圖的複本，點選的是 .frozen-host 之下原本的圖）
+        page.locator(
+            ".editor-canvas .frozen-host > svg path[aria-roledescription='bar'][aria-label*='East']"
+        ).click()
+        page.locator(".selection-bar").get_by_role("button", name="💬 註解…").click()
+        page.get_by_label("註解的文字").fill("東區")
+        page.locator(".annotations-dialog").get_by_role("button", name="加上註解").click()
+        settle(page)
+        expect(page.locator(".annotations-dialog table.list")).to_contain_text("東區")
+        page.locator(".annotations-dialog").get_by_role("button", name="關閉").click()
+        (annotation,) = sheet()["annotations"]
+        assert (annotation["kind"], annotation["point"]["mark"]) == ("mark", {"f_region": "East"})
+        expect(
+            page.locator(".editor-canvas .frozen-host > svg text", has_text="東區")
+        ).to_have_count(1)
+
+        # 以日期層級計算的快速表計算：列改成年、季
+        page.locator('[data-shelf="rows"] .pill', has_text="Region").click()
+        menu(page, "移除")
+        settle(page)
+        for _ in range(2):
+            page.locator('.data-pane [data-field="f_order_date"]').drag_to(
+                page.locator('[data-drop="rows"]')
+            )
+            settle(page)
+        page.locator('[data-shelf="rows"] .pill').nth(1).click()
+        menu(page, "季")
+        settle(page)
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "快速表計算", "年初至今總計")
+        settle(page)
+        (calc,) = sheet()["table_calcs"]
+        assert (calc["type"], calc["preset"], calc["restart"]["date"]["unit"]) == (
+            "running_total",
+            "specific",
+            "year",
+        )
+        assert [u["date"]["unit"] for u in calc["instances"]] == ["year", "quarter"]
+        # 表計算對話框：改成差異、相對於第一個、不重新開始
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "編輯表計算…")
+        page.get_by_label("計算類型").select_option("difference")
+        page.get_by_label("相對於").select_option("first")
+        page.get_by_label("重新開始間隔").select_option("")
+        page.locator(".table-calc-dialog").get_by_role("button", name="確定").click()
+        settle(page)
+        (calc,) = sheet()["table_calcs"]
+        assert (calc["type"], calc["options"], calc["restart"]) == (
+            "difference",
+            {"relative_to": "first"},
+            None,
+        )
+        key = next(k for k in table()["keys"] if "#" in k)
+        assert float(values(key)[0]) == 0.0
+        # 年成長率：計算層級是年
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "快速表計算", "年成長率")
+        settle(page)
+        (calc,) = sheet()["table_calcs"]
+        assert (calc["type"], calc["level"]["date"]["unit"]) == ("percent_difference", "year")
+        assert errors == []
+        browser.close()
+
+
 def test_edit_dashboard_and_story(engine: str) -> None:
     from playwright.sync_api import Page, expect, sync_playwright
 
@@ -349,6 +530,152 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         page.get_by_role("button", name="完成").click()
         page.wait_for_url(f"{engine}/w/demo/story/{story['id']}")
         expect(page.locator(".story-points button.active")).to_have_text("全公司概況")
+        assert errors == []
+        browser.close()
+
+
+def test_url_action_loads_the_web_object(engine: str) -> None:
+    """內嵌網頁與網址動作：dashboard 加上空白的網頁物件，網址動作的目標指定它；檢視器點選標記後，
+    網頁物件載入代入標記值的網址（不開新分頁）。目標改成「新的瀏覽器分頁」後在新分頁開啟。"""
+    from playwright.sync_api import Page, Route, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('[data-saving="false"]')
+        page.wait_for_timeout(300)
+
+    def board() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/dashboards/db_ee909b0c")["dashboard"]
+
+    def webs(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = []
+        for zone in zones:
+            if zone["kind"] == "web":
+                found.append(zone)
+            found.extend(webs(zone["children"]))
+        return found
+
+    def fulfill(route: Route) -> None:
+        # 外部網頁以固定的內容回應（測試環境不連外）
+        route.fulfill(status=200, content_type="text/html", body="<p>region page</p>")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(viewport={"width": 1500, "height": 950})
+        context.route("https://example.com/**", fulfill)
+        page = context.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
+
+        # 匯出按鈕（Tableau 的「下載」物件）：格式改成 PowerPoint，再改成顯示／隱藏區塊，最後移除
+        page.get_by_label("以浮動方式加入").check()
+        page.locator(".object-buttons").get_by_role("button", name="匯出按鈕").click()
+        settle(page)
+
+        def button() -> dict[str, Any]:
+            return next(z for z in board()["zones"] if z["kind"] == "button")["button"]
+
+        assert (button()["action"], button()["export"]) == ("export", "pdf")
+        page.get_by_label("匯出的格式").select_option("powerpoint")
+        settle(page)
+        assert button()["export"] == "powerpoint"
+        page.get_by_label("按鈕的動作").select_option("toggle")
+        settle(page)
+        assert button()["action"] == "toggle" and len(button()["zones"]) == 1
+        assert button()["export"] is None
+        page.locator(".dash-props").get_by_role("button", name="移除").click()
+        settle(page)
+        assert not any(z["kind"] == "button" for z in board()["zones"])
+
+        # 以浮動方式加入網頁物件，網址留空白（由網址動作載入）
+        page.locator(".object-buttons").get_by_role("button", name="網頁").click()
+        settle(page)
+        url = page.locator(".dash-props").get_by_label("網址")
+        url.fill("")
+        page.locator(".dash-props .prop-title").click()
+        settle(page)
+        (web,) = webs(board()["zones"])
+        assert web.get("url") is None
+        # 拖到右下角（不蓋住來源工作表）
+        size = board()["size"]
+        selected = page.locator(".dash-zone.selected")
+        box = selected.bounding_box()
+        canvas = page.locator(".dash-editor .dashboard").bounding_box()
+        assert box is not None and canvas is not None
+        page.mouse.move(box["x"] + 20, box["y"] + 20)
+        page.mouse.down()
+        page.mouse.move(
+            canvas["x"] + canvas["width"] - box["width"] + 10,
+            canvas["y"] + canvas["height"] - box["height"] + 10,
+            steps=8,
+        )
+        page.mouse.up()
+        settle(page)
+        (web,) = webs(board()["zones"])
+        assert web["x"] > size["width"] / 2 and web["y"] > size["height"] / 3
+
+        # 網址動作：選取 Sales by Region 的標記時，把區域代入網址，載入這個網頁物件
+        page.get_by_role("button", name="動作…").click()
+        page.locator("#new-action-kind").select_option("url")
+        page.get_by_role("button", name="新增動作").click()
+        page.get_by_label("動作名稱").fill("開啟區域頁")
+        page.locator('[aria-label="來源工作表"] label', has_text="Sales by Region").locator(
+            "input"
+        ).check()
+        page.locator(".action-form").get_by_label("網址", exact=True).fill(
+            "https://example.com/region?name=<Region>"
+        )
+        target = page.get_by_label("網址目標")
+        assert target.locator("option").count() == 3
+        target.select_option(f"zone:{web['id']}")
+        page.locator(".action-form").get_by_role("button", name="確定").click()
+        expect(page.locator(".modal table.list")).to_contain_text("開啟區域頁")
+        page.locator(".modal .dialog-actions").get_by_role("button", name="關閉").click()
+        (action,) = [
+            a for a in call(engine, "/api/workbooks/demo/ir")["actions"] if a["kind"] == "url"
+        ]
+        assert (action["activation"], action["url"]["target"], action["url"]["zone"]) == (
+            "select",
+            "zone",
+            web["id"],
+        )
+        assert action["url"]["fields"] == [{"placeholder": "<Region>", "key": "f_region"}]
+
+        # 檢視器：網頁物件原本是空白的；點選 East 後載入網址
+        page.get_by_role("button", name="完成").click()
+        page.wait_for_url(f"{engine}/w/demo/d/db_ee909b0c")
+        page.wait_for_selector(".dashboard [data-zone] svg")
+        zone = page.locator(f".dashboard [data-zone='{web['id']}']")
+        expect(zone.locator("iframe")).to_have_count(0)
+        bar = "svg path[aria-roledescription='bar']"
+        page.locator(
+            f"[data-worksheet='ws_sales_by_region'] {bar}[aria-label*='East']"
+        ).first.click()
+        frame = zone.locator("iframe")
+        expect(frame).to_have_attribute("data-url", "https://example.com/region?name=East")
+        expect(page.frame_locator(f"[data-zone='{web['id']}'] iframe").locator("p")).to_have_text(
+            "region page"
+        )
+        assert len(context.pages) == 1  # 沒有開新分頁
+        page.locator(
+            f"[data-worksheet='ws_sales_by_region'] {bar}[aria-label*='West']"
+        ).first.click()
+        expect(frame).to_have_attribute("data-url", "https://example.com/region?name=West")
+
+        # 目標改成「新的瀏覽器分頁」：在新分頁開啟，網頁物件不變
+        action["url"].update(target="browser", zone=None)
+        call(engine, "/api/edit/demo/actions", {"action": action})
+        page.reload()
+        page.wait_for_selector(".dashboard [data-zone] svg")
+        with context.expect_page() as opened:
+            page.locator(
+                f"[data-worksheet='ws_sales_by_region'] {bar}[aria-label*='East']"
+            ).first.click()
+        assert opened.value.url == "https://example.com/region?name=East"
+        expect(zone.locator("iframe")).to_have_count(0)
         assert errors == []
         browser.close()
 

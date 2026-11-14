@@ -89,6 +89,17 @@ export const editApi = {
       method: "PUT",
       body: JSON.stringify({ worksheet: sheet }),
     }).then((r) => r.worksheet),
+  /** 篩選可以套用到的其他工作表（同一個資料源）與目前是否已套用 */
+  filterTargets: (workbook: string, worksheet: string, filter: string) =>
+    request<{ worksheets: { id: string; name: string; applied: boolean }[] }>(
+      `${edit(workbook)}/worksheets/${part(worksheet)}/filters/${part(filter)}/apply`,
+    ).then((r) => r.worksheets),
+  /** 把篩選套用到其他工作表（空的表示只套用到這張工作表）；回傳這張工作表 */
+  applyFilter: (workbook: string, worksheet: string, filter: string, targets: string[]) =>
+    request<{ worksheet: SheetIR }>(`${edit(workbook)}/worksheets/${part(worksheet)}/filters/${part(filter)}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ targets }),
+    }).then((r) => r.worksheet),
   addWorksheet: (workbook: string, name?: string, datasource?: string) =>
     request<{ worksheet: SheetIR }>(`${edit(workbook)}/worksheets`, {
       method: "POST",

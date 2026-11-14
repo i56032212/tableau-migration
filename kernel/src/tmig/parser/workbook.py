@@ -549,7 +549,7 @@ class WorkbookParser:
                 link = child(action, "link")
                 assert link is not None
                 url_action = self._url_action(
-                    action, link, caption, activation, dashboard, sources, sheet_ds
+                    action, link, caption, activation, dashboard, sources, sheet_ds, dashboards
                 )
                 if url_action is not None:
                     result.append(url_action)
@@ -728,8 +728,13 @@ class WorkbookParser:
         dashboard: str | None,
         sources: list[str],
         sheet_ds: dict[str, str],
+        dashboards: list[Dashboard],
     ) -> Action | None:
-        """網址動作：網址中的 <[欄位]> 對應到欄位鍵，檢視器以選取的標記代入。"""
+        """網址動作：網址中的 <[欄位]> 對應到欄位鍵，檢視器以選取的標記代入。
+
+        開啟的位置（<link> 之下的 <url-action-type>，2019.2 起）：default-zone-or-browser（沒有寫時也是）＝
+        dashboard 上有網頁物件時載入其中，否則在新分頁；browser＝新分頁；specific-zone＝
+        <url-action-target> 指定的網頁物件（區塊 id）。"""
         ctx = self.ctx
         expression = link.get("expression", "")
         if not expression:
@@ -749,11 +754,7 @@ class WorkbookParser:
                 continue
             if all(f.placeholder != match.group(0) for f in fields):
                 fields.append(UrlField(placeholder=match.group(0), key=key))
-        target = text_of(child(link, "url-action-type"))
-        if target == "specific-zone":
-            ctx.ignore(
-                action, f"網址動作「{caption}」原本開在 dashboard 的網頁物件中，新平台在新分頁開啟"
-            )
+        target, zone = self._url_target(action, link, caption, dashboard, dashboards)
         return Action(
             id=ctx.ids.make("act", caption or action.get("name", ""), action.get("name", "")),
             name=action.get("name", "") or caption,
@@ -764,12 +765,42 @@ class WorkbookParser:
                 fields=fields,
                 escape=link.get("url-escape", "true") != "false",
                 delimiter=link.get("delimiter") or ",",
+                target=target,  # type: ignore[arg-type]
+                zone=zone,
             ),
             activation=activation,  # type: ignore[arg-type]
             dashboard=dashboard,
             sources=sources,
             source_ref=xpath(action),
         )
+
+    def _url_target(
+        self,
+        action: etree._Element,
+        link: etree._Element,
+        caption: str,
+        dashboard: str | None,
+        dashboards: list[Dashboard],
+    ) -> tuple[str, str | None]:
+        """網址動作開啟的位置：（auto、browser 或 zone，zone 時網頁物件的區塊 id）。"""
+        kind = text_of(child(link, "url-action-type"))
+        if kind == "browser":
+            return "browser", None
+        if kind != "specific-zone":
+            return "auto", None
+        raw = text_of(child(link, "url-action-target")).strip()
+        board = next((d for d in dashboards if d.id == dashboard), None)
+        layouts = [board.zones, *(layout.zones for layout in board.layouts)] if board else []
+        webs = [z for zones in layouts for z in iter_zones(zones) if z.kind == "web"]
+        found = next((z for z in webs if z.id in (raw, f"z{raw}")), None)
+        if found is not None:
+            return "zone", found.id
+        self.ctx.ignore(
+            action,
+            f"網址動作「{caption}」指定的網頁物件（{raw or '未指定'}）找不到："
+            "dashboard 上有網頁物件時載入其中，否則在新分頁開啟",
+        )
+        return "auto", None
 
     def _new_action_common(
         self,

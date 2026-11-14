@@ -119,6 +119,10 @@ export interface UrlAction {
   fields: UrlField[];
   escape: boolean;
   delimiter: string;
+  /** 開啟的位置：auto＝dashboard 上有網頁物件時載入其中，否則新分頁；browser＝新分頁；zone＝指定的網頁物件 */
+  target?: "auto" | "browser" | "zone";
+  /** target 為 zone 時，網頁物件的區塊 id */
+  zone?: string | null;
 }
 
 export interface ParameterAction {

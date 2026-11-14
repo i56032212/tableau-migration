@@ -313,7 +313,7 @@ export function zoneLabel(zone: Zone, names: Map<string, string>): string {
     case "button":
       return `按鈕：${zone.button?.caption ?? zone.button?.action ?? ""}`;
     case "web":
-      return `網頁：${zone.url ?? ""}`;
+      return `網頁：${zone.url ?? "（由網址動作載入）"}`;
     default:
       return zone.kind;
   }

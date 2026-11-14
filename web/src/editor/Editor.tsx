@@ -25,7 +25,6 @@ import {
   CalcDialog,
   ClusterDialog,
   ColorsDialog,
-  DirectionDialog,
   ForecastDialog,
   FormatDialog,
   GeoDialog,
@@ -38,6 +37,7 @@ import {
   TrendDialog,
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
+import { AnnotationsDialog, ApplyFilterDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
 import {
   type Card,
   type Catalog,
@@ -229,6 +229,9 @@ function AnalyticsCard() {
         </button>
         <button type="button" onClick={() => editor.openDialog({ kind: "cluster" })}>
           {sheet.cluster ? "叢集 ✓" : "＋ 叢集…"}
+        </button>
+        <button type="button" title="點與區域的註解；標記的註解先在檢視上選取標記" onClick={() => editor.openDialog({ kind: "annotations", mark: null })}>
+          {(sheet.annotations as unknown[] | undefined)?.length ? `註解（${(sheet.annotations as unknown[]).length}）` : "＋ 註解…"}
         </button>
       </div>
       <label className="hint aggregate-toggle" title="關閉時量值不彙總，每一列資料是一個標記（Tableau 的「分析＞彙總量值」）">
@@ -721,7 +724,10 @@ export function Editor({
           }}
         />
       )}
-      {dialog?.kind === "direction" && <DirectionDialog tableCalc={dialog.tableCalc} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "direction" && <TableCalcDialog tableCalc={dialog.tableCalc} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "sort" && <SortDialog use={dialog.use} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "annotations" && <AnnotationsDialog mark={dialog.mark} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "apply-filter" && <ApplyFilterDialog filter={dialog.filter} onClose={() => setDialog(null)} />}
       {dialog?.kind === "format" && <FormatDialog use={dialog.use} onClose={() => setDialog(null)} />}
       {dialog?.kind === "title" && <TitleDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "sheet-format" && <SheetFormatDialog onClose={() => setDialog(null)} />}
@@ -805,6 +811,14 @@ function SelectionBar({
       </button>
       <button type="button" disabled={!levels} title="排除選取的標記（加上篩選）" onClick={() => onFilter("exclude")}>
         ✕ 排除
+      </button>
+      <button
+        type="button"
+        disabled={marks.length !== 1}
+        title={marks.length === 1 ? "在選取的標記上加註解" : "選取一個標記時可以加上標記的註解"}
+        onClick={() => editor.openDialog({ kind: "annotations", mark: marks[0] })}
+      >
+        💬 註解…
       </button>
       <button
         type="button"

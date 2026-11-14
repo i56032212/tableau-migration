@@ -300,6 +300,18 @@ def check_references(ir: IR) -> list[str]:
             errors.append(f"actions[{act.id}].target_story：Story「{act.target_story}」不存在")
         if act.parameter is not None and act.parameter.parameter not in params:
             errors.append(f"actions[{act.id}].parameter：參數「{act.parameter.parameter}」不存在")
+        if act.url is not None and act.url.zone is not None:
+            # 網址動作載入指定的網頁物件：動作所屬的 dashboard（預設或裝置版面）上的網頁區塊
+            board = next((db for db in ir.dashboards if db.id == act.dashboard), None)
+            layouts = [board.zones, *(layout.zones for layout in board.layouts)] if board else []
+            if not any(
+                zone.id == act.url.zone and zone.kind == "web"
+                for zones in layouts
+                for zone in iter_zones(zones)
+            ):
+                errors.append(
+                    f"actions[{act.id}].url.zone：dashboard 上沒有網頁物件「{act.url.zone}」"
+                )
         if act.set_action is not None:
             target = next(
                 (

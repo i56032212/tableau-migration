@@ -10399,7 +10399,9 @@
           }
         ],
         "escape": true,
-        "delimiter": ","
+        "delimiter": ",",
+        "target": "auto",
+        "zone": null
       },
       "parameter": null,
       "set_action": null,

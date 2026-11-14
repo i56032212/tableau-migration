@@ -39,9 +39,11 @@ import {
   setUses,
   type ShelfName,
   type SheetIR,
+  type TableCalcIR,
   updateCard,
   usesOn,
 } from "./model";
+import { dateCalc, dateLevels } from "./MoreDialogs";
 
 // ---------------------------------------------------------------- 選單
 
@@ -339,6 +341,8 @@ export function usePillMenu() {
             action: () => sort("by_field", "desc"),
           },
           { label: "清除排序", disabled: !current, action: () => apply((s) => setSort(s, use.field, null)) },
+          // 資料來源順序、依任一欄位與彙總、手動排列成員
+          { label: "排序…", checked: current?.kind === "manual" || current?.kind === "data_source", action: () => editor.openDialog({ kind: "sort", use }) },
         ],
       });
     }
@@ -399,21 +403,42 @@ export function usePillMenu() {
     if (measure) {
       items.push(SEPARATOR);
       const tc = sheet.table_calcs.find((t) => t.id === use.table_calc);
+      // 換上新的快速表計算（原本的快速表計算移除；Table Calculation 計算欄位的保留）
+      const quick = (type: string, make: (id: string) => TableCalcIR) =>
+        apply(async (s) => {
+          const id = await editor.newId("tc", `${type} ${field?.caption ?? use.field}`);
+          const others = s.table_calcs.filter((t) => t.id !== use.table_calc || t.type === "formula");
+          const updated = { ...s, table_calcs: [...others, make(id)] };
+          return changeUse(updated, shelf, index, { ...use, table_calc: id }, card);
+        });
+      // 以日期層級計算的快速表計算：檢視中要有年；年初至今另外要有比年細的日期層級
+      const levels = dateLevels(sheet, fields);
+      const compounded = tc?.options.compounded === true;
       items.push({
         label: "快速表計算",
         children: [
           ...QUICK_CALCS.map(([type, label, options]) => ({
             label,
-            checked: tc?.type === type,
-            action: () =>
-              apply(async (s) => {
-                const id = await editor.newId("tc", `${type} ${field?.caption ?? use.field}`);
-                const calc = newTableCalc(id, type, options);
-                const others = s.table_calcs.filter((t) => t.id !== use.table_calc || t.type === "formula");
-                const updated = { ...s, table_calcs: [...others, calc] };
-                return changeUse(updated, shelf, index, { ...use, table_calc: id }, card);
-              }),
+            checked: tc?.type === type && !compounded && !tc.restart && !tc.level,
+            action: () => quick(type, (id) => newTableCalc(id, type, options)),
           })),
+          {
+            label: "年初至今總計",
+            disabled: !levels || levels.finer.length === 0,
+            checked: tc?.type === "running_total" && Boolean(tc.restart),
+            action: () => levels && quick("ytd total", (id) => dateCalc(newTableCalc(id, "running_total", {}), "ytd", levels)),
+          },
+          {
+            label: "複合成長率",
+            checked: tc?.type === "percent_difference" && compounded,
+            action: () => quick("compound growth", (id) => newTableCalc(id, "percent_difference", { relative_to: "first", compounded: true })),
+          },
+          {
+            label: "年成長率",
+            disabled: !levels,
+            checked: tc?.type === "percent_difference" && Boolean(tc.level),
+            action: () => levels && quick("year over year", (id) => dateCalc(newTableCalc(id, "percent_difference", {}), "yoy", levels)),
+          },
         ],
       });
       if (tc && tc.type !== "formula") {
@@ -439,6 +464,8 @@ export function usePillMenu() {
             { label: "指定維度…", checked: tc.preset === "specific", action: () => editor.openDialog({ kind: "direction", tableCalc: tc.id }) },
           ],
         });
+        // 計算類型與選項（相對於、排名方式、移動計算的範圍等）、計算層級與重新開始間隔
+        items.push({ label: "編輯表計算…", action: () => editor.openDialog({ kind: "direction", tableCalc: tc.id }) });
       }
       items.push({ label: "格式…", action: () => editor.openDialog({ kind: "format", use }) });
     }
@@ -550,6 +577,8 @@ export function FiltersShelf() {
             ),
           })),
       },
+      // 選取的工作表、使用此資料源的所有工作表（同一個篩選，檢視器中一起變更）
+      { label: "套用到工作表…", checked: Boolean(filter.group), action: () => editor.openDialog({ kind: "apply-filter", filter: filter.id }) },
       SEPARATOR,
       { label: "移除", action: () => apply((s) => removeUse(s, "filters", index)) },
     ];

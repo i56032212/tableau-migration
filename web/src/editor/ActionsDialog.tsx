@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../Server";
-import type { Action, Dashboard, FieldUse } from "../types";
+import type { Action, Dashboard, FieldUse, Zone } from "../types";
 import { editApi, type Outline } from "./api";
 import { walkZones } from "./dashboardModel";
 import { type Catalog, pillLabel, useKey } from "./model";
@@ -39,6 +39,10 @@ interface Draft {
   highlightFields: string[];
   url: string;
   escape: boolean;
+  /** 選取多個標記時值的分隔字元 */
+  delimiter: string;
+  /** 網址開啟的位置：auto、browser 或 zone:<網頁物件的區塊 id> */
+  urlTarget: string;
   parameter: string;
   parameterField: string;
   aggregation: string;
@@ -64,6 +68,8 @@ function draftOf(action: Action | null, dashboard: Dashboard, onBoard: string[])
     highlightFields: action?.highlight?.fields ?? [],
     url: action?.url?.template ?? "https://",
     escape: action?.url?.escape ?? true,
+    delimiter: action?.url?.delimiter ?? ",",
+    urlTarget: action?.url?.target === "zone" && action.url.zone ? `zone:${action.url.zone}` : (action?.url?.target ?? "auto"),
     parameter: action?.parameter?.parameter ?? "",
     parameterField: action?.parameter?.field ?? "",
     aggregation: action?.parameter?.aggregation ?? "attr",
@@ -106,6 +112,14 @@ export function ActionsDialog({
       if (z.kind === "worksheet" && z.worksheet && !ids.includes(z.worksheet)) ids.push(z.worksheet);
     });
     return ids;
+  }, [dashboard]);
+  // dashboard 上的網頁物件（網址動作可以載入其中）
+  const webZones = useMemo(() => {
+    const found: Zone[] = [];
+    walkZones(dashboard.zones, (z) => {
+      if (z.kind === "web") found.push(z);
+    });
+    return found;
   }, [dashboard]);
   const sheetName = (id: string) => outline.worksheets.find((w) => w.id === id)?.name ?? id;
   const actions = outline.actions.filter((a) => a.dashboard === dashboard.id || a.dashboard === null);
@@ -155,7 +169,16 @@ export function ActionsDialog({
           return parameter ? { placeholder, key: `param:${parameter.id}` } : null;
         })
         .filter(Boolean);
-      body.url = { template: draft.url, fields, escape: draft.escape, delimiter: "," };
+      // 指定的網頁物件只在這個 dashboard 上有意義
+      const zone = draft.scope === "dashboard" && draft.urlTarget.startsWith("zone:") ? draft.urlTarget.slice(5) : null;
+      body.url = {
+        template: draft.url,
+        fields,
+        escape: draft.escape,
+        delimiter: draft.delimiter || ",",
+        target: zone ? "zone" : draft.urlTarget === "browser" ? "browser" : "auto",
+        zone,
+      };
     } else if (draft.kind === "parameter") {
       body.parameter = {
         parameter: draft.parameter,
@@ -378,6 +401,24 @@ export function ActionsDialog({
               </div>
               <label className="inline">
                 <input type="checkbox" checked={draft.escape} onChange={(e) => set({ escape: e.target.checked })} /> 網址編碼
+              </label>
+              <label className="inline">
+                多個值的分隔字元
+                <input aria-label="分隔字元" className="narrow" value={draft.delimiter} onChange={(e) => set({ delimiter: e.target.value })} />
+              </label>
+              <label className="inline">
+                網址目標
+                <select aria-label="網址目標" value={draft.urlTarget} onChange={(e) => set({ urlTarget: e.target.value })}>
+                  <option value="auto">沒有網頁物件時在新分頁（有時載入網頁物件）</option>
+                  <option value="browser">新的瀏覽器分頁</option>
+                  {draft.scope === "dashboard" &&
+                    webZones.map((z, n) => (
+                      <option key={z.id} value={`zone:${z.id}`}>
+                        網頁物件 {n + 1}
+                        {z.url ? `：${z.url}` : "（空白）"}
+                      </option>
+                    ))}
+                </select>
               </label>
             </>
           )}

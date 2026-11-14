@@ -1950,7 +1950,7 @@ _ZONE_REQUIRED: dict[str, tuple[str, ...]] = {
     "title": (),
     "blank": (),
     "button": ("button",),
-    "web": ("url",),
+    "web": (),
 }
 
 
@@ -1992,7 +1992,8 @@ class Button(IRModel):
         return self
 
 
-_ZONE_OPTIONAL: dict[str, tuple[str, ...]] = {"title": ("text",)}
+_ZONE_OPTIONAL: dict[str, tuple[str, ...]] = {"title": ("text",), "web": ("url",)}
+"""網頁物件可以沒有網址：由網址動作載入（UrlAction.target）。"""
 
 
 class ZoneStyle(IRModel):
@@ -2036,7 +2037,9 @@ class Zone(IRModel):
     )
     image: str | None = Field(default=None, description=".twbx 內的圖片路徑")
     button: Button | None = None
-    url: str | None = Field(default=None, description="網頁區塊的網址")
+    url: str | None = Field(
+        default=None, description="網頁區塊的網址；沒有時是空白的網頁物件（由網址動作載入）"
+    )
     children: list[Zone] = Field(default_factory=list, description="只有 container 可以有子區塊")
     layout: Literal["tiled", "horizontal", "vertical"] | None = Field(
         default=None,
@@ -2235,6 +2238,20 @@ class UrlAction(IRModel):
     fields: list[UrlField] = Field(default_factory=list, description="網址中的欄位參照")
     escape: bool = Field(default=True, description="代入的值是否以網址編碼")
     delimiter: str = Field(default=",", description="選取多個標記時值的分隔字元")
+    target: Literal["auto", "browser", "zone"] = Field(
+        default="auto",
+        description="開啟的位置（Tableau 的 URL Target）：auto＝dashboard 上有網頁物件時載入其中（第一個），"
+        "沒有時在新分頁開啟；browser＝一律在新的瀏覽器分頁；zone＝載入 dashboard 上指定的網頁物件",
+    )
+    zone: Id | None = Field(
+        default=None, description="target 為 zone 時，動作所屬 dashboard 上網頁物件的區塊 id"
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if (self.target == "zone") != (self.zone is not None):
+            raise ValueError("只有 target 為 zone 時必須、也只能指定 zone")
+        return self
 
 
 class ParameterAction(IRModel):
