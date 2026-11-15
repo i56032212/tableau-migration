@@ -25,6 +25,8 @@ API（都在 /api/edit/<報表> 下）：
 - 跨資料庫的 join：``POST …/tables`` 的資料庫資料表另送 ``connection``（桌面版的連線代號，或資料源中已有的
   資料庫）時，與檔案或其他資料庫的資料表在本機合併；資料庫的資料源加上檔案也是。``remote-tables``、
   ``remote-columns`` 以 ``connection`` 指定資料源中的哪一個資料庫
+- ``PUT …/initial-sql``：``{"sql": …, "connection": …}`` 資料庫連線的 Initial SQL（空的表示清除；
+  ``connection`` 是資料源中的哪一個資料庫，只有一個時可以省略）。模型的 ``sources`` 列出可以設定的連線
 - ``PUT …/interpreter``：``{"file": "Data/…", "enabled": …}`` 切換 Excel 檔的資料解譯器
 - ``POST …/wildcard-union``：``{"table", "folder", "files", "sheets", "recursive"}`` 萬用字元聯集（資料夾中
   檔名符合模式的檔案複製進報表、接在資料表下面）
@@ -32,13 +34,14 @@ API（都在 /api/edit/<報表> 下）：
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from tmig.authoring import (
     DATA_DIR,
@@ -52,6 +55,7 @@ from tmig.authoring import (
     add_table,
     add_wildcard_union,
     federate,
+    initial_sql_connections,
     inspect_file,
     join_calc_display,
     leaf_relations,
@@ -60,12 +64,14 @@ from tmig.authoring import (
     remove_table,
     rename_datasource,
     set_custom_sql,
+    set_initial_sql,
     set_interpreter,
     set_join,
     set_relationship,
     unpivot,
     update_field,
 )
+from tmig.data import initial_sql
 from tmig.data.hyper_import import HyperImportError, import_sources
 from tmig.edit import EditError
 from tmig.ir import (
@@ -193,6 +199,14 @@ class SqlBody(BaseModel):
     sql: str
 
 
+class InitialSqlBody(BaseModel):
+    """連線的 Initial SQL：空的表示清除；connection 是資料源中的哪一個資料庫（只有一個時可以省略）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    sql: str | None = Field(default=None, max_length=100_000)
+    connection: str | None = None
+
+
 class InterpreterBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     file: str
@@ -242,7 +256,28 @@ def connection_view(connection: LiveConnection) -> dict[str, Any]:
         "port": connection.port,
         "database": connection.database,
         "schema": connection.schema_name,
+        "initial_sql": connection.initial_sql,
     }
+
+
+def initial_sql_trial(request: Request, connection: LiveConnection) -> str | None:
+    """以新的 Initial SQL 連一次資料庫；回傳失敗的原因（沒有 Initial SQL、成功時為 None）。
+
+    桌面版不執行 <ServerOnly> 的部分，[TableauServerUser] 是登入伺服器的帳號（沒有登入時是空的），
+    所以在這裡失敗的不一定在伺服器上也失敗：只回報，不擋存檔（與 Tableau 相同，錯誤在連線時出現）。"""
+    from tmig.data.sources import SourceConnectionError, open_executor
+
+    if not initial_sql.resolved(connection):
+        return None
+    try:
+        executor = open_executor(connection, request.app.state.runtime.configs)
+    except SourceConnectionError as exc:
+        return str(exc)
+    except Exception as exc:
+        return f"連不上資料庫：{exc}"
+    with contextlib.suppress(Exception):
+        executor.close()
+    return None
 
 
 def interpreted_files(ds: Datasource) -> set[str]:
@@ -388,6 +423,8 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
             )
     server = connection_view(connection) if isinstance(connection, LiveConnection) else None
     return {
+        # 可以設定 Initial SQL 的資料庫連線：Live 連線、萃取的來源，或跨資料庫的 join 中的各資料庫
+        "sources": [connection_view(c) for c in initial_sql_connections(ds)],
         "datasource": {
             "id": ds.id,
             "caption": ds.caption,
@@ -859,6 +896,34 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
         return model_view(
             ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory
         )
+
+    @router.put("/{workbook}/datasources/{datasource}/initial-sql")
+    def initial_sql_endpoint(
+        workbook: str, datasource: str, body: InitialSqlBody, request: Request
+    ) -> dict[str, Any]:
+        """設定（或清除）資料庫連線的 Initial SQL（Tableau 的「資料＞初始 SQL」）。存檔後以新的內容連一次
+        資料庫，失敗的原因放在 initial_sql_error（仍然存檔）。"""
+        loaded = workspace(request).get(workbook)
+        ir = apply(
+            request,
+            workbook,
+            None,
+            lambda ir: set_initial_sql(ir, datasource, body.sql, body.connection),
+        )
+        ds = next(d for d in ir.datasources if d.id == datasource)
+        changed = next(
+            (
+                c
+                for c in initial_sql_connections(ds)
+                if body.connection is None or c.connection_id == body.connection
+            ),
+            None,
+        )
+        view = model_view(ir, ds, loaded.directory)
+        view["initial_sql_error"] = (
+            initial_sql_trial(request, changed) if changed is not None else None
+        )
+        return view
 
     @router.put("/{workbook}/datasources/{datasource}")
     def rename_endpoint(

@@ -40,8 +40,9 @@ Relationship 模型（見「Relationship 模型」）；公開報表盤點中符
 Project、workbook、view 權限開放（見「權限」）；匯入之後 Project、權限、使用者與群組在新平台上管理（見「站台管理」）。排程器依 Tableau Server 匯出的排程執行萃取更新，以訂閱者的身分產生
 PDF、PNG 寄出訂閱（見「排程與訂閱」），排程、萃取更新與訂閱也在新平台上管理，使用者可以自己訂閱（見「排程管理」）、建立資料警示（見「資料警示」），Published Data Source 也發布到新平台、報表共用伺服器上的萃取（見「伺服器上的資料源」）；檢視器有復原、自訂檢視、下載交叉資料表與資料、留言與我的最愛（見「檢視者的工具」）；每次檢視記錄使用者、報表與時間（見「使用紀錄」）。
 一份報表可以有多個資料源（各工作表用各自的資料源，網址參數套用到所有資料源中同名的欄位）；同一張工作表混用多個資料源的
-Data Blending 支援主要與次要資料源是萃取、檔案、跨資料庫的 join 或 Live 連線（次要資料源也可以是 Relationship 模型）的工作表，含引用次要資料源欄位的計算欄位、次要資料源的維度、篩選、排序、Table Calculation、參考線與總計（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、Initial SQL 帶入登入者），移轉後資料庫端的權限
-不會生效，盤點時列為不符合起步條件（見「依檢視者的身分連線」）。以 156 份公開報表重新盤點：放寬多個資料源後 12 份
+Data Blending 支援主要與次要資料源是萃取、檔案、跨資料庫的 join 或 Live 連線（次要資料源也可以是 Relationship 模型）的工作表，含引用次要資料源欄位的計算欄位、次要資料源的維度、篩選、排序、Table Calculation、參考線與總計（見「Data Blending」）。依檢視者的身分連線資料庫的報表（沒有嵌入密碼、以檢視者的身分模擬），移轉後資料庫端的權限
+不會生效，盤點時列為不符合起步條件；連線的 Initial SQL 平台照樣執行，`[TableauServerUser]` 代入平台登入的帳號
+（見「Initial SQL」與「依檢視者的身分連線」）。以 156 份公開報表重新盤點：放寬多個資料源後 12 份
 轉為符合起步條件；28 份要求檢視者輸入自己的資料庫帳號（Tableau Server Insights、TabMon 等連到 Tableau 資料庫的範例）
 改列為不符合，3 份以 Windows 整合驗證連線列為需注意。
 
@@ -271,18 +272,50 @@ SQL 以 SQLGlot 轉回 DuckDB、該資料庫特有的函式依官方文件的語
 （`fixtures/*/sql/<方言>/`）供審核，仍待實機驗證。與 Tableau 直接連該資料庫時相同，字串的比較與排序依資料庫的定序
 （SQL Server、MySQL 預設不分大小寫），轉成字串的小數格式依資料庫。
 
+### Initial SQL
+
+連線的 Initial SQL（Tableau 的「初始 SQL」，.twb 連線的 `one-time-sql`）記在連線上（`LiveConnection.initial_sql`），
+平台**連上來源資料庫時執行一次**，之後這條連線上的查詢都看得到它的結果（`kernel/src/tmig/data/initial_sql.py`、
+`tmig.data.sources.open_executor`）：設定工作階段（`SET search_path`、`ALTER SESSION`）、建立暫存資料表給自訂 SQL
+使用、把登入者帶給資料庫（Oracle VPD 的 `DBMS_SESSION.SET_IDENTIFIER`、SQL Server 的 `EXECUTE AS USER`）。
+檢視、篩選控制項的可選值、動態參數、資料警示、發布前的檢查、`tmig query`、`tmig verify` 與更新萃取
+（萃取的來源連線）都一樣。
+
+- **參數**（與 Tableau 相同的五個，名稱不分大小寫）：`[TableauServerUser]` 登入者的帳號、`[TableauServerUserFull]`
+  帶網域的帳號（`網域\帳號`，沒有網域時與帳號相同）、`[TableauApp]`（伺服器上是 `Tableau Server`、桌面版是
+  `Tableau Desktop Professional`：沿用 Tableau 的名稱，依它判斷環境的 Initial SQL 照原本的方式執行）、
+  `[TableauVersion]`（`2021.2`）、`[WorkbookName]` 報表的名稱。值依連線的方言跳脫（單引號重複一次；MySQL、BigQuery、
+  Spark 等以反斜線跳脫的方言連反斜線一起），帳號含這些字元時不會跳出字串常值。沒有登入者時（排程的萃取更新、
+  沒有設定身分驗證）帳號是空字串；`tmig verify`、`tmig query` 代入 cases.yaml 的 `user`（或 `--user`）
+- **`<ServerOnly>…</ServerOnly>`**：只在伺服器上執行的部分，桌面版不執行（與 Tableau 相同）
+- **每位登入者各自一條連線**：代入參數後內容不同的 Initial SQL 各自開一條連線（用到 `[TableauServerUser]` 時每位
+  登入者一條），工作階段的設定不會互相影響；跨資料庫的 join 取回的資料與動態參數的快取也依它分開。同一個連線最多
+  同時保留 16 條這樣的連線（環境變數 `TMIG_SESSION_CONNECTIONS`），超過時關掉最久沒用的
+- **執行的方式**：依最外層的分號拆成一句一句送出（字串、識別字、註解與 PostgreSQL 的 `$…$` 中的分號不算）；
+  SQL Server 整段是一個批次（變數只在同一個批次裡有效），Oracle、Db2、SAP HANA、Teradata 以 `BEGIN`、`DECLARE`
+  開頭時是程序區塊，整段送出。平台的連線平常是唯讀的工作階段，執行 Initial SQL 時暫時解除（PostgreSQL、MySQL
+  才能建立暫存資料表），之後恢復。執行失敗時連線關閉，查詢回報「連線 … 的 Initial SQL 執行失敗」與資料庫的訊息
+- **停用**：環境變數 `TMIG_INITIAL_SQL=off` 時不送出任何 Initial SQL（Tableau Server 的
+  `vizqlserver.initialsql.disabled`），報表照常開啟
+- **在桌面版設定**：資料源分頁的「Initial SQL…」（見「連線到資料與資料源的編輯」）
+
+平台不檢查 Initial SQL 的內容，原樣送給資料庫（與 Tableau 相同）：它是報表作者寫的 SQL，請用只有需要的權限的服務帳號
+連線。以 PostgreSQL 16 與 MySQL 8 實跑測試（設定工作階段、建立暫存資料表、自訂 SQL 讀到 Initial SQL 記下的登入者、
+之後的查詢仍是唯讀；`kernel/tests/data/test_initial_sql.py`）；其他資料庫沒有實機，正式使用前須在公司的資料庫實測。
+BigQuery、Athena 的每次查詢各自獨立（沒有工作階段）：敘述會執行，但 `SET` 與暫存資料表不會留到之後的查詢。
+
 ### 依檢視者的身分連線
 
-平台一律以唯讀的服務帳號連線、不執行 Initial SQL。Tableau 上依檢視者的身分查詢資料庫、由資料庫端過濾資料的報表，
+平台一律以部署環境提供的服務帳號連線。Tableau 上依檢視者的身分查詢資料庫、由資料庫端過濾資料的報表，
 移轉後每個人會看到相同的資料，所以盤點時就列出（`tmig census`、`tmig inventory` 的「連線不依賴檢視者的身分」）：
 
 - **不符合起步條件**（解析時也列入 unsupported）：Tableau Server 上要求檢視者輸入自己的資料庫帳號（伺服器盤點比對
-  REST API 的「沒有嵌入密碼」，或 .twb 的 `workgroup-auth-mode='prompt'`）、以檢視者的身分模擬（impersonation）、
-  Initial SQL 用到 `[TableauServerUser]`／`[TableauServerUserFull]`（例如 Oracle VPD 的 `DBMS_SESSION.SET_IDENTIFIER`、
-  SQL Server 的 `EXECUTE AS USER`）。這類報表要改用列層級權限（使用者函式或使用者篩選）重寫後再移轉
+  REST API 的「沒有嵌入密碼」，或 .twb 的 `workgroup-auth-mode='prompt'`）、以檢視者的身分模擬（impersonation）。
+  這類報表要改用列層級權限（使用者函式或使用者篩選）重寫後再移轉
 - **需注意**：Windows 整合驗證與 Kerberos（伺服器可能以 Run As 服務帳號連線，也可能以 Kerberos 委派用檢視者的身分，
-  請與 DBA 確認）、OAuth（伺服器上嵌入了登入資訊時不列）、其他 Initial SQL（平台不會執行，解析時列入 unsupported）、
-  萃取來源的 Initial SQL（檢視時讀萃取檔不受影響，但更新萃取時不會執行）、伺服器上沒有嵌入密碼但對不到資料源的連線
+  請與 DBA 確認）、OAuth（伺服器上嵌入了登入資訊時不列）、Initial SQL 用到 `[TableauServerUser]`／
+  `[TableauServerUserFull]`（平台會執行、代入平台登入的帳號：請確認平台的帳號與資料庫端認得的身分相同；萃取來源的
+  在排程更新時沒有登入者）、伺服器上沒有嵌入密碼但對不到資料源的連線。其他的 Initial SQL 平台照樣執行，不列
 
 萃取型的資料源檢視時讀萃取檔，與檢視者的帳號無關，不列。伺服器盤點的連線設定是目前的狀態：.twb 記錄的是發佈時的設定，
 之後在伺服器上嵌入了密碼的連線不列。確認資料庫端沒有依人不同的權限（例如所有檢視者本來就用同一個唯讀帳號）時，
@@ -862,8 +895,12 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
   共同的成員、只在左側或只在右側的成員
 - **線條類型**（標記類型為線時，標記卡上的「線條類型」）：直線、階梯、跳躍
 - **個別成員的顏色**（「色彩…」）：離散的色彩可以為各成員指定顏色（其餘依色盤），「重設」改回色盤的顏色
-- **形狀**（形狀上有欄位時標記卡的「形狀…」，Tableau 的「編輯形狀」）：為各成員指定形狀（圓形、方形、加號、叉號、
-  星號、菱形與四個方向的三角形），「自動」依預設調色盤的順序
+- **形狀**（標記類型是形狀或形狀上有欄位時標記卡的「形狀…」，Tableau 的「編輯形狀」）：為各成員指定形狀（圓形、
+  方形、加號、叉號、星號、菱形與四個方向的三角形），「自動」依預設調色盤的順序；形狀上沒有欄位時是所有標記的形狀。
+  **自訂的圖片形狀**：選單中另有報表裡的形狀調色盤（Tableau 檔內嵌的，與在這裡加入的），「加入圖片…」把自己的圖片
+  （PNG、JPEG、GIF、BMP、WebP、SVG，每張 4 MB 以內）加入一個調色盤（Tableau 的 `My Tableau Repository\Shapes\<調色盤>`），
+  「指定調色盤」依成員的順序一次指定整個調色盤；資料窗格維度的「預設屬性＞形狀…」也可以用。圖片存在報表套件的
+  `files/Shapes/<調色盤>/`，發布時一起上傳（見「自訂的圖片形狀」）
 - **顯示篩選、顯示參數**：篩選膠囊的「顯示篩選」與資料窗格參數旁的 ○／◉ 把控制項放到工作表上（單獨檢視
   工作表時顯示在檢視的右側）；類別篩選的控制項可以設為「只顯示相關的值」
 - **年初至今成長率**（快速表計算）：每年重新累計（年初至今總計），次要計算在年的層級與前一年同期比較
@@ -1022,6 +1059,12 @@ API：`GET`／`PUT /api/edit/{報表}/datasources/{資料源}/filters`（`?stage
   只剩同一個資料庫時改回一般的 Live 連線。跨資料庫的 join 中資料庫的欄位也可以變更資料類型（取回後轉換）
 - **樞紐**：欄位清單中勾選同一張資料表的欄，「樞紐所選的欄位」轉成 Pivot Field Names、Pivot Field Values；
   可以移除樞紐
+- **Initial SQL**（資料源名稱旁的「Initial SQL…」，Tableau 的「資料＞初始 SQL」；有資料庫連線的資料源才有：Live
+  連線、萃取的來源、跨資料庫的 join 中的各資料庫，有多個時先選連線）：輸入連上資料庫時先執行的 SQL，「插入參數…」
+  放進 `[TableauServerUser]` 等五個參數或 `<ServerOnly>`；清空後確定是清除。確定後存檔並以新的內容連一次資料庫，
+  執行失敗時留在對話框顯示資料庫的訊息（已經存檔：桌面版不執行 `<ServerOnly>`、沒有登入伺服器時帳號是空的，在桌面版
+  失敗的不一定在伺服器上也失敗）。桌面版的 `[TableauServerUser]` 是登入伺服器的帳號，與 Tableau Desktop 相同。
+  萃取的資料源在更新萃取時執行（見「Initial SQL」）
 - **資料解譯器**（Excel 檔與文字檔下的「使用資料解譯器」）：工作表上面有標題、說明的列時找出標題列（至少兩格有值、都是文字
   或整數，且下一個有值的列至少一半的欄有值；Tableau 的判斷方式沒有公開，這是推定的規則），之前的列與之後空白的列
   不算；切換時名稱相同的欄位保留。Excel 的具名範圍（.xlsx）與工作表一起列在左邊，可以當作資料表加入
@@ -1042,7 +1085,8 @@ API：`GET`／`PUT /api/edit/{報表}/datasources/{資料源}/filters`（`?stage
   `table_path`／`sql`）、`GET datasources/<資料源>/model`、`POST …/tables`（加入資料表）、`DELETE …/tables/<資料表>`、
   `PUT …/joins/<資料表>`、`PUT …/relationships/<邏輯資料表>`（條件的一邊可以是 `{"formula": …}`）、
   `POST …/pivot`、`DELETE …/pivot/<名稱>`、`PUT …/fields/<欄位>`、`PUT datasources/<資料源>`（改名）、
-  `GET …/remote-tables`、`POST …/remote-columns`、`PUT …/custom-sql/<名稱>`；桌面版另有 `POST /api/desktop/inspect`、
+  `GET …/remote-tables`、`POST …/remote-columns`、`PUT …/custom-sql/<名稱>`、`PUT …/initial-sql`
+  （`{"sql", "connection"}`；模型的 `sources` 是可以設定的連線）；桌面版另有 `POST /api/desktop/inspect`、
   `POST /api/desktop/new`、`POST /api/desktop/new-live` 與連線的 `GET /api/desktop/connectors`、
   `GET|POST /api/desktop/connections`、`POST …/connections/<連線>/sign-in`、`DELETE …/connections/<連線>`、
   `GET …/connections/<連線>/tables`、`POST …/connections/<連線>/columns`（`tmig_service.desktop_connections`、
@@ -1180,6 +1224,25 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   離中心較遠的一端用到最深的顏色，Use Full Color Range 時兩端都用到最深的顏色；總計預設不影響色階的範圍
 - 標記卡：沒有顏色欄位時的顏色、不透明度與框線（面積的框線畫成上緣的折線）；折線與面積與 Tableau 的預設相同
   不畫出點（透明的點仍可停留顯示工具提示、點選）
+
+### 自訂的圖片形狀
+
+Tableau 的自訂形狀調色盤（`My Tableau Repository\Shapes\<調色盤>\<檔名>`，含 Tableau 內建的 Arrows、KPI、Gender、
+Bug Tracking 等圖片調色盤）用到的圖片存在活頁簿裡（`<external><shapes><shape name='調色盤/檔名'>` 的 base64，依
+Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表示（`MarkShape.image`、`ShapeAssignment.image`，
+`Shapes/<調色盤>/<檔名>`）：標記卡上固定的形狀（窗格樣式的 `<format attr='shape'>`，`Marks.mark_shape`）、依欄位指定給
+各成員的形狀（`<encoding attr='shape'>` 的 `<map to='調色盤/檔名'>`）與資料源中維度的預設形狀
+（`kernel/src/tmig/shapes.py`、`kernel/src/tmig/parser/colors.py`）。圖片與 dashboard 的圖片相同，檢視時才從報表的
+`files/` 或原本的 .twbx／.twb 讀出（`GET /api/workbooks/<報表>/images/Shapes/…`），發布與存成報表套件時一起帶走。
+
+- **呈現**：圖片畫在標記的位置（散佈圖、表格中的形狀、地圖的點），原本的點留著但透明，停留的工具提示、點選、
+  醒目提示與動作不變；圖片的邊長是標記的直徑（依「大小」的設定或大小上的欄位）
+- **顏色**：色彩上有欄位（或標記卡指定了顏色）時，圖片不透明的部分整個換成那個顏色（透明的部分不變，與 Tableau
+  把圖片當作遮罩著色相同）；沒有時是圖片原本的顏色
+- **圖例**：形狀的圖例顯示圖片；色彩與形狀是同一個欄位時合成一個圖例（圖片帶顏色）。dashboard 的形狀圖例相同
+- **編輯**：見「工作表編輯器」的「形狀」。`GET /api/edit/<報表>/shapes` 列出報表中的調色盤，`POST` 加入圖片
+
+活頁簿中沒有內嵌的圖片（檔案被改過）依預設的形狀呈現，解析時記為略過。
 
 ## 格式
 
@@ -1544,8 +1607,10 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
   在上方、列總計在左側，小計也在各組之前
 - **形狀的調色盤**（標記樣式的 `<encoding attr='shape'>`，`Marks.shape_assignments`）：指定給各成員的形狀優先，
   其餘的成員依 Tableau 預設形狀調色盤的順序（成員依值排序，與色彩相同）；實心調色盤（`:filled/…`）對應到同名的
-  形狀，一律以實心畫出；自訂的圖片形狀（其他調色盤）認不得，依預設的形狀呈現（記為略過）。形狀的名稱依公開
-  資料推定
+  形狀，一律以實心畫出；其他調色盤是自訂的圖片形狀（見「自訂的圖片形狀」）。形狀的名稱依公開資料推定。
+  圖片形狀的大小（邊長等於圓點的直徑）與著色的方式（有顏色時不透明的部分整個換色）依 Tableau 的說明推定，
+  尚未與 Tableau 的畫面逐像素比對；分頁的歷程（Page history）中的舊標記以預設的形狀畫出；雙軸的兩張標記卡各有
+  自己的大小範圍時圖片依第一張的範圍；TIFF、EMF 格式的圖片不支援（瀏覽器不能顯示），依預設的形狀呈現
 - **說明**（Caption；`<layout-options><caption>` 的自訂文字，`Worksheet.caption`、`caption_shown`）：工作表視窗有
   `<card type='caption'>` 時單獨檢視會顯示說明，dashboard 的工作表區塊依各自的 `show-caption`（`Zone.show_caption`）。
   自訂的文字可以含參數的值（欄位的值不顯示，記為略過）；沒有自訂文字時是自動產生的說明——欄列架上的維度與量值、
@@ -1601,7 +1666,7 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
 合併集合（XML 的寫法尚未在公開報表中看到）、預測的其他結果類型（趨勢、精確度等）與指定的彙總依據、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度本身含 LOD、SCRIPT_*／MODEL_*／RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
 Relationship 模型中同一個彙總用到多張資料表的欄位、上表以外的資料庫的 Live 連線、
-Live 連線的 Initial SQL、要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、
+要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、預存程序（Stored Procedure）當作資料表、
 Data Blending 中同一個彙總混用兩個資料源的欄位、LOD 中次要資料源的欄位、次要資料源的條件與 Top N 篩選、
 標題中的 Table Calculation 值、
 故事點記下的其他狀態（排序、欄列架的變更、註解等）、

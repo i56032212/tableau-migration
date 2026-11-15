@@ -2,7 +2,8 @@
 
 - 萃取：DuckDB 檔（呼叫端提供路徑，例如 <報表目錄>/data/<資料源 id>.duckdb）
 - Live：兩段式執行（tmig.data.live）；連線依連線設定檔（tmig.data.sources）開啟，之後重複使用，
-  同一個連線一次只執行一段查詢
+  同一個連線一次只執行一段查詢。連線有 Initial SQL 時開啟後先執行（tmig.data.initial_sql）；代入參數後
+  內容不同的（用到登入者時每個登入者）各自一條連線
 - 跨資料庫的 join（檔案型資料源中有資料庫的資料表）：各資料庫的資料表取回後與匯入的檔案在本機的 DuckDB
   合併（tmig.data.federated）；取回的資料在 TTL 之內重複使用
 - Data Blending：與 Tableau 相同，各次要資料源的查詢先在各自的來源執行（WorksheetSql.stages，各自依上面的
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -21,6 +23,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from tmig.data import initial_sql
 from tmig.data.executor import QueryResult, execute, execute_query, stage_tables
 from tmig.data.federated import FederatedCache, execute_federated, execute_federated_sql
 from tmig.data.live import execute_live, execute_remote
@@ -36,6 +39,20 @@ from tmig.sqlgen.dialect import ParameterValues
 from tmig.sqlgen.query import QueryError, WorksheetSql
 from tmig.sqlgen.source import datasource_source
 
+SESSION_SEPARATOR = "\x1f"
+"""連線的鍵中分開連線代號與工作階段（Initial SQL 代入參數後的內容）的字元。"""
+SESSION_LIMIT_ENV = "TMIG_SESSION_CONNECTIONS"
+DEFAULT_SESSION_LIMIT = 16
+
+
+def session_limit() -> int:
+    """同一個連線最多同時保留幾個依 Initial SQL 分開的工作階段（TMIG_SESSION_CONNECTIONS，預設 16）。"""
+    try:
+        return max(int(os.environ.get(SESSION_LIMIT_ENV, DEFAULT_SESSION_LIMIT)), 1)
+    except ValueError:
+        return DEFAULT_SESSION_LIMIT
+
+
 Database = Path | Callable[[], Path]
 """萃取的 DuckDB 檔；可以是函式（只有萃取的資料源才需要時再準備，例如由 .twbx 匯入）。"""
 
@@ -45,6 +62,9 @@ class DataRuntime:
         self._configs = configs
         self._executors: dict[str, Executor] = {}
         self._locks: dict[str, threading.Lock] = {}
+        self._used: dict[str, int] = {}
+        """各連線最後一次使用的順序（Initial SQL 分開的工作階段太多時關掉最久沒用的）。"""
+        self._clock = 0
         self._lock = threading.Lock()
         self.federated = FederatedCache()
         """跨資料庫的 join 取回的資料庫資料（TTL 之內重複使用）。"""
@@ -64,7 +84,10 @@ class DataRuntime:
             if self._configs is None:
                 self._configs = load_connections()
             self._configs.update(configs)
-            stale = [self._executors.pop(key) for key in configs if key in self._executors]
+            keys = [key for key in self._executors if key.split(SESSION_SEPARATOR)[0] in configs]
+            stale = [self._executors.pop(key) for key in keys]
+            for key in keys:
+                self._used.pop(key, None)
         for executor in stale:
             _close(executor)
         if stale:
@@ -121,14 +144,20 @@ class DataRuntime:
 
     @contextmanager
     def _executor(self, connection: LiveConnection) -> Iterator[Executor]:
-        key = connection.connection_id
+        # Initial SQL 代入參數後內容不同的（例如用到登入者）各自一條連線：工作階段的設定不會互相影響
+        session = initial_sql.session_key(connection)
+        key = connection.connection_id + (SESSION_SEPARATOR + session if session else "")
         with self._lock:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
             executor = self._executors.get(key)
             if executor is None:
                 executor = open_executor(connection, self.configs)
-                self._executors[key] = executor
+                with self._lock:
+                    self._executors[key] = executor
+            with self._lock:
+                self._clock += 1
+                self._used[key] = self._clock
             try:
                 yield executor
             except (SourceConnectionError, QueryError):
@@ -136,9 +165,34 @@ class DataRuntime:
                 raise
             except Exception:
                 # 來源資料庫執行失敗，連線可能已中斷：下次重新連線
-                self._executors.pop(key, None)
+                with self._lock:
+                    self._executors.pop(key, None)
+                    self._used.pop(key, None)
                 _close(executor)
                 raise
+        if session:
+            self._trim(connection.connection_id)
+
+    def _trim(self, connection_id: str) -> None:
+        """同一個連線依 Initial SQL 分開的工作階段太多時（每個登入者一條），關掉最久沒用的。"""
+        prefix = connection_id + SESSION_SEPARATOR
+        closing: list[Executor] = []
+        with self._lock:
+            keys = sorted(
+                (key for key in self._executors if key.startswith(prefix)),
+                key=lambda key: self._used.get(key, 0),
+            )
+            for key in keys[: max(len(keys) - session_limit(), 0)]:
+                lock = self._locks.get(key)
+                if lock is None or not lock.acquire(blocking=False):
+                    continue  # 正在執行查詢：留著
+                try:
+                    closing.append(self._executors.pop(key))
+                    self._used.pop(key, None)
+                finally:
+                    lock.release()
+        for executor in closing:
+            _close(executor)
 
     def close(self) -> None:
         with self._lock:

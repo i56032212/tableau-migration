@@ -78,7 +78,16 @@ from tmig.ir.models import (
 from tmig.planner.state import use_key
 from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
-from tmig.render.colors import continuous_scale, discrete_scale, member_order, shape_scale
+from tmig.render.colors import (
+    SHAPE_PATHS,
+    VEGA_SHAPES,
+    continuous_scale,
+    discrete_scale,
+    member_order,
+    scale_color,
+    shape_members,
+    shape_scale,
+)
 from tmig.render.fonts import (
     DEFAULT_SIZE,
     LABEL_COLOR,
@@ -165,6 +174,16 @@ VL_MARKS = {
     "polygon": "line",
 }
 ROW = "__row"
+SHAPE_IMAGE = "__shape_img"
+"""自訂的圖片形狀：資料列中這個標記的圖片（報表 files/ 下的路徑；內建形狀的標記為 None）。同一張圖有多張
+標記卡用到圖片形狀時各自一組欄位（名稱後面接編號）。"""
+SHAPE_TINT = "__shape_tint"
+"""圖片形狀要套用的顏色（色彩上有欄位、或標記卡設定了顏色時；與 Tableau 相同把圖片不透明的部分換成這個
+顏色）；None 為圖片原本的顏色。"""
+SHAPE_URL = "__shape_url"
+"""圖片的網址：由檢視器載入圖片（並套用顏色）之後填入（規格中沒有這一欄）。"""
+SHAPE_LAYER = "__shape_images"
+"""畫出圖片形狀的圖層名稱（後面接編號）。"""
 NEXT = "__next"
 DROP_LINE_COLOR = "#666666"
 """下拉線的顏色。"""
@@ -302,6 +321,12 @@ class _Builder:
         self.notes: list[str] = []
         self.trend_models: list[dict[str, Any]] = []
         """畫出的趨勢線的模型（「描述趨勢模型」）：寫進 usermeta.trends。"""
+        self.shape_fields: list[dict[str, str]] = []
+        """用到圖片形狀的各標記卡在資料列中的欄位（image、tint、url）：寫進 usermeta.shape_images，
+        檢視器依它載入圖片。"""
+        self.shape_legend: dict[str, Any] | None = None
+        """形狀的圖例（形狀上有欄位時）：標題與各成員的形狀（內建形狀的路徑或圖片），寫進
+        usermeta.shape_legend；有圖片時由檢視器自己畫圖例（Vega 的圖例不能放圖片）。"""
         self.pane_values = pane_values or {}
         """詳細程度較粗的標記卡（ws.panes 的索引）各自的資料列（J3）。"""
         self.rows = list(ws.rows)
@@ -716,6 +741,13 @@ class _Builder:
         cols_meas: list[FieldUse],
     ) -> tuple[dict[str, Any], str]:
         """一張圖的 mark、encoding（與標籤圖層）。回傳規格片段與實際的標記類型。"""
+        if (
+            mark == "circle"
+            and marks.type == "automatic"
+            and (marks.shape is not None or marks.mark_shape is not None)
+        ):
+            # 兩個量值的散佈圖上 Tableau 的「自動」是形狀：形狀上有欄位或設定了形狀時以形狀畫出
+            mark = "shape"
         if mark == "gantt":
             found = self.gantt(marks, rows_dims, cols_dims, rows_meas, cols_meas)
             if found is not None:
@@ -880,6 +912,7 @@ class _Builder:
             self.notes.append("依量值著色的折線以色階中間的單一顏色畫出（Tableau 依各段的值著色）")
         _mark_style(vl_mark, marks)
         self.size_mark(vl_mark, encoding, marks)
+        main, image = self.shape_layers(marks, vl_mark, encoding)
         if marks.path is not None and vl_mark["type"] in ("line", "area"):
             encoding["order"] = {"field": self.ch(marks.path).name}
         elif mark == "polygon":
@@ -904,7 +937,7 @@ class _Builder:
             if labels:
                 return {
                     "encoding": encoding,
-                    "layer": [*(jump or [{"mark": vl_mark}]), *drops, *labels],
+                    "layer": [*(jump or [main, *image]), *drops, *labels],
                 }, mark
         if mark == "text":
             lines = self.line_layers(marks, vl_mark, encoding)
@@ -912,9 +945,99 @@ class _Builder:
                 return lines, mark
         if jump is not None:
             return {"encoding": encoding, "layer": [*jump, *drops]}, mark
-        if drops:
-            return {"encoding": encoding, "layer": [{"mark": vl_mark}, *drops]}, mark
+        if drops or image:
+            return {"encoding": encoding, "layer": [main, *image, *drops]}, mark
         return {"mark": vl_mark, "encoding": encoding}, mark
+
+    def shape_layers(
+        self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """形狀標記的形狀：標記卡上固定的形狀，與自訂的圖片形狀（Tableau 的自訂形狀調色盤）。
+
+        回傳主圖層（{"mark": …}，有圖片時另有它自己的 encoding）與畫圖片的圖層（沒有圖片形狀時是空的）。
+        圖片形狀的標記仍畫成看不見的點（工具提示、點選與選取照舊在它上面），圖片另外一層畫在同一個位置：
+        資料列記下圖片的路徑與要套用的顏色，檢視器載入圖片後填入網址（見 SHAPE_IMAGE、SHAPE_TINT、
+        SHAPE_URL）。圖片的邊長與點的外框相同（大小上有欄位時跟著大小的比例尺）。"""
+        main: dict[str, Any] = {"mark": vl_mark}
+        if vl_mark.get("type") != "point":
+            return main, []
+        records = self.records_of(marks)
+        images: list[str | None]
+        if marks.shape is not None:
+            ch = self.ch(marks.shape)
+            members = shape_members(
+                marks.shape_assignments,
+                ((r.get(ch.label), r.get(ch.name)) for r in records if not r.get(TOTAL)),
+            )
+            by_label = {label: image for label, _, image in members}
+            images = [by_label.get(r.get(ch.label)) for r in records]
+            entries: list[dict[str, Any]] = [
+                {"label": label, "image": image}
+                if image is not None
+                else {"label": label, "path": SHAPE_PATHS[shape]}
+                for label, shape, image in members
+            ]
+            # 色彩與形狀是同一個欄位：與 Tableau 相同是一個合併的圖例，各成員的形狀帶著它的顏色
+            shared = encoding.get("color")
+            if isinstance(shared, dict) and shared.get("field") == ch.label:
+                for entry in entries:
+                    found = scale_color(shared.get("scale"), entry["label"])
+                    if found is not None:
+                        entry["color"] = found
+            self.shape_legend = {"title": ch.title, "entries": entries}
+            if any(images) and isinstance(encoding.get("shape"), dict):
+                # 有圖片的圖例由檢視器畫（usermeta.shape_legend）；色彩是同一個欄位時 Vega-Lite 把兩個圖例
+                # 合併，這裡關掉後色彩的圖例也不畫（已經合併在形狀的圖例裡）
+                encoding["shape"]["legend"] = None
+        elif marks.mark_shape is not None:
+            vl_mark["shape"] = VEGA_SHAPES[marks.mark_shape.shape]
+            images = [marks.mark_shape.image] * len(records)
+        else:
+            return main, []
+        if not any(images):
+            return main, []
+        n = len(self.shape_fields)
+        image, tint, url = f"{SHAPE_IMAGE}{n}", f"{SHAPE_TINT}{n}", f"{SHAPE_URL}{n}"
+        self.shape_fields.append({"image": image, "tint": tint, "url": url})
+        # 套用到圖片的顏色：色彩上有欄位時是這個標記的顏色，否則是標記卡設定的顏色（沒有設定時不套用）
+        color = encoding.get("color")
+        colored = isinstance(color, dict) and isinstance(color.get("field"), str)
+        fixed = _css_color(marks.mark_color) if marks.mark_color is not None else None
+        for record, path in zip(records, images, strict=True):
+            record[image] = path
+            if path is None:
+                record[tint] = None
+            elif colored:
+                assert isinstance(color, dict)
+                record[tint] = scale_color(color.get("scale"), record.get(color["field"]))
+            else:
+                record[tint] = fixed
+        hidden = {"condition": {"test": f"isValid(datum['{image}'])", "value": 0}, "value": 1}
+        main["encoding"] = {"fillOpacity": hidden, "strokeOpacity": hidden}
+        size = encoding.get("size")
+        side: Any
+        if isinstance(size, dict) and isinstance(size.get("field"), str):
+            side = {"expr": f"sqrt(scale('size', datum[{json.dumps(size['field'])}]))"}
+        else:
+            side = round(math.sqrt(float(vl_mark.get("size", POINT_DIAMETER**2))), 2)
+        picture: dict[str, Any] = {
+            "type": "image",
+            "width": side,
+            "height": side,
+            "aspect": True,
+            "tooltip": False,
+        }
+        if marks.opacity is not None:
+            picture["opacity"] = marks.opacity
+        if vl_mark.get("clip"):
+            picture["clip"] = True
+        layer = {
+            "name": f"{SHAPE_LAYER}{n}",
+            "transform": [{"filter": f"isValid(datum['{url}'])"}],
+            "mark": picture,
+            "encoding": {"url": {"field": url, "type": "nominal"}},
+        }
+        return main, [layer]
 
     def drop_layers(self, encoding: dict[str, Any]) -> list[dict[str, Any]]:
         """下拉線：從標記到連續座標軸的虛線（到橫軸是往下的垂直線，到縱軸是往左的水平線）。
@@ -2458,6 +2581,10 @@ def build_spec(
         spec["usermeta"]["tooltip"] = tooltip
     if builder.trend_models:
         spec["usermeta"]["trends"] = builder.trend_models
+    if builder.shape_fields:
+        spec["usermeta"]["shape_images"] = builder.shape_fields
+    if builder.shape_legend is not None:
+        spec["usermeta"]["shape_legend"] = builder.shape_legend
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
     spec["usermeta"]["title_color"] = title_color or _title_color(ws)
     spec["usermeta"]["title_font"] = _title_font(ws)

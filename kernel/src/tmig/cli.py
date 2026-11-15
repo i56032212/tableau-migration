@@ -229,6 +229,7 @@ def _cmd_sql(args: argparse.Namespace) -> int:
 
 
 def _cmd_query(args: argparse.Namespace) -> int:
+    from tmig.data import initial_sql
     from tmig.data.executor import ExecutionError
     from tmig.data.runtime import DataRuntime
     from tmig.data.sources import SourceConnectionError
@@ -255,8 +256,11 @@ def _cmd_query(args: argparse.Namespace) -> int:
                 prepared.append(True)
             return args.ir.parent / "data" / f"{datasource_id}.duckdb"
 
-        # Live 連線依連線設定檔（TMIG_CONNECTIONS）連到來源資料庫
-        with DataRuntime() as runtime:
+        # Live 連線依連線設定檔（TMIG_CONNECTIONS）連到來源資料庫；連線的 Initial SQL 以這位登入者代入
+        session = initial_sql.server_session(
+            user.username if user else "", user.domain if user else None, ir.workbook.name
+        )
+        with initial_sql.use(session), DataRuntime() as runtime:
             # 動態參數：與 Tableau 開啟報表時相同，以目前的資料取值
             resolved, notes = resolve_parameters(
                 ir, lambda q, ds: runtime.run(q, ds, database_of(ds.id)), user
@@ -464,6 +468,7 @@ def _extract_inputs(path: Path) -> tuple[IR, Path]:
 
 
 def _cmd_extract_refresh(args: argparse.Namespace) -> int:
+    from tmig.data import initial_sql
     from tmig.data.extract_refresh import RefreshError, refresh_extract, refresh_plan
     from tmig.data.sources import SourceConnectionError, load_connections, open_executor
 
@@ -491,7 +496,9 @@ def _cmd_extract_refresh(args: argparse.Namespace) -> int:
         out_path = out_dir / f"{ds.id}.duckdb"
         try:
             plan = refresh_plan(ir, ds.id)
-            executor = open_executor(plan.source, configs)
+            # 來源連線的 Initial SQL：沒有登入者，[WorkbookName] 是報表的名稱
+            with initial_sql.use(initial_sql.server_session(workbook=ir.workbook.name)):
+                executor = open_executor(plan.source, configs)
             try:
                 result = refresh_extract(
                     ir, ds.id, executor, out_path, incremental=args.incremental

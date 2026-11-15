@@ -191,6 +191,8 @@ class ParseContext:
     story_ids: dict[str, str] = field(default_factory=dict)
     dynamic_parameters: list[tuple[Parameter, etree._Element]] = field(default_factory=list)
     """動態參數（<column default-value-field=… source-field=…>）：資料源解析完後才對應到欄位。"""
+    shape_images: frozenset[str] = frozenset()
+    """活頁簿內嵌的圖片形狀（<external><shapes>）在 IR 中的路徑（Shapes/<調色盤>/<檔名>）。"""
     tooltip_refs: list[TooltipRef] = field(default_factory=list)
     """工具提示中的工作表（Viz in Tooltip），依工作表解析的順序。"""
     datasources_parsed: bool = False

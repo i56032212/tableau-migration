@@ -1020,9 +1020,25 @@ def _data_layer(
         if layer.kind == "shape":
             mark["filled"] = True
         builder.size_mark(mark, encoding, marks)
+        # 形狀：標記卡上固定的形狀與自訂的圖片形狀（圖片另外一層，畫在同一個位置）
+        main, pictures = builder.shape_layers(marks, mark, encoding)
         drawn.append(
-            {**data, "transform": [valid], "mark": mark, "encoding": {**encoding, **position}}
+            {
+                **data,
+                "transform": [valid],
+                "mark": mark,
+                "encoding": {**encoding, **position, **main.get("encoding", {})},
+            }
         )
+        for picture in pictures:
+            drawn.append(
+                {
+                    **data,
+                    **picture,
+                    "transform": [valid, *picture["transform"]],
+                    "encoding": {**position, **picture["encoding"]},
+                }
+            )
         if marks.type in ("pie", "bar", "area", "gantt", "polygon"):
             builder.notes.append(f"地圖上的{marks.type}標記以圓點呈現")
     labels = _label_layer(builder, layer, project, encoding, data, position, placed, keys or [])

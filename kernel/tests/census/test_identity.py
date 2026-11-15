@@ -1,5 +1,5 @@
-"""連線是否依檢視者的身分：檢視者用自己的資料庫帳號、Initial SQL 帶入登入者時，移轉後資料庫端的權限
-不會生效（平台以唯讀服務帳號連線、不執行 Initial SQL），列為不符合起步條件或需注意。"""
+"""連線是否依檢視者的身分：檢視者用自己的資料庫帳號時，移轉後資料庫端的權限不會生效（平台以唯讀服務帳號
+連線），列為不符合起步條件或需注意；Initial SQL 帶入登入者時平台代入平台登入的帳號，列為需注意。"""
 
 from __future__ import annotations
 
@@ -67,7 +67,8 @@ def server(type_: str = "oracle", *, embed: bool | None = False, **kw: object) -
 # ---------------------------------------------------------------- 只看 .twb
 
 
-def test_initial_sql_with_server_user_fails(tmp_path: Path) -> None:
+def test_initial_sql_with_server_user_warns(tmp_path: Path) -> None:
+    """Initial SQL 用到登入者：平台會執行、代入平台登入的帳號，列為需注意（帳號要與資料庫端認得的相同）。"""
     vpd = ORACLE.replace(
         "one-time-sql=''",
         "one-time-sql='BEGIN DBMS_SESSION.SET_IDENTIFIER([TableauServerUser]); END;'",
@@ -76,21 +77,20 @@ def test_initial_sql_with_server_user_fails(tmp_path: Path) -> None:
     ds = live(report)
     assert ds.initial_sql and ds.initial_sql_user == ["[TableauServerUser]"]
     result = check(report)
-    assert result.status == "fail"
+    assert result.status == "warn"
     assert result.detail.startswith(
-        "「Sales (Oracle)」的 Initial SQL 用到 [TableauServerUser]：資料庫依檢視者的身分過濾資料"
+        "「Sales (Oracle)」的 Initial SQL 用到 [TableauServerUser]：平台開啟連線時會執行、代入平台登入的帳號"
     )
-    assert "需改用列層級權限" in result.detail
+    assert "請確認平台的帳號與資料庫端認得的身分相同" in result.detail
     assert "Initial SQL（[TableauServerUser]）" in render_markdown(report)
 
 
-def test_other_initial_sql_warns(tmp_path: Path) -> None:
+def test_other_initial_sql_passes(tmp_path: Path) -> None:
+    """其他的 Initial SQL 平台照樣執行，不依賴檢視者的身分；連線欄仍註明有 Initial SQL。"""
     nls = ORACLE.replace("one-time-sql=''", "one-time-sql='ALTER SESSION SET NLS_SORT = BINARY'")
-    result = check(census(tmp_path, nls))
-    assert result.status == "warn"
-    assert result.detail == (
-        "「Sales (Oracle)」有 Initial SQL：平台不會執行，請確認查詢結果不依賴它（驗證比對會顯示差異）"
-    )
+    report = census(tmp_path, nls)
+    assert check(report).status == "pass"
+    assert "Initial SQL" in render_markdown(report)
 
 
 def test_prompt_user_fails(tmp_path: Path) -> None:

@@ -60,6 +60,7 @@ from pydantic import BaseModel, ConfigDict
 
 from tmig.access.directory import Directory, DirectoryError, load_directory, login_name
 from tmig.access.permissions import ADMIN_ROLES, Permissions, PermissionsError, load_permissions
+from tmig.data import initial_sql
 from tmig.data.sources import ENV_REF
 from tmig.planner.identity import Identity
 
@@ -473,6 +474,12 @@ class Authenticator:
     @property
     def mode(self) -> Mode:
         return self.settings.mode
+
+    def sql_session(self, identity: Identity | None, workbook: str = "") -> initial_sql.Session:
+        """連線的 Initial SQL 代入參數的環境（tmig.data.initial_sql）：這位登入者在伺服器上看這份報表。"""
+        if identity is None:
+            return initial_sql.server_session(workbook=workbook)
+        return initial_sql.server_session(identity.username, identity.domain, workbook)
 
     def resolve(self, login: str, groups: Sequence[str] = (), name: str | None = None) -> Identity:
         """登入的帳號 → 身分：有目錄時以目錄為準，否則用標頭或宣告中的群組。"""

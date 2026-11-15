@@ -639,6 +639,10 @@ fieldset.frequency input[type="time"] { font: inherit; padding: 2px 4px; }
 .cs-filter input { font: inherit; padding: 2px 6px; }
 .cs-tables { max-height: 44vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; }
 textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--line); border-radius: 4px; resize: vertical; }
+.dse-initial-sql[data-set="true"] { font-weight: 600; }
+.dse-initial-connection { display: block; margin-bottom: 8px; font-size: 13px; }
+.dse-initial-insert { display: flex; align-items: center; gap: 12px; margin: 6px 0; font-size: 12px; }
+.dse-initial-insert select { font: inherit; max-width: 60%; }
 .cs-checked { overflow-wrap: anywhere; }
 
 /* 資料窗格的欄位選單：群組、集合、數值分組、別名與預設屬性的對話框 */
@@ -737,3 +741,21 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .story-note-dialog input[type=number], .story-format-dialog input.narrow-number { width: 5.5em; }
 /* 底圖的地名（國名、州名、城市名）不擋住下面的標記：滑過與點選都落在標記上 */
 .chart svg g.mark-text[class*="__deco_map_"][class*="_names_marks"] { pointer-events: none; }
+/* 自訂的圖片形狀：圖片的圖層不接收滑鼠事件（停留、點選落在同一個位置上看不見的點），形狀的圖例 */
+.chart svg g.mark-image.role-mark[class*="__shape_images"] { pointer-events: none; }
+.worksheet-body.with-legend { display: flex; }
+.worksheet-body.with-legend > .chart { flex: 1; min-width: 0; width: auto; }
+.worksheet-body.with-legend > .shape-legend { flex: none; max-width: 200px; overflow: auto; padding: 4px 10px 4px 6px; font-size: 12px; }
+.shape-legend .legend-item { display: flex; align-items: center; gap: 6px; }
+.shape-swatch { width: 16px; height: 16px; flex: none; object-fit: contain; }
+svg.shape-swatch path { fill: #5f6b7a; }
+.shapes-dialog { min-width: 420px; }
+.shape-select { display: flex; align-items: center; gap: 8px; }
+.shape-select .shape-item { min-width: 110px; }
+.shape-select select { flex: 1; min-width: 0; }
+.shape-thumb { width: 22px; height: 22px; object-fit: contain; flex: none; }
+.shape-palettes { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+.shape-palettes legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.shape-palettes .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.shape-grid { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow: auto; padding: 4px; background: #f6f7f9; border-radius: 4px; }
+.shape-grid img { width: 28px; height: 28px; object-fit: contain; }

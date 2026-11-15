@@ -948,8 +948,12 @@ export function MarksCard() {
         <button type="button" onClick={() => editor.openDialog({ kind: "colors", card })}>
           色彩…
         </button>
-        {marks.shape && (
-          <button type="button" title="各成員的形狀（Tableau 的「編輯形狀」）" onClick={() => editor.openDialog({ kind: "shapes", card })}>
+        {(marks.shape || marks.type === "shape" || marks.mark_shape) && (
+          <button
+            type="button"
+            title="各成員的形狀，形狀上沒有欄位時是所有標記的形狀；可以用自訂的圖片（Tableau 的「編輯形狀」）"
+            onClick={() => editor.openDialog({ kind: "shapes", card })}
+          >
             形狀…
           </button>
         )}

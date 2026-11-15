@@ -1967,3 +1967,100 @@ def test_import_copies_source_files_only_inside_the_report(tmp_path: Path) -> No
     (target / "Data" / "Orders.csv").write_text("Region,Sales\nWest,2\n", encoding="utf-8")
     with pytest.raises(ValueError, match="內容不同"):
         source_copies(source, target, ["Data/Orders.csv"])
+
+
+def test_custom_image_shapes(client: TestClient, tmp_path: Path) -> None:
+    """自訂的圖片形狀：圖片加入形狀調色盤（存在報表的 files/Shapes/ 下）、設成標記卡的形狀與各成員的形狀，
+    檢視器從報表的檔案取得圖片；存成報表套件時圖片跟著報表。"""
+    import base64
+
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    encoded = base64.b64encode(png).decode()
+    assert client.get("/api/edit/demo/shapes").json() == {"palettes": []}
+    added = client.post(
+        "/api/edit/demo/shapes",
+        json={
+            "palette": "KPI",
+            "files": [
+                {"name": "up.png", "content": encoded},
+                {"name": "down.png", "content": encoded},
+            ],
+        },
+    )
+    assert added.status_code == 200, added.text
+    assert added.json() == {
+        "added": ["Shapes/KPI/up.png", "Shapes/KPI/down.png"],
+        "palettes": [{"name": "KPI", "images": ["Shapes/KPI/down.png", "Shapes/KPI/up.png"]}],
+    }
+    served = client.get("/api/workbooks/demo/files/Shapes/KPI/up.png")
+    assert served.status_code == 200 and served.content == png
+    assert served.headers["content-type"] == "image/png"
+    # 名稱會跳出資料夾、不是圖片、內容與副檔名不符的不接受
+    for palette, name, content in [
+        ("../x", "up.png", encoded),
+        ("KPI", "../up.png", encoded),
+        ("KPI", "up.exe", encoded),
+        ("KPI", "up.png", base64.b64encode(b"not an image").decode()),
+        ("KPI", "up.png", "not base64!"),
+        ("KPI", "up.svg", encoded),
+    ]:
+        body = {"palette": palette, "files": [{"name": name, "content": content}]}
+        refused = client.post("/api/edit/demo/shapes", json=body)
+        assert refused.status_code == 422, (palette, name)
+    assert not (tmp_path / "x").exists()
+
+    # 散佈圖：各區一個標記，East 與 West 是圖片、色彩依區域（圖片套用各區的顏色）
+    region = use("f_region")
+    ws = blank(
+        client,
+        rows=[use("f_sales", agg="sum", continuous=True)],
+        columns=[use("f_profit", agg="sum", continuous=True)],
+    )
+    ws["marks"].update(
+        type="shape",
+        shape=region,
+        color=region,
+        detail=[region],
+        shape_assignments=[
+            {"value": "East", "image": "Shapes/KPI/up.png"},
+            {"value": "West", "shape": "diamond", "image": "Shapes/KPI/down.png"},
+        ],
+    )
+    saved = put(client, ws)
+    assert saved["marks"]["shape_assignments"][0] == {
+        "shape": "circle",
+        "image": "Shapes/KPI/up.png",
+        "value": "East",
+    }
+    spec = render(client, ws["id"])["spec"]
+    assert spec["usermeta"]["shape_images"] == [
+        {"image": "__shape_img0", "tint": "__shape_tint0", "url": "__shape_url0"}
+    ]
+    legend = {e["label"]: e for e in spec["usermeta"]["shape_legend"]["entries"]}
+    scale = spec["encoding"]["color"]["scale"]
+    by_color = dict(zip(scale["domain"], scale["range"], strict=True))
+    assert legend["East"]["image"] == "Shapes/KPI/up.png"
+    assert legend["East"]["color"] == by_color["East"] and legend["Central"]["color"]
+    assert "path" in legend["Central"]
+    by_region = {v[spec["encoding"]["shape"]["field"]]: v for v in spec["data"]["values"]}
+    assert by_region["East"]["__shape_img0"] == "Shapes/KPI/up.png"
+    assert by_region["East"]["__shape_tint0"].startswith("#")
+    assert by_region["Central"]["__shape_img0"] is None
+    # 形狀上沒有欄位：標記卡固定的形狀
+    ws["marks"].update(
+        shape=None, shape_assignments=[], color=None, mark_shape={"image": "Shapes/KPI/up.png"}
+    )
+    put(client, ws)
+    spec = render(client, ws["id"])["spec"]
+    assert {v["__shape_img0"] for v in spec["data"]["values"]} == {"Shapes/KPI/up.png"}
+    ws["marks"]["mark_shape"] = {"image": "Other/up.png"}
+    refused = client.put(f"/api/edit/demo/worksheets/{ws['id']}", json={"worksheet": ws})
+    assert refused.status_code == 422
+    # 存成報表套件：用到的圖片在 files/ 下
+    target = tmp_path / "shapes.tmigx"
+    saved_package = client.post("/api/desktop/save", json={"workbook": "demo", "path": str(target)})
+    assert saved_package.status_code == 200, saved_package.text
+    with zipfile.ZipFile(target) as archive:
+        assert archive.read("files/Shapes/KPI/up.png") == png

@@ -8,6 +8,8 @@ from tmig.ir.models import (
     LIVE_PATH_PREFIX,
     MEASURE_NAMES,
     MEASURE_VALUES,
+    SHAPE_FOLDER,
+    SHAPE_IMAGE_SUFFIXES,
     SPECIAL_FIELDS,
     Action,
     AllowedAll,
@@ -62,6 +64,7 @@ from tmig.ir.models import (
     LogicalTable,
     MarkLabels,
     Marks,
+    MarkShape,
     MeasureAlias,
     MemberAlias,
     MemberRange,
@@ -129,6 +132,7 @@ from tmig.ir.models import (
     is_federated,
     local_tables,
     remote_tables,
+    shape_image_error,
     source_connections,
 )
 from tmig.ir.serialize import dumps_ir, ir_json_schema, ir_json_schema_text, load_ir, save_ir
@@ -140,6 +144,8 @@ __all__ = [
     "LIVE_PATH_PREFIX",
     "MEASURE_NAMES",
     "MEASURE_VALUES",
+    "SHAPE_FOLDER",
+    "SHAPE_IMAGE_SUFFIXES",
     "SPECIAL_FIELDS",
     "Action",
     "AllowedAll",
@@ -193,6 +199,7 @@ __all__ = [
     "LiveConnection",
     "LogicalTable",
     "MarkLabels",
+    "MarkShape",
     "Marks",
     "MeasureAlias",
     "MemberAlias",
@@ -268,5 +275,6 @@ __all__ = [
     "local_tables",
     "remote_tables",
     "save_ir",
+    "shape_image_error",
     "source_connections",
 ]

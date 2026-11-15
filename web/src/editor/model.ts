@@ -42,7 +42,7 @@ export interface CatalogField {
   table?: string | null;
   /** 預設屬性：色彩、形狀、排序、總計使用 */
   default_color?: Record<string, unknown> | null;
-  default_shapes?: { value: Scalar; shape: string }[];
+  default_shapes?: { value: Scalar; shape: string; image?: string | null }[];
   default_sort?: { kind: "alphabetic" | "manual"; order: "asc" | "desc"; manual_values: Scalar[] } | null;
   total_using?: "sum" | "avg" | "min" | "max" | null;
 }
@@ -179,6 +179,10 @@ export interface MarksIR {
   tooltip_sheets?: TooltipSheetIR[];
   /** 色彩上的其他維度（以組合著色）：同時在詳細資料中 */
   color_more?: FieldUse[];
+  /** 形狀欄位中指定給各成員的形狀（內建的形狀或自訂的圖片） */
+  shape_assignments?: { value: Scalar; shape: string; image?: string | null }[];
+  /** 形狀上沒有欄位時所有標記的形狀 */
+  mark_shape?: { shape: string; image?: string | null } | null;
   [key: string]: unknown;
 }
 

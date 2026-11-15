@@ -79,6 +79,7 @@ from tmig.parser.colors import (
     hex_color,
     label_color,
     mark_style,
+    pane_shape,
     parse_color,
     parse_shapes,
     shape_encodings,
@@ -1473,6 +1474,15 @@ class SheetParser:
             marks.color_palette = self._color_palette(color_ref, marks.color)
         if marks.shape is not None and shape_ref is not None:
             marks.shape_assignments = self._shapes(shape_ref, pane)
+        elif marks.shape is None:
+            # 形狀上沒有欄位：標記卡上固定的形狀（內建的形狀，或存在活頁簿裡的圖片形狀）
+            marks.mark_shape, unknown_shape = pane_shape(pane, self.ctx.shape_images)
+            if unknown_shape:
+                self.ctx.ignore(
+                    pane,
+                    f"工作表「{self.name}」的形狀 {unknown_shape} 不是內建的形狀、圖片也沒有存在活頁簿裡，"
+                    "依預設的形狀呈現",
+                )
         marks.mark_color, marks.opacity, marks.stroke = mark_style(pane)
         if mark_type == "density":
             marks.density = density_style(pane)
@@ -1526,18 +1536,19 @@ class SheetParser:
 
     def _shapes(self, ref: str, pane: etree._Element) -> list[ShapeAssignment]:
         """形狀欄位的形狀設定（編輯形狀）：工作表的 <style> 優先，其次是資料源的 <style>。自訂的圖片形狀
-        認不得，依預設的形狀呈現（不影響數字）。"""
+        要存在活頁簿裡（<external><shapes>）；沒有的認不得，依預設的形狀呈現（不影響數字）。"""
         assert self.ds is not None
         source = shape_encodings(child(self.ds.element, "style"))
         sheet = shape_encodings(child(child(self.el, "table"), "style"))
         enc = {**source, **sheet}.get(instance_key(ref))
         if enc is None:
             return []
-        assignments, unknown = parse_shapes(enc)
+        assignments, unknown = parse_shapes(enc, self.ctx.shape_images)
         if unknown:
             self.ctx.ignore(
                 pane,
-                f"工作表「{self.name}」的形狀 {'、'.join(unknown[:3])} 不是內建的形狀，依預設的形狀呈現",
+                f"工作表「{self.name}」的形狀 {'、'.join(unknown[:3])} 不是內建的形狀、圖片也沒有存在"
+                "活頁簿裡，依預設的形狀呈現",
             )
         return assignments
 

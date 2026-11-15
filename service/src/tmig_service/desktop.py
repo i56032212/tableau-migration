@@ -47,11 +47,12 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from tmig.data import initial_sql
 from tmig.package import SUFFIX, PackageError, read_package, write_package
 from tmig.parser.ids import slugify
 from tmig.planner.identity import Identity
@@ -290,7 +291,10 @@ def desktop_router(documents: Documents) -> APIRouter:
             if kind == "package":
                 read_package(source, directory)
             else:
-                shutil.copy2(source, directory / source.name)
+                # 先複製成暫存的檔名再換上：複製到一半時，其他請求（報表清單）不會讀到不完整的檔案
+                partial = directory / f".{source.name}.part"
+                shutil.copy2(source, partial)
+                os.replace(partial, directory / source.name)
             loaded = workspace(request).get(document.id)
         except PackageError as exc:
             documents.remove(document.id)
@@ -459,15 +463,65 @@ def _opened(document: Document, workspace: Workspace, already_open: bool) -> dic
 # ---------------------------------------------------------------- 身分與權杖
 
 
+@dataclass(frozen=True)
+class DesktopSession(initial_sql.Session):
+    """桌面版執行連線的 Initial SQL 的環境：[TableauServerUser] 是登入伺服器的帳號（沒有登入時是空的，
+    與 Tableau Desktop 相同），用到時才查；不執行 <ServerOnly> 的部分。"""
+
+    server_user: Callable[[], str] | None = None
+    workbook_name: Callable[[], str] | None = None
+
+    def value(self, name: str) -> str:
+        key = name.lower()
+        if key in initial_sql.USER_PARAMETERS:
+            return self.server_user() if self.server_user is not None else ""
+        if key == "workbookname" and self.workbook_name is not None:
+            return self.workbook_name()
+        return super().value(name)
+
+
 class DesktopAuthenticator(Authenticator):
     """登入者固定為作業系統的帳號。"""
 
-    def __init__(self, username: str) -> None:
+    def __init__(self, username: str, server_user: Callable[[], str] | None = None) -> None:
         super().__init__(AuthSettings(mode="desktop"))
         self._identity = Identity(username=username)
+        self.server_user = server_user
+        """登入伺服器的帳號（Initial SQL 的 [TableauServerUser]）；沒有登入時是空字串。"""
 
     def identity(self, request: Request) -> Identity | None:
         return self._identity
+
+    def sql_session(
+        self,
+        identity: Identity | None,
+        workbook: str = "",
+        workbook_name: Callable[[], str] | None = None,
+    ) -> initial_sql.Session:
+        return DesktopSession(
+            app=initial_sql.APP_DESKTOP,
+            workbook=workbook,
+            server=False,
+            server_user=self.server_user,
+            workbook_name=workbook_name,
+        )
+
+
+async def desktop_sql_session(request: Request) -> None:
+    """桌面版的編輯 API 的每個請求：之後開啟的來源連線，Initial SQL 以桌面版的環境代入。
+
+    是 async 的相依：設定留在這次請求的 context 中，之後在執行緒中執行的端點看得到。"""
+    authenticator = request.app.state.authenticator
+    workbook = request.path_params.get("workbook") or ""
+
+    def name() -> str:
+        try:
+            return request.app.state.workspace.get(workbook).ir.workbook.name
+        except HTTPException:
+            return workbook
+
+    session = authenticator.sql_session(None, workbook, name if workbook else None)
+    initial_sql.set_session(session)
 
 
 class DesktopGuard:
@@ -533,17 +587,28 @@ def create_desktop_app(
     remote = Remote(folder / SETTINGS_FILE, store, opener, client_factory)
     connections = DesktopConnections(folder / CONNECTIONS_FILE, store)
     connections.restore()
+
+    def server_user() -> str:
+        """登入伺服器的帳號；沒有登入（沒有權杖）時是空字串。"""
+        settings = remote.load()
+        if not settings.url or not settings.username or remote.token(settings.url) is None:
+            return ""
+        return settings.username
+
+    edit = APIRouter(dependencies=[Depends(desktop_sql_session)])
+    for router in (
+        desktop_router(documents),
+        remote_router(remote, documents, _opened),
+        editor_router(on_change=documents.mark_modified),
+        datasource_editor_router(on_change=documents.mark_modified),
+        connections_router(lambda request: request.app.state.connections),
+    ):
+        edit.include_router(router)
     app = create_app(
         workspace,
         web_dist,
-        auth=DesktopAuthenticator(username or local_username()),
-        routers=[
-            desktop_router(documents),
-            remote_router(remote, documents, _opened),
-            editor_router(on_change=documents.mark_modified),
-            datasource_editor_router(on_change=documents.mark_modified),
-            connections_router(lambda request: request.app.state.connections),
-        ],
+        auth=DesktopAuthenticator(username or local_username(), server_user),
+        routers=[edit],
     )
     app.state.documents = documents
     app.state.connections = connections

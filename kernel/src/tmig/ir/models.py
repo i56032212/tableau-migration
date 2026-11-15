@@ -606,6 +606,13 @@ class LiveConnection(IRModel):
     schema_name: str | None = Field(default=None, description="預設的結構描述")
     http_path: str | None = Field(default=None, description="Databricks 的 SQL warehouse 路徑")
     authentication: str | None = Field(default=None, description="Tableau 記錄的驗證方式")
+    initial_sql: str | None = Field(
+        default=None,
+        max_length=100_000,
+        description="Initial SQL（Tableau 連線的 one-time-sql）：連上資料庫時執行一次的 SQL，原樣送給資料庫；"
+        "可以用 [TableauServerUser]、[TableauServerUserFull]、[TableauApp]、[TableauVersion]、"
+        "[WorkbookName] 與 <ServerOnly>…</ServerOnly>（見 tmig.data.initial_sql）",
+    )
     relation: TopRelation | None = Field(
         default=None, description="資料表、自訂 SQL、join 樹或 Relationship 模型"
     )
@@ -1388,11 +1395,48 @@ ShapeName = Literal[
 """Tableau 預設形狀調色盤的形狀，依調色盤的順序。"""
 
 
-class ShapeAssignment(IRModel):
+SHAPE_FOLDER = "Shapes"
+"""自訂的圖片形狀在報表的 files/ 下的資料夾：Shapes/<調色盤>/<檔名>（Tableau 的 My Tableau Repository\\Shapes）。"""
+SHAPE_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg")
+"""可以當作形狀的圖片（瀏覽器可以顯示的格式；Tableau 另有 TIFF，不支援）。"""
+
+
+def shape_image_error(path: str) -> str | None:
+    """自訂形狀的圖片路徑不正確時的說明：要在 Shapes/ 下、不能跳出資料夾、是支援的圖片格式。"""
+    parts = path.split("/")
+    if len(parts) < 2 or parts[0] != SHAPE_FOLDER or "\\" in path:
+        return f"自訂形狀的圖片要在 {SHAPE_FOLDER}/ 下（{SHAPE_FOLDER}/<調色盤>/<檔名>）：{path}"
+    if any(part in ("", ".", "..") or ":" in part for part in parts):
+        return f"自訂形狀的圖片路徑不正確：{path}"
+    if not path.lower().endswith(SHAPE_IMAGE_SUFFIXES):
+        return f"自訂形狀的圖片要是 {'、'.join(SHAPE_IMAGE_SUFFIXES)} 檔：{path}"
+    return None
+
+
+class MarkShape(IRModel):
+    """一個形狀：Tableau 預設調色盤的形狀，或自訂的圖片形狀（Tableau 的自訂形狀調色盤）。
+
+    image 是報表的 files/ 下的圖片（Shapes/<調色盤>/<檔名>）；有圖片時 shape 是找不到圖片時的替代。"""
+
+    shape: ShapeName = "circle"
+    image: str | None = Field(
+        default=None,
+        max_length=300,
+        description="自訂的圖片形狀：報表 files/ 下的路徑，例如 Shapes/KPI/up.png；None 為內建的形狀",
+    )
+
+    @model_validator(mode="after")
+    def _image_path(self) -> Self:
+        problem = shape_image_error(self.image) if self.image is not None else None
+        if problem is not None:
+            raise ValueError(problem)
+        return self
+
+
+class ShapeAssignment(MarkShape):
     """形狀欄位中指定給一個值的形狀（Tableau 的「編輯形狀」）。"""
 
     value: Scalar = Field(description="欄位的值（Null 為 None，日期為 ISO 8601 字串）")
-    shape: ShapeName
 
 
 class ColorPalette(IRModel):
@@ -1570,6 +1614,10 @@ class Marks(IRModel):
     shape_assignments: list[ShapeAssignment] = Field(
         default_factory=list,
         description="形狀欄位中指定給各值的形狀；其餘的值依預設形狀調色盤的順序",
+    )
+    mark_shape: MarkShape | None = Field(
+        default=None,
+        description="形狀上沒有欄位時所有標記的形狀（標記卡的「形狀」）；None 為預設的圓形",
     )
     angle: FieldUse | None = Field(default=None, description="圓餅每一塊的角度（wedge-size）")
     path: FieldUse | None = Field(default=None, description="折線或多邊形的連接順序")

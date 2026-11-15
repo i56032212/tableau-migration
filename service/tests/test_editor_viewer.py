@@ -1991,9 +1991,11 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         )
         settle(page)
         page.locator(".mark-buttons").get_by_role("button", name="形狀…").click()
-        page.locator(".shapes-dialog").get_by_label("East的形狀").select_option("asterisk")
+        page.locator(".shapes-dialog").get_by_label("East的形狀").select_option("s:asterisk")
         confirm(page, ".shapes-dialog")
-        assert sheet()["marks"]["shape_assignments"] == [{"value": "East", "shape": "asterisk"}]
+        assert sheet()["marks"]["shape_assignments"] == [
+            {"shape": "asterisk", "image": None, "value": "East"}
+        ]
         shapes = records()  # 規格中形狀的比例尺：East 是星號（路徑），其餘依預設的順序
         assert shapes
 
@@ -3029,5 +3031,205 @@ def test_import_worksheets_dialog(engine: str, tmp_path: Path) -> None:
         data = call(engine, f"/api/workbooks/demo/worksheets/{added[0]['id']}/render", {})
         assert data["unsupported"] is None
         assert data["table"]["raw"] == expected["table"]["raw"]
+        assert errors == []
+        browser.close()
+
+
+def test_custom_image_shapes_in_editor_and_viewer(engine: str, tmp_path: Path) -> None:
+    """自訂的圖片形狀：在「形狀…」把圖片加入調色盤、指定給成員（指定調色盤），圖表上畫出圖片（色彩上有欄位時
+    套用各標記的顏色）、形狀的圖例由檢視器畫；圖片上可以點選標記；形狀上沒有欄位時是所有標記的形狀。"""
+    import numpy as np
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    from tmig.render.density import _png
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def picture(name: str) -> Path:
+        # 透明的背景上一個黑色的方塊（套用顏色後方塊是那個顏色、背景仍然透明）
+        pixels = np.zeros((16, 16, 4), dtype=np.uint8)
+        pixels[4:12, 4:12] = (0, 0, 0, 255)
+        path = tmp_path / name
+        path.write_bytes(_png(pixels))
+        return path
+
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "Icons"})["worksheet"]
+    ws = created["id"]
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{ws}")["worksheet"]
+
+    def measure(field: str) -> dict[str, Any]:
+        return {"field": field, "agg": "sum", "date": None, "continuous": True, "table_calc": None}
+
+    region = {
+        "field": "f_region",
+        "agg": None,
+        "date": None,
+        "continuous": False,
+        "table_calc": None,
+    }
+    body = sheet()
+    body.update(rows=[measure("f_sales")], columns=[measure("f_profit")])
+    body["marks"].update(type="shape", shape=region, color=region, detail=[region])
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/{ws}",
+        data=json.dumps({"worksheet": body}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        assert response.status == 200
+
+    images = "svg g.mark-image image"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{ws}")
+        settle(page)
+        page.locator(".mark-buttons").get_by_role("button", name="形狀…").click()
+        dialog = page.locator(".shapes-dialog")
+        dialog.get_by_label("新調色盤的名稱").fill("KPI")
+        dialog.get_by_label("形狀的圖片檔").set_input_files(
+            [str(picture("up.png")), str(picture("down.png"))]
+        )
+        expect(dialog.locator(".shape-grid img")).to_have_count(2)
+        assert call(engine, "/api/edit/demo/shapes")["palettes"] == [
+            {"name": "KPI", "images": ["Shapes/KPI/down.png", "Shapes/KPI/up.png"]}
+        ]
+        # 指定調色盤：圖片依序指定給各成員；West 再改回內建的菱形
+        dialog.get_by_role("button", name="指定調色盤").click()
+        expect(dialog.get_by_label("East的形狀")).to_have_value("i:Shapes/KPI/up.png")
+        dialog.get_by_label("West的形狀").select_option("s:diamond")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assigned = {
+            a["value"]: (a["shape"], a["image"]) for a in sheet()["marks"]["shape_assignments"]
+        }
+        assert assigned == {
+            "Central": ("circle", "Shapes/KPI/down.png"),
+            "East": ("circle", "Shapes/KPI/up.png"),
+            "South": ("circle", "Shapes/KPI/down.png"),
+            "West": ("diamond", None),
+        }
+        # 圖表：三個成員畫圖片、West 畫菱形；圖片是 data URL（匯出時不必另外載入）
+        chart = page.locator(".editor-canvas .chart")
+        expect(chart.locator(images)).to_have_count(3)
+        spec = call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})["spec"]
+        colors = dict(
+            zip(
+                spec["encoding"]["color"]["scale"]["domain"],
+                spec["encoding"]["color"]["scale"]["range"],
+                strict=True,
+            )
+        )
+        # 色彩上有欄位：圖片不透明的部分換成各標記的顏色，透明的部分不變
+        drawn = page.evaluate(
+            """async () => {
+              const nodes = Array.from(document.querySelectorAll('.editor-canvas .chart svg g.mark-image image'));
+              const out = [];
+              for (const node of nodes) {
+                const href = node.getAttribute('href') || node.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+                const image = new Image();
+                await new Promise((resolve) => { image.onload = resolve; image.src = href; });
+                const canvas = document.createElement('canvas');
+                canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+                const context = canvas.getContext('2d');
+                context.drawImage(image, 0, 0);
+                const center = Array.from(context.getImageData(8, 8, 1, 1).data);
+                const corner = Array.from(context.getImageData(0, 0, 1, 1).data);
+                out.push({data: href.startsWith('data:image/png'), center, corner, width: node.getAttribute('width')});
+              }
+              return out;
+            }"""
+        )
+        assert len(drawn) == 3 and all(item["data"] for item in drawn)
+        assert all(item["corner"][3] == 0 for item in drawn)
+        wanted = {
+            tuple(int(colors[name][i : i + 2], 16) for i in (1, 3, 5))
+            for name in ("Central", "East", "South")
+        }
+        assert {tuple(item["center"][:3]) for item in drawn} == wanted
+        assert all(item["center"][3] == 255 for item in drawn)
+        assert {item["width"] for item in drawn} == {"10"}
+        # 形狀的圖例：有圖片時由檢視器畫（三張圖片與一個內建的形狀）
+        legend = page.locator(".editor-canvas .shape-legend")
+        expect(legend.locator("img.shape-swatch")).to_have_count(3)
+        expect(legend.locator("svg.shape-swatch")).to_have_count(1)
+        expect(legend.locator(".legend-item")).to_have_text(["Central", "East", "South", "West"])
+        # 色彩與形狀是同一個欄位：合併的圖例，圖片與內建的形狀都帶著成員的顏色
+        expect(legend.locator('img.shape-swatch[data-tinted="true"]')).to_have_count(3)
+        west = legend.locator("svg.shape-swatch path").evaluate("e => getComputedStyle(e).fill")
+        assert west == "rgb({}, {}, {})".format(
+            *(int(colors["West"][i : i + 2], 16) for i in (1, 3, 5))
+        )
+
+        # 檢視器：點圖片選到標記（看不見的點接收事件），工具提示釘住
+        page.goto(f"{engine}/w/demo/s/{ws}")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        viewer = page.locator(".single-sheet .chart")
+        expect(viewer.locator(images)).to_have_count(3)
+        box = viewer.locator(images).first.bounding_box()
+        assert box is not None
+        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        pinned = page.locator(".viz-tooltip.pinned")
+        pinned.wait_for()
+        assert any(name in pinned.inner_text() for name in ("Central", "East", "South"))
+        page.keyboard.press("Escape")
+
+        # dashboard 的形狀圖例區塊：各成員的形狀（圖片與內建的形狀）
+        board = call(engine, "/api/edit/demo/dashboards", {"name": "Icons Board"})["dashboard"]
+        board["zones"][0]["children"][0]["children"] = [
+            {"id": "z3", "kind": "worksheet", "x": 4, "y": 4, "w": 700, "h": 600, "worksheet": ws,
+             "source_ref": "/editor"},
+            {"id": "z4", "kind": "legend", "x": 704, "y": 4, "w": 292, "h": 600, "worksheet": ws,
+             "legend": "shape", "source_ref": "/editor"},
+        ]  # fmt: skip
+        update = urllib.request.Request(
+            f"{engine}/api/edit/demo/dashboards/{board['id']}",
+            data=json.dumps({"dashboard": board}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(update, timeout=60) as response:
+            assert response.status == 200
+        page.goto(f"{engine}/w/demo/d/{board['id']}")
+        zone_legend = page.locator(".dashboard .shape-legend")
+        expect(zone_legend.locator(".legend-item")).to_have_text(
+            ["Central", "East", "South", "West"], timeout=30000
+        )
+        expect(zone_legend.locator("img.shape-swatch")).to_have_count(3)
+        expect(page.locator(".dashboard .chart").locator(images)).to_have_count(3)
+        assert (
+            page.locator(".dashboard .worksheet-body .shape-legend").count() == 0
+        )  # 圖表裡不再畫一次
+
+        # 形狀上沒有欄位：所有標記的形狀（圖片），再改成內建的叉號
+        page.goto(f"{engine}/w/demo/edit/{ws}")
+        settle(page)
+        page.locator('[data-drop="marks.shape"] .pill').first.click()
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text="移除").first.click()
+        settle(page)
+        assert sheet()["marks"]["shape"] is None
+        page.locator(".mark-buttons").get_by_role("button", name="形狀…").click()
+        dialog.get_by_label("所有標記的形狀").select_option("i:Shapes/KPI/up.png")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assert sheet()["marks"]["mark_shape"] == {"shape": "circle", "image": "Shapes/KPI/up.png"}
+        expect(chart.locator(images)).to_have_count(4)
+        page.locator(".mark-buttons").get_by_role("button", name="形狀…").click()
+        dialog.get_by_label("所有標記的形狀").select_option("s:times")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assert sheet()["marks"]["mark_shape"] == {"shape": "times", "image": None}
+        expect(chart.locator(images)).to_have_count(0)
         assert errors == []
         browser.close()

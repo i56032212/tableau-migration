@@ -27,7 +27,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
-from tmig.data import udf
+from tmig.data import initial_sql, udf
 from tmig.data.executor import ExecutionError, QueryResult, check_guard, finish
 from tmig.ir.models import (
     FILE_SCHEMA,
@@ -171,10 +171,12 @@ class FederatedCache:
     ) -> pa.Table:
         connection = table.connection
         assert connection is not None
+        # Initial SQL 用到登入者的連線：各登入者取回的資料分開（工作階段不同，資料可能不同）
+        source = connection.connection_id + "\x1e" + initial_sql.session_key(connection)
         if table.sql is not None:
-            key = (connection.connection_id, remote_sql(table, None, parameters))
+            key = (source, remote_sql(table, None, parameters))
         else:
-            key = (connection.connection_id, "\x1f".join(table.table or [table.name]))
+            key = (source, "\x1f".join(table.table or [table.name]))
         wanted = frozenset(c.name for c in columns)
         with self._lock:
             found = self._fresh(key, wanted)

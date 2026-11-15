@@ -201,7 +201,7 @@ export const editApi = {
       comment?: string | null;
       fiscal_year_start?: number | null;
       default_color?: Record<string, unknown> | null;
-      default_shapes?: { value: Scalar; shape: string }[];
+      default_shapes?: { value: Scalar; shape: string; image?: string | null }[];
       default_sort?: { kind: "alphabetic" | "manual"; order: "asc" | "desc"; manual_values: Scalar[] } | null;
       total_using?: "sum" | "avg" | "min" | "max" | null;
     },
@@ -328,6 +328,14 @@ export const editApi = {
         exclude_filter: options.excludeFilter ?? null,
         from_source: options.fromSource === true,
       }),
+    }),
+  /** 報表中的自訂形狀調色盤（files/Shapes/ 下的圖片與 Tableau 活頁簿裡存的圖片形狀） */
+  shapes: (workbook: string) => request<{ palettes: { name: string; images: string[] }[] }>(`${edit(workbook)}/shapes`),
+  /** 把圖片加入自訂的形狀調色盤（content 為 base64） */
+  addShapes: (workbook: string, palette: string, files: { name: string; content: string }[]) =>
+    request<{ added: string[]; palettes: { name: string; images: string[] }[] }>(`${edit(workbook)}/shapes`, {
+      method: "POST",
+      body: JSON.stringify({ palette, files }),
     }),
   /** 匯入另一份報表的工作表；worksheets 為 null 時整份匯入（含 dashboard、Story 與動作） */
   importSheets: (workbook: string, source: string, worksheets: string[] | null) =>

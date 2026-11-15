@@ -115,28 +115,108 @@ VEGA_SHAPES: dict[ShapeName, str] = {
 }
 
 
-def shape_scale(
+SHAPE_PATHS: dict[ShapeName, str] = {
+    "circle": "M1,0A1,1,0,1,1,-1,0A1,1,0,1,1,1,0Z",
+    "square": "M-0.9,-0.9H0.9V0.9H-0.9Z",
+    "plus": "M-0.3,-1H0.3V-0.3H1V0.3H0.3V1H-0.3V0.3H-1V-0.3H-0.3Z",
+    "times": VEGA_SHAPES["times"],
+    "asterisk": VEGA_SHAPES["asterisk"],
+    "diamond": "M0,-1L0.7,0L0,1L-0.7,0Z",
+    "triangle": "M0,-1L1,0.85H-1Z",
+    "down_triangle": "M0,1L1,-0.85H-1Z",
+    "left_triangle": "M-1,0L0.85,-1V1Z",
+    "right_triangle": "M1,0L-0.85,-1V1Z",
+}
+"""各形狀的 SVG 路徑（範圍 -1 到 1）：檢視器自己畫的形狀圖例用。"""
+
+
+def shape_members(
     assignments: Sequence[ShapeAssignment], pairs: Iterable[tuple[Any, Any]]
-) -> dict[str, Any] | None:
-    """形狀的比例尺：domain 為資料中的顯示值（成員依原值排序，與色彩相同），range 為各值的形狀。
-    指定的形狀優先，其餘的成員依預設形狀調色盤的順序。pairs：（顯示值、原值）。"""
-    assigned: dict[tuple[str, Any], ShapeName] = {
-        value_key(item.value): item.shape for item in assignments
-    }
+) -> list[tuple[Any, ShapeName, str | None]]:
+    """形狀欄位在資料中的各成員：（顯示值、形狀、自訂的圖片）。成員依原值排序（與色彩相同）；指定的形狀
+    優先，其餘的成員依預設形狀調色盤的順序。pairs：（顯示值、原值）。"""
+    assigned = {value_key(item.value): item for item in assignments}
     labels: list[Any] = []
     raw: dict[Any, Any] = {}
     for label, value in pairs:
         if label not in raw:
             raw[label] = value
             labels.append(label)
-    if not labels:
-        return None
     labels.sort(key=lambda label: member_order(raw[label]))
-    shapes: list[ShapeName] = [
-        assigned.get(value_key(raw[label]), SHAPE_ORDER[i % len(SHAPE_ORDER)])
-        for i, label in enumerate(labels)
-    ]
-    return {"domain": labels, "range": [VEGA_SHAPES[s] for s in shapes]}
+    members: list[tuple[Any, ShapeName, str | None]] = []
+    for i, label in enumerate(labels):
+        item = assigned.get(value_key(raw[label]))
+        if item is None:
+            members.append((label, SHAPE_ORDER[i % len(SHAPE_ORDER)], None))
+        else:
+            members.append((label, item.shape, item.image))
+    return members
+
+
+def shape_scale(
+    assignments: Sequence[ShapeAssignment], pairs: Iterable[tuple[Any, Any]]
+) -> dict[str, Any] | None:
+    """形狀的比例尺：domain 為資料中的顯示值（成員依原值排序，與色彩相同），range 為各值的形狀。
+    指定的形狀優先，其餘的成員依預設形狀調色盤的順序。pairs：（顯示值、原值）。"""
+    members = shape_members(assignments, pairs)
+    if not members:
+        return None
+    return {
+        "domain": [label for label, _, _ in members],
+        "range": [VEGA_SHAPES[shape] for _, shape, _ in members],
+    }
+
+
+def _rgb(color: str) -> tuple[int, int, int] | None:
+    digits = color.lstrip("#")
+    if len(digits) not in (6, 8):
+        return None
+    try:
+        return int(digits[0:2], 16), int(digits[2:4], 16), int(digits[4:6], 16)
+    except ValueError:
+        return None
+
+
+def scale_color(scale: Any, value: Any) -> str | None:
+    """比例尺（discrete_scale、continuous_scale 的結果）中一個值的顏色；算不出來時為 None。
+
+    離散：domain 中的顯示值對應 range 的顏色。連續：分段（quantize）取所在的那一段；其餘在 domain 的各點
+    之間以 RGB 線性內插（與規格的 interpolate: rgb 相同），範圍之外取兩端的顏色。"""
+    if not isinstance(scale, dict):
+        return None
+    domain, colors = scale.get("domain"), scale.get("range")
+    if not isinstance(domain, list) or not isinstance(colors, list) or not colors:
+        return None
+    if scale.get("type") == "quantize":
+        if not isinstance(value, int | float) or isinstance(value, bool) or len(domain) != 2:
+            return None
+        start, end = float(domain[0]), float(domain[1])
+        if end <= start:
+            return str(colors[0])
+        step = int((float(value) - start) / (end - start) * len(colors))
+        return str(colors[min(max(step, 0), len(colors) - 1)])
+    if "interpolate" not in scale:
+        try:
+            return str(colors[domain.index(value) % len(colors)])
+        except ValueError:
+            return None
+    if not isinstance(value, int | float) or isinstance(value, bool) or len(domain) != len(colors):
+        return None
+    number = float(value)
+    if number <= domain[0]:
+        return str(colors[0])
+    if number >= domain[-1]:
+        return str(colors[-1])
+    for i in range(len(domain) - 1):
+        low, high = float(domain[i]), float(domain[i + 1])
+        if low <= number <= high:
+            a, b = _rgb(str(colors[i])), _rgb(str(colors[i + 1]))
+            if a is None or b is None:
+                return None
+            t = (number - low) / (high - low) if high > low else 0.0
+            mixed = [round(a[k] + (b[k] - a[k]) * t) for k in range(3)]
+            return "#" + "".join(f"{c:02x}" for c in mixed)
+    return None
 
 
 def member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str]:
@@ -232,4 +312,11 @@ def _round(value: float) -> float:
     return round(value, digits)
 
 
-__all__ = ["continuous_scale", "discrete_scale", "value_key"]
+__all__ = [
+    "continuous_scale",
+    "discrete_scale",
+    "scale_color",
+    "shape_members",
+    "shape_scale",
+    "value_key",
+]

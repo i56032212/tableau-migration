@@ -3,8 +3,9 @@
 - 只記連線資訊（類型、主機、連接埠、資料庫、結構描述、Databricks 的 HTTP 路徑），不記帳號、密碼或權杖；
   部署環境依 connection_id 提供憑證
 - 連線類型對應 SQLGlot 的方言；對應不到的類型 dialect 為 None，報表列為不支援
-- 依檢視者的身分查詢資料庫的設定列為不支援：Initial SQL（平台不會執行，用到 [TableauServerUser] 時
-  資料庫可能依檢視者過濾資料）、要求檢視者輸入自己的帳號、以檢視者的身分模擬；
+- Initial SQL（連線的 one-time-sql）記在 LiveConnection.initial_sql，開啟連線時執行（tmig.data.initial_sql）；
+  用到 [TableauServerUser] 時每個登入者各自一條連線、代入平台登入的帳號
+- 依檢視者的身分查詢資料庫的設定列為不支援：要求檢視者輸入自己的帳號、以檢視者的身分模擬；
   Windows 整合驗證、Kerberos 與 OAuth 由功能盤點列為需注意（伺服器上可能以服務帳號連線）
 - 關聯樹：資料表（type='table'）、自訂 SQL（type='text'）與 join（type='join'，條件為欄位或常值的比較、
   join 計算或空間 join，以 AND 連接）、樞紐（type='pivot'）、聯集（type='union'）與合併不相符的欄位
@@ -135,23 +136,15 @@ def initial_sql_users(text: str) -> list[str]:
 
 
 def viewer_identity_problems(named: etree._Element, caption: str) -> list[str]:
-    """Live 連線依檢視者的身分查詢資料庫的設定：平台以唯讀服務帳號連線、不執行 Initial SQL，
-    原本依人不同的資料移轉後每個人都看得到，所以列為不支援。
+    """Live 連線依檢視者自己的資料庫帳號查詢的設定：平台以服務帳號連線，原本依人不同的資料移轉後每個人
+    都看得到，所以列為不支援。
 
-    - Initial SQL（平台尚不會執行；用到 [TableauServerUser] 時資料庫可能依檢視者過濾資料）
     - Tableau Server 上要求檢視者輸入自己的資料庫帳號（workgroup-auth-mode=prompt）或以檢視者的身分模擬
+
+    Initial SQL 不在此列：平台開啟連線時會執行，[TableauServerUser] 代入平台登入的帳號（功能盤點列為需注意：
+    平台的帳號要與資料庫端認得的身分相同）。
     """
     problems: list[str] = []
-    initial = (named.get("one-time-sql") or "").strip()
-    if initial:
-        users = initial_sql_users(initial)
-        if users:
-            problems.append(
-                f"資料源「{caption}」的 Initial SQL 用到 {'、'.join(users)}，資料庫可能依檢視者的身分"
-                "過濾資料；平台不會執行 Initial SQL，需改用列層級權限（使用者函式或使用者篩選）"
-            )
-        else:
-            problems.append(f"資料源「{caption}」有 Initial SQL，平台尚不會執行")
     mode = (named.get("workgroup-auth-mode") or "").strip()
     if mode.lower() == "prompt":
         problems.append(
@@ -235,6 +228,7 @@ def live_connection(
         schema_name=named.get("schema") or named.get("SCHEMA") or None,
         http_path=named.get("v-http-path") or None,
         authentication=named.get("authentication") or None,
+        initial_sql=(named.get("one-time-sql") or "").strip() or None,
         relation=tree,
     )
 

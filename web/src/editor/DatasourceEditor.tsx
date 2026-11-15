@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { DataGrid } from "../DatasourceView";
 import { pickDataPath, pickFolderPath, toast } from "../desktop";
@@ -104,6 +104,7 @@ export function DatasourceEditor({
   }, []);
   /** 萬用字元聯集的對話框（檔案） */
   const [wildcard, setWildcard] = useState<{ file: string; name: string; format?: string } | null>(null);
+  const [initialSql, setInitialSql] = useState(false);
 
   useEffect(() => {
     datasourceApi
@@ -193,6 +194,8 @@ export function DatasourceEditor({
     const found = panes.find((c) => c.connection_id === id);
     return found ? connectionLabel(found, labels[found.dbclass]) : id;
   };
+  const sources = model.sources ?? [];
+  const hasInitialSql = sources.some((c) => !!c.initial_sql);
   const kindLabel = model.datasource.federated
     ? "跨資料庫"
     : ({ extract: "萃取", file: "檔案", live: "即時" }[model.datasource.kind] ?? model.datasource.kind);
@@ -215,6 +218,17 @@ export function DatasourceEditor({
         <span className={`ds-badge ${model.datasource.kind}`} title={model.datasource.federated ? "不同連線的資料表在本機合併" : undefined}>
           {kindLabel}
         </span>
+        {sources.length > 0 && (
+          <button
+            type="button"
+            className="dse-initial-sql"
+            data-set={hasInitialSql ? "true" : "false"}
+            title="連上資料庫時先執行的 SQL（Tableau 的「初始 SQL」），例如設定工作階段或建立暫存資料表"
+            onClick={() => setInitialSql(true)}
+          >
+            Initial SQL…{hasInitialSql ? " ✓" : ""}
+          </button>
+        )}
         <button type="button" className="primary" onClick={onOpenSheet}>
           前往工作表
         </button>
@@ -441,6 +455,23 @@ export function DatasourceEditor({
           }
         />
       )}
+      {initialSql && (
+        <InitialSqlDialog
+          sources={sources}
+          label={(c) => connectionLabel(c, labels[c.dbclass])}
+          extract={model.datasource.kind === "extract"}
+          onClose={() => setInitialSql(false)}
+          onSubmit={async (sql, connection) => {
+            let failure: string | null = null;
+            const saved = await change(async () => {
+              const updated = await datasourceApi.setInitialSql(workbook, datasource, sql, connection);
+              failure = updated.initial_sql_error ?? null;
+              return updated;
+            }, sql.trim() ? "已設定 Initial SQL" : "已清除 Initial SQL");
+            return saved ? { error: failure } : null;
+          }}
+        />
+      )}
       {wildcard && (
         <WildcardDialog
           model={model}
@@ -649,6 +680,145 @@ function LivePane({
         </button>
       )}
     </div>
+  );
+}
+
+const INITIAL_SQL_PARAMETERS: [string, string][] = [
+  ["[TableauServerUser]", "登入伺服器的帳號"],
+  ["[TableauServerUserFull]", "帶網域的帳號（網域\\帳號）"],
+  ["[TableauApp]", "應用程式（Tableau Server 或 Tableau Desktop Professional）"],
+  ["[TableauVersion]", "版本"],
+  ["[WorkbookName]", "報表的名稱"],
+];
+
+/** 連線的 Initial SQL（Tableau 的「資料＞初始 SQL」）：連上資料庫時執行一次。確定後存檔並在這個連線上
+ *  試一次；失敗時留在對話框顯示原因（已經存檔，可以修改後再按確定）。 */
+function InitialSqlDialog({
+  sources,
+  label,
+  extract,
+  onClose,
+  onSubmit,
+}: {
+  sources: ModelConnection[];
+  label: (connection: ModelConnection) => string;
+  extract: boolean;
+  onClose: () => void;
+  onSubmit: (sql: string, connection: string) => Promise<{ error: string | null } | null>;
+}) {
+  const [connection, setConnection] = useState(sources[0].connection_id);
+  const current = sources.find((c) => c.connection_id === connection) ?? sources[0];
+  const [sql, setSql] = useState(current.initial_sql ?? "");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const area = useRef<HTMLTextAreaElement | null>(null);
+  /** 插入之後游標要放的位置：新的內容畫上去的同時設定（之後的輸入接在插入的文字後面） */
+  const cursor = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (cursor.current === null || !area.current) return;
+    area.current.focus();
+    area.current.setSelectionRange(cursor.current, cursor.current);
+    cursor.current = null;
+  }, [sql]);
+  const insert = (text: string) => {
+    const start = area.current?.selectionStart ?? sql.length;
+    const end = area.current?.selectionEnd ?? sql.length;
+    cursor.current = start + text.length;
+    setSql(sql.slice(0, start) + text + sql.slice(end));
+    setFailure(null);
+  };
+  return (
+    <Modal title="Initial SQL" onClose={onClose} wide>
+      {sources.length > 1 && (
+        <label className="dse-initial-connection">
+          連線{" "}
+          <select
+            aria-label="Initial SQL 的連線"
+            value={connection}
+            onChange={(e) => {
+              const next = sources.find((c) => c.connection_id === e.target.value) ?? sources[0];
+              setConnection(next.connection_id);
+              setSql(next.initial_sql ?? "");
+              setFailure(null);
+            }}
+          >
+            {sources.map((c) => (
+              <option key={c.connection_id} value={c.connection_id}>
+                {label(c)}
+                {c.initial_sql ? " ✓" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <textarea
+        ref={area}
+        className="cs-sql"
+        aria-label="Initial SQL"
+        spellCheck={false}
+        rows={10}
+        placeholder={"例如：SET search_path TO sales;\nCREATE TEMP TABLE my_regions AS SELECT … WHERE owner = '[TableauServerUser]';"}
+        value={sql}
+        onChange={(e) => {
+          setSql(e.target.value);
+          setFailure(null);
+        }}
+      />
+      <div className="dse-initial-insert">
+        <select
+          aria-label="插入參數"
+          value=""
+          onChange={(e) => {
+            if (e.target.value) insert(e.target.value);
+          }}
+        >
+          <option value="">插入參數…</option>
+          {INITIAL_SQL_PARAMETERS.map(([name, text]) => (
+            <option key={name} value={name}>
+              {name}　{text}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="link" title="只在伺服器上執行的部分（桌面版不執行）" onClick={() => insert("<ServerOnly></ServerOnly>")}>
+          插入 &lt;ServerOnly&gt;
+        </button>
+      </div>
+      <p className="hint">
+        {extract
+          ? "這個資料源是萃取：Initial SQL 在更新萃取、連到來源資料庫時執行。"
+          : "連上資料庫時執行一次（開啟報表、更新資料時），多句以分號分開。"}
+        發布到伺服器後，參數以每位檢視者的帳號代入；用到帳號的 Initial SQL 每位檢視者各自一條連線。
+      </p>
+      {failure && (
+        <p className="error" role="alert">
+          已經存檔，但在這個連線上執行失敗：{failure}
+          <br />
+          <span className="muted">（桌面版不執行 &lt;ServerOnly&gt; 的部分，沒有登入伺服器時帳號是空的；可以修改後再按「確定」，或直接關閉）</span>
+        </p>
+      )}
+      <div className="dialog-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          onClick={() =>
+            void (async () => {
+              setBusy(true);
+              const result = await onSubmit(sql, connection);
+              setBusy(false);
+              if (!result) return;
+              if (result.error) setFailure(result.error);
+              else onClose();
+            })()
+          }
+        >
+          確定
+        </button>
+        <button type="button" onClick={onClose}>
+          {failure ? "關閉" : "取消"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

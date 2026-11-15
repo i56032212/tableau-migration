@@ -129,6 +129,8 @@ export interface ModelConnection {
   port: number | null;
   database: string | null;
   schema: string | null;
+  /** 連線的 Initial SQL（Tableau 的「初始 SQL」）：連上資料庫時執行一次；沒有時為 null */
+  initial_sql?: string | null;
 }
 
 export interface DatasourceModel {
@@ -139,6 +141,10 @@ export interface DatasourceModel {
   connection: ModelConnection | null;
   /** 資料庫的連線：Live 連線本身，或跨資料庫的 join 中的各資料庫 */
   connections: ModelConnection[];
+  /** 可以設定 Initial SQL 的資料庫連線：Live 連線、萃取的來源，或跨資料庫的 join 中的各資料庫 */
+  sources?: ModelConnection[];
+  /** 剛設定的 Initial SQL 在資料庫執行失敗的原因（已經存檔；只在設定的回應中） */
+  initial_sql_error?: string | null;
   files: ModelFile[];
   logical: LogicalView[];
   relationships: RelationshipView[];
@@ -258,6 +264,12 @@ export const datasourceApi = {
     request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/wildcard-union`, {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+  /** 連線的 Initial SQL：空的表示清除；connection 是資料源中的哪一個資料庫。 */
+  setInitialSql: (workbook: string, datasource: string, sql: string, connection: string | null) =>
+    request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/initial-sql`, {
+      method: "PUT",
+      body: JSON.stringify({ sql, connection }),
     }),
   rename: (workbook: string, datasource: string, caption: string) =>
     request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}`, {

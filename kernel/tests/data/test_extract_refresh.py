@@ -526,6 +526,68 @@ def test_cli_refresh_and_compare(
     assert (data / f"{report.ir.datasources[0].id}.compare.json").is_file()
 
 
+def test_refresh_runs_initial_sql(
+    tmp_path: Path,
+    report: Report,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """萃取來源連線的 Initial SQL 在更新萃取時執行：沒有登入者（帳號是空字串），[WorkbookName] 是報表的名稱；
+    執行失敗時更新失敗、回報原因。"""
+    from tmig.ir import dumps_ir
+
+    source = tmp_path / "source.duckdb"
+    with duckdb.connect(str(source)) as con:
+        con.execute('CREATE SCHEMA "SALES"')
+        for name, table in {"ORDERS": ORDERS, "PEOPLE": PEOPLE}.items():
+            con.register("rows", table)
+            con.execute(f'CREATE TABLE "SALES"."{name}" AS SELECT * FROM rows')
+            con.unregister("rows")
+    ds = report.ir.datasources[0]
+    connection = ds.connection
+    assert isinstance(connection, ExtractConnection) and connection.source is not None
+    config = tmp_path / "connections.toml"
+    config.write_text(
+        f'[connections.{connection.source.connection_id}]\ndriver = "duckdb"\n'
+        f'path = "{source.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TMIG_CONNECTIONS", str(config))
+
+    def write(sql: str) -> Path:
+        updated = connection.model_copy(
+            update={"source": connection.source.model_copy(update={"initial_sql": sql})}  # type: ignore[union-attr]
+        )
+        ir = report.ir.model_copy(
+            update={"datasources": [ds.model_copy(update={"connection": updated})]}
+        )
+        path = tmp_path / "report.ir.json"
+        path.write_text(dumps_ir(ir), encoding="utf-8")
+        return path
+
+    # 參數代入的值不對時這一句會失敗（轉型錯誤），更新就不會成功
+    name = report.ir.workbook.name.replace("'", "''")
+    check = (
+        f"SELECT CASE WHEN '[WorkbookName]' = '{name}' AND '[TableauServerUser]' = '' "
+        "AND '[TableauApp]' = 'Tableau Server' THEN 1 ELSE CAST('wrong' AS INTEGER) END"
+    )
+    data = tmp_path / "data"
+    assert main(["extract", "refresh", str(write(check)), "--out-dir", str(data)]) == 0
+    assert "完整更新" in capsys.readouterr().out
+    assert (data / f"{ds.id}.duckdb").is_file()
+    before = (data / f"{ds.id}.duckdb").read_bytes()
+    assert (
+        main(["extract", "refresh", str(write("SELECT * FROM nope")), "--out-dir", str(data)]) == 1
+    )
+    assert "Initial SQL 執行失敗" in capsys.readouterr().err
+    assert (data / f"{ds.id}.duckdb").read_bytes() == before  # 失敗時資料檔不變
+    # 停用 Initial SQL 時照常更新
+    monkeypatch.setenv("TMIG_INITIAL_SQL", "off")
+    assert (
+        main(["extract", "refresh", str(tmp_path / "report.ir.json"), "--out-dir", str(data)]) == 0
+    )
+
+
 def test_verify_notes_refreshed_data(report: Report, tmp_path: Path) -> None:
     from tmig.verify.run import ensure_data
 

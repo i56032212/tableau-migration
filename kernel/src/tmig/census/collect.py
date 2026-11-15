@@ -723,14 +723,17 @@ def _match_connection(dss: list[DatasourceInfo], conn: ServerConnection) -> list
 
 
 def identity_check(dss: list[DatasourceInfo], server: Sequence[ServerConnection] = ()) -> Check:
-    """資料是否依檢視者的身分而不同：平台以部署環境提供的唯讀服務帳號連線、不執行 Initial SQL，
-    原本靠資料庫端（檢視者自己的帳號、Initial SQL 帶入登入者）過濾的資料，移轉後每個人看到的都一樣。
+    """資料是否依檢視者的身分而不同：平台以部署環境提供的服務帳號連線，原本靠資料庫端依檢視者自己的帳號
+    過濾的資料，移轉後每個人看到的都一樣。
 
-    - 不符合：Live 連線的 Initial SQL 用到 [TableauServerUser]、要求檢視者輸入帳號（.twb 的
-      workgroup-auth-mode=prompt，或伺服器上沒有嵌入密碼）、以檢視者的身分模擬（impersonation）
+    - 不符合：要求檢視者輸入帳號（.twb 的 workgroup-auth-mode=prompt，或伺服器上沒有嵌入密碼）、
+      以檢視者的身分模擬（impersonation）
     - 需注意：Windows 整合驗證、Kerberos 或 OAuth（Tableau Server 可能以服務帳號或檢視者的身分連線）、
-      其他 Initial SQL（平台不會執行）、萃取來源的 Initial SQL（更新萃取時不會執行）、
-      伺服器上沒有嵌入密碼但無法確定屬於哪個資料源的連線
+      Initial SQL 用到 [TableauServerUser]（平台開啟連線時會執行、代入平台登入的帳號：帳號要與資料庫端
+      認得的身分相同；萃取來源的則在更新萃取時沒有登入者）、伺服器上沒有嵌入密碼但無法確定屬於哪個
+      資料源的連線
+
+    其他的 Initial SQL 平台照樣執行（與 Tableau 相同），不依賴檢視者的身分，不列。
 
     伺服器的連線設定是目前的狀態：確認嵌入了密碼時，.twb 中記錄的 prompt 與 OAuth 不列。
     """
@@ -754,19 +757,16 @@ def identity_check(dss: list[DatasourceInfo], server: Sequence[ServerConnection]
         if ds.initial_sql_user:
             params = "、".join(ds.initial_sql_user)
             if live:
-                failed[
-                    f"{name}的 Initial SQL 用到 {params}：資料庫依檢視者的身分過濾資料，"
-                    f"平台不會執行 Initial SQL，{SAME_DATA}；需改用列層級權限（使用者函式或使用者篩選）"
+                warned[
+                    f"{name}的 Initial SQL 用到 {params}：平台開啟連線時會執行、代入平台登入的帳號"
+                    "（每個登入者各自一條連線）；請確認平台的帳號與資料庫端認得的身分相同，"
+                    "驗證比對時代入 cases.yaml 的 user（沒有時是空字串）"
                 ] = None
             else:
                 warned[
-                    f"{name}的萃取來源有 Initial SQL 用到 {params}：平台更新萃取時不會執行，"
-                    "更新後的資料可能與 Tableau 不同"
+                    f"{name}的萃取來源有 Initial SQL 用到 {params}：平台更新萃取時會執行，但排程的更新沒有"
+                    "登入者（代入空字串），更新後的資料可能與 Tableau 不同"
                 ] = None
-        elif ds.initial_sql:
-            warned[
-                f"{name}有 Initial SQL：平台不會執行，請確認查詢結果不依賴它（驗證比對會顯示差異）"
-            ] = None
         if not live:
             continue  # 萃取：檢視時讀萃取檔，與檢視者的帳號無關
         for mode in ds.server_auth_modes:

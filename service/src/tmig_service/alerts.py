@@ -191,6 +191,7 @@ Evaluate = Callable[[Report, DataAlert, str], list[tuple[str, float]]]
 
 def evaluate_with_runtime(site: SiteStore | None) -> Evaluate:
     """以查詢服務相同的方式查詢（萃取或 Live；以收件人的身分套用列層級權限）。"""
+    from tmig.data import initial_sql
     from tmig.data.runtime import DataRuntime
     from tmig.planner.state import QueryState
     from tmig.sqlgen.query import worksheet_sql
@@ -231,7 +232,11 @@ def evaluate_with_runtime(site: SiteStore | None) -> Evaluate:
             ensure_data(report.directory, ir)
             return report.directory / "data" / f"{sheet.datasource}.duckdb"
 
-        result = runtime.run(query, datasource, database)
+        # 來源連線的 Initial SQL 也以收件人代入
+        identity = member.identity()
+        session = initial_sql.server_session(identity.username, identity.domain, ir.workbook.name)
+        with initial_sql.use(session):
+            result = runtime.run(query, datasource, database)
         if alert.measure not in result.columns:
             raise AlertError(f"工作表中已經沒有量值 {alert.measure_name}")
         index = result.columns.index(alert.measure)

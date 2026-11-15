@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from tmig.data import initial_sql
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
@@ -68,13 +69,22 @@ def check_report(
                         f"資料源「{ds.caption}」的工作表交給伺服器檢查",
                     )
                 )
+    # 來源連線的 Initial SQL：伺服器上以發布者代入；桌面版沿用桌面版的環境（不執行 <ServerOnly>）
+    session = (
+        initial_sql.server_session(
+            user.username if user else "", user.domain if user else None, ir.workbook.name
+        )
+        if where == "server"
+        else initial_sql.current()
+    )
     for sheet in ir.worksheets:
         if sheet.datasource in unavailable:
             continue
         datasource = next(d for d in ir.datasources if d.id == sheet.datasource)
         try:
             query = worksheet_sql(ir, sheet.id, QueryState(), user)
-            runtime.run(query, datasource, directory / "data" / f"{sheet.datasource}.duckdb")
+            with initial_sql.use(session):
+                runtime.run(query, datasource, directory / "data" / f"{sheet.datasource}.duckdb")
         except QueryError as exc:
             level: Literal["error", "warning"] = "warning" if exc.unsupported else "error"
             prefix = "不支援，檢視時不會顯示" if exc.unsupported else "無法查詢"

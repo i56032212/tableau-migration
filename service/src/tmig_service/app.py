@@ -49,10 +49,11 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from tmig.access.permissions import ADMIN_ROLES, decide
 from tmig.catalog import Catalog, Report, workbook_url_name
+from tmig.data import initial_sql
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
-from tmig.ir import IR, LiveConnection, Worksheet, iter_zones, save_ir
+from tmig.ir import IR, LiveConnection, Worksheet, iter_zones, save_ir, source_connections
 from tmig.package import read_report_file
 from tmig.planner.drill import apply_drill, drill_info
 from tmig.planner.dynamic import dynamic_fields, resolve_parameters
@@ -436,6 +437,8 @@ def create_app(
         grant = grant_for(loaded, user)
         if not grant.allowed:
             raise HTTPException(404, f"找不到報表「{wb}」")
+        # 之後這次請求開啟的來源連線：Initial SQL 以這位登入者與這份報表代入（tmig.data.initial_sql）
+        initial_sql.set_session(authenticator.sql_session(user, loaded.ir.workbook.name))
         resolved = dynamic_ir(wb, loaded, user)
         if resolved is not loaded.ir:
             loaded = Loaded(loaded.directory, resolved, loaded.stamp, loaded.published)
@@ -448,6 +451,7 @@ def create_app(
         """動態參數（開啟報表時取自欄位的目前值與允許值）以目前的資料取值後的 IR。
 
         同一份報表、同一份萃取與使用者（只有用到列層級權限的資料源才分使用者）的結果快取一分鐘；
+        連線的 Initial SQL 代入後內容不同的（用到登入者時每個登入者）也各自快取。
         查詢失敗或沒有連線權限時維持存檔時的值。"""
         fields = dynamic_fields(loaded.ir)
         if not fields:
@@ -460,10 +464,14 @@ def create_app(
         except HTTPException:
             return loaded.ir
         stamps: list[float] = []
+        sessions: list[str] = []
         personal = False
         for source in sources:
             datasource = next(d for d in loaded.ir.datasources if d.id == source)
             personal = personal or bool(protected_fields(loaded.ir, datasource))
+            sessions.extend(
+                initial_sql.session_key(c) for c in source_connections(datasource.connection)
+            )
             if not isinstance(datasource.connection, LiveConnection):
                 path = workspace.database(wb, source)
                 stamps.append(path.stat().st_mtime if path.is_file() else 0.0)
@@ -477,7 +485,7 @@ def create_app(
             if personal and user is not None
             else None
         )
-        key = (wb, loaded.stamp, tuple(stamps), who)
+        key = (wb, loaded.stamp, tuple(stamps), who, tuple(sessions))
         now = time.monotonic()
         with dynamic_lock:
             cached = dynamic_cache.get(key)

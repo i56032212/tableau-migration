@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import math
 import shutil
@@ -86,11 +88,12 @@ from tmig.ir import (
     TupleFilter,
     has_local_data,
 )
-from tmig.ir.models import GeoAlias, GeoRole, Scalar, SetRule
+from tmig.ir.models import SHAPE_FOLDER, GeoAlias, GeoRole, Scalar, SetRule, shape_image_error
 from tmig.merge import import_from
-from tmig.package import SOURCES, member_path, read_report_file
+from tmig.package import SOURCES, member_path, read_report_file, shape_images
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
+from tmig.shapes import MAX_SHAPE_BYTES, palettes
 from tmig.sqlgen.query import QueryError, custom_sql_parameters, domain_sql, worksheet_sql
 from tmig.verify.cases import CasesError, load_cases
 from tmig_service.app import Workspace, current_user
@@ -135,6 +138,73 @@ class ImportBody(BaseModel):
 
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp")
+
+SHAPE_UPLOAD_LIMIT = 100
+"""一次加入的形狀圖片數量上限。"""
+IMAGE_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".bmp": (b"BM",),
+    ".webp": (b"RIFF",),
+}
+"""圖片檔開頭的位元組（副檔名與內容要相符；SVG 是文字，另外檢查）。"""
+
+
+class ShapeFile(BaseModel):
+    """要加入的形狀圖片：檔名與內容（base64）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1)
+
+
+class ShapesBody(BaseModel):
+    """把圖片加入自訂的形狀調色盤（Tableau 的 My Tableau Repository\\Shapes\\<調色盤>）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    palette: str = Field(min_length=1, max_length=60)
+    files: list[ShapeFile] = Field(min_length=1, max_length=SHAPE_UPLOAD_LIMIT)
+
+
+def shape_palettes(directory: Path) -> list[dict[str, Any]]:
+    """報表可以用的自訂形狀調色盤（files/Shapes/ 與 .twbx／.twb 內嵌的圖片）。"""
+    return [{"name": name, "images": images} for name, images in palettes(directory).items()]
+
+
+def shape_upload(directory: Path, body: ShapesBody) -> list[str]:
+    """把圖片寫進報表的 files/Shapes/<調色盤>/；回傳加入的圖片路徑。名稱或內容不正確時 ValueError。"""
+    palette = body.palette.strip()
+    if not palette or palette in (".", "..") or any(c in palette for c in '/\\:*?"<>|'):
+        raise ValueError(f'調色盤的名稱不能有 / \\ : * ? " < > | 等字元：{body.palette}')
+    written: list[tuple[str, bytes]] = []
+    for item in body.files:
+        name = item.name.strip()
+        path = f"{SHAPE_FOLDER}/{palette}/{name}"
+        problem = shape_image_error(path)
+        if problem is not None or any(c in name for c in '/\\:*?"<>|'):
+            raise ValueError(problem or f"圖片的檔名不正確：{item.name}")
+        try:
+            content = base64.b64decode(item.content, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"圖片 {name} 的內容不是 base64") from exc
+        if not content or len(content) > MAX_SHAPE_BYTES:
+            raise ValueError(f"圖片 {name} 是空的或超過 {MAX_SHAPE_BYTES // 1024 // 1024} MB")
+        suffix = Path(name).suffix.lower()
+        if suffix == ".svg":
+            if b"<svg" not in content[:4096].lower():
+                raise ValueError(f"{name} 不是 SVG 圖片")
+        elif not content.startswith(IMAGE_SIGNATURES.get(suffix, ())):
+            raise ValueError(f"{name} 的內容不是 {suffix} 圖片")
+        written.append((path, content))
+    for path, content in written:
+        relative = member_path(path)
+        assert relative is not None
+        target = directory.joinpath("files", *relative.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return [path for path, _ in written]
 
 
 def source_copies(
@@ -781,21 +851,41 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
                 shutil.copytree(origin, copied, dirs_exist_ok=True)
             else:
                 shutil.copy2(origin, copied)
+        # 圖片：匯入的工作表與資料源用到的自訂圖片形狀；整份匯入時另有 dashboard 用到的圖片。
+        # 目標報表已經有同一個路徑的圖片時用它的（不蓋掉）
+        images = set(shape_images(result.ir))
         if body.worksheets is None:
-            # 整份匯入：dashboard 用到的圖片
-            for path in _image_paths([d.model_dump(mode="json") for d in source.ir.dashboards]):
-                content = read_report_file(source.directory, path)
-                relative = member_path(path)
-                if content is None or relative is None:
-                    continue
-                copied = target.directory.joinpath("files", *relative.parts)
-                if not copied.is_file() and read_report_file(target.directory, path) is None:
-                    copied.parent.mkdir(parents=True, exist_ok=True)
-                    copied.write_bytes(content)
+            images.update(_image_paths([d.model_dump(mode="json") for d in source.ir.dashboards]))
+        for path in sorted(images):
+            content = read_report_file(source.directory, path)
+            relative = member_path(path)
+            if content is None or relative is None:
+                continue
+            copied = target.directory.joinpath("files", *relative.parts)
+            if not copied.is_file() and read_report_file(target.directory, path) is None:
+                copied.parent.mkdir(parents=True, exist_ok=True)
+                copied.write_bytes(content)
         space.save_ir(workbook, result.ir)
         if on_change is not None:
             on_change(workbook)
         return result.to_json()
+
+    @router.get("/{workbook}/shapes")
+    def get_shapes(workbook: str, request: Request) -> dict[str, Any]:
+        """自訂的形狀調色盤（Tableau「編輯形狀」的「選取形狀調色盤」）：報表中的圖片形狀。"""
+        return {"palettes": shape_palettes(workspace(request).get(workbook).directory)}
+
+    @router.post("/{workbook}/shapes")
+    def post_shapes(workbook: str, body: ShapesBody, request: Request) -> dict[str, Any]:
+        """把圖片加入自訂的形狀調色盤：存在報表的 files/Shapes/<調色盤>/，存檔、發布時跟著報表。"""
+        loaded = workspace(request).get(workbook)
+        if loaded.published is not None:
+            raise HTTPException(409, "伺服器上的報表不能直接編輯")
+        try:
+            added = shape_upload(loaded.directory, body)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"added": added, "palettes": shape_palettes(loaded.directory)}
 
     @router.post("/{workbook}/worksheets")
     def post_worksheet(workbook: str, body: NewWorksheetBody, request: Request) -> dict[str, Any]:

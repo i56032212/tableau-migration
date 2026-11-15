@@ -556,8 +556,8 @@ def render_inventory(result: InventoryResult) -> str:
     lines.append("")
     lines.append(
         "起步條件：資料在 .twbx 的萃取（單表或 Relationship 模型）內或為可連線的資料庫（Live）、"
-        "沒有 Data Blending、連線不依賴檢視者的身分（檢視者用自己的資料庫帳號、Initial SQL 帶入登入者時"
-        "不符合；Windows 整合驗證、Kerberos、OAuth、用到列層級權限、dashboard 不是固定尺寸時列為需注意）。"
+        "沒有 Data Blending、連線不依賴檢視者的身分（檢視者用自己的資料庫帳號時不符合；Windows 整合驗證、"
+        "Kerberos、OAuth、Initial SQL 帶入登入者、用到列層級權限、dashboard 不是固定尺寸時列為需注意）。"
         "候選依「不支援數少 → 注意事項少 → 檢視次數多」排序。"
     )
 

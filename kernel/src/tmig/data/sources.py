@@ -41,12 +41,14 @@
 
 - 密碼、權杖一律寫成 ${環境變數}，不能直接寫在設定檔中；環境變數由部署環境或密碼管理服務注入
 - 建議使用唯讀的服務帳號；PostgreSQL 與 MySQL 的工作階段另外設為唯讀
+- 連線有 Initial SQL 時（LiveConnection.initial_sql）連上後先執行（見 tmig.data.initial_sql）
 - 執行器回傳 Arrow 資料表；小數（DECIMAL／NUMBER）轉成浮點數或整數、含時區的時間轉成 UTC 的
   無時區時間，與萃取匯入 DuckDB 後的型別一致
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import os
 import re
@@ -60,7 +62,7 @@ from typing import Any, Protocol
 
 import pyarrow as pa
 
-from tmig.data import udf
+from tmig.data import initial_sql, udf
 from tmig.ir.models import LiveConnection
 
 CONFIG_ENV = "TMIG_CONNECTIONS"
@@ -197,6 +199,49 @@ def load_connections(path: str | Path | None = None) -> dict[str, ConnectionConf
 
 
 def open_executor(connection: LiveConnection, configs: dict[str, ConnectionConfig]) -> Executor:
+    """開啟來源連線；連線有 Initial SQL 時連上後先執行（Tableau 的「初始 SQL」，見 tmig.data.initial_sql：
+    參數依目前的登入者代入）。Initial SQL 執行失敗時連線關閉、回報錯誤。"""
+    executor = _open_driver(connection, configs)
+    text = initial_sql.resolved(connection)
+    if text:
+        try:
+            for statement in initial_sql.statements(text, executor.dialect):
+                run_statement(executor, statement)
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                executor.close()
+            raise SourceConnectionError(
+                f"連線 {connection.connection_id} 的 Initial SQL 執行失敗：{exc}"
+            ) from exc
+    return executor
+
+
+def run_statement(executor: Executor, sql: str) -> None:
+    """執行一句不取結果的敘述（Initial SQL 的一句）。執行器有自己的 run 時用它（例如 PostgreSQL 要暫時解除
+    唯讀、BigQuery 沒有游標）；其餘以連線的游標執行，有結果時讀完丟掉，不是自動認可的連線最後認可。"""
+    custom = getattr(executor, "run", None)
+    if callable(custom):
+        custom(sql)
+        return
+    con = getattr(executor, "con", None)
+    if con is None:
+        raise SourceConnectionError(f"{executor.dialect} 的連線不能執行 Initial SQL")
+    cursor = con.cursor()
+    try:
+        cursor.execute(sql)
+        if getattr(cursor, "description", None):
+            with contextlib.suppress(Exception):
+                cursor.fetchall()
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+    commit = getattr(con, "commit", None)
+    if callable(commit) and not getattr(con, "autocommit", False):
+        with contextlib.suppress(Exception):
+            commit()
+
+
+def _open_driver(connection: LiveConnection, configs: dict[str, ConnectionConfig]) -> Executor:
     config = configs.get(connection.connection_id)
     if config is None:
         raise SourceConnectionError(
@@ -274,6 +319,13 @@ class DuckDBExecutor:
         method = getattr(relation, "to_arrow_table", None) or relation.arrow
         return method()
 
+    def run(self, sql: str) -> None:
+        """Initial SQL 的一句（例如 SET、建立暫存資料表或巨集）；附加的資料檔仍是唯讀。有結果的敘述
+        （SELECT）把結果讀完丟掉：連線上留著沒讀完的結果時不能執行下一句。"""
+        self.con.execute(sql)
+        if self.con.description:
+            self.con.fetchall()
+
     def close(self) -> None:
         self.con.close()
 
@@ -319,6 +371,15 @@ class PostgresExecutor:
             scales = [_pg_scale(d) for d in description]
             rows = cursor.fetchall()
         return rows_to_arrow(names, rows, scales)
+
+    def run(self, sql: str) -> None:
+        """Initial SQL 的一句。唯讀的工作階段不能建立暫存資料表：執行時暫時解除唯讀，之後恢復
+        （能不能寫入實際的資料表由服務帳號的權限決定，請用唯讀的帳號）。"""
+        self.con.execute("SET default_transaction_read_only = off")
+        try:
+            self.con.execute(sql)
+        finally:
+            self.con.execute("SET default_transaction_read_only = on")
 
     def close(self) -> None:
         self.con.close()
@@ -597,6 +658,18 @@ class MySQLExecutor:
             rows = [tuple(_mysql_value(v) for v in row) for row in cursor.fetchall()]
         return rows_to_arrow(names, rows)
 
+    def run(self, sql: str) -> None:
+        """Initial SQL 的一句。唯讀的工作階段不能建立暫存資料表：執行時暫時解除唯讀，之後恢復
+        （能不能寫入實際的資料表由服務帳號的權限決定，請用唯讀的帳號）。"""
+        with self.con.cursor() as cursor:
+            cursor.execute("SET SESSION TRANSACTION READ WRITE")
+            try:
+                cursor.execute(sql)
+                if cursor.description:
+                    cursor.fetchall()
+            finally:
+                cursor.execute("SET SESSION TRANSACTION READ ONLY")
+
     def close(self) -> None:
         self.con.close()
 
@@ -871,6 +944,11 @@ class BigQueryExecutor:
             )
             job.result(retry=self.retry)
         return normalize_arrow(job.to_arrow(create_bqstorage_client=False))
+
+    def run(self, sql: str) -> None:
+        """Initial SQL 的一句。BigQuery 的每次查詢各自獨立（沒有工作階段）：敘述會執行，但 SET、暫存資料表
+        不會留到之後的查詢。"""
+        self.client.query(sql, job_config=self.job_config).result()
 
     def close(self) -> None:
         self.client.close()

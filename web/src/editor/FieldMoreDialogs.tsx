@@ -8,19 +8,7 @@ import { editApi } from "./api";
 import { type EditorDialog, useEditor } from "./context";
 import { memberText } from "./FieldDialogs";
 import type { CatalogField } from "./model";
-
-const SHAPES: [string, string][] = [
-  ["circle", "● 圓形"],
-  ["square", "■ 方形"],
-  ["plus", "✚ 加號"],
-  ["times", "✖ 叉號"],
-  ["asterisk", "★ 星號"],
-  ["diamond", "◆ 菱形"],
-  ["triangle", "▲ 三角形"],
-  ["down_triangle", "▼ 倒三角形"],
-  ["left_triangle", "◀ 向左三角形"],
-  ["right_triangle", "▶ 向右三角形"],
-];
+import { type ShapeChoice, ShapePalettes, ShapeSelect, SHAPES, useShapePalettes } from "./ShapePicker";
 
 const TYPE_NAMES: Record<string, string> = {
   string: "字串",
@@ -211,10 +199,11 @@ export function DefaultColorDialog({ datasource, field, onClose, onSaved }: Prop
 export function DefaultShapesDialog({ datasource, field, onClose, onSaved }: Props) {
   const editor = useEditor();
   const target = useTarget(datasource, field);
-  const [assigned, setAssigned] = useState<Record<string, { value: Scalar; shape: string }>>(() =>
+  const [assigned, setAssigned] = useState<Record<string, { value: Scalar } & ShapeChoice>>(() =>
     Object.fromEntries((target?.default_shapes ?? []).map((a) => [JSON.stringify(a.value), a])),
   );
   const { values, error: loadError } = useMembers(field, 200);
+  const { palettes, setPalettes } = useShapePalettes(editor.workbook);
   const { error, busy, run } = useSave(onClose, onSaved);
   if (!target) return null;
   const save = () =>
@@ -222,6 +211,10 @@ export function DefaultShapesDialog({ datasource, field, onClose, onSaved }: Pro
       () => editApi.saveFieldProperties(editor.workbook, datasource, field, { default_shapes: Object.values(assigned) }),
       `已設定「${target.caption}」的預設形狀`,
     );
+  const assignPalette = (images: string[]) => {
+    if (images.length === 0) return;
+    setAssigned(Object.fromEntries((values ?? []).map((value, i) => [JSON.stringify(value), { value, shape: "circle", image: images[i % images.length] }])));
+  };
   return (
     <Modal title={`預設形狀：${target.caption}`} onClose={onClose}>
       <div className="action-form shapes-dialog">
@@ -231,30 +224,26 @@ export function DefaultShapesDialog({ datasource, field, onClose, onSaved }: Pro
           const id = JSON.stringify(value);
           const label = memberText(value);
           return (
-            <label className="inline" key={id}>
-              {label}
-              <select
-                aria-label={`${label}的預設形狀`}
-                value={assigned[id]?.shape ?? ""}
-                onChange={(e) =>
-                  setAssigned((current) => {
-                    const next = { ...current };
-                    if (e.target.value) next[id] = { value, shape: e.target.value };
-                    else delete next[id];
-                    return next;
-                  })
-                }
-              >
-                <option value="">自動（{SHAPES[i % SHAPES.length][1]}）</option>
-                {SHAPES.map(([shape, text]) => (
-                  <option key={shape} value={shape}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <ShapeSelect
+              key={id}
+              workbook={editor.workbook}
+              label={label}
+              ariaLabel={`${label}的預設形狀`}
+              value={assigned[id]}
+              auto={`自動（${SHAPES[i % SHAPES.length][1]}）`}
+              palettes={palettes}
+              onChange={(choice) =>
+                setAssigned((current) => {
+                  const next = { ...current };
+                  if (choice) next[id] = { value, ...choice };
+                  else delete next[id];
+                  return next;
+                })
+              }
+            />
           );
         })}
+        <ShapePalettes workbook={editor.workbook} palettes={palettes} onPalettes={setPalettes} onAssign={assignPalette} />
         {(error ?? loadError) && <p className="error">{error ?? loadError}</p>}
         <Actions onSave={save} onClose={onClose} disabled={busy} />
       </div>

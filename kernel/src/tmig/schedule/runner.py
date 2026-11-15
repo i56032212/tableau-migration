@@ -845,6 +845,7 @@ def extract_handler(config: Path | str | None = None) -> Handler:
     """萃取更新：依連線設定檔連到來源資料庫，更新每個對象的 DuckDB 檔（N7，原子替換）。"""
 
     def handle(job: Job) -> str:
+        from tmig.data import initial_sql
         from tmig.data.extract_refresh import refresh_extract, refresh_plan
         from tmig.data.sources import load_connections, open_executor
 
@@ -855,7 +856,9 @@ def extract_handler(config: Path | str | None = None) -> Handler:
             assert target.datasource is not None
             ir = target.report.ir
             plan = refresh_plan(ir, target.datasource)
-            executor = open_executor(plan.source, configs)
+            # 來源連線的 Initial SQL：排程沒有登入者，[WorkbookName] 是報表的名稱
+            with initial_sql.use(initial_sql.server_session(workbook=ir.workbook.name)):
+                executor = open_executor(plan.source, configs)
             try:
                 result = refresh_extract(
                     ir,

@@ -3765,6 +3765,20 @@
           "description": "Tableau 記錄的驗證方式",
           "title": "Authentication"
         },
+        "initial_sql": {
+          "anyOf": [
+            {
+              "maxLength": 100000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Initial SQL（Tableau 連線的 one-time-sql）：連上資料庫時執行一次的 SQL，原樣送給資料庫；可以用 [TableauServerUser]、[TableauServerUserFull]、[TableauApp]、[TableauVersion]、[WorkbookName] 與 <ServerOnly>…</ServerOnly>（見 tmig.data.initial_sql）",
+          "title": "Initial Sql"
+        },
         "relation": {
           "anyOf": [
             {
@@ -4093,6 +4107,45 @@
       "title": "MarkLabels",
       "type": "object"
     },
+    "MarkShape": {
+      "additionalProperties": false,
+      "description": "一個形狀：Tableau 預設調色盤的形狀，或自訂的圖片形狀（Tableau 的自訂形狀調色盤）。\n\nimage 是報表的 files/ 下的圖片（Shapes/<調色盤>/<檔名>）；有圖片時 shape 是找不到圖片時的替代。",
+      "properties": {
+        "shape": {
+          "default": "circle",
+          "enum": [
+            "circle",
+            "square",
+            "plus",
+            "times",
+            "asterisk",
+            "diamond",
+            "triangle",
+            "down_triangle",
+            "left_triangle",
+            "right_triangle"
+          ],
+          "title": "Shape",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "自訂的圖片形狀：報表 files/ 下的路徑，例如 Shapes/KPI/up.png；None 為內建的形狀",
+          "title": "Image"
+        }
+      },
+      "title": "MarkShape",
+      "type": "object"
+    },
     "Marks": {
       "additionalProperties": false,
       "properties": {
@@ -4380,6 +4433,18 @@
           },
           "title": "Shape Assignments",
           "type": "array"
+        },
+        "mark_shape": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MarkShape"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "形狀上沒有欄位時所有標記的形狀（標記卡的「形狀」）；None 為預設的圓形"
         },
         "angle": {
           "anyOf": [
@@ -6220,6 +6285,37 @@
       "additionalProperties": false,
       "description": "形狀欄位中指定給一個值的形狀（Tableau 的「編輯形狀」）。",
       "properties": {
+        "shape": {
+          "default": "circle",
+          "enum": [
+            "circle",
+            "square",
+            "plus",
+            "times",
+            "asterisk",
+            "diamond",
+            "triangle",
+            "down_triangle",
+            "left_triangle",
+            "right_triangle"
+          ],
+          "title": "Shape",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "自訂的圖片形狀：報表 files/ 下的路徑，例如 Shapes/KPI/up.png；None 為內建的形狀",
+          "title": "Image"
+        },
         "value": {
           "anyOf": [
             {
@@ -6240,27 +6336,10 @@
           ],
           "description": "欄位的值（Null 為 None，日期為 ISO 8601 字串）",
           "title": "Value"
-        },
-        "shape": {
-          "enum": [
-            "circle",
-            "square",
-            "plus",
-            "times",
-            "asterisk",
-            "diamond",
-            "triangle",
-            "down_triangle",
-            "left_triangle",
-            "right_triangle"
-          ],
-          "title": "Shape",
-          "type": "string"
         }
       },
       "required": [
-        "value",
-        "shape"
+        "value"
       ],
       "title": "ShapeAssignment",
       "type": "object"

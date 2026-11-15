@@ -239,6 +239,110 @@ def test_connect_server_relationship_calc_and_custom_sql(dsn: str, engine: str) 
         browser.close()
 
 
+def test_initial_sql_dialog(dsn: str, engine: str) -> None:
+    """資料源分頁的「Initial SQL…」：輸入、插入參數、確定後存檔並在連線上執行；自訂 SQL 讀得到它建立的
+    暫存資料表。執行失敗時留在對話框說明原因；清空後確定是清除。"""
+    from playwright.sync_api import sync_playwright
+
+    params = dict(part.split("=", 1) for part in dsn.split())
+    created = call(
+        engine,
+        "/api/desktop/connections",
+        {
+            "dbclass": "postgres",
+            "server": params["host"],
+            "port": int(params["port"]),
+            "database": params["dbname"],
+            "schema": "shop",
+            "user": params["user"],
+            "password": "pw",
+        },
+    )
+    key = created["connection"]["id"]
+    opened = call(
+        engine,
+        "/api/desktop/new-live",
+        {"connection": key, "sql": "SELECT region, sales FROM shop.orders"},
+    )
+    workbook, datasource = opened["document"]["id"], opened["datasource"]
+    wb = urllib.parse.quote(workbook)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/{wb}/edit-ds/{datasource}")
+        page.wait_for_selector('.ds-editor[data-busy="false"]')
+        button = page.locator(".dse-initial-sql")
+        assert button.inner_text() == "Initial SQL…"
+        button.click()
+        dialog = page.get_by_role("dialog", name="Initial SQL")
+        dialog.wait_for()
+        area = dialog.get_by_label("Initial SQL", exact=True)
+        area.fill("CREATE TEMP TABLE me AS SELECT '")
+        # 插入參數：放在游標的位置，接著繼續輸入
+        dialog.get_by_label("插入參數").select_option("[TableauApp]")
+        page.keyboard.type("'::text AS app, 1 AS n")
+        expected = "CREATE TEMP TABLE me AS SELECT '[TableauApp]'::text AS app, 1 AS n"
+        assert area.input_value() == expected
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        page.wait_for_selector('.ds-editor[data-busy="false"]')
+        page.wait_for_selector('.dse-initial-sql[data-set="true"]')
+        assert model(engine, workbook, datasource)["sources"][0]["initial_sql"] == expected
+        # 自訂 SQL 讀得到 Initial SQL 建立的暫存資料表；桌面版的 [TableauApp]
+        call(
+            engine,
+            f"/api/edit/{wb}/datasources/{datasource}/custom-sql/Custom%20SQL%20Query",
+            {"sql": "SELECT app, n FROM me"},
+            "PUT",
+        )
+        f = {x["caption"]: x["id"] for x in model(engine, workbook, datasource)["fields"]}
+        assert render(engine, workbook, datasource, f["app"], f["n"]) == {
+            "Tableau Desktop Professional": "1"
+        }
+        # 執行失敗：已經存檔，留在對話框說明原因；改好之後再按確定
+        page.reload()
+        page.wait_for_selector('.ds-editor[data-busy="false"]')
+        page.locator(".dse-initial-sql").click()
+        dialog.wait_for()
+        assert area.input_value() == expected
+        area.fill("SELECT * FROM shop.nope")
+        dialog.get_by_role("button", name="確定").click()
+        alert = dialog.get_by_role("alert")
+        alert.wait_for()
+        assert "已經存檔，但在這個連線上執行失敗" in alert.inner_text()
+        assert "Initial SQL 執行失敗" in alert.inner_text()
+        assert (
+            model(engine, workbook, datasource)["sources"][0]["initial_sql"]
+            == "SELECT * FROM shop.nope"
+        )
+        area.fill(expected)
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        page.wait_for_selector('.ds-editor[data-busy="false"]')
+        assert render(engine, workbook, datasource, f["app"], f["n"]) == {
+            "Tableau Desktop Professional": "1"
+        }
+        # 清空後確定：清除（自訂 SQL 先改回不需要暫存資料表的寫法）
+        call(
+            engine,
+            f"/api/edit/{wb}/datasources/{datasource}/custom-sql/Custom%20SQL%20Query",
+            {"sql": "SELECT region AS app, 1 AS n FROM shop.orders"},
+            "PUT",
+        )
+        page.locator(".dse-initial-sql").click()
+        dialog.wait_for()
+        area.fill("")
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        page.wait_for_selector('.dse-initial-sql[data-set="false"]')
+        assert model(engine, workbook, datasource)["sources"][0]["initial_sql"] is None
+        assert errors == []
+        browser.close()
+
+
 def write_book(path: Path) -> Path:
     book = Workbook()
     orders = book.active

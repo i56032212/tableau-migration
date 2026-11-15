@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from tmig.data import initial_sql
 from tmig.data.executor import ExecutionError
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
@@ -188,19 +189,26 @@ def verify_fixture(
         notes.append("cases.yaml 沒有 fetched_at：預期結果不是由 fetch-expected 從 Tableau 抓取")
     owned = runtime is None
     active = runtime or DataRuntime()
+    # 連線的 Initial SQL 以 cases.yaml 的登入者代入（與檢視時相同）
+    session = initial_sql.server_session(
+        cases.user.username if cases.user else "",
+        cases.user.domain if cases.user else None,
+        ir.workbook.name,
+    )
     try:
-        # 動態參數：與 Tableau 開啟報表時相同，以目前的資料取值
-        ir, dynamic_notes = resolve_parameters(
-            ir,
-            lambda query, ds: active.run(query, ds, root / "data" / f"{ds.id}.duckdb"),
-            cases.user,
-        )
-        notes.extend(dynamic_notes)
-        checks = [
-            _check(root, ir, cases, mapping, sheet.worksheet, sheet.view, case.name, active)
-            for sheet in cases.sheets
-            for case in cases.cases
-        ]
+        with initial_sql.use(session):
+            # 動態參數：與 Tableau 開啟報表時相同，以目前的資料取值
+            ir, dynamic_notes = resolve_parameters(
+                ir,
+                lambda query, ds: active.run(query, ds, root / "data" / f"{ds.id}.duckdb"),
+                cases.user,
+            )
+            notes.extend(dynamic_notes)
+            checks = [
+                _check(root, ir, cases, mapping, sheet.worksheet, sheet.view, case.name, active)
+                for sheet in cases.sheets
+                for case in cases.cases
+            ]
     finally:
         if owned:
             active.close()

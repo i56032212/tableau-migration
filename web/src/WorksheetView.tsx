@@ -2,8 +2,9 @@ import type React from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
-import { api } from "./api";
+import { api, fileUrl } from "./api";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
+import { prepareShapeImages, shapeImage, type ShapeLegend } from "./shapeImages";
 import { nextSelection, sameMark } from "./state";
 import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TextStyle, TooltipSheetInfo } from "./types";
 
@@ -122,6 +123,50 @@ function regionTest(tool: SelectTool, points: [number, number][]): (x: number, y
     }
     return inside;
   };
+}
+
+/** 圖例中的一張形狀圖片；color 不是 null 時套用這個顏色（載入之前先顯示原本的圖片）。 */
+function ShapeSwatch({ workbook, image, color }: { workbook: string; image: string; color: string | null }) {
+  const [tinted, setTinted] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setTinted(null);
+    if (color !== null)
+      void shapeImage(workbook, image, color).then((url) => {
+        if (!cancelled) setTinted(url);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workbook, image, color]);
+  return <img className="shape-swatch" src={tinted ?? fileUrl(workbook, image)} alt="" data-tinted={tinted ? "true" : undefined} />;
+}
+
+/**
+ * 形狀的圖例：各成員的形狀（內建形狀的路徑或自訂的圖片）。有圖片形狀時圖表裡的圖例由這裡畫
+ * （Vega 的圖例不能放圖片）；dashboard 的形狀圖例區塊也用它。
+ */
+export function ShapeLegendView({ workbook, legend }: { workbook: string; legend: ShapeLegend }) {
+  return (
+    <div className="legend shape-legend" aria-label="形狀的圖例">
+      <div className="legend-title">{legend.title}</div>
+      {legend.entries.map((entry) => {
+        const label = entry.label === null || entry.label === undefined ? "Null" : String(entry.label);
+        return (
+          <div className="legend-item" key={label} data-shape={entry.image ? "image" : "path"}>
+            {entry.image ? (
+              <ShapeSwatch workbook={workbook} image={entry.image} color={entry.color ?? null} />
+            ) : (
+              <svg className="shape-swatch" viewBox="-1.2 -1.2 2.4 2.4" aria-hidden="true">
+                <path d={entry.path ?? ""} style={entry.color ? { fill: entry.color } : undefined} />
+              </svg>
+            )}
+            {label}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /**
@@ -857,7 +902,10 @@ export function WorksheetView({
     let viewTimer: number | undefined;
     /** 平移、縮放過（放開滑鼠時不當成點選標記） */
     let moved = false;
-    embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom || pinnable ? { tooltip } : {}) })
+    // 自訂的圖片形狀：先載入圖片（並套用顏色）填進資料列，再畫圖
+    prepareShapeImages(spec, workbook)
+      .catch(() => undefined)
+      .then(() => embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom || pinnable ? { tooltip } : {}) }))
       .then(async (result) => {
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
@@ -987,7 +1035,7 @@ export function WorksheetView({
       viewRef.current = null;
       setTip(null);
     };
-  }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable]);
+  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable]);
 
   // 地圖的選取工具（矩形、半徑、套索）：選了工具之後在圖上拖曳，範圍內的標記都選取
   const [tool, setTool] = useState<SelectTool | null>(null);
@@ -1088,6 +1136,9 @@ export function WorksheetView({
 
   const title = response?.title ?? response?.name ?? worksheet;
   const count = selected?.length ?? 0;
+  // 形狀的圖例有圖片時由這裡畫（規格中已經關掉 Vega 的形狀圖例）
+  const legendMeta = (response?.spec as Spec | undefined)?.usermeta?.shape_legend as ShapeLegend | undefined;
+  const shapeLegend = legendMeta?.entries.some((entry) => entry.image) ? legendMeta : null;
   // 工作表的背景（含標題，可以透明）與標題的顏色
   const usermeta = (response?.spec as Spec | null | undefined)?.usermeta ?? {};
   const meta = (
@@ -1168,7 +1219,7 @@ export function WorksheetView({
           {meta}
         </div>
       )}
-      <div className="worksheet-body" ref={bodyRef}>
+      <div className={`worksheet-body${shapeLegend && !hideLegend && !showTable ? " with-legend" : ""}`} ref={bodyRef}>
         {error && <div className="placeholder error">查詢失敗：{error}</div>}
         {!error && response?.unsupported && (
           <div className="placeholder unsupported">未支援：{response.unsupported}</div>
@@ -1198,6 +1249,7 @@ export function WorksheetView({
           </div>
         )}
         {!error && !response?.unsupported && !showTable && <div className="chart" ref={chartRef} />}
+        {!error && !response?.unsupported && !showTable && !hideLegend && shapeLegend && <ShapeLegendView workbook={workbook} legend={shapeLegend} />}
         {zoomable && !showTable && !error && (
           <div className="map-tools" role="toolbar" aria-label="地圖工具列">
             <button type="button" title="放大（滾輪、連按兩下）" aria-label="放大" onClick={() => zoomBy(2)}>

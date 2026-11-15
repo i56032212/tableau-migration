@@ -58,6 +58,7 @@ from tmig.ir import (
     DataField,
     Datasource,
     DatasourceSettings,
+    ExtractConnection,
     FileColumn,
     FileConnection,
     FileTable,
@@ -1857,6 +1858,67 @@ def rename_datasource(ir: IR, datasource: str, caption: str) -> IR:
     )
 
 
+def initial_sql_connections(ds: Datasource) -> list[LiveConnection]:
+    """資料源中可以設定 Initial SQL 的資料庫連線：Live 連線本身、萃取的來源連線，或跨資料庫的 join 中的
+    各資料庫（依連線代號只列一次）。"""
+    connection = ds.connection
+    if isinstance(connection, LiveConnection):
+        return [connection]
+    if isinstance(connection, ExtractConnection):
+        return [connection.source] if connection.source is not None else []
+    found: dict[str, LiveConnection] = {}
+    for table in connection.tables:
+        if table.connection is not None:
+            found.setdefault(table.connection.connection_id, table.connection)
+    return list(found.values())
+
+
+def set_initial_sql(
+    ir: IR, datasource: str, sql: str | None, connection_id: str | None = None
+) -> IR:
+    """設定資料庫連線的 Initial SQL（Tableau 的「初始 SQL」：連上資料庫時執行一次；空的表示沒有）。
+
+    connection_id 省略時是資料源唯一的資料庫連線（Live 連線、萃取的來源）；跨資料庫的 join 有多個資料庫時要
+    指定。內容原樣保存、不檢查（與 Tableau 相同），可以用 [TableauServerUser] 等參數與 <ServerOnly>
+    （見 tmig.data.initial_sql）。"""
+    ds = _datasource(ir, datasource)
+    candidates = initial_sql_connections(ds)
+    if not candidates:
+        raise EditError(f"資料源「{ds.caption}」沒有資料庫連線，不能設定 Initial SQL")
+    if connection_id is None:
+        if len(candidates) > 1:
+            raise EditError(f"資料源「{ds.caption}」有多個資料庫連線，請指定要設定的連線")
+        connection_id = candidates[0].connection_id
+    elif all(c.connection_id != connection_id for c in candidates):
+        raise EditError(f"資料源「{ds.caption}」沒有連線 {connection_id}")
+    text = (sql or "").strip() or None
+
+    def update(live: LiveConnection) -> LiveConnection:
+        if live.connection_id != connection_id:
+            return live
+        return live.model_copy(update={"initial_sql": text})
+
+    connection = ds.connection
+    changed: Any
+    if isinstance(connection, LiveConnection):
+        changed = update(connection)
+    elif isinstance(connection, ExtractConnection):
+        assert connection.source is not None
+        changed = connection.model_copy(update={"source": update(connection.source)})
+    else:
+        tables = [
+            t.model_copy(update={"connection": update(t.connection)})
+            if t.connection is not None
+            else t
+            for t in connection.tables
+        ]
+        changed = connection.model_copy(update={"tables": tables})
+    return _validated(
+        _replace_datasource(ir, ds.model_copy(update={"connection": changed})),
+        "設定 Initial SQL 失敗",
+    )
+
+
 # ---------------------------------------------------------------- 工具
 
 
@@ -2372,6 +2434,7 @@ __all__ = [
     "add_table",
     "add_wildcard_union",
     "file_table",
+    "initial_sql_connections",
     "inspect_file",
     "interpret_header",
     "join_calc_display",
@@ -2380,6 +2443,7 @@ __all__ = [
     "pivot",
     "remove_table",
     "rename_datasource",
+    "set_initial_sql",
     "set_interpreter",
     "set_join",
     "set_relationship",

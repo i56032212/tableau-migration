@@ -23,13 +23,21 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from lxml import etree
 
-from tmig.ir.models import ColorAssignment, ColorPalette, Scalar, ShapeAssignment, ShapeName
+from tmig.ir.models import (
+    ColorAssignment,
+    ColorPalette,
+    MarkShape,
+    Scalar,
+    ShapeAssignment,
+    ShapeName,
+)
 from tmig.parser.fields import instance_key
 from tmig.parser.twbx import child, children
+from tmig.shapes import shape_path
 
 HEX = re.compile(r"^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$")
 NUMBER = re.compile(r"^-?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$")
@@ -140,15 +148,35 @@ def shape_encodings(style: etree._Element | None) -> dict[str, etree._Element]:
     return found
 
 
-def parse_shapes(enc: etree._Element) -> tuple[list[ShapeAssignment], list[str]]:
-    """一個形狀編碼 → 各值的形狀，以及認不得的形狀（自訂的圖片形狀等，依預設的形狀呈現）。"""
+def builtin_shape(name: str) -> ShapeName | None:
+    """Tableau 的形狀名稱是內建的形狀時（預設調色盤的 circle、實心調色盤的 :filled/circle）回傳它。"""
+    if name.count("/") > 1 or ("/" in name and not name.lower().startswith(":filled/")):
+        return None
+    return SHAPES.get(name.rsplit("/", 1)[-1].lower())
+
+
+def parse_shape(name: str, images: Collection[str] = ()) -> MarkShape | None:
+    """Tableau 的形狀名稱 → 形狀：內建的形狀，或活頁簿內嵌的圖片形狀（images：內嵌圖片在 IR 中的路徑）。
+    認不得、或圖片沒有存在活頁簿裡的回傳 None。"""
+    shape = builtin_shape(name)
+    if shape is not None:
+        return MarkShape(shape=shape)
+    path = shape_path(name)
+    return MarkShape(image=path) if path is not None and path in images else None
+
+
+def parse_shapes(
+    enc: etree._Element, images: Collection[str] = ()
+) -> tuple[list[ShapeAssignment], list[str]]:
+    """一個形狀編碼 → 各值的形狀，以及認不得的形狀（圖片沒有存在活頁簿裡的自訂形狀等，依預設的形狀呈現）。
+    images：活頁簿內嵌的圖片形狀在 IR 中的路徑。"""
     assignments: list[ShapeAssignment] = []
     unknown: list[str] = []
     seen: set[tuple[str, Scalar]] = set()
     for item in children(enc, "map"):
         to = item.get("to") or ""
-        shape = SHAPES.get(to.rsplit("/", 1)[-1].lower()) if to.count("/") <= 1 else None
-        if shape is None or (("/" in to) and not to.lower().startswith(":filled/")):
+        shape = parse_shape(to, images)
+        if shape is None:
             if to and to not in unknown:
                 unknown.append(to)
             continue
@@ -160,8 +188,25 @@ def parse_shapes(enc: etree._Element) -> tuple[list[ShapeAssignment], list[str]]
             key = (type(value).__name__, value)
             if key not in seen:
                 seen.add(key)
-                assignments.append(ShapeAssignment(value=value, shape=shape))
+                assignments.append(
+                    ShapeAssignment(value=value, shape=shape.shape, image=shape.image)
+                )
     return assignments, unknown
+
+
+def pane_shape(pane: etree._Element, images: Collection[str] = ()) -> tuple[MarkShape | None, str]:
+    """標記卡上固定的形狀（形狀上沒有欄位時所有標記的形狀）：窗格樣式的
+    ``<style-rule element='mark'><format attr='shape' value='…' /></style-rule>``。
+    回傳形狀（沒有設定或認不得為 None）與認不得的名稱（沒有為空字串）。"""
+    for rule in children(child(pane, "style"), "style-rule"):
+        if rule.get("element") != "mark":
+            continue
+        for item in children(rule, "format"):
+            if item.get("attr") == "shape" and item.get("field") is None:
+                name = item.get("value") or ""
+                shape = parse_shape(name, images)
+                return shape, "" if shape is not None else name
+    return None, ""
 
 
 def mark_style(pane: etree._Element) -> tuple[str | None, float | None, str | None]:

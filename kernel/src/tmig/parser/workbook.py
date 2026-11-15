@@ -66,6 +66,7 @@ from tmig.parser.twbx import (
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.parser.worksheet import SheetParser
 from tmig.planner.state import use_key
+from tmig.shapes import shape_names
 
 FITS: dict[str, FitMode] = {
     "entire-view": "entire_view",
@@ -224,6 +225,7 @@ class WorkbookParser:
 
     def parse(self) -> IR:
         ctx, root = self.ctx, self.package.root
+        ctx.shape_images = frozenset(shape_names(root))
         for item in children(root):
             tag = local_name(item)
             if tag == "mapsources":

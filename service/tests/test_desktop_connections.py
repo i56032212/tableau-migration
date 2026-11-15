@@ -200,3 +200,88 @@ def test_connect_create_and_restore(dsn: str, tmp_path: Path) -> None:
     assert len(ok(fresh.get(f"/api/desktop/connections/{key}/tables"))["tables"]) == 2
     ok(fresh.delete(f"/api/desktop/connections/{key}"))
     assert ok(fresh.get("/api/desktop/connections"))["connections"] == []
+
+
+def connect(client: TestClient, dsn: str) -> str:
+    params = settings(dsn)
+    created = ok(
+        client.post(
+            "/api/desktop/connections",
+            json={
+                "dbclass": "postgres",
+                "server": params["host"],
+                "port": int(params["port"]),
+                "database": params["dbname"],
+                "schema": "crm",
+                "user": params["user"],
+                "password": "not-used-by-trust-auth",
+                "remember": False,
+            },
+        )
+    )
+    return created["connection"]["id"]
+
+
+def test_initial_sql_in_the_desktop_editor(dsn: str, tmp_path: Path) -> None:
+    """資料源分頁的「Initial SQL…」：存進報表、連上資料庫時執行；桌面版不執行 <ServerOnly> 的部分，
+    [TableauServerUser] 是登入伺服器的帳號（沒有登入時是空的）。執行失敗時回報原因。"""
+    from tmig.ir import load_ir
+    from tmig_service.desktop_remote import SETTINGS_FILE, target_for
+
+    credentials = MemoryCredentials()
+    client = client_for(tmp_path, credentials)
+    key = connect(client, dsn)
+    info = ok(
+        client.post(
+            "/api/desktop/new-live",
+            json={"connection": key, "sql": "SELECT region, sales FROM crm.orders"},
+        )
+    )
+    workbook, ds = info["document"]["id"], info["datasource"]
+    name = info["document"]["name"]
+    base = f"/api/edit/{workbook}/datasources/{ds}"
+    model = ok(client.get(f"{base}/model"))
+    assert [(c["connection_id"], c["initial_sql"]) for c in model["sources"]] == [(key, None)]
+
+    sql = (
+        "CREATE TEMP TABLE session_info AS SELECT '[TableauApp]'::text AS app, "
+        "'user=[TableauServerUser]'::text AS who, '[WorkbookName]'::text AS workbook, 1 AS n;\n"
+        "<ServerOnly>DROP TABLE session_info;</ServerOnly>"
+    )
+    saved = ok(client.put(f"{base}/initial-sql", json={"sql": sql}))
+    assert saved["initial_sql_error"] is None
+    assert saved["sources"][0]["initial_sql"] == sql
+    stored = load_ir(tmp_path / "workspace" / workbook / "golden.ir.json")
+    assert stored.datasources[0].connection.initial_sql == sql  # type: ignore[union-attr]
+
+    # 自訂 SQL 讀得到 Initial SQL 建立的暫存資料表（<ServerOnly> 的 DROP 在桌面版不執行）
+    custom = f"{base}/custom-sql/Custom SQL Query"
+    ok(client.put(custom, json={"sql": "SELECT app, who, workbook, n FROM session_info"}))
+    f = ids(client, workbook, ds)
+    assert render(client, workbook, ds, f["app"], f["n"]) == {"Tableau Desktop Professional": "1"}
+    assert render(client, workbook, ds, f["who"], f["n"]) == {"user=": "1"}
+    assert render(client, workbook, ds, f["workbook"], f["n"]) == {name: "1"}
+
+    # 登入伺服器之後 [TableauServerUser] 是伺服器上的帳號：另一條連線，Initial SQL 重新執行
+    url = "https://reports.example.com"
+    (tmp_path / "settings" / SETTINGS_FILE).write_text(
+        f'{{"url": "{url}", "username": "amy.chen", "name": "Amy"}}', encoding="utf-8"
+    )
+    credentials.set(target_for(url), "amy.chen", "desktop-token")
+    assert render(client, workbook, ds, f["who"], f["n"]) == {"user=amy.chen": "1"}
+
+    # 執行失敗：仍然存檔，原因放在 initial_sql_error；之後查詢時回報同樣的原因
+    broken = ok(client.put(f"{base}/initial-sql", json={"sql": "SELECT * FROM crm.nope"}))
+    assert "Initial SQL 執行失敗" in broken["initial_sql_error"]
+    assert broken["sources"][0]["initial_sql"] == "SELECT * FROM crm.nope"
+    failed = client.post(f"/api/workbooks/{workbook}/worksheets/ws_1/render", json={})
+    assert failed.status_code == 503 and "Initial SQL 執行失敗" in failed.json()["detail"]
+    ok(client.put(f"{base}/initial-sql", json={"sql": sql, "connection": key}))
+    assert render(client, workbook, ds, f["app"], f["n"]) == {"Tableau Desktop Professional": "1"}
+    assert (
+        client.put(f"{base}/initial-sql", json={"sql": sql, "connection": "x"}).status_code == 422
+    )
+
+    # 清除
+    cleared = ok(client.put(f"{base}/initial-sql", json={"sql": "  "}))
+    assert cleared["sources"][0]["initial_sql"] is None and cleared["initial_sql_error"] is None

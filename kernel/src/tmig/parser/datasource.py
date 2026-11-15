@@ -465,7 +465,7 @@ class DatasourceParser:
         for key, enc in shape_encodings(style).items():
             found = target(key)
             if found is not None:
-                found.default_shapes = parse_shapes(enc)[0]
+                found.default_shapes = parse_shapes(enc, self.ctx.shape_images)[0]
 
     def _comments(self, state: DsState) -> None:
         """欄位的註解（Tableau 的「預設屬性＞註解」，<column><desc>）：資料表中的欄位也可以有。"""

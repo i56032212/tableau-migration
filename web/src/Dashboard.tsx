@@ -40,7 +40,8 @@ import type {
   Zone,
   ZoneTextRun,
 } from "./types";
-import { type MarkEvent, visitSpecs, WorksheetView } from "./WorksheetView";
+import type { ShapeLegend } from "./shapeImages";
+import { type MarkEvent, ShapeLegendView, visitSpecs, WorksheetView } from "./WorksheetView";
 
 // Vega 預設的類別色（與 Vega-Lite 的 nominal 顏色相同）
 
@@ -508,7 +509,7 @@ function ZoneContent({
       );
     }
     case "legend":
-      return <Legend response={renders[zone.worksheet!]} kind={zone.legend} />;
+      return <Legend workbook={workbook} response={renders[zone.worksheet!]} kind={zone.legend} />;
     case "page":
       return <PageControl workbook={workbook} worksheet={zone.worksheet!} {...pagesOf(ir, zone.worksheet!)} view={view} onView={onView} />;
     case "set":
@@ -616,8 +617,11 @@ function DashboardButton({
   );
 }
 
-function Legend({ response, kind }: { response: RenderResponse | undefined; kind: string | null }) {
+function Legend({ workbook, response, kind }: { workbook: string; response: RenderResponse | undefined; kind: string | null }) {
   const spec = response?.spec as Record<string, any> | undefined;
+  // 形狀的圖例：各成員的形狀（內建的形狀或自訂的圖片）
+  const shapes = spec?.usermeta?.shape_legend as ShapeLegend | undefined;
+  if (kind === "shape" && shapes) return <ShapeLegendView workbook={workbook} legend={shapes} />;
   // 參考線、色帶等圖層包住主圖時，顏色在第一個依欄位著色的圖層（色帶的顏色是固定值）
   let color: Record<string, any> | undefined;
   if (spec)

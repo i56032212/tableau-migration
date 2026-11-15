@@ -8,6 +8,7 @@ import { useEditor } from "./context";
 import { allUses, type Card, cardMarks, isMeasure, pillLabel, type SheetIR, updateCard, useKey } from "./model";
 import { textTokens } from "./MoreDialogs";
 import { type RichRun, RichTextEditor } from "./RichText";
+import { type ShapeChoice, ShapePalettes, ShapeSelect, SHAPES, useShapePalettes } from "./ShapePicker";
 
 type TotalAgg = "sum" | "avg" | "min" | "max";
 interface VisualTotalIR {
@@ -161,30 +162,22 @@ export function CaptionDialog({ onClose }: { onClose: () => void }) {
 
 // ---------------------------------------------------------------- 形狀
 
-const SHAPES: [string, string][] = [
-  ["circle", "● 圓形"],
-  ["square", "■ 方形"],
-  ["plus", "✚ 加號"],
-  ["times", "✖ 叉號"],
-  ["asterisk", "★ 星號"],
-  ["diamond", "◆ 菱形"],
-  ["triangle", "▲ 三角形"],
-  ["down_triangle", "▼ 倒三角形"],
-  ["left_triangle", "◀ 向左三角形"],
-  ["right_triangle", "▶ 向右三角形"],
-];
+type Assigned = Record<string, { value: Scalar } & ShapeChoice>;
 
-/** 形狀（Tableau 標記卡「形狀」的「編輯形狀」）：為形狀欄位的各成員指定形狀；「自動」依預設調色盤的順序。 */
+/**
+ * 形狀（Tableau 標記卡「形狀」的「編輯形狀」）：形狀上有欄位時為各成員指定形狀（「自動」依預設調色盤的
+ * 順序）；沒有欄位時是所有標記的形狀。形狀可以是預設調色盤的形狀，或自訂調色盤中的圖片。
+ */
 export function ShapesDialog({ card, onClose }: { card: Card; onClose: () => void }) {
   const editor = useEditor();
   const marks = cardMarks(editor.sheet, card);
   const use = marks.shape as FieldUse | null;
   const [members, setMembers] = useState<Scalar[]>([]);
-  const [assigned, setAssigned] = useState<Record<string, { value: Scalar; shape: string }>>(() =>
-    Object.fromEntries(
-      ((marks.shape_assignments as { value: Scalar; shape: string }[] | undefined) ?? []).map((a) => [JSON.stringify(a.value), a]),
-    ),
+  const [assigned, setAssigned] = useState<Assigned>(() =>
+    Object.fromEntries((marks.shape_assignments ?? []).map((a) => [JSON.stringify(a.value), a])),
   );
+  const [fixed, setFixed] = useState<ShapeChoice | null>(marks.mark_shape ?? null);
+  const { palettes, setPalettes } = useShapePalettes(editor.workbook);
   const key = use ? useKey(use) : "";
   useEffect(() => {
     if (!use) return;
@@ -201,44 +194,66 @@ export function ShapesDialog({ card, onClose }: { card: Card; onClose: () => voi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   const save = () => {
-    editor.apply((s: SheetIR) => updateCard(s, card, (m) => ({ ...m, shape_assignments: Object.values(assigned) })));
+    editor.apply((s: SheetIR) =>
+      updateCard(s, card, (m) => (use ? { ...m, shape_assignments: Object.values(assigned) } : { ...m, mark_shape: fixed })),
+    );
     onClose();
+  };
+  const reset = () => {
+    setAssigned({});
+    setFixed(null);
+  };
+  /** 指定調色盤：調色盤的圖片依序指定給各成員（成員比圖片多時從頭再用） */
+  const assignPalette = (images: string[]) => {
+    if (images.length === 0) return;
+    setAssigned(Object.fromEntries(members.map((value, i) => [JSON.stringify(value), { value, shape: "circle", image: images[i % images.length] }])));
   };
   return (
     <Modal title="形狀" onClose={onClose}>
       <div className="action-form shapes-dialog">
-        {members.length === 0 && <p className="hint">沒有可以指定形狀的成員。</p>}
-        {members.map((value, i) => {
-          const id = JSON.stringify(value);
-          const label = value === null ? "Null" : String(value);
-          return (
-            <label className="inline" key={id}>
-              {label}
-              <select
-                aria-label={`${label}的形狀`}
-                value={assigned[id]?.shape ?? ""}
-                onChange={(e) =>
+        {use && members.length === 0 && <p className="hint">沒有可以指定形狀的成員。</p>}
+        {use &&
+          members.map((value, i) => {
+            const id = JSON.stringify(value);
+            const label = value === null ? "Null" : String(value);
+            return (
+              <ShapeSelect
+                key={id}
+                workbook={editor.workbook}
+                label={label}
+                ariaLabel={`${label}的形狀`}
+                value={assigned[id]}
+                auto={`自動（${SHAPES[i % SHAPES.length][1]}）`}
+                palettes={palettes}
+                onChange={(choice) =>
                   setAssigned((current) => {
                     const next = { ...current };
-                    if (e.target.value) next[id] = { value, shape: e.target.value };
+                    if (choice) next[id] = { value, ...choice };
                     else delete next[id];
                     return next;
                   })
                 }
-              >
-                <option value="">自動（{SHAPES[i % SHAPES.length][1]}）</option>
-                {SHAPES.map(([shape, text]) => (
-                  <option key={shape} value={shape}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            </label>
-          );
-        })}
+              />
+            );
+          })}
+        {!use && (
+          <ShapeSelect
+            workbook={editor.workbook}
+            label="所有標記"
+            ariaLabel="所有標記的形狀"
+            value={fixed}
+            auto={`預設（${SHAPES[0][1]}）`}
+            palettes={palettes}
+            onChange={setFixed}
+          />
+        )}
+        <ShapePalettes workbook={editor.workbook} palettes={palettes} onPalettes={setPalettes} onAssign={use ? assignPalette : undefined} />
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>
             確定
+          </button>
+          <button type="button" title="回到預設的形狀（Tableau 的「重設」）" onClick={reset}>
+            重設
           </button>
           <button type="button" onClick={onClose}>
             取消

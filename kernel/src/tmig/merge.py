@@ -40,6 +40,8 @@ FREE_TEXT = frozenset(
         "path",
         "hyper_file",
         "column",
+        "image",
+        "image_hidden",
     }
 )
 """不是 id 的文字（公式、名稱、說明、路徑等）：改 id 時不動。"""

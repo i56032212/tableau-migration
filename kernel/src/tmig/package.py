@@ -29,7 +29,8 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from tmig import __version__
-from tmig.ir import IR, Datasource, dumps_ir, has_local_data, iter_zones, save_ir
+from tmig.ir import IR, SHAPE_FOLDER, Datasource, dumps_ir, has_local_data, iter_zones, save_ir
+from tmig.shapes import read_shape
 
 FORMAT = "tmigx"
 FORMAT_VERSION = 1
@@ -60,7 +61,7 @@ class PackageInfo:
 
 
 def image_paths(ir: IR) -> list[str]:
-    """報表用到的圖片：圖片區塊、圖片按鈕（含切換按鈕隱藏時的圖片）。"""
+    """報表用到的圖片：圖片區塊、圖片按鈕（含切換按鈕隱藏時的圖片）與自訂的圖片形狀。"""
     paths: set[str] = set()
     for dashboard in ir.dashboards:
         for zone in iter_zones(dashboard.zones):
@@ -68,6 +69,21 @@ def image_paths(ir: IR) -> list[str]:
                 paths.add(zone.image)
             if zone.button is not None:
                 paths.update(p for p in (zone.button.image, zone.button.image_hidden) if p)
+    paths.update(shape_images(ir))
+    return sorted(paths)
+
+
+def shape_images(ir: IR) -> list[str]:
+    """報表用到的自訂圖片形狀：標記卡固定的形狀、各成員的形狀與欄位的預設形狀。"""
+    paths: set[str] = set()
+    for ds in ir.datasources:
+        for data_field in ds.fields:
+            paths.update(a.image for a in data_field.default_shapes if a.image)
+    for sheet in ir.worksheets:
+        for marks in (sheet.marks, *(pane.marks for pane in sheet.panes)):
+            if marks.mark_shape is not None and marks.mark_shape.image:
+                paths.add(marks.mark_shape.image)
+            paths.update(a.image for a in marks.shape_assignments if a.image)
     return sorted(paths)
 
 
@@ -90,11 +106,14 @@ def local_file(directory: Path, path: str) -> Path | None:
 
 
 def read_report_file(directory: Path, path: str) -> bytes | None:
-    """報表目錄中的圖片：先找 files/（開啟的報表套件），再找 .twbx 內（反斜線視為斜線）。"""
+    """報表目錄中的圖片：先找 files/（開啟的報表套件），再找 .twbx 內（反斜線視為斜線）；自訂的圖片形狀
+    （Shapes/…）另外找 .twbx／.twb 內嵌的圖片（見 tmig.shapes）。"""
     found = local_file(directory, path)
     if found is not None:
         return found.read_bytes()
     wanted = path.replace("\\", "/")
+    if wanted.startswith(f"{SHAPE_FOLDER}/"):
+        return read_shape(directory, wanted)
     for package in sorted(directory.glob("*.twbx")):
         with zipfile.ZipFile(package) as archive:
             names = {n.replace("\\", "/"): n for n in archive.namelist()}

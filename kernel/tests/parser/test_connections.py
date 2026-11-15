@@ -345,8 +345,8 @@ def test_unsupported_connections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert any("連線類型 exasol 尚不支援" in r for r in reasons(ir))
 
 
-def test_viewer_identity_settings_are_unsupported(tmp_path: Path) -> None:
-    """依檢視者的身分查詢資料庫的 Live 連線：平台以服務帳號連線、不執行 Initial SQL，列為不支援。"""
+def test_initial_sql_is_kept_on_the_connection(tmp_path: Path) -> None:
+    """Initial SQL（連線的 one-time-sql）記在連線上，開啟連線時執行：不再列為不支援（含用到登入者的）。"""
     table = "<relation connection='db.1' name='ORDERS' table='[SALES].[ORDERS]' type='table' />"
     vpd = ORACLE.replace(
         "one-time-sql=''",
@@ -354,15 +354,28 @@ def test_viewer_identity_settings_are_unsupported(tmp_path: Path) -> None:
     )
     for lenient in (False, True):
         ir = parse(tmp_path, live_datasource(vpd, table), lenient=lenient)
-        assert reasons(ir) == [
-            "資料源「Orders」的 Initial SQL 用到 [TableauServerUser]，資料庫可能依檢視者的身分"
-            "過濾資料；平台不會執行 Initial SQL，需改用列層級權限（使用者函式或使用者篩選）"
-        ]
+        assert reasons(ir) == []
+        connection = ir.datasources[0].connection
+        assert isinstance(connection, LiveConnection)
+        assert connection.initial_sql == (
+            "BEGIN DBMS_SESSION.SET_IDENTIFIER([TableauServerUser]); END;"
+        )
 
     nls = ORACLE.replace("one-time-sql=''", "one-time-sql='ALTER SESSION SET NLS_SORT = BINARY'")
     ir = parse(tmp_path, live_datasource(nls, table), lenient=True)
-    assert reasons(ir) == ["資料源「Orders」有 Initial SQL，平台尚不會執行"]
+    assert reasons(ir) == []
+    connection = ir.datasources[0].connection
+    assert isinstance(connection, LiveConnection)
+    assert connection.initial_sql == "ALTER SESSION SET NLS_SORT = BINARY"
+    # 沒有 Initial SQL（空的屬性）
+    ir = parse(tmp_path, live_datasource(ORACLE, table), lenient=True)
+    connection = ir.datasources[0].connection
+    assert isinstance(connection, LiveConnection) and connection.initial_sql is None
 
+
+def test_viewer_identity_settings_are_unsupported(tmp_path: Path) -> None:
+    """依檢視者自己的資料庫帳號查詢的 Live 連線：平台以服務帳號連線，列為不支援。"""
+    table = "<relation connection='db.1' name='ORDERS' table='[SALES].[ORDERS]' type='table' />"
     prompt = ORACLE.replace("/>", "workgroup-auth-mode='prompt' />")
     ir = parse(tmp_path, live_datasource(prompt, table), lenient=True)
     assert reasons(ir) == [
@@ -376,8 +389,8 @@ def test_viewer_identity_settings_are_unsupported(tmp_path: Path) -> None:
         assert reasons(parse(tmp_path, live_datasource(conn, table), lenient=True)) == []
 
 
-def test_extract_source_initial_sql_is_not_flagged(tmp_path: Path) -> None:
-    """萃取的來源連線只在更新萃取時使用：檢視時讀萃取檔，Initial SQL 不影響解析。"""
+def test_extract_source_initial_sql_is_kept_for_refresh(tmp_path: Path) -> None:
+    """萃取的來源連線只在更新萃取時使用：Initial SQL 記在來源連線上，更新萃取時執行。"""
     source = ORACLE.replace("one-time-sql=''", "one-time-sql='EXEC AS [TableauServerUser]'")
     datasource = (
         b.extract_datasource()
@@ -388,6 +401,9 @@ def test_extract_source_initial_sql_is_not_flagged(tmp_path: Path) -> None:
     )
     ir = parse(tmp_path, datasource)
     assert reasons(ir) == []
+    connection = ir.datasources[0].connection
+    assert isinstance(connection, ExtractConnection) and connection.source is not None
+    assert connection.source.initial_sql == "EXEC AS [TableauServerUser]"
 
 
 def test_initial_sql_users() -> None:
