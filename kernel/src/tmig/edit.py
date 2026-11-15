@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from tmig.field_defaults import apply_field_defaults
 from tmig.formula.analyze import Analyzer
 from tmig.formula.ast import FieldRef, to_json, walk
 from tmig.formula.lexer import FormulaSyntaxError
@@ -127,6 +128,16 @@ def _field_entry(f: DataField) -> dict[str, Any]:
         "column": f.column,
         "fiscal_year_start": f.fiscal_year_start,
         "combined": f.combined,
+        "ad_hoc": f.ad_hoc,
+        "table": f.table,
+        "default_color": f.default_color.model_dump(mode="json")
+        if f.default_color is not None
+        else None,
+        "default_shapes": [a.model_dump(mode="json") for a in f.default_shapes],
+        "default_sort": f.default_sort.model_dump(mode="json")
+        if f.default_sort is not None
+        else None,
+        "total_using": f.total_using,
     }
 
 
@@ -243,10 +254,29 @@ def check_formula(
 
 
 def upsert_calc(
-    ir: IR, datasource: str, caption: str, formula: str, field_id: str | None = None
+    ir: IR,
+    datasource: str,
+    caption: str,
+    formula: str,
+    field_id: str | None = None,
+    ad_hoc: bool = False,
 ) -> tuple[IR, DataField]:
-    """新增或修改計算欄位：名稱不能與其他欄位重複；修改時保留 id 與內部名稱（工作表的參照不變）。"""
+    """新增或修改計算欄位：名稱不能與其他欄位重複；修改時保留 id 與內部名稱（工作表的參照不變）。
+
+    ad_hoc：臨時計算（Tableau 直接在架上輸入的公式）——名稱就是公式，資料窗格不顯示；公式相同的
+    臨時計算只建立一個。以一般的方式（計算欄位對話框）修改臨時計算時，它成為資料窗格中的計算欄位。"""
     ds = _datasource(ir, datasource)
+    if ad_hoc:
+        formula = formula.strip()
+        same = next((f for f in ds.fields if f.ad_hoc and f.caption == formula), None)
+        if same is not None and same.id != field_id:
+            return ir, same
+        taken = {f.caption for f in ds.fields if f.id != field_id}
+        caption = formula
+        n = 2
+        while caption in taken:  # 名稱與既有的欄位相同（例如公式只有一個字）
+            caption = f"{formula} ({n})"
+            n += 1
     caption = caption.strip()
     if not caption:
         raise EditError("計算欄位需要名稱")
@@ -258,7 +288,12 @@ def upsert_calc(
     check = check_formula(ir, datasource, formula, field_id)
     if existing is not None:
         field = existing.model_copy(
-            update={"caption": caption, "calc": check.calc, "datatype": check.datatype}
+            update={
+                "caption": caption,
+                "calc": check.calc,
+                "datatype": check.datatype,
+                "ad_hoc": ad_hoc,
+            }
         )
         if existing.role != check.role and check.level in ("aggregate", "table_calc"):
             field = field.model_copy(update={"role": "measure"})
@@ -270,6 +305,7 @@ def upsert_calc(
             role=check.role,
             datatype=check.datatype,  # type: ignore[arg-type]
             calc=check.calc,
+            ad_hoc=ad_hoc,
             source_ref=EDITOR_REF,
         )
     fields = [field if f.id == field.id else f for f in ds.fields]
@@ -436,8 +472,44 @@ def _across(ir: IR, ws: Worksheet) -> list[str]:
     return ids
 
 
+def prune_ad_hoc(ir: IR, datasource: str) -> IR:
+    """移除沒有任何地方用到的臨時計算（膠囊從架上拿掉之後留下的）：它們不在資料窗格中，卻會讓公式裡
+    用到的欄位不能刪除或變更型別。修改欄位之前呼叫；還在工作表、動作、篩選或其他欄位中用到的保留。"""
+    ds = _datasource(ir, datasource)
+    candidates = [f for f in ds.fields if f.ad_hoc]
+    if not candidates:
+        return ir
+    places: list[Any] = [w.model_dump(mode="json") for w in ir.worksheets]
+    places += [f.model_dump(mode="json") for f in ds.filters]
+    places += [a.model_dump(mode="json") for a in ir.actions]
+    places += [{"value": p.value_field, "domain": p.domain_field} for p in ir.parameters]
+    removed: set[str] = set()
+    while True:
+        kept = [f for f in ds.fields if f.id not in removed]
+        names: set[str] = set()
+        for other in kept:
+            if other.calc is not None:
+                names |= _formula_refs(other.calc.formula)
+        more = {
+            f.id
+            for f in candidates
+            if f.id not in removed
+            and not any(_mentions(place, {f.id}) for place in places)
+            and not ({_strip_name(f.name), f.caption} & names)
+        }
+        if not more:
+            break
+        removed |= more
+    if not removed:
+        return ir
+    return _replace_datasource(
+        ir, ds.model_copy(update={"fields": [f for f in ds.fields if f.id not in removed]})
+    )
+
+
 def remove_calc(ir: IR, datasource: str, field_id: str) -> IR:
     """刪除計算欄位：工作表、其他計算欄位、集合、篩選或動作還在使用時不能刪。"""
+    ir = prune_ad_hoc(ir, datasource)
     ds = _datasource(ir, datasource)
     field = next((f for f in ds.fields if f.id == field_id), None)
     if field is None or field.calc is None:
@@ -454,6 +526,93 @@ def remove_calc(ir: IR, datasource: str, field_id: str) -> IR:
         ),
     )
     return _validated(updated, f"「{field.caption}」還在使用中，不能刪除")
+
+
+def replace_references(ir: IR, datasource: str, field_id: str, replacement: str) -> IR:
+    """取代參照（Tableau 資料窗格的「取代參照」）：工作表、資料源篩選、動作、階層、參數，以及計算欄位的
+    公式中用到 field_id 的地方，都改用 replacement；欄位本身保留（群組、數值分組與集合仍以它為來源）。換過之後不成立時
+    （例如型別不合）以 EditError 說明，什麼都不改。"""
+    ir = prune_ad_hoc(ir, datasource)
+    ds = _datasource(ir, datasource)
+    old = next((f for f in ds.fields if f.id == field_id), None)
+    new = next((f for f in ds.fields if f.id == replacement), None)
+    if old is None or new is None:
+        raise EditError("找不到欄位")
+    if old.id == new.id:
+        raise EditError("要換成另一個欄位")
+    if (old.role == "measure") != (new.role == "measure") and old.calc is None:
+        raise EditError(f"「{old.caption}」與「{new.caption}」一個是維度、一個是量值，不能互相取代")
+    pattern = re.compile(rf"(?<![a-z0-9_]){re.escape(old.id)}(?![a-z0-9_])")
+
+    def swap(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {swap(k): swap(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [swap(v) for v in value]
+        return pattern.sub(new.id, value) if isinstance(value, str) else value
+
+    names = {_strip_name(old.name), old.caption}
+
+    def formula(text: str) -> str:
+        if not _formula_refs(text) & names:
+            return text
+        ref = "[" + new.caption.replace("]", "]]") + "]"
+        for name in sorted(names, key=len, reverse=True):
+            text = text.replace("[" + name.replace("]", "]]") + "]", ref)
+        return text
+
+    # 計算欄位的公式改寫後重新分析；群組、數值分組、集合與合併欄位仍以原來的欄位為來源
+    changed: list[tuple[DataField, str]] = []
+    for f in ds.fields:
+        plain = f.group is None and f.bin is None and f.set is None and f.combined is None
+        if f.id in (old.id, new.id) or f.calc is None or not plain:
+            continue
+        text = formula(f.calc.formula)
+        if text != f.calc.formula:
+            changed.append((f, text))
+    hierarchies = []
+    for h in ds.hierarchies:
+        swapped = [new.id if x == old.id else x for x in h.fields]
+        hierarchies.append(h.model_copy(update={"fields": list(dict.fromkeys(swapped))}))
+    try:
+        result = _replace_datasource(
+            ir,
+            ds.model_copy(
+                update={
+                    "hierarchies": hierarchies,
+                    "filters": [
+                        type(f).model_validate(swap(f.model_dump(mode="json"))) for f in ds.filters
+                    ],
+                }
+            ),
+        )
+        result = result.model_copy(
+            update={
+                "worksheets": [
+                    Worksheet.model_validate(swap(w.model_dump(mode="json")))
+                    if w.datasource == ds.id or any(b.datasource == ds.id for b in w.blends)
+                    else w
+                    for w in result.worksheets
+                ],
+                "actions": [
+                    type(a).model_validate(swap(a.model_dump(mode="json"))) for a in result.actions
+                ],
+                "parameters": [
+                    p.model_copy(
+                        update={
+                            "value_field": new.id if p.value_field == old.id else p.value_field,
+                            "domain_field": new.id if p.domain_field == old.id else p.domain_field,
+                        }
+                    )
+                    for p in result.parameters
+                ],
+            }
+        )
+    except ValidationError as exc:
+        raise EditError(f"「{old.caption}」不能換成「{new.caption}」：{_first_error(exc)}") from exc
+    for field, text in changed:
+        result, _ = upsert_calc(result, ds.id, field.caption, text, field.id, ad_hoc=field.ad_hoc)
+    return _validated(result, f"「{old.caption}」不能換成「{new.caption}」")
 
 
 def _formula_refs(formula: str) -> set[str]:
@@ -601,7 +760,7 @@ def replace_worksheet(ir: IR, worksheet: dict[str, Any] | Worksheet) -> tuple[IR
         raise EditError(f"找不到工作表 {sheet.id}")
     if any(w.name == sheet.name and w.id != sheet.id for w in ir.worksheets):
         raise EditError(f"已經有名為「{sheet.name}」的工作表")
-    sheet = _sync_controls(ir, _sync_blends(ir, sheet))
+    sheet = apply_field_defaults(ir, _sync_controls(ir, _sync_blends(ir, sheet)))
     updated = ir.model_copy(
         update={"worksheets": [sheet if w.id == sheet.id else w for w in ir.worksheets]}
     )

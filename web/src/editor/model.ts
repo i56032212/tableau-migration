@@ -36,6 +36,15 @@ export interface CatalogField {
   fiscal_year_start?: number | null;
   /** 合併欄位的組成欄位 */
   combined?: string[] | null;
+  /** 臨時計算（直接在架上輸入的公式）：資料窗格不顯示，名稱就是公式 */
+  ad_hoc?: boolean;
+  /** 所屬的資料表（萃取為 null） */
+  table?: string | null;
+  /** 預設屬性：色彩、形狀、排序、總計使用 */
+  default_color?: Record<string, unknown> | null;
+  default_shapes?: { value: Scalar; shape: string }[];
+  default_sort?: { kind: "alphabetic" | "manual"; order: "asc" | "desc"; manual_values: Scalar[] } | null;
+  total_using?: "sum" | "avg" | "min" | "max" | null;
 }
 
 /** 資料窗格的資料夾（role 為 null 時不分維度、量值）。 */
@@ -376,6 +385,41 @@ export function pillLabel(use: FieldUse, fields: Map<string, CatalogField>, calc
     if (tc && tc.type !== "formula") text += " △";
   }
   return text;
+}
+
+/** 膠囊的公式（在架上編輯時的文字）：臨時計算是它的公式，其他欄位是 [名稱] 加上彙總或日期衍生。 */
+export function pillFormula(use: FieldUse, fields: Map<string, CatalogField>): string {
+  const field = fields.get(use.field);
+  if (!field) return "";
+  let text = field.ad_hoc && field.formula ? field.formula : `[${field.caption.replace(/]/g, "]]")}]`;
+  if (use.date) {
+    text =
+      use.date.kind === "part"
+        ? `${use.date.unit === "weekday" ? "DATENAME('weekday', " : `DATEPART('${use.date.unit}', `}${text})`
+        : `DATETRUNC('${use.date.unit}', ${text})`;
+  }
+  if (use.agg) {
+    const percentile = /^pct(\d+)$/.exec(use.agg);
+    text = percentile ? `PERCENTILE(${text}, ${Number(percentile[1]) / 100})` : `${AGG_FUNCTIONS[use.agg] ?? use.agg.toUpperCase()}(${text})`;
+  }
+  return text;
+}
+
+/** 架上輸入的文字只是一個欄位（[Sales]、Sales）或欄位的彙總（SUM([Sales])）時，直接用這個欄位，
+ * 不必建立臨時計算；其他公式回傳 null。 */
+export function plainFormulaUse(text: string, fields: Map<string, CatalogField>): FieldUse | null {
+  const trimmed = text.trim();
+  const byCaption = (name: string) => [...fields.values()].find((f) => !f.ad_hoc && f.caption === name.replace(/]]/g, "]"));
+  const single = /^\[((?:[^\]]|\]\])+)\]$/.exec(trimmed);
+  const bare = byCaption(trimmed);
+  const field = single ? byCaption(single[1]) : bare;
+  if (field) return defaultUse(field);
+  const wrapped = /^([A-Za-z]+)\(\s*\[((?:[^\]]|\]\])+)\]\s*\)$/.exec(trimmed);
+  if (!wrapped) return null;
+  const agg = Object.entries(AGG_FUNCTIONS).find(([, name]) => name === wrapped[1].toUpperCase())?.[0];
+  const target = byCaption(wrapped[2]);
+  if (!agg || !target || target.level === "aggregate" || target.level === "table_calc") return null;
+  return { field: target.id, agg, date: null, continuous: agg !== "attr", table_calc: null };
 }
 
 export function useKey(use: FieldUse): string {

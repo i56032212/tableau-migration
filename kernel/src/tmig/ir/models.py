@@ -309,6 +309,28 @@ class DataField(IRModel):
         description="關聯計算（Tableau 2020.2 起關聯條件的一邊可以是公式）：只用在 Relationship 模型的"
         "關聯條件，table 為所屬的邏輯資料表，公式只能用到這張資料表的欄位；資料窗格不顯示",
     )
+    ad_hoc: bool = Field(
+        default=False,
+        description="臨時計算（直接在架上輸入的公式）：只存在用到它的工作表，資料窗格不顯示；"
+        "caption 為公式的原文",
+    )
+    default_color: ColorPalette | None = Field(
+        default=None,
+        description="預設屬性＞色彩：這個欄位放到色彩上、工作表沒有另外設定時的色彩設定",
+    )
+    default_shapes: list[ShapeAssignment] = Field(
+        default_factory=list,
+        description="預設屬性＞形狀：這個欄位放到形狀上、工作表沒有另外設定時各成員的形狀",
+    )
+    default_sort: FieldSort | None = Field(
+        default=None,
+        description="預設屬性＞排序：這個維度在工作表上沒有另外排序時的順序",
+    )
+    total_using: Literal["sum", "avg", "min", "max"] | None = Field(
+        default=None,
+        description="預設屬性＞總計使用：這個量值的總計與小計沒有另外設定時的計算方式（VisualTotal）；"
+        "None 為自動（在較粗的詳細程度重新彙總）",
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -1216,6 +1238,20 @@ class Sort(IRModel):
         return self
 
 
+class FieldSort(IRModel):
+    """欄位預設的排序（預設屬性＞排序）：字母順序或手動排列的成員。"""
+
+    kind: Literal["alphabetic", "manual"]
+    order: Literal["asc", "desc"] = "asc"
+    manual_values: list[Scalar] = Field(default_factory=list, description="kind 為 manual 時的順序")
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if (self.kind == "manual") != bool(self.manual_values):
+            raise ValueError("只有 kind 為 manual 時必須、也只能指定 manual_values")
+        return self
+
+
 class MeasureAlias(IRModel):
     """Measure Names 的別名（資料源中設定）：量值在 Measure Names 的標題與圖例中顯示的名稱。"""
 
@@ -1325,6 +1361,11 @@ class ColorPalette(IRModel):
         description="發散色盤兩端都用到最深的顏色（Use Full Color Range）；"
         "預設離中心較近的一端只用到相同比例的深淺",
     )
+
+
+# 欄位的預設屬性用到後面才定義的型別（色彩、形狀、排序）
+DataField.model_rebuild()
+Datasource.model_rebuild()
 
 
 class TooltipSheet(IRModel):

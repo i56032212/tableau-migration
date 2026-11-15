@@ -1347,3 +1347,97 @@ def test_secondary_table_calculation(client: TestClient) -> None:
     ]
     refused = client.put("/api/edit/demo/worksheets/ws_sales_by_region", json={"worksheet": ws})
     assert refused.status_code == 422
+
+
+def test_ad_hoc_defaults_split_and_replace_references(client: TestClient) -> None:
+    def use(field: str, agg: str | None = None, continuous: bool = False) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": continuous,
+            "table_calc": None,
+        }
+
+    def fields() -> dict[str, dict[str, Any]]:
+        data = client.get("/api/edit/demo/catalog").json()
+        return {f["id"]: f for f in data["datasources"][0]["fields"]}
+
+    def put(ws: dict[str, Any]) -> dict[str, Any]:
+        response = client.put(f"/api/edit/demo/worksheets/{ws['id']}", json={"worksheet": ws})
+        assert response.status_code == 200, response.text
+        return response.json()["worksheet"]
+
+    base = "/api/edit/demo/datasources/ds_orders/fields"
+    # 臨時計算：名稱是公式、資料窗格的資料帶著 ad_hoc；公式相同時回傳同一個欄位
+    body = {"datasource": "ds_orders", "formula": "SUM([Sales]) / SUM([Quantity])", "ad_hoc": True}
+    made = client.post("/api/edit/demo/calcs", json=body)
+    assert made.status_code == 200, made.text
+    adhoc = made.json()["field"]["id"]
+    assert client.post("/api/edit/demo/calcs", json=body).json()["field"]["id"] == adhoc
+    entry = fields()[adhoc]
+    assert entry["ad_hoc"] is True and entry["caption"] == body["formula"]
+    ws = sheet(client, "ws_sales_by_region")
+    ws.update(rows=[use("f_region")], columns=[use(adhoc, continuous=True)], filters=[], sorts=[])
+    ws.update(marks={"type": "bar"}, panes=[], table_calcs=[], reference_lines=[])
+    put(ws)
+    table = render(client, "ws_sales_by_region")["table"]
+    # 每件金額：各區域的銷售額除以數量
+    assert len(table["rows"]) == 4 and all(20 < float(r[1]) < 100 for r in table["rows"])
+    bad = client.post(
+        "/api/edit/demo/calcs", json={"datasource": "ds_orders", "formula": "SUM(", "ad_hoc": True}
+    )
+    assert bad.status_code == 422 and "公式有誤" in bad.text
+
+    # 預設屬性：排序套用到用到這個欄位、沒有另外排序的工作表
+    response = client.put(
+        f"{base}/f_region/properties",
+        json={"default_sort": {"kind": "alphabetic", "order": "desc"}},
+    )
+    assert response.status_code == 200, response.text
+    ws = sheet(client, "ws_sales_by_region")
+    assert [(s["field"], s["order"]) for s in ws["sorts"]] == [("f_region", "desc")]
+    members = [r[0] for r in render(client, "ws_sales_by_region")["table"]["rows"]]
+    assert members == sorted(members, reverse=True)
+    response = client.put(f"{base}/f_region/properties", json={"default_sort": None})
+    assert sheet(client, "ws_sales_by_region")["sorts"] == []
+    assert client.put(f"{base}/f_sales/properties", json={"total_using": "avg"}).status_code == 200
+    assert fields()["f_sales"]["total_using"] == "avg"
+    wrong = client.put(f"{base}/f_sales/properties", json={"default_shapes": []})
+    assert wrong.status_code == 422 and "只有維度" in wrong.text
+
+    # 分割：建立「<名稱> - Split N」的計算欄位
+    split = client.post(f"{base}/f_order_id/split", json={"separator": "-", "count": 2})
+    assert split.status_code == 200, split.text
+    parts = split.json()["fields"]
+    assert [p["caption"] for p in parts] == ["Order ID - Split 1", "Order ID - Split 2"]
+    ws = sheet(client, "ws_sales_by_region")
+    ws.update(rows=[use(parts[0]["id"])], columns=[use("f_sales", "sum", True)])
+    put(ws)
+    prefixes = {r[0] for r in render(client, "ws_sales_by_region")["table"]["rows"]}
+    assert prefixes and all(p and "-" not in p for p in prefixes)
+
+    # 取代參照：工作表上的欄位換成另一個
+    replaced = client.post(f"{base}/{parts[0]['id']}/replace", json={"replacement": "f_segment"})
+    assert replaced.status_code == 200, replaced.text
+    assert sheet(client, "ws_sales_by_region")["rows"][0]["field"] == "f_segment"
+    same = client.post(f"{base}/f_segment/replace", json={"replacement": "f_sales"})
+    assert same.status_code == 422 and "不能互相取代" in same.text
+
+    # 變更資料類型：萃取的欄位在查詢時轉換，欄位的 id 不變；改回原本的型別時還原
+    target = "f_row_id"
+    changed = client.put(f"{base}/{target}", json={"datatype": "string"})
+    assert changed.status_code == 200, changed.text
+    entry = fields()[target]
+    assert (entry["datatype"], entry["kind"]) == ("string", "calc") and entry["formula"].startswith(
+        "STR("
+    )
+    ws = sheet(client, "ws_sales_by_region")
+    ws.update(rows=[use(target)], columns=[use("f_sales", "sum", True)])
+    put(ws)
+    assert all(isinstance(r[0], str) for r in render(client, "ws_sales_by_region")["table"]["rows"])
+    ws.update(rows=[use("f_region")])
+    put(ws)
+    assert client.put(f"{base}/{target}", json={"datatype": "integer"}).status_code == 200
+    entry = fields()[target]
+    assert (entry["datatype"], entry["kind"]) == ("integer", "column")

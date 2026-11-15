@@ -47,6 +47,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         },
         {
@@ -72,6 +77,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[2]"
         },
         {
@@ -97,6 +107,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[3]"
         },
         {
@@ -122,6 +137,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[4]"
         },
         {
@@ -147,6 +167,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[5]"
         },
         {
@@ -172,6 +197,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[6]"
         },
         {
@@ -197,6 +227,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[7]"
         },
         {
@@ -222,6 +257,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[8]"
         },
         {
@@ -247,6 +287,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[9]"
         },
         {
@@ -272,6 +317,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[10]"
         },
         {
@@ -297,6 +347,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[8]"
         },
         {
@@ -322,6 +377,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -347,6 +407,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[13]"
         },
         {
@@ -372,6 +437,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[14]"
         },
         {
@@ -397,6 +467,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[15]"
         },
         {
@@ -422,6 +497,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[16]"
         },
         {
@@ -447,6 +527,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[17]"
         },
         {
@@ -472,6 +557,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[18]"
         },
         {
@@ -497,6 +587,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[19]"
         },
         {
@@ -522,6 +617,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[20]"
         },
         {
@@ -547,6 +647,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/extract/connection/metadata-records/metadata-record[21]"
         },
         {
@@ -609,6 +714,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -667,6 +777,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -729,6 +844,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -778,6 +898,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -842,6 +967,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         }
       ],

@@ -412,8 +412,9 @@ export function DataPane({
   const ds = catalog.datasources.find((d) => d.id === shown);
   const secondary = new Set(blendSources(sheet));
   const term = search.trim().toLowerCase();
+  // 臨時計算（直接在架上輸入的公式）只在工作表上，資料窗格不列出
   const visible = (ds?.fields ?? []).filter(
-    (f) => (showHidden || !f.hidden) && (!term || f.caption.toLowerCase().includes(term)),
+    (f) => !f.ad_hoc && (showHidden || !f.hidden) && (!term || f.caption.toLowerCase().includes(term)),
   );
   const isMeasureField = (f: CatalogField) =>
     f.role === "measure" || f.level === "aggregate" || f.level === "table_calc";

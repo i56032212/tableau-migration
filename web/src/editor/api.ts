@@ -147,6 +147,24 @@ export const editApi = {
       method: "POST",
       body: JSON.stringify({ datasource, caption, formula, field: field ?? null }),
     }).then((r) => r.field),
+  /** 臨時計算（直接在架上輸入的公式）：名稱就是公式，公式相同的只建立一個；回傳欄位的 id */
+  saveAdHoc: (workbook: string, datasource: string, formula: string) =>
+    request<{ field: { id: string } }>(`${edit(workbook)}/calcs`, {
+      method: "POST",
+      body: JSON.stringify({ datasource, formula, ad_hoc: true }),
+    }).then((r) => r.field.id),
+  /** 分割、自訂分割：建立「<名稱> - Split N」的計算欄位 */
+  splitField: (workbook: string, datasource: string, field: string, separator: string, count: number, fromEnd = false) =>
+    request<{ fields: { id: string; caption: string }[] }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/split`, {
+      method: "POST",
+      body: JSON.stringify({ separator, count, from_end: fromEnd }),
+    }).then((r) => r.fields),
+  /** 取代參照：用到 field 的地方改用 replacement */
+  replaceReferences: (workbook: string, datasource: string, field: string, replacement: string) =>
+    request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/replace`, {
+      method: "POST",
+      body: JSON.stringify({ replacement }),
+    }),
   /** 分析的欄位：新的叢集欄位，或資料源的 Forecast Indicator（已經有時回傳既有的） */
   addAnalyticsField: (workbook: string, datasource: string, kind: "cluster" | "forecast_indicator") =>
     request<{ field: CatalogField }>(`${edit(workbook)}/analytics-fields`, {
@@ -168,7 +186,15 @@ export const editApi = {
     workbook: string,
     datasource: string,
     field: string,
-    body: { format?: string | null; comment?: string | null; fiscal_year_start?: number | null },
+    body: {
+      format?: string | null;
+      comment?: string | null;
+      fiscal_year_start?: number | null;
+      default_color?: Record<string, unknown> | null;
+      default_shapes?: { value: Scalar; shape: string }[];
+      default_sort?: { kind: "alphabetic" | "manual"; order: "asc" | "desc"; manual_values: Scalar[] } | null;
+      total_using?: "sum" | "avg" | "min" | "max" | null;
+    },
   ) =>
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}/properties`, {
       method: "PUT",

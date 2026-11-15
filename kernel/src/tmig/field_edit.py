@@ -25,10 +25,13 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+from pydantic import ValidationError
+
 from tmig.edit import (
     EDITOR_REF,
     EditError,
     _datasource,
+    _first_error,
     _next_calc_number,
     _replace_datasource,
     _slug,
@@ -37,16 +40,21 @@ from tmig.edit import (
     _without_fields,
     check_formula,
     check_unused,
+    prune_ad_hoc,
+    upsert_calc,
 )
+from tmig.field_defaults import repush_field_defaults
 from tmig.ir import (
     IR,
     Calc,
+    ColorPalette,
     DataField,
     Datasource,
     FieldBin,
     FieldFolder,
     FieldGroup,
     FieldSet,
+    FieldSort,
     FieldUse,
     GroupItem,
     MemberAlias,
@@ -55,6 +63,7 @@ from tmig.ir import (
     SetCondition,
     SetMembers,
     SetTop,
+    ShapeAssignment,
 )
 from tmig.ir.models import Scalar
 from tmig.ir.setformula import (
@@ -447,12 +456,58 @@ def set_field_properties(
     format: Any = UNSET,
     comment: Any = UNSET,
     fiscal_year_start: Any = UNSET,
+    default_color: Any = UNSET,
+    default_shapes: Any = UNSET,
+    default_sort: Any = UNSET,
+    total_using: Any = UNSET,
 ) -> IR:
-    """預設屬性（Tableau 的「預設屬性」）：數字或日期的格式字串（None 為自動）、註解（None 為沒有）與
-    日期欄位的會計年度起始月（1 到 12；None 沿用資料源的設定）。"""
+    """預設屬性（Tableau 的「預設屬性」）：數字或日期的格式字串（None 為自動）、註解（None 為沒有）、
+    日期欄位的會計年度起始月（1 到 12；None 沿用資料源的設定），以及色彩（ColorPalette）、形狀
+    （各成員的形狀）、排序（FieldSort）與總計使用（sum、avg、min、max；None 為自動）。後四項在工作表
+    沒有另外設定時作用：沿用舊預設的工作表一併換成新的。"""
     ds = _datasource(ir, datasource)
     field = _field(ds, field_id)
     update: dict[str, Any] = {}
+    try:
+        if default_color is not UNSET:
+            palette = None if default_color is None else ColorPalette.model_validate(default_color)
+            if palette is not None and (palette.kind == "discrete") != (field.role == "dimension"):
+                raise EditError("維度的預設色彩是各成員的顏色，量值的是連續的色盤")
+            update["default_color"] = palette
+        if default_shapes is not UNSET:
+            if field.role != "dimension":
+                raise EditError("只有維度可以設定預設的形狀")
+            update["default_shapes"] = [
+                ShapeAssignment.model_validate(item) for item in default_shapes or []
+            ]
+        if default_sort is not UNSET:
+            if field.role != "dimension":
+                raise EditError("只有維度可以設定預設的排序")
+            update["default_sort"] = (
+                None if default_sort is None else FieldSort.model_validate(default_sort)
+            )
+    except ValidationError as exc:
+        raise EditError(f"「{field.caption}」的預設屬性不正確：{_first_error(exc)}") from exc
+    if total_using is not UNSET:
+        if field.role != "measure":
+            raise EditError("只有量值可以設定總計的計算方式")
+        if total_using not in (None, "sum", "avg", "min", "max"):
+            raise EditError(f"不認得的總計計算方式 {total_using}")
+        update["total_using"] = total_using
+    if update:
+        changed = field.model_copy(update=update)
+        updated = _replace_datasource(
+            ir,
+            ds.model_copy(
+                update={"fields": [changed if f.id == field.id else f for f in ds.fields]}
+            ),
+        )
+        ir = _validated(
+            repush_field_defaults(updated, field), f"「{field.caption}」的預設屬性不正確"
+        )
+        ds = _datasource(ir, datasource)
+        field = _field(ds, field_id)
+        update = {}
     if format is not UNSET:
         text = (format or "").strip() or None
         update["format"] = text
@@ -498,6 +553,48 @@ def set_date_properties(
     return _validated(
         _replace_datasource(ir, ds.model_copy(update={"settings": settings})), "日期屬性不正確"
     )
+
+
+# ---------------------------------------------------------------- 分割
+
+
+SPLIT_LIMIT = 10
+"""分割最多建立的欄位數（與 Tableau 相同）。"""
+
+
+def split_field(
+    ir: IR,
+    datasource: str,
+    field_id: str,
+    separator: str,
+    count: int,
+    from_end: bool = False,
+) -> tuple[IR, list[DataField]]:
+    """分割與自訂分割（Tableau 的「轉換＞分割／自訂分割」）：字串欄位依分隔符號分成 count 個計算欄位
+    「<名稱> - Split N」，公式為 TRIM(SPLIT([欄位], "分隔符號", N))；from_end 時取最後的 count 段
+    （N 為負數）。自動分割由編輯器依資料中的值決定分隔符號與段數後呼叫。"""
+    ds = _datasource(ir, datasource)
+    field = _field(ds, field_id)
+    if field.datatype != "string":
+        raise EditError(f"「{field.caption}」不是字串，不能分割")
+    if not separator:
+        raise EditError("分割需要分隔符號")
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= SPLIT_LIMIT:
+        raise EditError(f"分割的欄位數要是 1 到 {SPLIT_LIMIT}")
+    ref = "[" + field.caption.replace("]", "]]") + "]"
+    created: list[DataField] = []
+    for n in range(1, count + 1):
+        taken = {f.caption for f in _datasource(ir, datasource).fields}
+        base = f"{field.caption} - Split {n}"
+        caption, suffix = base, 2
+        while caption in taken:
+            caption = f"{base} ({suffix})"
+            suffix += 1
+        index = -n if from_end else n
+        formula = f"TRIM( SPLIT( {ref}, {formula_literal(separator)}, {index} ) )"
+        ir, made = upsert_calc(ir, datasource, caption, formula)
+        created.append(made)
+    return ir, created
 
 
 # ---------------------------------------------------------------- 合併欄位
@@ -607,6 +704,7 @@ def remove_folder(ir: IR, datasource: str, name: str) -> IR:
 def remove_field(ir: IR, datasource: str, field_id: str) -> IR:
     """刪除計算欄位、群組、數值分組或集合（資料表中的欄位只能隱藏）；工作表、其他欄位、篩選或動作
     用到時退回並說明用到的地方。"""
+    ir = prune_ad_hoc(ir, datasource)
     ds = _datasource(ir, datasource)
     field = _field(ds, field_id)
     if field.column is not None:

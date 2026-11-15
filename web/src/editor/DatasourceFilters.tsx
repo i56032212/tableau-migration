@@ -105,6 +105,8 @@ export function DatasourceFilters({
     openDialog: () => undefined,
     notify: (message, kind) => toast(message, kind === "error" ? "error" : "info"),
     reloadCatalog: () => undefined,
+    refreshCatalog: () => Promise.resolve(fields),
+    reloadSheet: () => undefined,
   };
   return (
     <section className="dse-filters" aria-label={title}>

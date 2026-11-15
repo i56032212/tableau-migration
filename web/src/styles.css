@@ -353,6 +353,8 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .shelf-label { flex: none; width: 28px; color: var(--muted); font-size: 12px; }
 .shelf-drop { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 26px; padding: 1px 2px; border-radius: 3px; }
 .shelf-hint { color: #a0a6ae; font-size: 12px; }
+.adhoc-input { flex: 1; min-width: 180px; height: 22px; padding: 0 6px; font: 12px/1 ui-monospace, Consolas, monospace; border: 1px solid var(--accent); border-radius: 11px; }
+.mark-slot-pills .adhoc-input { min-width: 0; width: 100%; }
 .pill-slot { display: inline-flex; align-items: center; max-width: 100%; }
 .pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border-radius: 12px; border: none; color: #fff; font: inherit; font-size: 12px; line-height: 18px; cursor: grab; user-select: none; text-align: left; }
 .pill.discrete { background: #4996b2; }
@@ -445,6 +447,13 @@ textarea.formula { width: 100%; font-family: ui-monospace, "Cascadia Mono", Menl
 .manual-sort .value-list li { padding: 3px 8px; cursor: pointer; }
 .manual-sort .value-list li.picked { background: #dbeafe; }
 .manual-sort-buttons { display: flex; flex-direction: column; gap: 4px; }
+.default-manual-sort { max-height: 260px; overflow: auto; margin: 0; padding: 0 0 0 28px; border: 1px solid var(--line); border-radius: 4px; }
+.default-manual-sort li { padding: 2px 6px; }
+.default-manual-sort li span { display: inline-block; min-width: 160px; }
+.describe-table { border-collapse: collapse; width: 100%; }
+.describe-table th { text-align: left; vertical-align: top; padding: 4px 12px 4px 0; white-space: nowrap; color: #5b6470; font-weight: 500; }
+.describe-table td { padding: 4px 0; word-break: break-word; }
+.describe-members { max-height: 200px; overflow: auto; margin: 4px 0 0; padding-left: 18px; }
 .zone-web.empty { background: #fff; }
 .story-point-list ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .story-point-list li { border: 1px solid var(--line); border-radius: 4px; padding: 6px; display: flex; flex-direction: column; gap: 4px; cursor: pointer; }

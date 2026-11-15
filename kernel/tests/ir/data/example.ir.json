@@ -47,6 +47,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[1]"
         },
         {
@@ -72,6 +77,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[2]"
         },
         {
@@ -97,6 +107,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[3]"
         },
         {
@@ -122,6 +137,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[4]"
         },
         {
@@ -147,6 +167,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[5]"
         },
         {
@@ -176,6 +201,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[6]"
         },
         {
@@ -205,6 +235,11 @@
           "fiscal_year_start": null,
           "combined": null,
           "relationship_calc": false,
+          "ad_hoc": false,
+          "default_color": null,
+          "default_shapes": [],
+          "default_sort": null,
+          "total_using": null,
           "source_ref": "/workbook/datasources/datasource[2]/column[7]"
         }
       ],

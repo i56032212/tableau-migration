@@ -61,6 +61,7 @@ from tmig.ir.models import (
 )
 from tmig.ir.scope import DatasourceScope, ForeignSource
 from tmig.ir.setformula import level_expr
+from tmig.parser.colors import color_encodings, parse_color, parse_shapes, shape_encodings
 from tmig.parser.connections import DIALECTS, EXECUTABLE, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
 from tmig.parser.fields import (
@@ -433,12 +434,38 @@ class DatasourceParser:
             instance_key(inst.get("name", "")): inst for inst in children(el, "column-instance")
         }
         self._filters(state)
+        self._default_marks(state)
         for model in children(self.el, "analytic-model"):
             name = child(child(model, "name"), "field")
             if name is not None and name.get("name"):
                 state.analytic_models[name.get("name", "")] = model
         self._check_children()
         return state
+
+    def _default_marks(self, state: DsState) -> None:
+        """欄位預設的色彩與形狀（預設屬性；資料源 <style> 中欄位本身的編碼，例如 [none:Region:nk]）：
+        編輯器新增的工作表用到這個欄位時與其他工作表同色。工作表各自的色彩仍由工作表解析（它的 <style>
+        優先於資料源的），這裡只記下維度本身的離散色彩與形狀。"""
+        style = child(self.el, "style")
+        if style is None:
+            return
+
+        def target(key: str) -> DataField | None:
+            inst = state.instances.get(key)
+            if inst is None or inst.get("derivation", "None") != "None":
+                return None
+            found = state.by_name.get(inst.get("column", ""))
+            return found if found is not None and found.role == "dimension" else None
+
+        for key, enc in color_encodings(style).items():
+            found = target(key)
+            palette = parse_color(enc) if found is not None else None
+            if found is not None and palette is not None and palette.kind == "discrete":
+                found.default_color = palette
+        for key, enc in shape_encodings(style).items():
+            found = target(key)
+            if found is not None:
+                found.default_shapes = parse_shapes(enc)[0]
 
     def _comments(self, state: DsState) -> None:
         """欄位的註解（Tableau 的「預設屬性＞註解」，<column><desc>）：資料表中的欄位也可以有。"""

@@ -55,6 +55,24 @@ function useMembers(workbook: string, field: string) {
   return { values, error };
 }
 
+const DATA_TYPES: [NonNullable<Parameters<typeof datasourceApi.updateField>[3]["datatype"]>, string][] = [
+  ["integer", "數字（整數）"],
+  ["real", "數字（小數）"],
+  ["datetime", "日期與時間"],
+  ["date", "日期"],
+  ["string", "字串"],
+  ["boolean", "布林"],
+];
+
+/** 總計使用（預設屬性）：自動為在較粗的詳細程度重新彙總，其餘為畫面上各標記的值再彙總。 */
+const TOTAL_USING: ["sum" | "avg" | "min" | "max" | null, string][] = [
+  [null, "自動"],
+  ["sum", "加總"],
+  ["avg", "平均"],
+  ["min", "最小值"],
+  ["max", "最大值"],
+];
+
 /** 欄位選單的項目（資料窗格的 ▾ 與按右鍵）。 */
 export function fieldMenu(editor: EditorContextValue, field: CatalogField, datasource: string, hierarchical: boolean): MenuItem[] {
   const { workbook } = editor;
@@ -138,6 +156,19 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
   }
   if (dimension && DISCRETE.includes(field.datatype) && !isDate(field))
     items.push({ label: "別名…", action: () => editor.openDialog({ kind: "aliases", datasource, field: field.id }) });
+  // 轉換：字串欄位依分隔符號分割成多個計算欄位（Tableau 的「轉換＞分割／自訂分割」）
+  if (field.datatype === "string" && field.kind !== "set" && rowLevel(field))
+    items.push({ label: "轉換", children: [{ label: "分割…", action: () => editor.openDialog({ kind: "split", datasource, field: field.id }) }] });
+  // 變更資料類型：檔案的欄位以新的型別重新匯入，萃取與資料庫的欄位在查詢時轉換
+  if (field.kind === "column" || (field.kind === "calc" && /（原始型別）|\(原始型別\)/.test(field.formula ?? "")))
+    items.push({
+      label: "變更資料類型",
+      children: DATA_TYPES.map(([datatype, label]) => ({
+        label,
+        checked: field.datatype === datatype,
+        action: () => field.datatype !== datatype && update({ datatype }, `「${field.caption}」的資料類型改為${label}`),
+      })),
+    });
   if (hierarchical)
     items.push({ label: "建立階層…", action: () => editor.openDialog({ kind: "hierarchy", datasource, name: null, field: field.id }) });
   if (field.kind !== "set" && ["string", "integer", "real"].includes(field.datatype))
@@ -169,7 +200,37 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
         : { label: "轉換為量值", action: () => update({ role: "measure" }, `「${field.caption}」已轉換為量值`) },
     );
   }
+  items.push(
+    { label: "取代參照…", action: () => editor.openDialog({ kind: "replace-references", datasource, field: field.id }) },
+    { label: "描述…", action: () => editor.openDialog({ kind: "describe", datasource, field: field.id }) },
+  );
   const properties: MenuItem[] = [];
+  if (field.datatype !== "spatial" && field.kind !== "set")
+    properties.push({ label: "色彩…", action: () => editor.openDialog({ kind: "default-color", datasource, field: field.id }) });
+  if (dimension && field.kind !== "set" && DISCRETE.includes(field.datatype)) {
+    properties.push(
+      { label: "形狀…", action: () => editor.openDialog({ kind: "default-shapes", datasource, field: field.id }) },
+      { label: "排序…", action: () => editor.openDialog({ kind: "default-sort", datasource, field: field.id }) },
+    );
+  }
+  if (field.role === "measure" && rowLevel(field) && field.datatype !== "spatial") {
+    const using = field.total_using ?? null;
+    properties.push({
+      label: "總計使用",
+      children: TOTAL_USING.map(([agg, label]) => ({
+        label,
+        checked: using === agg,
+        action: () =>
+          void editApi
+            .saveFieldProperties(workbook, datasource, field.id, { total_using: agg })
+            .then(() => {
+              done(`「${field.caption}」的總計改為${label}`);
+              editor.reloadSheet();
+            })
+            .catch(fail),
+      })),
+    });
+  }
   if (field.role === "measure" && rowLevel(field) && field.datatype !== "spatial") {
     properties.push({
       label: "彙總",

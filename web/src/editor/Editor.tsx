@@ -39,6 +39,7 @@ import {
 import { FilterDialog } from "./FilterDialog";
 import { AnnotationsDialog, ApplyFilterDialog, BlendsDialog, LabelDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
 import { CaptionDialog, ShapesDialog, TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
+import { moreFieldDialog } from "./FieldMoreDialogs";
 import {
   type Card,
   type Catalog,
@@ -483,6 +484,35 @@ export function Editor({
 
   const newId = useCallback((prefix: string, text: string) => editApi.newId(workbook, prefix, text), [workbook]);
 
+  /** 重新讀取資料窗格並立即更新欄位索引：之後排進去的變更（apply）看得到新的欄位。 */
+  const refreshCatalog = useCallback(async () => {
+    const loaded = await editApi.catalog(workbook);
+    setCatalog(loaded);
+    const current = historyRef.current;
+    const datasource = current ? current.entries[current.index].datasource : "";
+    const index = fieldIndex(loaded, datasource);
+    fieldsRef.current = index;
+    return index;
+  }, [workbook]);
+
+  /** 伺服器端改了工作表之後（預設屬性套用到工作表、取代參照）：以伺服器上的內容取代目前這一步。 */
+  const reloadSheet = useCallback(
+    () =>
+      enqueue(async () => {
+        const current = historyRef.current;
+        if (!current) return;
+        try {
+          const fresh = await editApi.worksheet(workbook, current.entries[current.index].id);
+          setHistory({ entries: current.entries.map((e, i) => (i === current.index ? fresh : e)), index: current.index });
+          setStored(fresh);
+          setRevision((r) => r + 1);
+        } catch (e) {
+          notify((e as Error).message, "error");
+        }
+      }),
+    [enqueue, workbook, notify],
+  );
+
   const prepare = useCallback(
     async (current: SheetIR, use: FieldUse): Promise<[SheetIR, FieldUse]> => {
       const field = fieldsRef.current.get(use.field);
@@ -512,6 +542,8 @@ export function Editor({
     openDialog: setDialog,
     notify,
     reloadCatalog: () => void reloadCatalog(),
+    refreshCatalog,
+    reloadSheet,
   };
   const shown = stored ?? sheet;
   const empty = shown.rows.length === 0 && shown.columns.length === 0 && markUses(shown.marks).length === 0;
@@ -833,6 +865,12 @@ export function Editor({
       {dialog && fieldDialog(dialog, () => setDialog(null), () => {
         void reloadCatalog();
         setRevision((r) => r + 1);
+        onChanged();
+      })}
+      {dialog && moreFieldDialog(dialog, () => setDialog(null), () => {
+        // 預設屬性與取代參照會改到工作表：重新讀取資料窗格與目前的工作表
+        void reloadCatalog();
+        reloadSheet();
         onChanged();
       })}
       {dialog?.kind === "parameter" && (

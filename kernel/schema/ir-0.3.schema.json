@@ -1860,6 +1860,63 @@
           "title": "Relationship Calc",
           "type": "boolean"
         },
+        "ad_hoc": {
+          "default": false,
+          "description": "臨時計算（直接在架上輸入的公式）：只存在用到它的工作表，資料窗格不顯示；caption 為公式的原文",
+          "title": "Ad Hoc",
+          "type": "boolean"
+        },
+        "default_color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorPalette"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預設屬性＞色彩：這個欄位放到色彩上、工作表沒有另外設定時的色彩設定"
+        },
+        "default_shapes": {
+          "description": "預設屬性＞形狀：這個欄位放到形狀上、工作表沒有另外設定時各成員的形狀",
+          "items": {
+            "$ref": "#/$defs/ShapeAssignment"
+          },
+          "title": "Default Shapes",
+          "type": "array"
+        },
+        "default_sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldSort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預設屬性＞排序：這個維度在工作表上沒有另外排序時的順序"
+        },
+        "total_using": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "avg",
+                "min",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預設屬性＞總計使用：這個量值的總計與小計沒有另外設定時的計算方式（VisualTotal）；None 為自動（在較粗的詳細程度重新彙總）",
+          "title": "Total Using"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -2535,6 +2592,58 @@
         "rule"
       ],
       "title": "FieldSet",
+      "type": "object"
+    },
+    "FieldSort": {
+      "additionalProperties": false,
+      "description": "欄位預設的排序（預設屬性＞排序）：字母順序或手動排列的成員。",
+      "properties": {
+        "kind": {
+          "enum": [
+            "alphabetic",
+            "manual"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "default": "asc",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "title": "Order",
+          "type": "string"
+        },
+        "manual_values": {
+          "description": "kind 為 manual 時的順序",
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Manual Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "FieldSort",
       "type": "object"
     },
     "FieldUse": {

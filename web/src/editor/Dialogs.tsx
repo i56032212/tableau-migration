@@ -60,7 +60,8 @@ export function CalcDialog({
 }) {
   const editor = useEditor();
   const ds = datasource ?? editor.sheet.datasource;
-  const [caption, setCaption] = useState(field?.caption ?? "計算 1");
+  // 臨時計算的名稱就是公式：命名時從預設的名稱開始
+  const [caption, setCaption] = useState(field && !field.ad_hoc ? field.caption : "計算 1");
   const [formula, setFormula] = useState(field?.formula ?? "");
   const [check, setCheck] = useState<FormulaCheck | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +97,7 @@ export function CalcDialog({
     }
   };
   const own = editor.catalog.datasources.find((d) => d.id === ds)?.fields ?? [];
-  const fields = own.filter((f) => !f.hidden && f.id !== field?.id);
+  const fields = own.filter((f) => !f.hidden && !f.ad_hoc && f.id !== field?.id);
   return (
     <Modal title={field ? `編輯計算欄位：${field.caption}` : "建立計算欄位"} onClose={onClose} wide>
       <div className="calc-dialog">

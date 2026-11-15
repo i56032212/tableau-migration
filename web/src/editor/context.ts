@@ -30,6 +30,10 @@ export interface EditorContextValue {
   notify: (message: string, kind?: "info" | "error") => void;
   /** 資料窗格的內容改變後（計算欄位、階層）重新讀取 */
   reloadCatalog: () => void;
+  /** 重新讀取資料窗格並等它完成（之後的 apply 看得到新的欄位）；回傳這張工作表資料源的欄位 */
+  refreshCatalog: () => Promise<Map<string, CatalogField>>;
+  /** 伺服器端改了工作表之後（預設屬性、取代參照）重新讀取目前的工作表 */
+  reloadSheet: () => void;
 }
 
 export type EditorDialog =
@@ -76,7 +80,9 @@ export type EditorDialog =
   /** 建立資料夾（fields 移進去）或改名（folder 為現有的資料夾） */
   | { kind: "folder"; datasource: string; fields: string[]; folder: string | null }
   /** 資料源的日期屬性 */
-  | { kind: "date-properties"; datasource: string };
+  | { kind: "date-properties"; datasource: string }
+  /** 預設屬性的色彩、形狀、排序；分割與自訂分割、取代參照、描述欄位 */
+  | { kind: "default-color" | "default-shapes" | "default-sort" | "split" | "replace-references" | "describe"; datasource: string; field: string };
 
 export const EditorContext = createContext<EditorContextValue | null>(null);
 

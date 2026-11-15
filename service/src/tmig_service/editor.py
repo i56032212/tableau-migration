@@ -41,6 +41,7 @@ from tmig.edit import (
     remove_story,
     remove_worksheet,
     replace_dashboard,
+    replace_references,
     replace_story,
     replace_worksheet,
     set_datasource_filters,
@@ -68,6 +69,7 @@ from tmig.field_edit import (
     set_aliases,
     set_date_properties,
     set_field_properties,
+    split_field,
     upsert_bins,
     upsert_group,
     upsert_set,
@@ -135,11 +137,14 @@ class FormulaBody(BaseModel):
 
 
 class CalcBody(BaseModel):
+    """計算欄位；ad_hoc 為直接在架上輸入的臨時計算（名稱就是公式，caption 不用給）。"""
+
     model_config = ConfigDict(extra="forbid")
     datasource: str
-    caption: str
+    caption: str = ""
     formula: str
     field: str | None = None
+    ad_hoc: bool = False
 
 
 class AnalyticsFieldBody(BaseModel):
@@ -284,6 +289,24 @@ class PropertiesBody(BaseModel):
     format: str | None = None
     comment: str | None = None
     fiscal_year_start: int | None = Field(default=None, ge=1, le=12)
+    default_color: dict[str, Any] | None = None
+    default_shapes: list[dict[str, Any]] | None = None
+    default_sort: dict[str, Any] | None = None
+    total_using: Literal["sum", "avg", "min", "max"] | None = None
+
+
+class SplitBody(BaseModel):
+    """分割：分隔符號、要建立的欄位數；from_end 為從最後面取。"""
+
+    model_config = ConfigDict(extra="forbid")
+    separator: str = Field(min_length=1)
+    count: int = Field(ge=1, le=10)
+    from_end: bool = False
+
+
+class ReplaceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replacement: str
 
 
 class DatePropertiesBody(BaseModel):
@@ -667,7 +690,9 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         field = edit(
             request,
             workbook,
-            lambda ir: upsert_calc(ir, body.datasource, body.caption, body.formula, body.field),
+            lambda ir: upsert_calc(
+                ir, body.datasource, body.caption, body.formula, body.field, body.ad_hoc
+            ),
         )
         return {"field": field.model_dump(mode="json")}
 
@@ -707,9 +732,35 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     def put_properties(
         workbook: str, datasource: str, field: str, body: PropertiesBody, request: Request
     ) -> dict[str, bool]:
-        """預設的數字或日期格式與註解（只改送來的項目）。"""
+        """預設屬性：數字或日期格式、註解、色彩、形狀、排序與總計使用（只改送來的項目）。"""
         changes = {key: getattr(body, key) for key in body.model_fields_set}
         edit(request, workbook, lambda ir: set_field_properties(ir, datasource, field, **changes))
+        return {"ok": True}
+
+    @router.post("/{workbook}/datasources/{datasource}/fields/{field}/split")
+    def post_split(
+        workbook: str, datasource: str, field: str, body: SplitBody, request: Request
+    ) -> dict[str, Any]:
+        """分割、自訂分割：建立「<名稱> - Split N」的計算欄位（見 tmig.field_edit.split_field）。"""
+        made = edit(
+            request,
+            workbook,
+            lambda ir: split_field(
+                ir, datasource, field, body.separator, body.count, body.from_end
+            ),
+        )
+        return {"fields": [f.model_dump(mode="json") for f in made]}
+
+    @router.post("/{workbook}/datasources/{datasource}/fields/{field}/replace")
+    def post_replace_references(
+        workbook: str, datasource: str, field: str, body: ReplaceBody, request: Request
+    ) -> dict[str, bool]:
+        """取代參照：用到這個欄位的地方改用另一個欄位（見 tmig.edit.replace_references）。"""
+        edit(
+            request,
+            workbook,
+            lambda ir: replace_references(ir, datasource, field, body.replacement),
+        )
         return {"ok": True}
 
     @router.put("/{workbook}/datasources/{datasource}/date-properties")

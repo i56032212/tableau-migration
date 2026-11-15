@@ -3,6 +3,7 @@
 import type React from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FieldUse } from "../types";
+import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor, type DragItem } from "./context";
 import {
   AGGREGATIONS,
@@ -31,7 +32,9 @@ import {
   MEASURE_NAMES,
   MEASURE_VALUES,
   newTableCalc,
+  pillFormula,
   pillLabel,
+  plainFormulaUse,
   QUICK_CALCS,
   removeUse,
   sameUse,
@@ -525,6 +528,81 @@ function toggleDual(sheet: SheetIR, use: FieldUse, shelf: "rows" | "columns"): S
   return updateCard(updated, "all", (m) => ({ ...m, color: names }));
 }
 
+// ---------------------------------------------------------------- 架上的臨時計算
+
+/** 在架上輸入公式（Tableau 的臨時計算）：連按兩下架上的空白處輸入，或從膠囊選單「在架上編輯」。
+ * 公式只是一個欄位（或欄位的彙總）時直接用這個欄位，其他的建立臨時計算（資料窗格不顯示）。 */
+function useAdHoc(shelf: ShelfName, card: Card) {
+  const editor = useEditor();
+  const [editing, setEditing] = useState<{ index: number | null; text: string; original: string } | null>(null);
+  // Enter 之後輸入框消失時可能再觸發一次 blur：同一次編輯只送出一次
+  const committed = useRef(false);
+  const start = (index: number | null, text: string) => {
+    committed.current = false;
+    setEditing({ index, text, original: text });
+  };
+  const commit = async () => {
+    if (committed.current) return;
+    committed.current = true;
+    const current = editing;
+    setEditing(null);
+    const formula = current?.text.trim() ?? "";
+    if (!current || !formula || formula === current.original) return;
+    let use = plainFormulaUse(formula, editor.fields);
+    if (!use) {
+      try {
+        const id = await editApi.saveAdHoc(editor.workbook, editor.sheet.datasource, formula);
+        const field = (await editor.refreshCatalog()).get(id);
+        if (!field) return;
+        use = defaultUse(field);
+      } catch (e) {
+        editor.notify((e as Error).message, "error");
+        return;
+      }
+    }
+    const ready = use;
+    editor.apply(async (sheet) => {
+      const [prepared, placed] = await editor.prepare(sheet, ready);
+      return current.index === null ? insertUse(prepared, shelf, placed, undefined, card) : changeUse(prepared, shelf, current.index, placed, card);
+    });
+  };
+  const input = editing && (
+    <input
+      className="adhoc-input"
+      aria-label="在架上輸入公式"
+      autoFocus
+      value={editing.text}
+      placeholder="輸入公式，例如 SUM([Sales]) / SUM([Quantity])"
+      onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") void commit();
+        else if (e.key === "Escape") {
+          committed.current = true;
+          setEditing(null);
+        }
+      }}
+      onBlur={() => void commit()}
+    />
+  );
+  /** 連按兩下架上的空白處（不是膠囊）開始輸入。 */
+  const onDoubleClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest(".pill, .adhoc-input, button")) return;
+    start(null, "");
+  };
+  /** 膠囊選單加上「在架上編輯…」：以膠囊的公式開始編輯。 */
+  const withEdit = (items: MenuItem[], use: FieldUse, index: number): MenuItem[] => {
+    if (isSpecial(use) || use.table_calc !== null || items.length < 2) return items;
+    const text = pillFormula(use, editor.fields);
+    const edit: MenuItem[] = [{ label: "在架上編輯…", action: () => start(index, text) }];
+    const field = editor.fields.get(use.field);
+    // 臨時計算命名之後成為資料窗格中的計算欄位（Tableau 把膠囊拖到資料窗格）
+    if (field?.ad_hoc) edit.push({ label: "命名並加到資料窗格…", action: () => editor.openCalc(field) });
+    return [...items.slice(0, -2), ...edit, ...items.slice(-2)];
+  };
+  return { editing, input, onDoubleClick, withEdit };
+}
+
 // ---------------------------------------------------------------- 架
 
 export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: ShelfName; card?: Card }) {
@@ -532,17 +610,32 @@ export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: Sh
   const menu = usePillMenu();
   const { over, handlers, dropAt } = useDropTarget(shelf, card, (use) => editor.openFilter({ use, index: null }));
   const uses = usesOn(editor.sheet, shelf, card);
+  const adHoc = useAdHoc(shelf, card);
+  const typed = shelf === "rows" || shelf === "columns";
   return (
     <div className="shelf" data-shelf={shelf}>
       <span className="shelf-label">{label}</span>
-      <div className={`shelf-drop${over ? " over" : ""}`} {...handlers} data-drop={shelf}>
-        {uses.map((use, i) => (
-          <span key={`${i}:${use.field}`} className="pill-slot" onDragOver={handlers.onDragOver} onDrop={(e) => dropAt(e, i)}>
-            {(shelf === "rows" || shelf === "columns") && <DrillButton shelf={shelf} index={i} />}
-            <Pill use={use} shelf={shelf} index={i} card={card} menu={() => menu(shelf, i, card)} />
-          </span>
-        ))}
-        {uses.length === 0 && <span className="shelf-hint">將欄位拖曳到這裡</span>}
+      <div
+        className={`shelf-drop${over ? " over" : ""}`}
+        {...handlers}
+        data-drop={shelf}
+        onDoubleClick={typed ? adHoc.onDoubleClick : undefined}
+        title={typed ? "將欄位拖曳到這裡，或連按兩下輸入公式" : undefined}
+      >
+        {uses.map((use, i) =>
+          adHoc.editing?.index === i ? (
+            <span key={`${i}:edit`} className="pill-slot">
+              {adHoc.input}
+            </span>
+          ) : (
+            <span key={`${i}:${use.field}`} className="pill-slot" onDragOver={handlers.onDragOver} onDrop={(e) => dropAt(e, i)}>
+              {(shelf === "rows" || shelf === "columns") && <DrillButton shelf={shelf} index={i} />}
+              <Pill use={use} shelf={shelf} index={i} card={card} menu={() => (typed ? adHoc.withEdit(menu(shelf, i, card), use, i) : menu(shelf, i, card))} />
+            </span>
+          ),
+        )}
+        {adHoc.editing?.index === null && adHoc.input}
+        {uses.length === 0 && !adHoc.editing && <span className="shelf-hint">將欄位拖曳到這裡</span>}
       </div>
     </div>
   );
@@ -689,8 +782,17 @@ function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; car
   const shelf = `marks.${slot}` as ShelfName;
   const { over, handlers, dropAt } = useDropTarget(shelf, card);
   const uses = usesOn(editor.sheet, shelf, card).filter((u) => slot !== "geometry" || u.field !== GEOMETRY_GENERATED);
+  // 臨時計算：連按兩下「詳細資料」的空白處輸入公式（與 Tableau 標記卡相同，加到詳細資料）
+  const adHoc = useAdHoc(shelf, card);
+  const typed = slot === "detail";
   return (
-    <div className={`mark-slot${over ? " over" : ""}`} {...handlers} data-drop={shelf}>
+    <div
+      className={`mark-slot${over ? " over" : ""}`}
+      {...handlers}
+      data-drop={shelf}
+      onDoubleClick={typed ? adHoc.onDoubleClick : undefined}
+      title={typed ? "連按兩下輸入公式" : undefined}
+    >
       <span className="mark-slot-label">{label}</span>
       <span className="mark-slot-pills">
         {uses.map((use, i) => (
@@ -698,6 +800,7 @@ function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; car
             <Pill use={use} shelf={shelf} index={i} card={card} menu={() => menu(shelf, i, card)} />
           </span>
         ))}
+        {typed && adHoc.input}
       </span>
     </div>
   );

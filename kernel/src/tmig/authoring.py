@@ -42,9 +42,12 @@ from tmig.edit import (
     EditError,
     _datasource,
     _replace_datasource,
+    _unique_id,
     _validated,
     add_worksheet,
+    check_formula,
     check_unused,
+    prune_ad_hoc,
 )
 from tmig.ir import (
     FILE_SCHEMA,
@@ -1635,6 +1638,8 @@ def update_field(
     datatype: str | None = None,
 ) -> IR:
     """欄位的顯示名稱、隱藏、角色、預設彙總與資料類型（檔案的欄位以新的型別重新匯入）。"""
+    if role is not None or datatype is not None:
+        ir = prune_ad_hoc(ir, datasource)  # 沒有用到的臨時計算不擋住欄位的變更
     ds = _datasource(ir, datasource)
     target = _field(ds, field_id)
     update: dict[str, Any] = {}
@@ -1656,6 +1661,15 @@ def update_field(
             raise EditError("只有量值有預設的彙總")
         update["default_agg"] = default_agg
     connection = ds.connection
+    if (
+        datatype is not None
+        and datatype != target.datatype
+        and not (isinstance(connection, FileConnection) and target.column is not None)
+    ):
+        # 萃取與資料庫的欄位：來源仍是原本的型別，查詢時轉換（與解析 .twb 的 datatype-customized 相同）
+        if update:
+            ir = update_field(ir, datasource, field_id, caption, hidden, role, default_agg)
+        return _convert_type(ir, datasource, field_id, datatype)
     if datatype is not None and datatype != target.datatype:
         if not isinstance(connection, FileConnection) or target.column is None:
             raise EditError("只有檔案的欄位可以變更資料類型")
@@ -1694,6 +1708,98 @@ def update_field(
     fields = [f.model_copy(update=update) if f.id == field_id else f for f in ds.fields]
     ds = ds.model_copy(update={"fields": fields, "connection": connection})
     return _validated(_replace_datasource(ir, ds), "修改欄位失敗")
+
+
+CONVERSIONS = {
+    "date": "DATE",
+    "datetime": "DATETIME",
+    "integer": "INT",
+    "real": "FLOAT",
+    "string": "STR",
+}
+"""變更資料類型的轉換函式（與 Tableau 的型別轉換函式相同）。"""
+RAW_SUFFIX = " (原始型別)"
+
+
+def _raw_of(ds: Datasource, target: DataField) -> DataField | None:
+    """已經變更過資料類型的欄位（公式為轉換函式包住隱藏的原始欄位）→ 原始欄位。"""
+    if target.calc is None:
+        return None
+    match = re.fullmatch(r"[A-Z]+\((\[.*\])\)", target.calc.formula.strip())
+    if match is None or not match.group(1).endswith(RAW_SUFFIX + "]"):
+        return None
+    return next((f for f in ds.fields if f.name == match.group(1) and f.column is not None), None)
+
+
+def _convert_type(ir: IR, datasource: str, field_id: str, datatype: str) -> IR:
+    """萃取或資料庫欄位的資料類型：以隱藏的原始欄位加上轉換它的計算欄位表示（欄位的 id 不變）；
+    改回原本的型別時還原成一般的欄位。"""
+    ds = _datasource(ir, datasource)
+    target = _field(ds, field_id)
+    raw = _raw_of(ds, target)
+    if target.column is None and raw is None:
+        raise EditError(f"「{target.caption}」是計算欄位，資料類型由公式決定")
+    if datatype not in CONVERSIONS:
+        raise EditError(f"這個欄位不能轉換成 {datatype}（可以轉成字串、數字、日期）")
+    _check_unused(ir, ds, [target])
+    numeric = datatype in ("integer", "real")
+    role = target.role if numeric else "dimension"
+    geo = target.geo_role if numeric or target.geo_role not in ("latitude", "longitude") else None
+    common = {
+        "datatype": datatype,
+        "role": role,
+        "default_agg": _measure_agg(datatype, geo, role),
+        "geo_role": geo,
+        "format": None,
+        "aliases": [],
+    }
+    if raw is not None and raw.datatype == datatype:
+        # 改回原本的型別：還原成一般的欄位，移除隱藏的原始欄位
+        restored = target.model_copy(
+            update={
+                **common,
+                "calc": None,
+                "column": raw.column,
+                "table": raw.table,
+                "physical_table": raw.physical_table,
+            }
+        )
+        fields = [restored if f.id == field_id else f for f in ds.fields if f.id != raw.id]
+        return _validated(
+            _replace_datasource(ir, ds.model_copy(update={"fields": fields})), "修改欄位失敗"
+        )
+    fields = list(ds.fields)
+    if raw is None:
+        name = f"[{target.name[1:-1]}{RAW_SUFFIX}]"
+        raw = target.model_copy(
+            update={
+                "id": _unique_id(ir, f"{target.id}_source"),
+                "name": name,
+                "caption": f"{target.caption}（原始型別）",
+                "hidden": True,
+                "aliases": [],
+                "geo_role": None,
+                "geo_aliases": [],
+                "comment": None,
+            }
+        )
+        fields.append(raw)
+    formula = f"{CONVERSIONS[datatype]}({raw.name})"
+    probe = ds.model_copy(update={"fields": [f for f in fields if f.id != field_id]})
+    check = check_formula(_replace_datasource(ir, probe), datasource, formula)
+    converted = target.model_copy(
+        update={
+            **common,
+            "calc": check.calc,
+            "column": None,
+            "table": None,
+            "physical_table": None,
+        }
+    )
+    fields = [converted if f.id == field_id else f for f in fields]
+    return _validated(
+        _replace_datasource(ir, ds.model_copy(update={"fields": fields})), "修改欄位失敗"
+    )
 
 
 def rename_datasource(ir: IR, datasource: str, caption: str) -> IR:

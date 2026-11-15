@@ -316,3 +316,158 @@ def test_selection_commands(engine: str, tmp_path: Path) -> None:
         assert "包含（Region、Category）" in page.locator('[data-shelf="filters"]').inner_text()
         assert errors == []
         browser.close()
+
+
+CODES = (
+    "Region,Category,Code,Sales,Quantity\n"
+    "East,Furniture,A-10,100.5,2\n"
+    "West,Office,B-20,200,1\n"
+    "East,Office,C-30,50.25,3\n"
+    "South,Tech,D-40,75,1\n"
+)
+
+
+def test_ad_hoc_calculation_and_more_field_commands(engine: str, tmp_path: Path) -> None:
+    """架上輸入臨時計算；欄位選單的預設屬性（排序、總計使用）、分割、取代參照、描述與變更資料類型。"""
+    from playwright.sync_api import sync_playwright
+
+    path = tmp_path / "codes.csv"
+    path.write_text(CODES, encoding="utf-8")
+    workbook = call(engine, "/api/desktop/new", {"path": str(path)})["document"]["id"]
+
+    def fields() -> dict[str, dict[str, Any]]:
+        body = call(engine, f"/api/edit/{workbook}/catalog")
+        return {f["caption"]: f for f in body["datasources"][0]["fields"]}
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, f"/api/edit/{workbook}/worksheets/ws_1")["worksheet"]
+
+    def table() -> dict[Any, Any]:
+        body = call(engine, f"/api/workbooks/{workbook}/worksheets/ws_1/render", {})
+        return {row[0]: row[1] for row in body["table"]["rows"]}
+
+    ids = {caption: f["id"] for caption, f in fields().items()}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/{workbook}/edit/ws_1")
+        page.wait_for_selector('.editor[data-saving="false"]')
+        pane = page.locator(".data-pane")
+
+        def settle() -> None:
+            page.wait_for_timeout(200)
+            page.wait_for_selector('.editor[data-saving="false"]')
+
+        def pick(label: str) -> Any:
+            exact = re.compile("^" + re.escape(label) + "$")
+            return page.locator(".popup-menu .menu-label").filter(has_text=exact).first
+
+        def menu(caption: str, *path: str) -> None:
+            pane.locator(f'li[data-field="{ids[caption]}"]').click(button="right")
+            page.locator(".popup-menu").wait_for()
+            for label in path[:-1]:
+                pick(label).hover()
+            pick(path[-1]).click()
+
+        def type_on(shelf: str, formula: str) -> None:
+            drop = page.locator(f'.shelf[data-shelf="{shelf}"] .shelf-drop')
+            box = drop.bounding_box()
+            assert box is not None
+            drop.dblclick(position={"x": box["width"] - 8, "y": box["height"] / 2})
+            entry = page.get_by_label("在架上輸入公式")
+            entry.fill(formula)
+            entry.press("Enter")
+            settle()
+
+        def confirm() -> None:
+            dialog = page.get_by_role("dialog")
+            dialog.get_by_role("button", name="確定").click()
+            dialog.wait_for(state="detached")
+            settle()
+
+        # 在列架輸入 [Region]：只是一個欄位，直接用它；在欄架輸入公式：建立臨時計算
+        type_on("rows", "[Region]")
+        type_on("columns", "SUM([Sales]) / SUM([Quantity])")
+        current = sheet()
+        assert current["rows"][0]["field"] == ids["Region"]
+        adhoc = fields()["SUM([Sales]) / SUM([Quantity])"]
+        assert adhoc["ad_hoc"] is True and current["columns"][0]["field"] == adhoc["id"]
+        assert table() == {"East": "30.15", "South": "75", "West": "200"}
+        # 臨時計算只在架上：資料窗格不列出，膠囊上是公式
+        assert pane.locator("li.field", has_text="SUM([Sales])").count() == 0
+        pill = page.locator('.shelf[data-shelf="columns"] .pill')
+        assert pill.get_attribute("data-pill") == "SUM([Sales]) / SUM([Quantity])"
+        # 在架上編輯：改成 SUM([Sales])，回到一般的欄位
+        pill.click()
+        pick("在架上編輯…").click()
+        entry = page.get_by_label("在架上輸入公式")
+        assert entry.input_value() == "SUM([Sales]) / SUM([Quantity])"
+        entry.fill("SUM([Sales])")
+        entry.press("Enter")
+        settle()
+        column = sheet()["columns"][0]
+        assert (column["field"], column["agg"]) == (ids["Sales"], "sum")
+        # 公式有誤時顯示原因，架上不變
+        type_on("columns", "SUM([Nope])")
+        page.locator(".toast.error").wait_for()
+        assert len(sheet()["columns"]) == 1
+
+        # 預設屬性＞排序：字母順序遞減，用到這個欄位的工作表跟著排序
+        menu("Region", "預設屬性", "排序…")
+        page.get_by_role("dialog").get_by_label("字母順序：遞減").check()
+        confirm()
+        assert fields()["Region"]["default_sort"]["order"] == "desc"
+        assert [(s["field"], s["order"]) for s in sheet()["sorts"]] == [(ids["Region"], "desc")]
+        assert list(table()) == ["West", "South", "East"]
+        # 預設屬性＞總計使用
+        menu("Sales", "預設屬性", "總計使用", "平均")
+        page.wait_for_function("!document.querySelector('.popup-menu')")
+        settle()
+        assert fields()["Sales"]["total_using"] == "avg"
+        # 預設屬性＞色彩：East 指定顏色，之後放到色彩上的工作表沿用
+        menu("Region", "預設屬性", "色彩…")
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("East的預設顏色").fill("#ff0000")
+        confirm()
+        assert fields()["Region"]["default_color"]["assignments"] == [
+            {"value": "East", "color": "#ff0000"}
+        ]
+
+        # 轉換＞分割：依資料中最常見的分隔符號自動分割
+        menu("Code", "轉換", "分割…")
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_role("button", name="自動分割").click()
+        dialog.wait_for(state="detached")
+        pane.locator("li.field", has_text="Code - Split 2").wait_for()
+        made = fields()
+        assert made["Code - Split 1"]["formula"] == 'TRIM( SPLIT( [Code], "-", 1 ) )'
+        assert made["Code - Split 2"]["formula"].endswith('"-", 2 ) )')
+        ids.update({caption: f["id"] for caption, f in made.items()})
+
+        # 取代參照：工作表上的 Region 換成 Category（預設排序是 Region 的，不跟著過去）
+        menu("Region", "取代參照…")
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("取代成的欄位").select_option(ids["Category"])
+        confirm()
+        assert sheet()["rows"][0]["field"] == ids["Category"]
+        page.locator('.shelf[data-shelf="rows"] .pill[data-pill="Category"]').wait_for()
+
+        # 描述：型別與值域
+        menu("Sales", "描述…")
+        dialog = page.get_by_role("dialog")
+        assert "數字（小數）" in dialog.inner_text() and "連續的量值" in dialog.inner_text()
+        dialog.get_by_role("button", name="載入").click()
+        dialog.get_by_text("50.25 到 200").wait_for()
+        dialog.locator("button.primary").click()
+        dialog.wait_for(state="detached")
+
+        # 變更資料類型：沒有用到的檔案欄位改成字串
+        menu("Quantity", "變更資料類型", "字串")
+        page.wait_for_function("!document.querySelector('.popup-menu')")
+        settle()
+        assert fields()["Quantity"]["datatype"] == "string"
+        assert errors == []
+        browser.close()
