@@ -1962,10 +1962,15 @@ def build_spec(
         assert column.use is not None
         data_field = fields[column.use.field]
         # 百分比（分析＞百分比）：量值是占範圍合計的比例，以百分比顯示
+        raw_measure = (
+            ws.disaggregated
+            and column.use.continuous
+            and column.use.agg is None
+            and data_field.role == "measure"
+        )
         percent = (
             ws.percentages is not None
-            and column.role == "measure"
-            and column.use.table_calc is None
+            and (column.role == "measure" or raw_measure)
             and column.datatype in ("integer", "real")
         )
         channels[column.key] = Channel(

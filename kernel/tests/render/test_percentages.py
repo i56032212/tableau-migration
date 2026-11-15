@@ -13,7 +13,6 @@ from tmig.ir import IR
 from tmig.render.vegalite import build_spec
 from tmig.sqlgen.query import (
     GRAND_TOTAL,
-    QueryError,
     percentages,
     totals_sql,
     worksheet_sql,
@@ -135,15 +134,19 @@ def test_percent_with_totals_and_mark_dimensions(tmp_path: Path, db: Path) -> No
     )
 
 
-def test_percent_with_table_calculation_is_unsupported(tmp_path: Path, db: Path) -> None:
-    calc = instance("[Sales]", "Sum", "[pcto:sum:Sales:qk]", "quantitative").replace(
-        "/>", "><table-calc ordering-type='Rows' type='PctTotal' /></column-instance>", 1
+def test_percent_of_a_table_calculation(tmp_path: Path, db: Path) -> None:
+    """百分比選項等同加上一個「合計百分比」表計算（Tableau 說明文件）：已經是表計算的量值是
+    「表計算的值 ÷ 範圍內各標記的值的總和」；一般的量值照舊在範圍的詳細程度重新彙總。"""
+    calc = instance("[Sales]", "Sum", "[cum:sum:Sales:qk]", "quantitative").replace(
+        "/>",
+        "><table-calc aggregation='Sum' ordering-type='Columns' type='CumTotal' /></column-instance>",
+        1,
     )
     sheet = worksheet(
         "Calc",
-        [REGION, calc],
+        [REGION, SALES, calc],
         rows=ref("none:Region:nk"),
-        cols=ref("pcto:sum:Sales:qk"),
+        cols=f"({ref('sum:Sales:qk')} + {ref('cum:sum:Sales:qk')})",
         view_extra="<percentages enabled='true' mode='table' />",
     )
     ir = parse(tmp_path, sheet)
@@ -151,8 +154,76 @@ def test_percent_with_table_calculation_is_unsupported(tmp_path: Path, db: Path)
     if ir.unsupported or not ws.table_calcs:
         pytest.skip("這個寫法的 Table Calculation 沒有解析成功")
     main = worksheet_sql(ir, ws.id)
-    with pytest.raises(QueryError, match="Table Calculation"):
-        percentages(ir, ws.id, main, execute(db, main.sql), [], lambda q: execute(db, q.sql))
+    result, _ = percentages(
+        ir, ws.id, main, execute(db, main.sql), [], lambda q: execute(db, q.sql)
+    )
+    plain = next(c.key for c in main.columns if c.role == "measure" and "#" not in c.key)
+    running_key = next(c.key for c in main.columns if c.role == "measure" and "#" in c.key)
+    records = {r["f_region"]: r for r in result.records()}
+    sales = {"East": 350, "North": 60, "South": 100, "West": 800}
+    running = {"East": 350, "North": 410, "South": 510, "West": 1310}
+    for region in sales:
+        assert records[region][plain] == pytest.approx(sales[region] / 1310)
+        assert records[region][running_key] == pytest.approx(
+            running[region] / sum(running.values())
+        )
+
+
+def test_percent_of_disaggregated_measures(tmp_path: Path, db: Path) -> None:
+    """取消彙總量值：每一列資料是一個標記，所有的值是總和的百分比（Tableau 說明文件）。"""
+    raw = instance("[Sales]", "None", "[none:Sales:qk]", "quantitative")
+    sheet = worksheet(
+        "Rows",
+        [REGION, raw],
+        rows=ref("none:Region:nk"),
+        cols=ref("none:Sales:qk"),
+        view_extra="<percentages enabled='true' mode='row' />",
+    ).replace("<aggregation value='true' />", "<aggregation value='false' />", 1)
+    ir = parse(tmp_path, sheet)
+    ws = ir.worksheets[0]
+    assert ir.unsupported == [] and ws.disaggregated
+    main = worksheet_sql(ir, ws.id)
+    marks = execute(db, main.sql)
+    result, _ = percentages(ir, ws.id, main, marks, [], lambda q: execute(db, q.sql))
+    measure = "f_sales"  # 取消彙總的量值在查詢中是連續的欄位
+    by_region: dict[str, float] = {}
+    for record in result.records():
+        by_region[record["f_region"]] = by_region.get(record["f_region"], 0) + record[measure]
+    # 列的百分比：每個 Region 之內各列的值相加是 100%
+    assert by_region == {
+        region: pytest.approx(1.0) for region in ("East", "North", "South", "West")
+    }
+    assert len(result.rows) == len(marks.rows) > 4
+
+
+def test_measure_names_innermost_is_one_hundred_percent(tmp_path: Path, db: Path) -> None:
+    """Measure Names 在欄架的最內層、窗格中的列百分比：每個標記是 100%（多個量值的值不能相加；
+    Tableau 說明文件）；窗格是去掉 Measure Names 之後的範圍，維度都留著。"""
+    from ..parser.test_extensions import measure_names_filter
+    from .test_text import PROFIT
+
+    sheet = worksheet(
+        "Values",
+        [REGION, SALES, PROFIT],
+        rows=ref("none:Region:nk"),
+        cols=ref(":Measure Names"),
+        mark="Text",
+        encodings=f"<text column='{ref('Multiple Values')}' />",
+        view_extra=measure_names_filter("sum:Sales:qk", "sum:Profit:qk")
+        + "<percentages enabled='true' mode='row-in-pane' />",
+    )
+    ir = parse(tmp_path, sheet)
+    ws = ir.worksheets[0]
+    assert ir.unsupported == [] and ws.percentages == "row_in_pane"
+    main = worksheet_sql(ir, ws.id)
+    result, _ = percentages(
+        ir, ws.id, main, execute(db, main.sql), [], lambda q: execute(db, q.sql)
+    )
+    measures = [c.key for c in main.columns if c.role == "measure"]
+    assert len(measures) == 2
+    for record in result.records():
+        for key in measures:
+            assert record[key] in (None, pytest.approx(1.0))
 
 
 def test_grand_total_label_unchanged(tmp_path: Path, db: Path) -> None:

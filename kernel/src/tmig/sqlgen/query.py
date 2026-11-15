@@ -44,6 +44,7 @@ from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
 from tmig.ir.models import (
     IR,
+    MEASURE_NAMES,
     PERCENTILES,
     SPECIAL_FIELDS,
     Calc,
@@ -3529,17 +3530,33 @@ def percentages(
     合計與總計相同，在範圍的詳細程度重新彙總底層資料（平均是範圍內所有資料列的平均，不是各標記的值
     相加）：範圍保留的維度以外的維度（含標記卡上的）都去掉，另外查詢（run 執行）。總計與小計的列也換成
     百分比（範圍中已經去掉的維度不算）。與量值篩選一起使用時，合計只算通過篩選的標記。
+    Tableau 的說明文件：百分比選項等同加上一個「合計百分比」表計算；取消彙總時所有的值是總和的百分比；
+    Measure Names 在架的最內層時每個標記是 100%。已經有表計算的量值因此是「表計算的值 ÷ 範圍內各標記的值的
+    總和」（等同次要計算的合計百分比，文件沒有明講，依上面那一句推定）。
     工作表的查詢（main）仍是原本的值，計算比對以它為準。"""
     from tmig.data.executor import QueryResult  # 避免循環匯入（executor 也匯入本模組）
 
     ws = _find_worksheet(ir, worksheet)
     if ws.percentages is None:
         return marks, totals
-    if ws.disaggregated:
-        raise QueryError("取消彙總量值與百分比一起使用尚不支援", unsupported=True)
-    measures = [c for c in main.columns if c.role == "measure" and c.use is not None]
-    if any(c.use is not None and c.use.table_calc is not None for c in measures):
-        raise QueryError("百分比與 Table Calculation 一起使用尚不支援", unsupported=True)
+    fields = {f.id: f for d in ir.datasources for f in d.fields}
+
+    def raw_measure(column: OutputColumn) -> bool:
+        """取消彙總時沒有彙總的量值（每一列的值）：查詢中是連續的欄位，這裡仍是要換成百分比的量值。"""
+        use = column.use
+        found = fields.get(use.field) if use is not None else None
+        return (
+            ws.disaggregated
+            and use is not None
+            and use.continuous
+            and use.agg is None
+            and found is not None
+            and found.role == "measure"
+        )
+
+    measures = [
+        c for c in main.columns if c.use is not None and (c.role == "measure" or raw_measure(c))
+    ]
     late = [f for f in main.state.filters if f.stage in ("measure", "table_calc")]
     if any(f.stage == "table_calc" for f in late) or {f.id for f in late} - {
         f.id for f in ws.filters
@@ -3548,19 +3565,38 @@ def percentages(
             "百分比與 Table Calculation 篩選、其他工作表的量值篩選一起使用尚不支援",
             unsupported=True,
         )
-    dims = [c.key for c in main.columns if c.role == "dimension"]
-    rows = [use_key(u) for u in ws.rows if use_key(u) in dims and not u.continuous]
-    cols = [use_key(u) for u in ws.columns if use_key(u) in dims and not u.continuous]
+    measured = {c.key for c in measures}
+    dims = [c.key for c in main.columns if c.role == "dimension" and c.key not in measured]
+
+    def shelf(uses: list[FieldUse]) -> tuple[list[str], list[str]]:
+        """架上的離散維度：全部，以及去掉最內層之後的（窗格）。Measure Names 在最內層時去掉的是它，
+        維度都留著——每個量值各自一格，與 Tableau 相同每個標記是 100%（多個量值的值不能相加）。"""
+        seq = [
+            None if u.field == MEASURE_NAMES else use_key(u)
+            for u in uses
+            if not u.continuous and (u.field == MEASURE_NAMES or use_key(u) in dims)
+        ]
+        return [k for k in seq if k is not None], [k for k in seq[:-1] if k is not None]
+
+    rows, rows_outer = shelf(ws.rows)
+    cols, cols_outer = shelf(ws.columns)
     scope = {
         "table": [],
         "column": cols,
         "row": rows,
-        "pane": rows[:-1] + cols[:-1],
-        "row_in_pane": rows + cols[:-1],
-        "column_in_pane": rows[:-1] + cols,
+        "pane": rows_outer + cols_outer,
+        "row_in_pane": rows + cols_outer,
+        "column_in_pane": rows_outer + cols,
         "cell": rows + cols,
     }[ws.percentages]
-    keys = {c.key for c in measures}
+    # 百分比選項等同加上一個「合計百分比」表計算（Tableau 說明文件）：一般的彙總在範圍的詳細程度重新彙總；
+    # 已經是表計算的量值，以及取消彙總的量值（每一列一個標記），是「值 ÷ 範圍內各標記的值的總和」
+    visual = {
+        c.key
+        for c in measures
+        if ws.disaggregated or (c.use is not None and c.use.table_calc is not None)
+    }
+    keys = {c.key for c in measures} - visual
     restriction = _marks_filter(ws, main, marks) if late else None
     cache: dict[tuple[str, ...], dict[tuple[Any, ...], dict[str, Any]]] = {}
 
@@ -3589,8 +3625,28 @@ def percentages(
             }
         )
 
+    index = {key: i for i, key in enumerate(marks.columns)}
+
+    def sums(kept: tuple[str, ...]) -> dict[tuple[Any, ...], dict[str, Any]]:
+        """範圍內各標記的值的總和（表計算與取消彙總的量值）。"""
+        found: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for row in marks.rows:
+            group = found.setdefault(tuple(row[index[k]] for k in kept if k in index), {})
+            for key in visual:
+                value: Any = row[index[key]] if key in index else None
+                if value is None or isinstance(value, bool | str):
+                    continue
+                try:
+                    group[key] = group.get(key, 0.0) + float(value)
+                except (TypeError, ValueError):
+                    continue
+        return found
+
     def denominators(kept: tuple[str, ...]) -> dict[tuple[Any, ...], dict[str, Any]]:
         if kept in cache:
+            return cache[kept]
+        if not keys:
+            cache[kept] = {}
             return cache[kept]
         filters = [f for f in ws.filters if f.stage not in ("measure", "table_calc")]
         if restriction is not None:
@@ -3635,12 +3691,14 @@ def percentages(
     def divide(result: QueryResult, dropped: Sequence[str]) -> QueryResult:
         kept = tuple(k for k in scope if k not in dropped)
         lookup = denominators(kept)
+        totals_of = sums(kept) if visual else {}
         at = {key: i for i, key in enumerate(result.columns)}
         changed: list[tuple[Any, ...]] = []
         for row in result.rows:
-            base = lookup.get(tuple(row[at[k]] for k in kept if k in at), {})
+            group = tuple(row[at[k]] for k in kept if k in at)
+            base = {**lookup.get(group, {}), **totals_of.get(group, {})}
             values = list(row)
-            for key in keys:
+            for key in keys | visual:
                 if key not in at:
                     continue
                 values[at[key]] = _ratio(values[at[key]], base.get(key))
