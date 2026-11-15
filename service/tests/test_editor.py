@@ -1936,3 +1936,34 @@ def test_import_worksheets_from_another_workbook(client: TestClient, tmp_path: P
     for sheet_id in result["worksheets"][:3]:
         again = client.post(f"/api/workbooks/demo/worksheets/{sheet_id}/render", json={}).json()
         assert again["unsupported"] is None, again
+
+
+def test_import_copies_source_files_only_inside_the_report(tmp_path: Path) -> None:
+    """匯入資料源時複製來源檔案：.twb 中寫的路徑不可信，跳出 sources 資料夾的（../）不複製；同一個路徑
+    但內容不同的檔案不能蓋掉目標報表的；File Geodatabase（資料夾）整個複製。"""
+    from tmig_service.editor import source_copies
+
+    source, target = tmp_path / "a" / "sources", tmp_path / "b" / "sources"
+    (source / "Data" / "Geo.gdb").mkdir(parents=True)
+    (source / "Data" / "Orders.csv").write_text("Region,Sales\nEast,1\n", encoding="utf-8")
+    (source / "Data" / "Geo.gdb" / "a00000001.gdbtable").write_bytes(b"x")
+    (tmp_path / "a" / "secret.txt").write_text("secret", encoding="utf-8")
+    target.mkdir(parents=True)
+    paths = [
+        "Data/Orders.csv",
+        "../secret.txt",
+        "Data/Geo.gdb",
+        "Data/Missing.csv",
+        "",
+        "/etc/hosts",
+    ]
+    assert source_copies(source, target, paths) == [
+        ((source / "Data" / "Orders.csv").resolve(), (target / "Data" / "Orders.csv").resolve()),
+        ((source / "Data" / "Geo.gdb").resolve(), (target / "Data" / "Geo.gdb").resolve()),
+    ]
+    (target / "Data").mkdir()
+    (target / "Data" / "Orders.csv").write_text("Region,Sales\nEast,1\n", encoding="utf-8")
+    assert len(source_copies(source, target, ["Data/Orders.csv"])) == 1  # 內容相同：可以
+    (target / "Data" / "Orders.csv").write_text("Region,Sales\nWest,2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="內容不同"):
+        source_copies(source, target, ["Data/Orders.csv"])

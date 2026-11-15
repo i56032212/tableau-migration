@@ -137,6 +137,26 @@ class ImportBody(BaseModel):
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp")
 
 
+def source_copies(
+    source_root: Path, target_root: Path, paths: list[str]
+) -> list[tuple[Path, Path]]:
+    """匯入資料源時要複製的來源檔案：（來源報表中的檔案, 目標報表中的位置）。路徑是 .twb 中寫的，不可信：
+    解析後不在各自的 sources 資料夾之內的（例如 ../../x）不複製。File Geodatabase 是資料夾，整個複製。
+    兩份報表有同一個路徑但內容不同的檔案時 ValueError（不能蓋掉目標報表的資料）。"""
+    source_root, target_root = source_root.resolve(), target_root.resolve()
+    found: list[tuple[Path, Path]] = []
+    for path in dict.fromkeys(paths):
+        origin = (source_root / path).resolve()
+        copied = (target_root / path).resolve()
+        inside = origin.is_relative_to(source_root) and copied.is_relative_to(target_root)
+        if not inside or origin == source_root or not origin.exists():
+            continue
+        if origin.is_file() and copied.is_file() and copied.read_bytes() != origin.read_bytes():
+            raise ValueError(f"兩份報表都有來源檔案 {path} 但內容不同，無法匯入這個資料源")
+        found.append((origin, copied))
+    return found
+
+
 def _image_paths(value: Any) -> list[str]:
     """內容中的圖片路徑（圖片區塊、圖片按鈕）。"""
     found: list[str] = []
@@ -747,19 +767,20 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
                     copies.append((report, target.directory / "data" / f"{new}.refresh.json"))
             if isinstance(ds.connection, FileConnection):
                 # 檔案型的資料源：來源檔案也複製（之後可以重新匯入、切換資料解譯器）
-                for path in dict.fromkeys(t.path for t in ds.connection.tables):
-                    origin = source.directory / SOURCES / path
-                    if not origin.is_file():
-                        continue
-                    copied = target.directory / SOURCES / path
-                    if copied.is_file() and copied.read_bytes() != origin.read_bytes():
-                        raise HTTPException(
-                            422, f"兩份報表都有來源檔案 {path} 但內容不同，無法匯入這個資料源"
-                        )
-                    copies.append((origin, copied))
+                try:
+                    copies += source_copies(
+                        source.directory / SOURCES,
+                        target.directory / SOURCES,
+                        [t.path for t in ds.connection.tables],
+                    )
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
         for origin, copied in copies:
             copied.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(origin, copied)
+            if origin.is_dir():
+                shutil.copytree(origin, copied, dirs_exist_ok=True)
+            else:
+                shutil.copy2(origin, copied)
         if body.worksheets is None:
             # 整份匯入：dashboard 用到的圖片
             for path in _image_paths([d.model_dump(mode="json") for d in source.ir.dashboards]):
