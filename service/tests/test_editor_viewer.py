@@ -2098,6 +2098,28 @@ def test_extract_settings_in_datasource_editor(tmp_path: Path) -> None:
                 timeout=30000
             )
 
+            # 只取前 N 筆、彙總可見維度的資料（勾選後增量更新的欄位清掉）
+            idle = '.dse-extract[data-busy="false"]'
+            rows = page.locator(".dse-extract").get_by_label("只取前 N 筆")
+            rows.fill("7")
+            rows.blur()
+            expect(page.locator(".toast", has_text="下次更新時生效").first).to_be_visible()
+            page.wait_for_selector(idle)
+            assert info()["top_rows"] == 7
+            page.locator(".dse-extract").get_by_role("button", name="立即更新萃取").click()
+            page.wait_for_timeout(200)
+            page.wait_for_selector(idle, timeout=30000)
+            report = space.get("demo").directory / "data" / "ds_orders.refresh.json"
+            assert json.loads(report.read_text(encoding="utf-8"))["tables"][0]["rows"] == 7
+            aggregate = page.locator(".dse-extract").get_by_label("彙總可見維度的資料")
+            aggregate.click()
+            expect(aggregate).to_be_checked()
+            page.wait_for_selector(idle)
+            assert (info()["aggregate"], info()["increment"]) == (True, None)
+            aggregate.click()
+            expect(aggregate).not_to_be_checked()
+            page.wait_for_selector(idle)
+
             # 萃取 → 即時
             page.locator(".dse-extract").get_by_label("即時").click()
             expect(page.locator('.dse-extract[data-mode="live"]')).to_be_visible(timeout=30000)

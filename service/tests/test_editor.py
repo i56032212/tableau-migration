@@ -1168,6 +1168,24 @@ def test_extract_settings(client: TestClient, tmp_path: Path) -> None:
     assert incremental.json()["result"]["mode"] == "incremental"
     assert client.put(f"{base}/extract", json={"increment": "f_region"}).status_code == 422
 
+    # 只取前 N 筆、彙總可見維度的資料：下次更新時生效；彙總與增量更新不能並用
+    full = client.post(f"{base}/extract/refresh", json={"incremental": False}).json()["result"]
+    east = sales()
+    limited = client.put(f"{base}/extract", json={"increment": None, "top_rows": 5})
+    assert limited.status_code == 200, limited.text
+    assert (limited.json()["top_rows"], limited.json()["can_aggregate"]) == (5, True)
+    result = client.post(f"{base}/extract/refresh", json={"incremental": False}).json()["result"]
+    assert result["tables"][0]["rows"] == 5
+    assert client.put(f"{base}/extract", json={"top_rows": 0}).status_code == 422
+    conflict = client.put(f"{base}/extract", json={"increment": "f_order_date", "aggregate": True})
+    assert conflict.status_code == 422 and "增量更新" in conflict.json()["detail"]
+    grouped = client.put(f"{base}/extract", json={"aggregate": True}).json()
+    assert (grouped["aggregate"], grouped["top_rows"], grouped["increment"]) == (True, None, None)
+    result = client.post(f"{base}/extract/refresh", json={"incremental": False}).json()["result"]
+    assert 0 < result["tables"][0]["rows"] <= full["tables"][0]["rows"]
+    assert sales() == east  # 先彙總再彙總，總和不變
+    assert client.put(f"{base}/extract", json={}).json()["aggregate"] is False
+
     # 萃取 → 即時：直接查詢來源（萃取篩選不再套用）
     back = client.post(f"{base}/extract/mode", json={"mode": "live"})
     assert back.status_code == 200 and back.json()["mode"] == "live"

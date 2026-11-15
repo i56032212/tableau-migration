@@ -186,6 +186,7 @@ export function ExtractSettings({ workbook, datasource, onChanged }: { workbook:
       .catch((e: Error) => toast(e.message, "error"))
       .finally(() => setBusy(null));
   };
+  const settings = { increment: info.increment, top_rows: info.top_rows, aggregate: info.aggregate };
   const switchTo = (mode: "live" | "extract") => {
     if (mode === info.mode) return;
     run(
@@ -223,7 +224,7 @@ export function ExtractSettings({ workbook, datasource, onChanged }: { workbook:
               disabled={busy !== null}
               onChange={(e) => {
                 const increment = e.target.value || null;
-                run("儲存中…", () => editApi.saveExtract(workbook, datasource, increment), "已儲存萃取設定");
+                run("儲存中…", () => editApi.saveExtract(workbook, datasource, { ...settings, increment }), "已儲存萃取設定");
               }}
             >
               <option value="">（無：只能完整更新）</option>
@@ -234,6 +235,39 @@ export function ExtractSettings({ workbook, datasource, onChanged }: { workbook:
               ))}
             </select>
           </label>
+          <label className="inline" title="更新萃取時每張資料表只取來源的前 N 列（Tableau 萃取設定的「前 N 列」）；空白為全部">
+            只取前
+            <input
+              key={`rows:${info.top_rows ?? ""}`}
+              type="number"
+              min={1}
+              aria-label="只取前 N 筆"
+              className="extract-rows"
+              defaultValue={info.top_rows ?? ""}
+              placeholder="全部"
+              disabled={busy !== null}
+              onBlur={(e) => {
+                const value = e.target.value.trim() ? Math.max(1, Math.floor(Number(e.target.value))) : null;
+                if (value !== info.top_rows) run("儲存中…", () => editApi.saveExtract(workbook, datasource, { ...settings, top_rows: value }), "已儲存萃取設定（下次更新時生效）");
+              }}
+            />
+            筆
+          </label>
+          {info.can_aggregate && (
+            <label className="inline" title="更新時依沒有隱藏的維度分組，預設彙總是總和、最小值、最大值的量值先彙總；隱藏的欄位不保留（Tableau 的「彙總可見維度的資料」）">
+              <input
+                type="checkbox"
+                aria-label="彙總可見維度的資料"
+                checked={info.aggregate}
+                disabled={busy !== null}
+                onChange={(e) => {
+                  const aggregate = e.target.checked;
+                  run("儲存中…", () => editApi.saveExtract(workbook, datasource, { ...settings, aggregate, increment: aggregate ? null : settings.increment }), "已儲存萃取設定（下次更新時生效）");
+                }}
+              />{" "}
+              彙總可見維度的資料
+            </label>
+          )}
           <button type="button" disabled={busy !== null} onClick={() => run("正在更新萃取…", () => editApi.refreshExtract(workbook, datasource, false), "已更新萃取")}>
             立即更新萃取
           </button>

@@ -467,7 +467,10 @@ def test_ad_hoc_calculation_and_more_field_commands(engine: str, tmp_path: Path)
         # 變更資料類型：沒有用到的檔案欄位改成字串
         menu("Quantity", "變更資料類型", "字串")
         page.wait_for_function("!document.querySelector('.popup-menu')")
-        settle()
+        deadline = time.monotonic() + 10  # 欄位的變更不經過工作表的儲存，等引擎套用
+        while fields()["Quantity"]["datatype"] != "string" and time.monotonic() < deadline:
+            page.wait_for_timeout(100)
         assert fields()["Quantity"]["datatype"] == "string"
+        settle()
         assert errors == []
         browser.close()

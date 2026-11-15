@@ -56,6 +56,7 @@ from tmig.edit import (
 from tmig.extract_edit import (
     extract_info,
     set_extract_increment,
+    set_extract_options,
     switch_to_extract,
     switch_to_live,
 )
@@ -108,6 +109,10 @@ class ExtractSettingsBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     increment: str | None = None
+    top_rows: int | None = Field(default=None, gt=0)
+    """只取前 N 筆（None 為全部）。"""
+    aggregate: bool = False
+    """彙總可見維度的資料。"""
 
 
 class ExtractModeBody(BaseModel):
@@ -626,7 +631,15 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     def put_extract(
         workbook: str, datasource: str, body: ExtractSettingsBody, request: Request
     ) -> dict[str, Any]:
-        edit(request, workbook, lambda ir: set_extract_increment(ir, datasource, body.increment))
+        def change(ir: IR) -> IR:
+            # 先清掉增量更新再設定彙總（兩者不能並用），最後設定增量更新的欄位
+            cleared = set_extract_increment(ir, datasource, None) if body.aggregate else ir
+            options = set_extract_options(
+                cleared, datasource, top_rows=body.top_rows, aggregate=body.aggregate
+            )
+            return set_extract_increment(options, datasource, body.increment)
+
+        edit(request, workbook, change)
         return extract_state(request, workbook, datasource)
 
     @router.post("/{workbook}/datasources/{datasource}/extract/mode")

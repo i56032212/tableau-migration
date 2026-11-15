@@ -19,6 +19,10 @@ export interface ExtractInfo {
   refreshable: boolean;
   increment: string | null;
   row_limit: number | null;
+  /** 只取前 N 筆（編輯器的設定）；彙總可見維度的資料 */
+  top_rows: number | null;
+  aggregate: boolean;
+  can_aggregate: boolean;
   filters: FilterIR[];
   increment_fields: { id: string; caption: string }[];
   /** 上次從來源更新的時間（ISO 8601） */
@@ -327,10 +331,10 @@ export const editApi = {
     }),
   /** 萃取設定：模式、能不能切換、增量更新的欄位、萃取篩選與上次更新的時間 */
   extract: (workbook: string, datasource: string) => request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract`),
-  saveExtract: (workbook: string, datasource: string, increment: string | null) =>
+  saveExtract: (workbook: string, datasource: string, settings: { increment: string | null; top_rows: number | null; aggregate: boolean }) =>
     request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract`, {
       method: "PUT",
-      body: JSON.stringify({ increment }),
+      body: JSON.stringify(settings),
     }),
   /** 即時與萃取的切換（改成萃取時立即從來源建立資料） */
   extractMode: (workbook: string, datasource: string, mode: "live" | "extract") =>

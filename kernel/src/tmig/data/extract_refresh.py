@@ -33,6 +33,9 @@ import duckdb
 
 from tmig.data.hyper_import import cast_column
 from tmig.data.sources import Executor
+from tmig.formula.ast import FieldRef, walk
+from tmig.formula.lexer import FormulaSyntaxError
+from tmig.formula.parser import parse_formula
 from tmig.ir.models import (
     IR,
     DataField,
@@ -85,6 +88,13 @@ class TablePlan:
     increment_field: str | None = None
     datatypes: dict[str, str] = field(default_factory=dict)
     """萃取中的欄名 → IR 的資料型別。"""
+    limit: int | None = None
+    """只取前 N 筆（編輯器的設定）。"""
+    aggregates: dict[str, str] | None = None
+    """彙總可見維度的資料：欄位 id → 彙總函式（SUM、MIN、MAX）；None 為不彙總。其餘的欄位（nulls 除外）
+    是分組的維度。"""
+    nulls: set[str] = field(default_factory=set)
+    """彙總時不保留的欄位（隱藏的欄位）：萃取中是 Null。"""
 
     def sql(self, after: Scalar | None = None) -> str:
         """after：增量更新時現有資料中增量欄位的最大值。"""
@@ -94,8 +104,25 @@ class TablePlan:
             datatype = self.datatypes.get(self.increment, "string")
             conds.append(f"{ident(self.increment_field)} > {literal(after, datatype)}")
         where = f" WHERE {' AND '.join(f'({c})' for c in conds)}" if conds else ""
-        selects = ", ".join(f"{ident(fid)} AS {ident(name)}" for name, fid in self.columns)
-        return f"SELECT {selects} FROM ({self.base}) AS {ident('base')}{where}"
+        group = ""
+        if self.aggregates is None:
+            selects = ", ".join(f"{ident(fid)} AS {ident(name)}" for name, fid in self.columns)
+        else:
+            parts: list[str] = []
+            keys: list[str] = []
+            for name, fid in self.columns:
+                if fid in self.nulls:
+                    kind = SQL_TYPES[self.datatypes.get(name, "string")]
+                    parts.append(f"CAST(NULL AS {kind}) AS {ident(name)}")
+                elif fid in self.aggregates:
+                    parts.append(f"{self.aggregates[fid]}({ident(fid)}) AS {ident(name)}")
+                else:
+                    parts.append(f"{ident(fid)} AS {ident(name)}")
+                    keys.append(ident(fid))
+            selects = ", ".join(parts)
+            group = f" GROUP BY {', '.join(keys)}" if keys else ""
+        limit = f" LIMIT {self.limit}" if self.limit is not None else ""
+        return f"SELECT {selects} FROM ({self.base}) AS {ident('base')}{where}{group}{limit}"
 
 
 @dataclass
@@ -172,9 +199,62 @@ def refresh_plan(ir: IR, datasource_id: str) -> RefreshPlan:
         for table in owner:
             name = next(n for n, fid in table.columns if fid == refresh.increment)
             table.increment, table.increment_field = name, refresh.increment
+    if refresh.top_rows is not None:
+        for table in tables:
+            table.limit = refresh.top_rows
+    if refresh.aggregate and connection.model is None:
+        _aggregate(ds, tables[0])
     return RefreshPlan(
         datasource=ds.id, source=source, tables=tables, parameters=custom_sql_parameters(ir)
     )
+
+
+AGGREGATED = {"sum": "SUM", "min": "MIN", "max": "MAX"}
+"""彙總可見維度的資料時先彙總的量值：預設彙總是可以再彙總的（總和的總和仍是總和）；其他的預設彙總
+（平均、計數等）先彙總之後再彙總會算錯，這些量值留在詳細資料（當作分組的維度）。"""
+
+
+def _aggregate(ds: Datasource, table: TablePlan) -> None:
+    """彙總可見維度的資料：依沒有隱藏的維度分組，量值依預設的彙總先彙總；隱藏的欄位不保留（Null），
+    但查詢時還會用到的隱藏欄位仍當作維度保留——沒有隱藏的計算欄位與集合的公式用到的、集合的層級，
+    以及資料源篩選（查詢時才套用）的欄位。"""
+    referenced: set[str] = set()
+    kept: set[str] = set()
+    for other in ds.fields:
+        if other.hidden:
+            continue
+        formulas = [other.calc.formula] if other.calc is not None else []
+        if other.set is not None:
+            kept |= {u.field for u in other.set.levels}
+            rule = other.set.rule
+            if rule.kind == "condition":
+                formulas.append(rule.condition)
+            elif rule.kind == "top_n":
+                formulas.append(rule.by)
+        for text in formulas:
+            try:
+                node = parse_formula(text)
+            except FormulaSyntaxError:
+                continue
+            referenced |= {n.parts[-1] for n in walk(node) if isinstance(n, FieldRef)}
+    for flt in ds.filters:
+        if flt.stage != "extract":
+            kept |= _filter_fields(flt)
+    fields = {f.id: f for f in ds.fields}
+    aggregates: dict[str, str] = {}
+    nulls: set[str] = set()
+    for _, fid in table.columns:
+        data_field = fields[fid]
+        used = (
+            fid in kept
+            or data_field.caption in referenced
+            or data_field.name.strip("[]") in referenced
+        )
+        if data_field.hidden and not used:
+            nulls.add(fid)
+        elif data_field.role == "measure" and data_field.default_agg in AGGREGATED:
+            aggregates[fid] = AGGREGATED[data_field.default_agg]
+    table.aggregates, table.nulls = aggregates, nulls
 
 
 def _filter_fields(flt: Filter) -> set[str]:

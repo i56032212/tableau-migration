@@ -607,6 +607,17 @@ class ExtractRefresh(IRModel):
     row_limit: int | None = Field(
         default=None, description="萃取只取前 N 筆或抽樣（extract count）；None 表示全部"
     )
+    top_rows: int | None = Field(
+        default=None,
+        gt=0,
+        description="編輯器設定的「只取前 N 筆」：更新萃取時每張資料表只取來源的前 N 列（LIMIT）；"
+        "從 Tableau 開啟的萃取是 row_limit（當時取到哪些列無法重現，不能更新）",
+    )
+    aggregate: bool = Field(
+        default=False,
+        description="彙總可見維度的資料（萃取設定的「彙總可見維度的資料」）：更新時依沒有隱藏的維度分組，"
+        "預設彙總是總和、最小值、最大值的量值先彙總；隱藏的欄位在萃取中是 Null",
+    )
 
 
 class ExtractConnection(IRModel):

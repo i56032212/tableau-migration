@@ -124,7 +124,9 @@ def test_view_permissions(fixtures: Path) -> None:
     bob = login(c, "bob")
     [summary] = bob.get("/api/workbooks").json()
     assert summary["dashboards"] == []
-    assert summary["worksheets"] == [{"id": "ws_monthly_profit", "name": "Monthly Profit"}]
+    assert summary["worksheets"] == [
+        {"id": "ws_monthly_profit", "name": "Monthly Profit", "hidden": False}
+    ]
     assert bob.post(f"{WB}/worksheets/ws_monthly_profit/render").status_code == 200
     response = bob.post(f"{WB}/worksheets/ws_sales_by_region/render")
     assert response.status_code == 404
