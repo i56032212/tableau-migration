@@ -1143,6 +1143,96 @@ def duplicate_worksheet(ir: IR, worksheet: str) -> tuple[IR, Worksheet]:
     return _validated(updated, "複製工作表失敗"), copy
 
 
+def duplicate_as_crosstab(ir: IR, worksheet: str) -> tuple[IR, Worksheet]:
+    """複製成交叉資料表（Tableau 的「複製為交叉資料表」）：新的工作表是原檢視的文字表——欄列架上的維度
+    留在原來的架上（連續的改為離散），標記卡上的維度加到列（詳細程度不變）；量值放到文字：只有一個時
+    直接顯示，多個時以 Measure Names（欄）與 Measure Values 並列。篩選、排序與 Table Calculation 照原樣。"""
+    source = next((w for w in ir.worksheets if w.id == worksheet), None)
+    if source is None:
+        raise EditError(f"找不到工作表 {worksheet}")
+    fields = {f.id: f for d in ir.datasources for f in d.fields}
+    special = ("measure_names", "measure_values")
+    generated = ("latitude_generated", "longitude_generated", "geometry_generated")
+
+    def measure(use: FieldUse) -> bool:
+        if use.agg is not None or use.table_calc is not None:
+            return True
+        field = fields.get(use.field)
+        calc = field.calc if field is not None else None
+        return calc is not None and calc.level in ("aggregate", "table_calc")
+
+    def add(target: list[FieldUse], use: FieldUse) -> None:
+        if use not in target:
+            target.append(use)
+
+    rows: list[FieldUse] = []
+    columns: list[FieldUse] = []
+    measures: list[FieldUse] = []
+    marks = [source.marks, *(p.marks for p in source.panes)]
+    for shelf, target in ((source.rows, rows), (source.columns, columns)):
+        for use in shelf:
+            if use.field in generated or use.field in special:
+                continue
+            if measure(use):
+                add(measures, use)
+            else:
+                add(target, use.model_copy(update={"continuous": False}))
+    for use in source.measure_values:
+        add(measures, use)
+    for card in marks:
+        for use in card.uses():
+            field = fields.get(use.field)
+            if use.field in special or use.field in generated:
+                continue
+            if field is not None and field.datatype == "spatial":
+                continue
+            if measure(use):
+                add(measures, use)
+            elif use not in rows and use not in columns:
+                add(rows, use.model_copy(update={"continuous": False}))
+    update: dict[str, Any] = {
+        "rows": rows,
+        "columns": columns,
+        "panes": [],
+        "measure_values": [],
+        "measure_aliases": [],
+        "reference_lines": [],
+        "annotations": [],
+        "cluster": None,
+        "forecast": None,
+        "axes": [],
+        "map": None,
+        "drop_lines": None,
+        "stack": None,
+        "pages": None,
+        "page": None,
+        "title": [],
+        "subtotals": [u for u in source.subtotals if u in rows or u in columns],
+        "show_missing": [],
+        "hidden": False,
+        "tab_color": None,
+    }
+    if len(measures) > 1:
+        update["columns"] = [*columns, FieldUse(field="measure_names")]
+        update["measure_values"] = measures
+        update["measure_aliases"] = [a for a in source.measure_aliases if a.use in measures]
+        text = [FieldUse(field="measure_values", continuous=True)]
+    else:
+        text = list(measures)
+    update["marks"] = Marks(type="text", label=text)
+    taken = {w.name for w in ir.worksheets}
+    name = _next_name(taken, f"{source.name} (交叉資料表)", start=2, template="{base} ({n})")
+    if f"{source.name} (交叉資料表)" not in taken:
+        name = f"{source.name} (交叉資料表)"
+    update.update(id=_unique_id(ir, "ws_" + _slug(name)), name=name)
+    copy = _reid(ir, source.model_copy(update=update, deep=True))
+    # 不在新檢視中的欄位的排序拿掉
+    present = {u.field for u in [*copy.rows, *copy.columns]}
+    copy = copy.model_copy(update={"sorts": [s for s in copy.sorts if s.field in present]})
+    updated = ir.model_copy(update={"worksheets": [*ir.worksheets, copy]})
+    return _validated(updated, "複製成交叉資料表失敗"), copy
+
+
 def remove_worksheet(ir: IR, worksheet: str) -> IR:
     """刪除工作表：dashboard、Story 或動作還在使用時不能刪。"""
     sheet = next((w for w in ir.worksheets if w.id == worksheet), None)

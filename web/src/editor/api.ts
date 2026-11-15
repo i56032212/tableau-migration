@@ -135,6 +135,12 @@ export const editApi = {
       method: "POST",
       body: "{}",
     }).then((r) => r.worksheet),
+  /** 複製成交叉資料表：新的工作表是這個檢視的文字表 */
+  duplicateAsCrosstab: (workbook: string, worksheet: string) =>
+    request<{ worksheet: SheetIR }>(`${edit(workbook)}/worksheets/${part(worksheet)}/crosstab`, {
+      method: "POST",
+      body: "{}",
+    }).then((r) => r.worksheet),
   removeWorksheet: (workbook: string, worksheet: string) =>
     request<{ ok: boolean }>(`${edit(workbook)}/worksheets/${part(worksheet)}`, { method: "DELETE" }),
   checkFormula: (workbook: string, datasource: string, formula: string, field?: string | null) =>

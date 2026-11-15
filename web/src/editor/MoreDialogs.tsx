@@ -124,6 +124,17 @@ export function SortDialog({ use, onClose }: { use: FieldUse; onClose: () => voi
     setMembers(next);
     setPicked(to);
   };
+  // 拖曳排列（Tableau 在檢視上拖曳標題、圖例的成員）：把成員拖到另一個成員的位置
+  const [dragged, setDragged] = useState<number | null>(null);
+  const dropOn = (to: number) => {
+    if (!members || dragged === null || dragged === to) return;
+    const next = [...members];
+    const [item] = next.splice(dragged, 1);
+    next.splice(to, 0, item);
+    setMembers(next);
+    setPicked(to);
+    setDragged(null);
+  };
   const save = () => {
     if (kind === "by_field" && !target) {
       setError("請選擇排序依據的欄位");
@@ -200,7 +211,26 @@ export function SortDialog({ use, onClose }: { use: FieldUse; onClose: () => voi
             {members === null && !error && <p className="hint">載入中…</p>}
             <ul className="value-list" aria-label="成員的順序">
               {(members ?? []).map((value, i) => (
-                <li key={JSON.stringify(value)} className={i === picked ? "picked" : ""} onClick={() => setPicked(i)}>
+                <li
+                  key={JSON.stringify(value)}
+                  className={`${i === picked ? "picked" : ""}${i === dragged ? " dragging" : ""}`}
+                  draggable
+                  title="拖曳可以改變順序"
+                  onClick={() => setPicked(i)}
+                  onDragStart={(e) => {
+                    setDragged(i);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", String(i));
+                  }}
+                  onDragOver={(e) => {
+                    if (dragged !== null) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    dropOn(i);
+                  }}
+                  onDragEnd={() => setDragged(null)}
+                >
                   {display(value)}
                 </li>
               ))}

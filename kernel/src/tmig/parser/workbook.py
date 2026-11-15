@@ -480,6 +480,8 @@ class WorkbookParser:
             ws, sheet = by_name.get(name), self.ctx.sheets.get(name)
             if window.get("class") != "worksheet" or ws is None or sheet is None:
                 continue
+            # 隱藏的工作表（只在 dashboard、Story 中使用）：檢視器的工作表清單不列出
+            ws.hidden = window.get("hidden") == "true"
             controls: list[SheetControl] = []
             for card in descendants(window, "card"):
                 kind = card.get("type")

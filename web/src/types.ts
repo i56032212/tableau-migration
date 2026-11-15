@@ -177,6 +177,10 @@ export interface Worksheet {
   controls?: SheetControl[];
   /** 存檔時的頁；null 為第一頁 */
   page?: Scalar;
+  /** 隱藏的工作表：檢視器的工作表清單不列出（編輯時仍看得到） */
+  hidden?: boolean;
+  /** 工作表分頁的顏色 */
+  tab_color?: string | null;
 }
 
 export type ZoneKind =
@@ -476,7 +480,8 @@ export interface WorkbookSummary {
   workbook: string;
   name: string;
   dashboards: { id: string; name: string }[];
-  worksheets: { id: string; name: string }[];
+  /** hidden：隱藏的工作表（只在 dashboard、Story 中使用），清單不列出 */
+  worksheets: { id: string; name: string; hidden?: boolean }[];
   stories?: { id: string; name: string }[];
   unsupported: number;
   /** 發布到報表庫的報表（fixtures 的報表為 null） */

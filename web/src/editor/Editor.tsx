@@ -51,6 +51,8 @@ import {
   cardMarks,
   fieldIndex,
   isMapSheet,
+  isMeasure,
+  isSpecial,
   MEASURE_VALUES,
   markUses,
   newTableCalc,
@@ -58,6 +60,7 @@ import {
   selectionFilter,
   selectionLevels,
   setAggregated,
+  setSort,
   type SheetIR,
   swapAxes,
   tidySheet,
@@ -569,6 +572,26 @@ export function Editor({
   const empty = shown.rows.length === 0 && shown.columns.length === 0 && markUses(shown.marks).length === 0;
   const measureValuesUsed = [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks)].some((u) => u.field === MEASURE_VALUES);
   const totals = new Set(sheet.totals);
+  // 工具列的排序（Tableau 工具列的遞增、遞減排序）：最內層的離散維度依另一架上的量值排序；
+  // 同一架上前面還有維度時是巢狀排序（各窗格各自排序），沒有量值時依名稱
+  const quickSort = (() => {
+    for (const [dims, measures] of [
+      [sheet.rows, sheet.columns],
+      [sheet.columns, sheet.rows],
+    ] as [FieldUse[], FieldUse[]][]) {
+      const discrete = dims.filter((u) => !isSpecial(u) && !u.continuous && !isMeasure(u, fields));
+      const by = measures.find((u) => !isSpecial(u) && isMeasure(u, fields)) ?? null;
+      const use = discrete[discrete.length - 1];
+      if (use && (by || measures.length === 0))
+        return { use, by, nested: by !== null && discrete.length > 1, caption: fields.get(use.field)?.caption ?? use.field };
+    }
+    return null;
+  })();
+  const sortBy = (order: "asc" | "desc") => {
+    if (!quickSort) return;
+    const { use, by, nested } = quickSort;
+    apply((s) => setSort(s, use.field, by ? { kind: "by_field", order, by, nested, manual_values: [] } : { kind: "alphabetic", order, by: null, manual_values: [] }));
+  };
   const toggleTotal = (which: "rows" | "columns") =>
     apply((s) => ({ ...s, totals: s.totals.includes(which) ? s.totals.filter((t) => t !== which) : [...s.totals, which] }));
 
@@ -654,6 +677,19 @@ export function Editor({
           >
             貼上格式
           </button>
+          {quickSort && (
+            <>
+              <button type="button" aria-label="遞增排序" title={`依 ${quickSort.by ? "量值" : "名稱"}由小到大排序「${quickSort.caption}」（Tableau 工具列的排序）`} onClick={() => sortBy("asc")}>
+                ↑ 排序
+              </button>
+              <button type="button" aria-label="遞減排序" title={`依 ${quickSort.by ? "量值" : "名稱"}由大到小排序「${quickSort.caption}」`} onClick={() => sortBy("desc")}>
+                ↓ 排序
+              </button>
+              <button type="button" aria-label="清除排序" disabled={!sheet.sorts.some((s) => s.field === quickSort.use.field)} onClick={() => apply((s) => setSort(s, quickSort.use.field, null))}>
+                清除排序
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={showMe ? "active" : undefined}
@@ -708,6 +744,47 @@ export function Editor({
           >
             複製
           </button>
+          <button
+            type="button"
+            title="新的工作表是這個檢視的文字表（Tableau 的「複製為交叉資料表」）"
+            onClick={() =>
+              void editApi
+                .duplicateAsCrosstab(workbook, sheet.id)
+                .then((created) => {
+                  onChanged();
+                  onOpen(created.id);
+                })
+                .catch((e: Error) => notify(e.message, "error"))
+            }
+          >
+            複製成交叉資料表
+          </button>
+          <label className="inline" title="隱藏的工作表只在 dashboard 與 Story 中使用，檢視器的工作表清單不列出（Tableau 的「隱藏工作表」）">
+            <input
+              type="checkbox"
+              aria-label="隱藏工作表"
+              checked={sheet.hidden === true}
+              onChange={(e) => {
+                const hidden = e.target.checked;
+                apply((s) => ({ ...s, hidden }));
+                window.setTimeout(onChanged, 600);
+              }}
+            />{" "}
+            隱藏
+          </label>
+          <label className="inline" title="工作表分頁的顏色（清單中以色塊標示）">
+            分頁顏色
+            <input
+              type="color"
+              aria-label="分頁顏色"
+              value={(sheet.tab_color as string | null | undefined) ?? "#ffffff"}
+              onChange={(e) => {
+                const color = e.target.value.toLowerCase();
+                apply((s) => ({ ...s, tab_color: color === "#ffffff" ? null : color }));
+                window.setTimeout(onChanged, 600);
+              }}
+            />
+          </label>
           <button
             type="button"
             className="danger"

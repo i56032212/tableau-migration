@@ -8439,6 +8439,26 @@
           "default": null,
           "description": "下拉線；None 為不顯示（連續的座標軸才有下拉線）"
         },
+        "hidden": {
+          "default": false,
+          "description": "隱藏的工作表（工作表分頁的「隱藏工作表」，視窗的 hidden='true'）：只在 dashboard 與 Story 中使用，檢視器的工作表清單不列出；編輯時仍看得到",
+          "title": "Hidden",
+          "type": "boolean"
+        },
+        "tab_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工作表分頁的顏色（分頁選單的「色彩」）；None 為沒有",
+          "title": "Tab Color"
+        },
         "show_missing": {
           "description": "顯示遺漏的值（膠囊選單）：欄列架上的日期（部分、截斷）與數值分組，在最小值到最大值之間補上沒有資料的成員（標題與座標軸上看得到，標記是空的）",
           "items": {

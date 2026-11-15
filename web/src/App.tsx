@@ -345,11 +345,13 @@ function Home({ me }: { me: Me }) {
                   Story：{st.name}
                 </Link>
               ))}
-              {wb.worksheets.map((w) => (
-                <Link key={w.id} to={viewPath(wb.id, "s", w.id)}>
-                  {w.name}
-                </Link>
-              ))}
+              {wb.worksheets
+                .filter((w) => desktop || !w.hidden)
+                .map((w) => (
+                  <Link key={w.id} to={viewPath(wb.id, "s", w.id)}>
+                    {w.hidden ? `${w.name}（隱藏）` : w.name}
+                  </Link>
+                ))}
             </div>
             {wb.unsupported > 0 && <div className="error">有 {wb.unsupported} 筆不支援的元素</div>}
             {desktop && (
@@ -543,7 +545,7 @@ function WorkbookPage({
         : stories[0]
           ? viewPath(workbook, "story", stories[0].id)
           : ir.worksheets[0]
-            ? viewPath(workbook, "s", ir.worksheets[0].id)
+            ? viewPath(workbook, "s", (ir.worksheets.find((w) => !w.hidden) ?? ir.worksheets[0]).id)
             : null;
   if (target) {
     navigate(target + window.location.search);
@@ -616,11 +618,15 @@ function WorkbookPage({
               Story：{st.name}
             </option>
           ))}
-          {ir.worksheets.map((w) => (
-            <option key={w.id} value={editing === w.id ? `edit:${w.id}` : `s:${w.id}`}>
-              工作表：{w.name}
-            </option>
-          ))}
+          {ir.worksheets
+            // 隱藏的工作表：檢視器的清單不列出（正在看的除外）；桌面版照樣列出，方便編輯
+            .filter((w) => me.mode === "desktop" || !w.hidden || w.id === worksheet?.id || editing === w.id)
+            .map((w) => (
+              <option key={w.id} value={editing === w.id ? `edit:${w.id}` : `s:${w.id}`} style={w.tab_color ? { backgroundColor: `${w.tab_color}55` } : undefined}>
+                工作表：{w.name}
+                {w.hidden ? "（隱藏）" : ""}
+              </option>
+            ))}
         </select>
         {me.mode === "desktop" && worksheet && (
           <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit", worksheet.id))}>

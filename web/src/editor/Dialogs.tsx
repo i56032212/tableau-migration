@@ -473,7 +473,7 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
             </label>
             <label title="主要刻度之間較短、沒有文字的刻度；空白為沒有">
               次要刻度間距
-              <input aria-label="次要刻度間距" value={minor} placeholder="無" onChange={(e) => setMinor(e.target.value)} />
+              <input aria-label="次要刻度的大小" value={minor} placeholder="無" onChange={(e) => setMinor(e.target.value)} />
             </label>
           </div>
         )}

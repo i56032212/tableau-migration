@@ -1880,7 +1880,7 @@ def test_worksheet_cards_and_relevant_values(tmp_path: Path) -> None:
       </zones>
     </dashboard>"""
     windows = f"""<windows>
-      <window class='worksheet' name='With Region'>
+      <window class='worksheet' hidden='true' name='With Region'>
         <cards>
           <edge name='left'><strip size='160'><card type='pages' /><card type='filters' /><card type='marks' /></strip></edge>
           <edge name='right'><strip size='160'>
@@ -1897,6 +1897,8 @@ def test_worksheet_cards_and_relevant_values(tmp_path: Path) -> None:
     )
     ir = parse(tmp_path, xml)
     assert reasons(ir) == []
+    # 隱藏的工作表（視窗的 hidden='true'）：只在 dashboard 中使用
+    assert ir.worksheets[0].hidden is True
     controls = ir.worksheets[0].controls
     assert [(c.kind, c.control, c.relevant) for c in controls] == [
         ("filter", "single_list", True),

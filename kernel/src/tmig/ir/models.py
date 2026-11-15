@@ -2172,6 +2172,14 @@ class Worksheet(IRModel):
     drop_lines: DropLines | None = Field(
         default=None, description="下拉線；None 為不顯示（連續的座標軸才有下拉線）"
     )
+    hidden: bool = Field(
+        default=False,
+        description="隱藏的工作表（工作表分頁的「隱藏工作表」，視窗的 hidden='true'）：只在 dashboard 與 Story 中"
+        "使用，檢視器的工作表清單不列出；編輯時仍看得到",
+    )
+    tab_color: HexColor | None = Field(
+        default=None, description="工作表分頁的顏色（分頁選單的「色彩」）；None 為沒有"
+    )
     show_missing: list[FieldUse] = Field(
         default_factory=list,
         description="顯示遺漏的值（膠囊選單）：欄列架上的日期（部分、截斷）與數值分組，在最小值到最大值之間"

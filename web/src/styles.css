@@ -687,3 +687,6 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .control-apply button { font: inherit; padding: 1px 10px; }
 .control-customize { border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; margin: 4px 0; }
 .control-customize legend { font-size: 12px; color: #5b6470; }
+.hidden-sheet { opacity: 0.55; font-style: italic; }
+.manual-sort .value-list li[draggable] { cursor: grab; }
+.manual-sort .value-list li.dragging { opacity: 0.4; }

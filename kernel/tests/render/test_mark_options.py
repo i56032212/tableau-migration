@@ -162,8 +162,9 @@ def test_label_direction_wrap_and_bar_position(tmp_path: Path, db: Path) -> None
     start = label(with_marks(ir, cell_align="left"))
     assert start["encoding"]["x"] == {"datum": 0, "type": "quantitative"}
     middle = label(with_marks(ir, cell_align="center"))
-    assert middle["mark"]["align"] == "center" and middle["encoding"]["x"]["field"] == "__bar_mid"
-    assert middle["transform"][-1]["as"] == "__bar_mid"
+    assert middle["mark"]["align"] == "center" and middle["encoding"]["x"]["field"] == "c1__mid"
+    # 位置是量值的一半（資料中另有一欄；不用 transform，只標示部分標記時的篩選不會蓋掉它）
+    assert "transform" not in middle
     # 文字方向：由下往上時文字轉 270 度，仍在長條尾端的右邊（文字的上緣朝左）
     up = label(with_marks(ir, labels=MarkLabels(show=True, direction="up")))
     assert (up["mark"]["angle"], up["mark"]["align"], up["mark"]["baseline"]) == (
@@ -193,7 +194,15 @@ def test_label_direction_wrap_and_bar_position(tmp_path: Path, db: Path) -> None
     assert (top["mark"]["baseline"], top["mark"]["dy"]) == ("bottom", -3)
     # 直的長條：垂直對齊靠下在起點，置中在中間；由下往上的文字從長條的頂端往上寫
     assert label(with_marks(ir, label_valign="bottom"))["encoding"]["y"]["datum"] == 0
-    assert label(with_marks(ir, label_valign="center"))["encoding"]["y"]["field"] == "__bar_mid"
+    assert label(with_marks(ir, label_valign="center"))["encoding"]["y"]["field"] == "c1__mid"
+    # 只標示最大值時（圖層有篩選）置中的位置仍然有效
+    largest = with_marks(
+        ir, label_valign="center", labels=MarkLabels(show=True, marks="min_max", minimum=False)
+    )
+    found = label(largest)
+    assert found["encoding"]["y"]["field"] == "c1__mid" and len(found["transform"]) == 1
+    values = render(largest, db).spec["data"]["values"]
+    assert all(v["c1__mid"] == v["c1"] / 2 for v in values)
     up = label(with_marks(ir, labels=MarkLabels(show=True, direction="up")))
     assert (up["mark"]["align"], up["mark"]["baseline"], up["mark"]["dx"]) == ("left", "middle", 3)
 

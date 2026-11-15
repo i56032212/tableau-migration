@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import time
@@ -2216,8 +2217,8 @@ def test_stack_color_effects_labels_axis_and_custom_format(engine: str) -> None:
         dialog = page.locator(".axis-dialog")
         dialog.get_by_label("各窗格獨立的範圍").check()
         dialog.get_by_label("主要刻度", exact=True).select_option("fixed")
-        dialog.get_by_label("刻度間距", exact=True).fill("200000")
-        dialog.get_by_label("次要刻度間距").fill("50000")
+        dialog.get_by_label("刻度間距").fill("200000")
+        dialog.get_by_label("次要刻度的大小").fill("50000")
         confirm(page, ".axis-dialog")
         axis = sheet()["axes"][0]
         assert (axis["tick_spacing"], axis["minor_spacing"], axis["independent"]) == (
@@ -2423,5 +2424,104 @@ def test_filter_tabs_control_options_missing_values_and_view_data(engine: str) -
         chosen = posted["filters"]["f_region"]
         assert chosen["mode"] == "include" and "East" not in chosen["values"]
         assert len(chosen["values"]) == 3
+        assert errors == []
+        browser.close()
+
+
+def test_toolbar_sort_manual_drag_hidden_sheet_and_crosstab(engine: str) -> None:
+    """工具列的排序、手動排序清單的拖曳、隱藏工作表與分頁顏色、複製成交叉資料表。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def menu(page: Page, *labels: str) -> None:
+        for label in labels[:-1]:
+            page.locator(
+                ".popup-menu li[role=menuitem] > .menu-label", has_text=label
+            ).first.hover()
+        page.locator(
+            ".popup-menu li[role=menuitem] > .menu-label", has_text=labels[-1]
+        ).first.click()
+
+    def sheet(worksheet: str = "ws_1") -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{worksheet}")["worksheet"]
+
+    def regions(worksheet: str = "ws_1") -> list[str]:
+        response = call(engine, f"/api/workbooks/demo/worksheets/{worksheet}/render", {})
+        assert response["unsupported"] is None, response
+        return [row[0] for row in response["table"]["rows"]]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1700, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        for field in ("f_region", "f_sales"):
+            page.locator(f'.data-pane [data-field="{field}"]').dblclick()
+            settle(page)
+        natural = regions()
+        assert natural == sorted(natural)
+
+        # 工具列的排序：Region 依 SUM(Sales) 由大到小、由小到大，再清除
+        page.get_by_role("button", name="遞減排序").click()
+        settle(page)
+        sort = sheet()["sorts"][0]
+        assert (sort["field"], sort["kind"], sort["order"]) == ("f_region", "by_field", "desc")
+        assert sort["by"]["field"] == "f_sales" and sort["nested"] is False
+        descending = regions()
+        page.get_by_role("button", name="遞增排序").click()
+        settle(page)
+        assert regions() == descending[::-1]
+        page.get_by_role("button", name="清除排序").click()
+        settle(page)
+        assert sheet()["sorts"] == [] and regions() == natural
+
+        # 手動排序：在清單中把最後一個成員拖到最前面
+        page.locator('.shelf[data-shelf="rows"] .pill').click()
+        menu(page, "排序", "排序…")
+        dialog = page.locator(".sort-dialog")
+        dialog.get_by_label("排序依據").select_option("manual")
+        items = dialog.locator(".manual-sort .value-list li")
+        items.nth(len(natural) - 1).wait_for()
+        items.nth(len(natural) - 1).drag_to(items.nth(0))
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+        expected = [natural[-1], *natural[:-1]]
+        assert sheet()["sorts"][0]["manual_values"] == expected and regions() == expected
+
+        # 隱藏工作表與分頁顏色
+        page.get_by_label("隱藏工作表").check()
+        settle(page)
+        page.get_by_label("分頁顏色").fill("#ff8800")
+        settle(page)
+        page.wait_for_timeout(700)
+        saved = sheet()
+        assert (saved["hidden"], saved["tab_color"]) == (True, "#ff8800")
+        option = page.locator("select.view-select option", has_text="工作表 1")
+        if option.count():
+            assert "（隱藏）" in (option.first.text_content() or "")
+
+        # 複製成交叉資料表：開啟新的工作表（文字表）
+        page.get_by_role("button", name="複製成交叉資料表").click()
+        page.wait_for_url(re.compile(r"/w/demo/edit/ws_1_"))
+        settle(page)
+        copy_id = page.url.rsplit("/", 1)[-1].split("?")[0]
+        copy = sheet(copy_id)
+        assert copy["marks"]["type"] == "text" and copy["hidden"] is False
+        assert [u["field"] for u in copy["rows"]] == ["f_region"]
+        assert [u["field"] for u in copy["marks"]["label"]] == ["f_sales"]
+        assert regions(copy_id) == expected  # 排序照原樣
         assert errors == []
         browser.close()

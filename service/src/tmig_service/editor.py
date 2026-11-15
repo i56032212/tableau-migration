@@ -29,6 +29,7 @@ from tmig.edit import (
     apply_filter_to_worksheets,
     catalog,
     check_formula,
+    duplicate_as_crosstab,
     duplicate_dashboard,
     duplicate_worksheet,
     new_id,
@@ -668,6 +669,12 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     @router.post("/{workbook}/worksheets/{worksheet}/duplicate")
     def post_duplicate(workbook: str, worksheet: str, request: Request) -> dict[str, Any]:
         sheet = edit(request, workbook, lambda ir: duplicate_worksheet(ir, worksheet))
+        return {"worksheet": sheet.model_dump(mode="json")}
+
+    @router.post("/{workbook}/worksheets/{worksheet}/crosstab")
+    def post_crosstab(workbook: str, worksheet: str, request: Request) -> dict[str, Any]:
+        """複製成交叉資料表：新的工作表是這個檢視的文字表（見 tmig.edit.duplicate_as_crosstab）。"""
+        sheet = edit(request, workbook, lambda ir: duplicate_as_crosstab(ir, worksheet))
         return {"worksheet": sheet.model_dump(mode="json")}
 
     @router.delete("/{workbook}/worksheets/{worksheet}")

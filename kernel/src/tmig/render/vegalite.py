@@ -1059,6 +1059,13 @@ class _Builder:
         size = marks.mark_size if marks.mark_size is not None else 1
         if setting.wrap:
             field_name = self.wrapped(marks, field_name)
+        # 長條的標籤置中：位置是量值的一半（資料中另有一欄；不用 transform，只標示部分標記時圖層的
+        # 篩選、檢視器選取時改寫的篩選都不會蓋掉它）
+        middle: str | None = None
+        horizontal = encoding.get("x", {}).get("type") == "quantitative"
+        centered = marks.cell_align == "center" if horizontal else marks.label_valign == "center"
+        if vl_type == "bar" and not stacked and centered:
+            middle = self.bar_middle(marks, encoding["x" if horizontal else "y"]["field"])
 
         def layer(extreme: Literal["max", "min"] | None = None) -> dict[str, Any]:
             found = _label_layer(
@@ -1073,6 +1080,7 @@ class _Builder:
                 extreme,
                 stacked,
                 marks.label_valign,
+                middle,
             )
             if setting.direction is not None:
                 _rotate_label(found["mark"], setting.direction)
@@ -1104,6 +1112,14 @@ class _Builder:
         horizontal = encoding.get("x", {}).get("type") == "quantitative"
         kind = "k" if setting.overlap else ("ix" if horizontal else "iy") if stacked else "c"
         return [self.named_label(found, kind) for found in layers]
+
+    def bar_middle(self, marks: Marks, field_name: str) -> str:
+        """長條中間的位置（標籤置中）：資料中加上「量值的一半」的欄，回傳它的名稱。"""
+        name = f"{field_name}{BAR_MIDDLE}"
+        for record in self.records_of(marks):
+            value = record.get(field_name)
+            record[name] = value / 2 if _is_number(value) else None
+        return name
 
     def wrapped(self, marks: Marks, field_name: str) -> str:
         """換行的標籤文字（標籤對齊的「換行：開」）：資料中加上換好行的欄，回傳它的名稱。"""
@@ -4640,6 +4656,8 @@ AUTOMATIC_DISCRETE = ColorPalette(kind="discrete")
 BORDERED = frozenset({"bar", "rect", "arc", "circle", "square", "point", "tick"})
 HALOED = frozenset({"circle", "square", "point"})
 """光暈作用的標記（Vega-Lite 的類型）。"""
+BAR_MIDDLE = "__mid"
+"""長條中間位置的欄名後綴（量值欄名加上它）。"""
 LABEL_WRAP_WIDTH = 120
 """標籤換行（換行：開）時每一行的寬度上限（像素）；Tableau 依標記與儲存格的大小決定，這裡是固定值。"""
 """可以畫框線的標記（Vega-Lite 的類型）；面積的框線另以折線疊在上緣。"""
@@ -5121,15 +5139,16 @@ def _label_layer(
     extreme: Literal["max", "min"] | None = None,
     stacked: bool = False,
     valign: Literal["top", "center", "bottom"] | None = None,
+    middle: str | None = None,
 ) -> dict[str, Any]:
-    """標籤：長條在尾端（stacked：依標記卡上的維度堆疊時在各段內側），圓點、形狀與方塊在右邊（對齊設為
+    """標籤：長條在尾端（stacked：依標記卡上的維度堆疊時在各段內側；對齊為靠左／下時在起點、置中時在
+    長條中間——middle 為資料中「量值的一半」的欄），圓點、形狀與方塊在右邊（對齊設為
     置中時在標記中央、靠左時在左邊；與 Tableau 相同），折線與區域在點的上方；折線的最大值（extreme）
     寫在點的右上、最小值在右下（與 Tableau 的畫面相同）。match 時文字的顏色與標記相同（依欄位著色時沿用
     同一個色彩的 encoding）。"""
     stacked = stacked and vl_type == "bar"
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
     font = font or resolve()
-    transforms: list[dict[str, Any]] = []
     mark: dict[str, Any] = {"type": "text", **font.mark(), "lineBreak": "\n"}
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
     if "size" in encoding:
@@ -5161,18 +5180,18 @@ def _label_layer(
         elif align == "left":
             # 水平對齊靠左：標籤在長條的起點（0）內側；置中：在長條的中間
             layer["x"] = {"datum": 0, "type": "quantitative"}
-        elif align == "center":
+        elif align == "center" and middle is not None:
             mark.update(align="center", dx=0)
-            layer["x"] = _bar_middle(encoding["x"], transforms)
+            layer["x"] = {**encoding["x"], "field": middle, "stack": None}
     elif vl_type == "bar":
         mark.update(baseline="top", dy=3) if stacked else mark.update(baseline="bottom", dy=-3)
         if stacked:
             layer["y"] = {**encoding["y"], "stack": "zero"}
         elif valign == "bottom":
             layer["y"] = {"datum": 0, "type": "quantitative"}
-        elif valign == "center":
+        elif valign == "center" and middle is not None:
             mark.update(baseline="middle", dy=0)
-            layer["y"] = _bar_middle(encoding["y"], transforms)
+            layer["y"] = {**encoding["y"], "field": middle, "stack": None}
     elif extreme == "max":
         mark.update(align="left", baseline="bottom", dx=3, dy=-2)
     elif extreme == "min":
@@ -5199,18 +5218,7 @@ def _label_layer(
                 "field": encoding["color"]["field"],
                 "type": encoding["color"]["type"],
             }
-    if transforms:
-        return {"transform": transforms, "mark": mark, "encoding": layer}
     return {"mark": mark, "encoding": layer}
-
-
-BAR_MIDDLE = "__bar_mid"
-
-
-def _bar_middle(channel: dict[str, Any], transforms: list[dict[str, Any]]) -> dict[str, Any]:
-    """長條中間的位置（標籤置中）：量值的一半；沿用座標軸的刻度與標題。"""
-    transforms.append({"calculate": f"datum[{json.dumps(channel['field'])}] / 2", "as": BAR_MIDDLE})
-    return {**channel, "field": BAR_MIDDLE, "stack": None}
 
 
 def _rotate_label(mark: dict[str, Any], direction: Literal["up", "down"]) -> None:

@@ -780,7 +780,7 @@ def create_app(
                         if grant.dashboard_allowed(d.name)
                     ],
                     "worksheets": [
-                        {"id": w.id, "name": w.name}
+                        {"id": w.id, "name": w.name, "hidden": w.hidden}
                         for w in ir.worksheets
                         if grant.worksheet_allowed(ir, w.id)
                     ],

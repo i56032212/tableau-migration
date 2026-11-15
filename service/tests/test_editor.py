@@ -1596,3 +1596,40 @@ def test_filter_tabs_control_options_missing_values_and_table_layout(client: Tes
     assert [t["title"] for t in tooltip] == ["Sales"]
     # 膠囊移走之後（工作表換成別的欄位）設定仍要對得上檢視中的欄位：伺服器照存，檢視器忽略不在架上的
     assert sheet(client, name)["show_missing"] == [day]
+
+
+def test_hidden_sheets_tab_color_and_duplicate_as_crosstab(client: TestClient) -> None:
+    name = "ws_sales_by_region"
+    listed = client.get("/api/workbooks").json()
+    demo = next(w for w in listed if w["id"] == "demo")
+    assert all(w["hidden"] is False for w in demo["worksheets"])
+    ws = sheet(client, name)
+    ws.update(hidden=True, tab_color="#ff8800")
+    response = client.put(f"/api/edit/demo/worksheets/{name}", json={"worksheet": ws})
+    assert response.status_code == 200, response.text
+    saved = response.json()["worksheet"]
+    assert (saved["hidden"], saved["tab_color"]) == (True, "#ff8800")
+    demo = next(w for w in client.get("/api/workbooks").json() if w["id"] == "demo")
+    assert [w["id"] for w in demo["worksheets"] if w["hidden"]] == [name]
+    # 隱藏的工作表照樣可以查詢（dashboard 上仍在使用）
+    assert render(client, name)["table"]["rows"]
+
+    # 複製成交叉資料表：維度留在架上，量值以 Measure Names／Values 並列成文字表；不沿用隱藏與顏色
+    original = render(client, name)
+    made = client.post(f"/api/edit/demo/worksheets/{name}/crosstab")
+    assert made.status_code == 200, made.text
+    copy = made.json()["worksheet"]
+    assert copy["name"] == "Sales by Region (交叉資料表)"
+    assert (copy["hidden"], copy["tab_color"], copy["marks"]["type"]) == (False, None, "text")
+    assert copy["columns"][-1]["field"] == "measure_names"
+    assert [u["field"] for u in copy["marks"]["label"]] == ["measure_values"]
+    assert len(copy["measure_values"]) >= 2 and copy["panes"] == []
+    table = render(client, copy["id"])
+    assert table["unsupported"] is None and table["mark"] == "text"
+    # 詳細程度不變：資料表的列（各維度的組合）與原檢視相同，量值各一欄
+    keys = table["table"]["keys"]
+    assert keys[:2] == ["f_region", "f_category"] and len(keys) == 2 + len(copy["measure_values"])
+    assert len(table["table"]["rows"]) == len(original["table"]["rows"])
+    again = client.post(f"/api/edit/demo/worksheets/{name}/crosstab").json()["worksheet"]
+    assert again["name"] == "Sales by Region (交叉資料表) (2)"
+    assert client.post("/api/edit/demo/worksheets/nope/crosstab").status_code == 422
