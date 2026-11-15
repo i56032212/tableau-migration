@@ -512,7 +512,7 @@ def _admits_null(flt: Filter) -> bool:
     """篩選保留 Null（次要資料源沒有對應資料的標記仍顯示）。"""
     if isinstance(flt, CategoricalFilter):
         return (None in flt.values) if flt.mode == "include" else (None not in flt.values)
-    return bool(getattr(flt, "include_null", False))
+    return bool(getattr(flt, "include_null", False) or getattr(flt, "only_null", False))
 
 
 def _reaggregate(rule: str, column: str, source: str) -> str:

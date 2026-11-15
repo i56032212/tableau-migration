@@ -2,7 +2,7 @@
 
 import type React from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { FieldUse } from "../types";
+import type { ControlOptions, FieldUse } from "../types";
 import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor, type DragItem } from "./context";
 import {
@@ -496,6 +496,19 @@ export function usePillMenu() {
         action: () => apply((s) => toggleHeader(s, use, axisShelf)),
       });
       if (use.continuous) items.push({ label: "編輯座標軸…", action: () => editor.openDialog({ kind: "axis", use, shelf: axisShelf }) });
+      // 顯示遺漏的值：日期與數值分組在最小值到最大值之間補上沒有資料的成員
+      if (!measure && (use.date !== null || field?.bin)) {
+        const missing = ((sheet.show_missing as FieldUse[] | undefined) ?? []).some((u) => sameUse(u, use));
+        items.push({
+          label: "顯示遺漏的值",
+          checked: missing,
+          action: () =>
+            apply((s) => {
+              const current = (s.show_missing as FieldUse[] | undefined) ?? [];
+              return { ...s, show_missing: missing ? current.filter((u) => !sameUse(u, use)) : [...current, use] };
+            }),
+        });
+      }
       const shelfUses = usesOn(sheet, shelf, card);
       if (measure) {
         const position = shelfUses.slice(0, index).filter((u) => isMeasure(u, fields)).length;
@@ -512,6 +525,19 @@ export function usePillMenu() {
             apply((s) => ({ ...s, subtotals: on ? s.subtotals.filter((u) => !sameUse(u, use)) : [...s.subtotals, use] })),
         });
       }
+    }
+    if (shelf !== "filters" && shelf !== "pages") {
+      // 包含在工具提示中：取消之後自動產生的工具提示不列出這個欄位
+      const excluded = ((sheet.tooltip_excluded as FieldUse[] | undefined) ?? []).some((u) => sameUse(u, use));
+      items.push({
+        label: "包含在工具提示中",
+        checked: !excluded,
+        action: () =>
+          apply((s) => {
+            const current = (s.tooltip_excluded as FieldUse[] | undefined) ?? [];
+            return { ...s, tooltip_excluded: excluded ? current.filter((u) => !sameUse(u, use)) : [...current, use] };
+          }),
+      });
     }
     items.push(SEPARATOR, remove);
     return items;
@@ -666,7 +692,16 @@ export interface SheetControlIR {
   parameter: string | null;
   control: string;
   relevant: boolean;
+  options?: ControlOptions | null;
 }
+
+/** 篩選控制項的自訂項目（選單的文字、選項的名稱與預設值）。 */
+export const CONTROL_OPTIONS: [keyof ControlOptions, string, boolean][] = [
+  ["show_all", "顯示「全部」值", true],
+  ["show_search", "顯示搜尋", true],
+  ["show_exclude", "顯示包含／排除", false],
+  ["show_apply", "顯示套用按鈕", false],
+];
 
 /** 篩選架：每個篩選一個膠囊（編輯、加入至內容、移除）。 */
 export function FiltersShelf() {
@@ -678,6 +713,11 @@ export function FiltersShelf() {
     const context = filter.stage === "context";
     const canContext = filter.stage === "dimension" || filter.stage === "top_n" || context;
     const shown = ((sheet.controls as SheetControlIR[] | undefined) ?? []).find((c) => c.kind === "filter" && sameUse(c.field, filter.field));
+    const change = (update: (control: SheetControlIR) => SheetControlIR) =>
+      apply((s) => ({
+        ...s,
+        controls: ((s.controls as SheetControlIR[] | undefined) ?? []).map((c) => (c.kind === "filter" && sameUse(c.field, filter.field) ? update(c) : c)),
+      }));
     return [
       { label: "編輯篩選…", action: () => editor.openFilter({ use: filter.field, index }) },
       {
@@ -712,11 +752,21 @@ export function FiltersShelf() {
             {
               label: "只顯示相關的值",
               checked: shown.relevant === true,
-              action: () =>
-                apply((s) => ({
-                  ...s,
-                  controls: ((s.controls as SheetControlIR[] | undefined) ?? []).map((c) => (c.kind === "filter" && sameUse(c.field, filter.field) ? { ...c, relevant: !c.relevant } : c)),
-                })),
+              action: () => change((c) => ({ ...c, relevant: !c.relevant, options: c.relevant ? c.options : { ...(c.options ?? {}), context_values: false } })),
+            },
+            {
+              // 可選值只列出套用內容篩選之後的值（與「只顯示相關的值」擇一）
+              label: "內容中的所有值",
+              checked: shown.options?.context_values === true && !shown.relevant,
+              action: () => change((c) => ({ ...c, relevant: false, options: { ...(c.options ?? {}), context_values: !(c.options?.context_values === true && !c.relevant) } })),
+            },
+            {
+              label: "自訂",
+              children: CONTROL_OPTIONS.map(([option, label, initial]) => ({
+                label,
+                checked: (shown.options?.[option] ?? initial) === true,
+                action: () => change((c) => ({ ...c, options: { ...(c.options ?? {}), [option]: !(c.options?.[option] ?? initial) } })),
+              })),
             },
           ]
         : []),

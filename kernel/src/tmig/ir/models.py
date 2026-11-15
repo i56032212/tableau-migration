@@ -810,6 +810,10 @@ class RangeFilter(IRModel):
     min: Scalar = None
     max: Scalar = None
     include_null: bool = False
+    only_null: bool = Field(
+        default=False,
+        description="只保留 Null 值（篩選對話框「特殊值」分頁的「Null 值」）；min、max 必須是 None",
+    )
     group: str | None = Field(
         default=None,
         description="篩選群組：同一群組的篩選一起變更（Tableau 的「套用到選取的工作表」與全域篩選）",
@@ -820,6 +824,8 @@ class RangeFilter(IRModel):
     def _check(self) -> Self:
         if self.stage == "top_n":
             raise ValueError("range 篩選不能屬於 top_n 階段")
+        if self.only_null and (self.min is not None or self.max is not None):
+            raise ValueError("只保留 Null 值的篩選不能有範圍")
         return self
 
 
@@ -1936,6 +1942,23 @@ ControlType = Literal[
 """篩選控制項；relative_date、condition 為顯示目前的相對日期或條件（檢視器尚不能修改）。"""
 
 
+class ControlOptions(IRModel):
+    """篩選控制項的自訂（篩選卡選單的值的範圍與「自訂」）。"""
+
+    context_values: bool = Field(
+        default=False,
+        description="內容中的所有值：可選值只列出套用內容篩選（context）之後的值；relevant 為 True 時以它為準",
+    )
+    show_all: bool = Field(default=True, description="顯示「（全部）」的選項")
+    show_search: bool = Field(default=True, description="成員多時顯示搜尋的輸入框（多選的清單）")
+    show_exclude: bool = Field(
+        default=False, description="顯示包含／排除的切換：排除時勾選的是要排除的值"
+    )
+    show_apply: bool = Field(
+        default=False, description="顯示套用按鈕：勾選之後按「套用」才篩選（多選的清單）"
+    )
+
+
 class SheetControl(IRModel):
     """工作表上顯示的控制項（Tableau 的「顯示篩選」「顯示參數」，工作表視窗的 <card>）：單獨檢視工作表時
     顯示在檢視的旁邊；dashboard 上的控制項是各自的區塊（Zone）。"""
@@ -1951,6 +1974,9 @@ class SheetControl(IRModel):
         default=False,
         description="篩選控制項「只顯示相關的值」：可選值只列出套用工作表上其他篩選之後還有資料的值；"
         "預設列出資料庫中所有的值",
+    )
+    options: ControlOptions | None = Field(
+        default=None, description="篩選控制項的自訂；None 為預設"
     )
 
     @model_validator(mode="after")
@@ -2146,6 +2172,31 @@ class Worksheet(IRModel):
     drop_lines: DropLines | None = Field(
         default=None, description="下拉線；None 為不顯示（連續的座標軸才有下拉線）"
     )
+    show_missing: list[FieldUse] = Field(
+        default_factory=list,
+        description="顯示遺漏的值（膠囊選單）：欄列架上的日期（部分、截斷）與數值分組，在最小值到最大值之間"
+        "補上沒有資料的成員（標題與座標軸上看得到，標記是空的）",
+    )
+    tooltip_excluded: list[FieldUse] = Field(
+        default_factory=list,
+        description="不包含在工具提示中的欄位（膠囊選單取消「包含在工具提示中」）：自動產生的工具提示"
+        "不列出它們；自訂的工具提示文字不受影響",
+    )
+    show_empty: list[Literal["rows", "columns"]] = Field(
+        default_factory=list,
+        description="表格版面的「顯示空的列」「顯示空的欄」：列架（欄架）上的離散維度，篩選之後還在資料中、"
+        "但沒有標記的成員組合（例如被量值篩選濾掉的）也顯示標題，儲存格是空的",
+    )
+    null_text: str | None = Field(
+        default=None,
+        description="特殊值的文字（格式＞窗格＞特殊值）：量值是 Null 時在文字表與標籤上顯示的文字；"
+        "None 為不顯示（空白）",
+    )
+    null_marks: Literal["connect", "zero"] | None = Field(
+        default=None,
+        description="座標軸上 Null 值的標記（特殊值＞標記）：connect＝隱藏並連接前後的點（折線不斷開），"
+        "zero＝顯示在預設值（0）；None 為隱藏、折線在這裡斷開",
+    )
     stack: Literal["on", "off"] | None = Field(
         default=None,
         description="堆疊標記（分析＞堆疊標記）：on＝一律堆疊（折線、圓點等也依標記卡上的維度累加），"
@@ -2292,6 +2343,9 @@ class Zone(IRModel):
         default=False,
         description="篩選控制項「只顯示相關的值」（values='relevant'）：可選值只列出套用工作表上其他篩選之後"
         "還有資料的值",
+    )
+    options: ControlOptions | None = Field(
+        default=None, description="篩選控制項的自訂；None 為預設"
     )
     legend: Literal["color", "size", "shape"] | None = None
     text: str | None = None

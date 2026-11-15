@@ -2254,3 +2254,174 @@ def test_stack_color_effects_labels_axis_and_custom_format(engine: str) -> None:
         dialog.get_by_role("button", name="取消").click()
         assert errors == []
         browser.close()
+
+
+def test_filter_tabs_control_options_missing_values_and_view_data(engine: str) -> None:
+    """量值篩選的「至少」與「特殊值」分頁、篩選控制項的自訂（套用按鈕）、顯示遺漏的值、包含在工具提示中、
+    格式的特殊值與表格版面，以及編輯器的「檢視資料」。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def menu(page: Page, *labels: str) -> None:
+        for label in labels[:-1]:
+            page.locator(
+                ".popup-menu li[role=menuitem] > .menu-label", has_text=label
+            ).first.hover()
+        page.locator(
+            ".popup-menu li[role=menuitem] > .menu-label", has_text=labels[-1]
+        ).first.click()
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+
+    def table() -> list[list[Any]]:
+        response = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})
+        assert response["unsupported"] is None, response
+        return response["table"]["rows"]
+
+    def confirm(page: Page, dialog: str) -> None:
+        page.locator(dialog).get_by_role("button", name="確定").click()
+        expect(page.locator(dialog)).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        for field in ("f_region", "f_sales"):
+            page.locator(f'.data-pane [data-field="{field}"]').dblclick()
+            settle(page)
+        assert len(table()) == 4
+
+        # 量值篩選的「至少」分頁：只有下限
+        page.locator('.shelf[data-shelf="columns"] .pill').click()
+        menu(page, "篩選…")
+        dialog = page.locator(".filter-dialog")
+        dialog.get_by_role("tab", name="至少").click()
+        expect(dialog.get_by_label("最大值")).to_have_count(0)
+        dialog.get_by_label("最小值").fill("600000")
+        confirm(page, ".filter-dialog")
+        saved = sheet()["filters"][0]
+        assert (saved["kind"], saved["min"], saved["max"]) == ("range", 600000, None)
+        kept = {row[0] for row in table()}
+        assert 0 < len(kept) < 4
+
+        # 格式：顯示空的列與 Null 值的文字——被濾掉的地區仍有標題，儲存格顯示「—」
+        page.get_by_role("button", name="格式…").click()
+        dialog = page.locator(".format-dialog")
+        dialog.get_by_label("顯示空的列").check()
+        dialog.get_by_label("Null 值的文字").fill("—")
+        dialog.get_by_label("Null 值的標記").select_option("connect")
+        confirm(page, ".format-dialog")
+        saved = sheet()
+        assert (saved["show_empty"], saved["null_text"], saved["null_marks"]) == (
+            ["rows"],
+            "—",
+            "connect",
+        )
+        rows = table()
+        assert (
+            len(rows) == 4
+            and {row[0] for row in rows if row[1] == "—"} == {row[0] for row in rows} - kept
+        )
+
+        # 檢視資料：摘要是每個標記一列，完整資料是基礎資料列
+        page.get_by_role("button", name="檢視資料…").click()
+        dialog = page.get_by_role("dialog")
+        dialog.locator(".data-preview tbody tr").nth(3).wait_for()
+        assert dialog.locator(".data-preview tbody tr").count() == 4
+        dialog.get_by_role("button", name="完整資料").click()
+        dialog.locator(".data-preview thead th", has_text="Order ID").wait_for()
+        assert dialog.locator(".data-preview tbody tr").count() > 4
+        dialog.get_by_label("關閉").click()
+        expect(page.get_by_role("dialog")).to_have_count(0)
+
+        # 篩選改成「特殊值＞所有值」（不再濾掉），再顯示 Region 的篩選控制項並自訂
+        page.locator('[data-drop="filters"] .pill').click()
+        menu(page, "編輯篩選…")
+        dialog = page.locator(".filter-dialog")
+        dialog.get_by_role("tab", name="特殊值").click()
+        dialog.get_by_label("所有值").check()
+        confirm(page, ".filter-dialog")
+        saved = sheet()["filters"][0]
+        assert (saved["min"], saved["max"], saved["include_null"], saved["only_null"]) == (
+            None,
+            None,
+            True,
+            False,
+        )
+        page.locator('.data-pane [data-field="f_region"]').drag_to(
+            page.locator('[data-drop="filters"]')
+        )
+        page.wait_for_selector(".filter-dialog .value-list li")
+        confirm(page, ".filter-dialog")
+        region_pill = page.locator('[data-drop="filters"] .pill', has_text="Region")
+        region_pill.click()
+        menu(page, "顯示篩選")
+        settle(page)
+        region_pill.click()
+        menu(page, "自訂", "顯示套用按鈕")
+        settle(page)
+        region_pill.click()
+        menu(page, "自訂", "顯示「全部」值")
+        settle(page)
+        control = next(c for c in sheet()["controls"] if c["field"]["field"] == "f_region")
+        assert control["options"]["show_apply"] is True and control["options"]["show_all"] is False
+
+        # 顯示遺漏的值與包含在工具提示中：欄換成月份（日期的部分）
+        page.locator('.data-pane [data-field="f_order_date"]').drag_to(
+            page.locator('.shelf[data-shelf="rows"] .shelf-drop')
+        )
+        settle(page)
+        date_pill = page.locator('.shelf[data-shelf="rows"] .pill').last
+        date_pill.click()
+        menu(page, "顯示遺漏的值")
+        settle(page)
+        date_pill.click()
+        menu(page, "包含在工具提示中")
+        settle(page)
+        saved = sheet()
+        assert [u["field"] for u in saved["show_missing"]] == ["f_order_date"]
+        assert [u["field"] for u in saved["tooltip_excluded"]] == ["f_order_date"]
+        # 膠囊移走之後設定一併拿掉
+        date_pill.click()
+        menu(page, "移除")
+        settle(page)
+        saved = sheet()
+        assert saved["show_missing"] == [] and saved["tooltip_excluded"] == []
+
+        # 檢視器：套用按鈕——勾選之後按「套用」才篩選；沒有「（全部）」的選項
+        page.goto(f"{engine}/w/demo/s/ws_1")
+        control_box = page.locator(
+            '.single-sheet .sheet-controls fieldset[data-control="multi_list"]'
+        )
+        control_box.locator("label", has_text="East").wait_for()
+        assert control_box.locator("label", has_text="（全部）").count() == 0
+        apply = control_box.get_by_role("button", name="套用")
+        expect(apply).to_be_disabled()
+        control_box.locator("label", has_text="East").locator("input").uncheck()
+        expect(apply).to_be_enabled()
+        with page.expect_response(
+            lambda r: r.url.endswith("/worksheets/ws_1/render") and r.request.method == "POST"
+        ) as rendered:
+            apply.click()
+        posted = rendered.value.request.post_data_json
+        assert posted is not None
+        chosen = posted["filters"]["f_region"]
+        assert chosen["mode"] == "include" and "East" not in chosen["values"]
+        assert len(chosen["values"]) == 3
+        assert errors == []
+        browser.close()

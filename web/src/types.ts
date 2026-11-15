@@ -233,6 +233,15 @@ export interface ZoneTextRun {
   style?: TextStyle | null;
 }
 
+/** 篩選控制項的自訂：值的範圍（內容中的所有值）與顯示的項目。 */
+export interface ControlOptions {
+  context_values?: boolean;
+  show_all?: boolean;
+  show_search?: boolean;
+  show_exclude?: boolean;
+  show_apply?: boolean;
+}
+
 /** 工作表上顯示的控制項：單獨檢視工作表時顯示在檢視的旁邊。 */
 export interface SheetControl {
   kind: "filter" | "parameter" | "set";
@@ -240,6 +249,7 @@ export interface SheetControl {
   parameter?: string | null;
   control: string;
   relevant?: boolean;
+  options?: ControlOptions | null;
 }
 
 /** 工作表的顯示大小（Tableau 的「調整」）。 */
@@ -283,6 +293,8 @@ export interface Zone {
   distribute?: boolean;
   /** 篩選控制項「只顯示相關的值」 */
   relevant?: boolean;
+  /** 篩選控制項的自訂 */
+  options?: ControlOptions | null;
   /** 工作表區塊是否顯示說明（Caption） */
   show_caption?: boolean;
   hidden?: boolean;

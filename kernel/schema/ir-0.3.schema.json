@@ -1513,6 +1513,44 @@
       "title": "ConditionFilter",
       "type": "object"
     },
+    "ControlOptions": {
+      "additionalProperties": false,
+      "description": "篩選控制項的自訂（篩選卡選單的值的範圍與「自訂」）。",
+      "properties": {
+        "context_values": {
+          "default": false,
+          "description": "內容中的所有值：可選值只列出套用內容篩選（context）之後的值；relevant 為 True 時以它為準",
+          "title": "Context Values",
+          "type": "boolean"
+        },
+        "show_all": {
+          "default": true,
+          "description": "顯示「（全部）」的選項",
+          "title": "Show All",
+          "type": "boolean"
+        },
+        "show_search": {
+          "default": true,
+          "description": "成員多時顯示搜尋的輸入框（多選的清單）",
+          "title": "Show Search",
+          "type": "boolean"
+        },
+        "show_exclude": {
+          "default": false,
+          "description": "顯示包含／排除的切換：排除時勾選的是要排除的值",
+          "title": "Show Exclude",
+          "type": "boolean"
+        },
+        "show_apply": {
+          "default": false,
+          "description": "顯示套用按鈕：勾選之後按「套用」才篩選（多選的清單）",
+          "title": "Show Apply",
+          "type": "boolean"
+        }
+      },
+      "title": "ControlOptions",
+      "type": "object"
+    },
     "Dashboard": {
       "additionalProperties": false,
       "properties": {
@@ -5172,6 +5210,12 @@
           "title": "Include Null",
           "type": "boolean"
         },
+        "only_null": {
+          "default": false,
+          "description": "只保留 Null 值（篩選對話框「特殊值」分頁的「Null 值」）；min、max 必須是 None",
+          "title": "Only Null",
+          "type": "boolean"
+        },
         "group": {
           "anyOf": [
             {
@@ -6150,6 +6194,18 @@
           "description": "篩選控制項「只顯示相關的值」：可選值只列出套用工作表上其他篩選之後還有資料的值；預設列出資料庫中所有的值",
           "title": "Relevant",
           "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選控制項的自訂；None 為預設"
         }
       },
       "required": [
@@ -8383,6 +8439,64 @@
           "default": null,
           "description": "下拉線；None 為不顯示（連續的座標軸才有下拉線）"
         },
+        "show_missing": {
+          "description": "顯示遺漏的值（膠囊選單）：欄列架上的日期（部分、截斷）與數值分組，在最小值到最大值之間補上沒有資料的成員（標題與座標軸上看得到，標記是空的）",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Show Missing",
+          "type": "array"
+        },
+        "tooltip_excluded": {
+          "description": "不包含在工具提示中的欄位（膠囊選單取消「包含在工具提示中」）：自動產生的工具提示不列出它們；自訂的工具提示文字不受影響",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Tooltip Excluded",
+          "type": "array"
+        },
+        "show_empty": {
+          "description": "表格版面的「顯示空的列」「顯示空的欄」：列架（欄架）上的離散維度，篩選之後還在資料中、但沒有標記的成員組合（例如被量值篩選濾掉的）也顯示標題，儲存格是空的",
+          "items": {
+            "enum": [
+              "rows",
+              "columns"
+            ],
+            "type": "string"
+          },
+          "title": "Show Empty",
+          "type": "array"
+        },
+        "null_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "特殊值的文字（格式＞窗格＞特殊值）：量值是 Null 時在文字表與標籤上顯示的文字；None 為不顯示（空白）",
+          "title": "Null Text"
+        },
+        "null_marks": {
+          "anyOf": [
+            {
+              "enum": [
+                "connect",
+                "zero"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "座標軸上 Null 值的標記（特殊值＞標記）：connect＝隱藏並連接前後的點（折線不斷開），zero＝顯示在預設值（0）；None 為隱藏、折線在這裡斷開",
+          "title": "Null Marks"
+        },
         "stack": {
           "anyOf": [
             {
@@ -8569,6 +8683,18 @@
           "description": "篩選控制項「只顯示相關的值」（values='relevant'）：可選值只列出套用工作表上其他篩選之後還有資料的值",
           "title": "Relevant",
           "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlOptions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "篩選控制項的自訂；None 為預設"
         },
         "legend": {
           "anyOf": [

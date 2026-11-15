@@ -2982,7 +2982,7 @@ def _unrestricted(flt: Filter) -> bool:
     if isinstance(flt, CategoricalFilter):
         return flt.mode == "all"
     if isinstance(flt, RangeFilter):
-        return flt.min is None and flt.max is None and flt.include_null
+        return flt.min is None and flt.max is None and flt.include_null and not flt.only_null
     return False
 
 

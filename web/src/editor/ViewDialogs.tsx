@@ -263,6 +263,8 @@ const FORMAT_KEYS = [
   "fonts",
   "field_label_background",
   "title_background",
+  "null_text",
+  "null_marks",
 ] as const;
 const FORMAT_STORE = "tmig.copied-format";
 let copiedFormat: Record<string, unknown> | null = null;

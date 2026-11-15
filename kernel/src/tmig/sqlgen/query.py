@@ -2817,7 +2817,7 @@ def _noop(flt: Filter) -> bool:
     if isinstance(flt, (CategoricalFilter, TupleFilter)):
         return flt.mode == "all"
     if isinstance(flt, RangeFilter):
-        return flt.min is None and flt.max is None and flt.include_null
+        return flt.min is None and flt.max is None and flt.include_null and not flt.only_null
     return False
 
 
@@ -2861,6 +2861,8 @@ def _members(
 
 
 def _range(value: str, flt: RangeFilter, datatype: str) -> str:
+    if flt.only_null:
+        return f"({value} IS NULL)"
     parts = []
     if flt.min is not None:
         parts.append(f"{value} >= {_lit(flt.min, datatype)}")
@@ -3117,9 +3119,11 @@ def relevant_domain_sql(
     use: FieldUse,
     state: QueryState | None = None,
     user: Identity | None = None,
+    context_only: bool = False,
 ) -> WorksheetSql:
     """篩選控制項的「只顯示相關的值」：套用工作表上其他的篩選（內容、維度階段，含檢視器目前的選取與
-    篩選動作）之後，這個欄位還有資料的值；這個欄位自己的篩選不算。結果只有一欄（欄位的值，依值排序）。"""
+    篩選動作）之後，這個欄位還有資料的值；這個欄位自己的篩選不算。結果只有一欄（欄位的值，依值排序）。
+    context_only：「內容中的所有值」——只套用內容篩選。"""
     ws = _find_worksheet(ir, worksheet)
     key = use_key(use)
     primary = {f.id for ds in ir.datasources if ds.id == ws.datasource for f in ds.fields}
@@ -3127,7 +3131,7 @@ def relevant_domain_sql(
         raise QueryError("次要資料源的欄位不支援「只顯示相關的值」", unsupported=True)
     kept: list[Filter] = []
     for flt in ws.filters:
-        if flt.stage not in ("context", "dimension"):
+        if flt.stage not in (("context",) if context_only else ("context", "dimension")):
             continue
         fields = flt.fields if isinstance(flt, TupleFilter) else [flt.field]
         if any(f.field not in primary for f in fields):
@@ -3140,6 +3144,58 @@ def relevant_domain_sql(
         name=ws.name,
         datasource=ws.datasource,
         rows=[use.model_copy(update={"continuous": False})],
+        marks=Marks(type="automatic"),
+        filters=kept,
+        source_ref=ws.source_ref,
+    )
+    sub = ir.model_copy(
+        update={"worksheets": [holder if w.id == ws.id else w for w in ir.worksheets]}
+    )
+    if state is not None:
+        keys = {use_key(f.field) for f in kept if not isinstance(f, TupleFilter)}
+        state = state.model_copy(
+            update={
+                "filters": {k: v for k, v in state.filters.items() if k in keys},
+                "pages": {},
+                "drill": {},
+                "tooltip": None,
+            }
+        )
+    return worksheet_sql(sub, ws.id, state, user)
+
+
+def empty_headers_sql(
+    ir: IR,
+    worksheet: str,
+    shelf: Literal["rows", "columns"],
+    state: QueryState | None = None,
+    user: Identity | None = None,
+) -> WorksheetSql | None:
+    """表格版面的「顯示空的列／欄」：這一架上離散維度的所有成員組合——套用工作表的內容與維度篩選
+    （含檢視器目前的選取）之後資料中有的組合，不論它們在檢視中有沒有標記（例如被量值篩選濾掉）。結果的欄
+    依架上的順序、依值排序。架上沒有可以補的維度（沒有離散維度，或有次要資料源的欄位）時回傳 None。"""
+    ws = _find_worksheet(ir, worksheet)
+    primary = {f.id: f for ds in ir.datasources if ds.id == ws.datasource for f in ds.fields}
+    uses = [
+        u
+        for u in (ws.rows if shelf == "rows" else ws.columns)
+        if u.field in primary and u.agg is None and u.table_calc is None and not u.continuous
+    ]
+    uses = [u for u in uses if (c := primary[u.field].calc) is None or c.level in ("row", "lod")]
+    if not uses:
+        return None
+    kept: list[Filter] = []
+    for flt in ws.filters:
+        if flt.stage not in ("context", "dimension"):
+            continue
+        fields = flt.fields if isinstance(flt, TupleFilter) else [flt.field]
+        if all(f.field in primary for f in fields):
+            kept.append(flt)
+    holder = Worksheet(
+        id=ws.id,
+        name=ws.name,
+        datasource=ws.datasource,
+        rows=uses,
         marks=Marks(type="automatic"),
         filters=kept,
         source_ref=ws.source_ref,

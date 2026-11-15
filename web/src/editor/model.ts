@@ -191,6 +191,8 @@ export interface FilterIR {
   min?: Scalar;
   max?: Scalar;
   include_null?: boolean;
+  /** 範圍篩選：只保留 Null 值（特殊值分頁） */
+  only_null?: boolean;
   group?: string | null;
   source_ref: string;
   [key: string]: unknown;
@@ -659,6 +661,11 @@ export function tidy(sheet: SheetIR, fields: Map<string, CatalogField>): SheetIR
   const present = new Set(uses.map((u) => u.field));
   const sorts = sheet.sorts.filter((s) => present.has(s.field));
   const changes: Partial<SheetIR> = { sorts };
+  // 顯示遺漏的值（欄列架上的膠囊）與不包含在工具提示中的欄位：膠囊移走之後一併拿掉
+  const missing = (sheet.show_missing as FieldUse[] | undefined) ?? [];
+  if (missing.length) changes.show_missing = missing.filter((u) => [...sheet.rows, ...sheet.columns].some((v) => sameUse(u, v)));
+  const excluded = (sheet.tooltip_excluded as FieldUse[] | undefined) ?? [];
+  if (excluded.length) changes.tooltip_excluded = excluded.filter((u) => uses.some((v) => sameUse(u, v)));
   const cluster = sheet.cluster as ClusterIR | null | undefined;
   if (cluster) {
     const measures = cluster.measures.filter((u) => uses.some((v) => sameUse(u, v)));

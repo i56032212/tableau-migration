@@ -31,6 +31,7 @@ import {
   zoneLabel,
 } from "./dashboardModel";
 import { useEditHistory, useNotice } from "./history";
+import { CONTROL_OPTIONS } from "./Shelves";
 
 type Base = Omit<NewZone, "kind">;
 const EMPTY: Base = {
@@ -468,9 +469,33 @@ export function DashboardEditor({
           </label>
         )}
         {zone.kind === "filter" && ["multi_list", "multi_dropdown", "single_list", "single_dropdown"].includes(zone.control ?? "") && (
-          <label className="inline" title="可選值只列出套用工作表上其他篩選之後還有資料的值（預設列出資料庫中所有的值）">
-            <input type="checkbox" checked={zone.relevant === true} onChange={(e) => set({ relevant: e.target.checked })} /> 只顯示相關的值
-          </label>
+          <>
+            <label className="inline" title="可選值只列出套用工作表上其他篩選之後還有資料的值（預設列出資料庫中所有的值）">
+              <input type="checkbox" checked={zone.relevant === true} onChange={(e) => set({ relevant: e.target.checked })} /> 只顯示相關的值
+            </label>
+            <label className="inline" title="可選值只列出套用工作表的內容篩選之後的值（沒有勾選「只顯示相關的值」時）">
+              <input
+                type="checkbox"
+                checked={zone.options?.context_values === true}
+                disabled={zone.relevant === true}
+                onChange={(e) => set({ options: { ...(zone.options ?? {}), context_values: e.target.checked } })}
+              />{" "}
+              內容中的所有值
+            </label>
+            <fieldset className="control-customize">
+              <legend>自訂</legend>
+              {CONTROL_OPTIONS.map(([option, label, initial]) => (
+                <label className="inline" key={option}>
+                  <input
+                    type="checkbox"
+                    checked={(zone.options?.[option] ?? initial) === true}
+                    onChange={(e) => set({ options: { ...(zone.options ?? {}), [option]: e.target.checked } })}
+                  />{" "}
+                  {label}
+                </label>
+              ))}
+            </fieldset>
+          </>
         )}
         {zone.kind === "parameter" && (
           <label className="inline">

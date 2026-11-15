@@ -138,6 +138,15 @@ export function FilterDialog({
   const [high, setHigh] = useState<string>(existing?.kind === "range" && existing.max !== null && existing.max !== undefined ? String(existing.max) : "");
   const [bounds, setBounds] = useState<{ min: Scalar; max: Scalar } | null>(null);
   const [includeNull, setIncludeNull] = useState(Boolean(existing?.include_null));
+  // 範圍的分頁（與 Tableau 相同）：值範圍、至少（只有下限）、至多（只有上限）、特殊值（Null、非 Null、全部）
+  const [rangeTab, setRangeTab] = useState<"range" | "least" | "most" | "special">(() => {
+    if (existing?.kind !== "range") return "range";
+    const hasMin = existing.min !== null && existing.min !== undefined;
+    const hasMax = existing.max !== null && existing.max !== undefined;
+    if (existing.only_null || (!hasMin && !hasMax)) return "special";
+    return hasMin && hasMax ? "range" : hasMin ? "least" : "most";
+  });
+  const [special, setSpecial] = useState<"null" | "non_null" | "all">(existing?.kind === "range" && existing.only_null ? "null" : existing?.kind === "range" && existing.include_null ? "all" : "non_null");
   // 相對日期
   const [period, setPeriod] = useState<string>((existing?.period as string | undefined) ?? "month");
   const [relative, setRelative] = useState<string>(() => {
@@ -240,7 +249,18 @@ export function FilterDialog({
       let filter: FilterIR;
       if (mode === "range") {
         const stage = measure ? (use.table_calc !== null || field?.level === "table_calc" ? "table_calc" : "measure") : context ? "context" : "dimension";
-        filter = { kind: "range", id, field: use, stage, min: parse(low), max: parse(high), include_null: includeNull, group, source_ref: EDITOR_REF };
+        filter = {
+          kind: "range",
+          id,
+          field: use,
+          stage,
+          min: rangeTab === "range" || rangeTab === "least" ? parse(low) : null,
+          max: rangeTab === "range" || rangeTab === "most" ? parse(high) : null,
+          include_null: rangeTab === "special" ? special === "all" : includeNull,
+          only_null: rangeTab === "special" && special === "null",
+          group,
+          source_ref: EDITOR_REF,
+        };
       } else if (mode === "relative") {
         const n = Math.max(1, Math.floor(count));
         const [first, last] =
@@ -514,24 +534,61 @@ export function FilterDialog({
 
         {mode === "range" && (
           <div className="filter-range">
-            <div className="row">
-              <label>
-                最小值
-                <input type={dateInput ? "date" : "text"} aria-label="最小值" value={dateInput ? low.slice(0, 10) : low} onChange={(e) => setLow(e.target.value)} />
-              </label>
-              <label>
-                最大值
-                <input type={dateInput ? "date" : "text"} aria-label="最大值" value={dateInput ? high.slice(0, 10) : high} onChange={(e) => setHigh(e.target.value)} />
-              </label>
+            <div className="tabs" role="tablist" aria-label="範圍的種類">
+              {(
+                [
+                  ["range", "值範圍"],
+                  ["least", "至少"],
+                  ["most", "至多"],
+                  ["special", "特殊值"],
+                ] as ["range" | "least" | "most" | "special", string][]
+              ).map(([key, label]) => (
+                <button type="button" role="tab" key={key} aria-selected={rangeTab === key} className={rangeTab === key ? "active" : ""} onClick={() => setRangeTab(key)}>
+                  {label}
+                </button>
+              ))}
             </div>
-            {bounds && (
-              <p className="hint">
-                資料的範圍：{display(bounds.min)} 到 {display(bounds.max)}（留空表示不限）
-              </p>
+            {rangeTab !== "special" && (
+              <>
+                <div className="row">
+                  {rangeTab !== "most" && (
+                    <label>
+                      最小值
+                      <input type={dateInput ? "date" : "text"} aria-label="最小值" value={dateInput ? low.slice(0, 10) : low} onChange={(e) => setLow(e.target.value)} />
+                    </label>
+                  )}
+                  {rangeTab !== "least" && (
+                    <label>
+                      最大值
+                      <input type={dateInput ? "date" : "text"} aria-label="最大值" value={dateInput ? high.slice(0, 10) : high} onChange={(e) => setHigh(e.target.value)} />
+                    </label>
+                  )}
+                </div>
+                {bounds && (
+                  <p className="hint">
+                    資料的範圍：{display(bounds.min)} 到 {display(bounds.max)}（留空表示不限）
+                  </p>
+                )}
+                <label>
+                  <input type="checkbox" checked={includeNull} onChange={(e) => setIncludeNull(e.target.checked)} /> 包含 Null 值
+                </label>
+              </>
             )}
-            <label>
-              <input type="checkbox" checked={includeNull} onChange={(e) => setIncludeNull(e.target.checked)} /> 包含 Null 值
-            </label>
+            {rangeTab === "special" && (
+              <div className="column">
+                {(
+                  [
+                    ["null", "Null 值"],
+                    ["non_null", "非 Null 值"],
+                    ["all", "所有值"],
+                  ] as ["null" | "non_null" | "all", string][]
+                ).map(([key, label]) => (
+                  <label key={key}>
+                    <input type="radio" name="special-values" checked={special === key} onChange={() => setSpecial(key)} /> {label}
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

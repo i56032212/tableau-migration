@@ -93,6 +93,7 @@ from tmig.render.format import (
     format_value,
     parse_format,
 )
+from tmig.render.missing import pad_result
 from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
 from tmig.render.trends import fit_model, format_p, format_r2, t_quantile
 from tmig.sqlgen.query import (
@@ -832,6 +833,10 @@ class _Builder:
                 vl_mark["filled"] = True
             if any(_fixed_range(encoding.get(c)) for c in ("x", "y")):
                 vl_mark["clip"] = True  # 與 Tableau 相同，固定範圍之外的標記不畫
+            if self.ws.null_marks is not None:
+                # 座標軸上的 Null（特殊值＞標記）：預設隱藏、折線斷開；connect 當作沒有這一列（折線連接
+                # 前後的點），zero 畫在預設值（0）
+                vl_mark["invalid"] = "filter" if self.ws.null_marks == "connect" else "show"
             # 開啟標記標籤、標籤上沒有欄位時標示數值座標軸上的量值（與 Tableau 相同）
             value_axis = rows_meas if not cols_meas else cols_meas if not rows_meas else []
             default = self.ch(value_axis[0]).label if value_axis else None
@@ -1700,11 +1705,12 @@ class _Builder:
             ch = self.ch(use)
             if ch.role == "dimension":
                 encoding.setdefault("detail", []).append({"field": ch.name, "type": "nominal"})
-        # 空間資料（形狀）不在工具提示中（與 Tableau 相同）
+        # 空間資料（形狀）不在工具提示中（與 Tableau 相同）；膠囊選單取消「包含在工具提示中」的欄位也不列
+        excluded = {use_key(u) for u in self.ws.tooltip_excluded}
         encoding["tooltip"] = [
             {"field": ch.label, "title": ch.title}
-            for ch in self.channels.values()
-            if ch.datatype != "spatial"
+            for key, ch in self.channels.items()
+            if ch.datatype != "spatial" and key not in excluded
         ]
 
     def combined_color(
@@ -2089,13 +2095,15 @@ def build_spec(
     builder.extent = _sheet_extent(ir, ws)
 
     # ---------------------------------------------------------- 資料
-    values = _records(channels, result)
+    # 顯示遺漏的值：日期與數值分組在最小值到最大值之間補上沒有資料的成員
+    result = pad_result(ir, ws, columns, result, parameters, builder.notes)
+    values = _records(channels, result, ws.null_text)
     if COLUMN_ORDER in result.columns:
         at = result.columns.index(COLUMN_ORDER)
         for record, row in zip(values, result.rows, strict=True):
             record[ORDER] = row[at]
     for total, total_result in totals or []:
-        records = _records(channels, total_result)
+        records = _records(channels, total_result, ws.null_text)
         for record in records:
             for key in total.dropped:
                 if key in channels:
@@ -2114,7 +2122,8 @@ def build_spec(
             place = before_groups if first else after_groups
             values = place(values, records, lambda r, keys=keys: tuple(r.get(k) for k in keys))
     pane_values = {
-        i: _records(channels, pane_result) for i, (_, pane_result) in (panes or {}).items()
+        i: _records(channels, pane_result, ws.null_text)
+        for i, (_, pane_result) in (panes or {}).items()
     }
     if long and pane_values:
         builder.notes.append("用到 Measure Values 時，各標記卡一律以工作表的詳細程度呈現")
@@ -3682,8 +3691,11 @@ def _exclude_totals_from_color(spec: dict[str, Any], mark: str, text: str) -> No
     }
 
 
-def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str, Any]]:
-    """查詢結果 → 資料列：原始值欄與顯示文字欄；只轉換結果中有的欄位。"""
+def _records(
+    channels: dict[str, Channel], result: QueryResult, null_text: str | None = None
+) -> list[dict[str, Any]]:
+    """查詢結果 → 資料列：原始值欄與顯示文字欄；只轉換結果中有的欄位。null_text：量值是 Null 時的
+    顯示文字（特殊值的文字）。"""
     index = {key: i for i, key in enumerate(result.columns)}
     present = [(key, ch) for key, ch in channels.items() if key in index]
     records: list[dict[str, Any]] = []
@@ -3706,6 +3718,8 @@ def _records(channels: dict[str, Channel], result: QueryResult) -> list[dict[str
                 record[ch.label] = fiscal
             elif use.date is not None and use.date.kind == "part" and raw is not None:
                 record[ch.label] = str(raw)
+            elif raw is None and null_text is not None and ch.role == "measure":
+                record[ch.label] = null_text
             else:
                 record[ch.label] = format_value(raw, ch.datatype, ch.format, trunc)
         records.append(record)

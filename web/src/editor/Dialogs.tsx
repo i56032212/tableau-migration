@@ -1839,6 +1839,17 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
   // 對齊：文字表儲存格的水平對齊與標題成員的垂直對齊（空的為預設）
   const [cellAlign, setCellAlign] = useState<string>((sheet.cell_align as string | null | undefined) ?? "");
   const [headerValign, setHeaderValign] = useState<string>((sheet.label_valign as string | null | undefined) ?? "");
+  // 特殊值（Null）：文字表與標籤上的文字、座標軸上的標記；表格版面：顯示空的列與欄
+  const [nullText, setNullText] = useState<string>((sheet.null_text as string | null | undefined) ?? "");
+  const [nullMarks, setNullMarks] = useState<string>((sheet.null_marks as string | null | undefined) ?? "");
+  const [empty, setEmpty] = useState<Set<string>>(new Set((sheet.show_empty as string[] | undefined) ?? []));
+  const toggleEmpty = (which: "rows" | "columns") =>
+    setEmpty((current) => {
+      const next = new Set(current);
+      if (next.has(which)) next.delete(which);
+      else next.add(which);
+      return next;
+    });
   const build = (s: SheetIR): SheetIR => {
       const nextFonts = { ...((s.fonts as Record<string, unknown>) ?? {}) } as Record<string, Record<string, unknown>>;
       const worksheetFont: Record<string, unknown> = { ...(nextFonts.worksheet ?? {}), family: family || null, size: size ? Number(size) : null };
@@ -1856,6 +1867,9 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
         column_style: colStyle,
         cell_align: cellAlign || null,
         label_valign: headerValign || null,
+        null_text: nullText === "" ? null : nullText,
+        null_marks: nullMarks || null,
+        show_empty: (["rows", "columns"] as const).filter((which) => empty.has(which)),
       };
   };
   const save = () => {
@@ -1993,6 +2007,28 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
               <option value="center">中</option>
               <option value="bottom">下</option>
             </select>
+          </label>
+        </div>
+        <div className="row">
+          <label title="量值是 Null 時在文字表與標籤上顯示的文字（Tableau 的「格式＞窗格＞特殊值」）；空白為不顯示">
+            Null 值的文字
+            <input aria-label="Null 值的文字" value={nullText} placeholder="（空白）" onChange={(e) => setNullText(e.target.value)} />
+          </label>
+          <label title="座標軸上量值是 Null 的標記">
+            Null 值的標記
+            <select aria-label="Null 值的標記" value={nullMarks} onChange={(e) => setNullMarks(e.target.value)}>
+              <option value="">隱藏（折線斷開）</option>
+              <option value="connect">隱藏（連接前後的點）</option>
+              <option value="zero">顯示在預設值（0）</option>
+            </select>
+          </label>
+        </div>
+        <div className="row" title="篩選之後資料中還有、但檢視中沒有標記的成員也顯示標題（Tableau 的「分析＞表格版面」）">
+          <label className="inline">
+            <input type="checkbox" checked={empty.has("rows")} onChange={() => toggleEmpty("rows")} /> 顯示空的列
+          </label>
+          <label className="inline">
+            <input type="checkbox" checked={empty.has("columns")} onChange={() => toggleEmpty("columns")} /> 顯示空的欄
           </label>
         </div>
         {shelf("列", rowStyle, setRowStyle)}

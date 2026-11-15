@@ -311,6 +311,8 @@ def _replace(existing: Filter, value: FilterValue) -> Filter:
                     "include_null": existing.include_null
                     if value.include_null is None
                     else value.include_null,
+                    # 檢視者改了範圍：不再是「只保留 Null 值」
+                    "only_null": existing.only_null and value.min is None and value.max is None,
                 }
             )
         return _new_filter(existing.id, existing.field, value, existing.stage)

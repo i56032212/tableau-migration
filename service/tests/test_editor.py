@@ -1441,3 +1441,158 @@ def test_ad_hoc_defaults_split_and_replace_references(client: TestClient) -> Non
     assert client.put(f"{base}/{target}", json={"datatype": "integer"}).status_code == 200
     entry = fields()[target]
     assert (entry["datatype"], entry["kind"]) == ("integer", "column")
+
+
+def test_filter_tabs_control_options_missing_values_and_table_layout(client: TestClient) -> None:
+    def use(
+        field: str, agg: str | None = None, continuous: bool = False, date: Any = None
+    ) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": date,
+            "continuous": continuous,
+            "table_calc": None,
+        }
+
+    def put(ws: dict[str, Any]) -> dict[str, Any]:
+        response = client.put(f"/api/edit/demo/worksheets/{ws['id']}", json={"worksheet": ws})
+        assert response.status_code == 200, response.text
+        return response.json()["worksheet"]
+
+    def flt(
+        filter_id: str, kind: str, field: dict[str, Any], stage: str, **more: Any
+    ) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "id": filter_id,
+            "field": field,
+            "stage": stage,
+            "source_ref": "/editor",
+            **more,
+        }
+
+    name = "ws_sales_by_region"
+    sales = use("f_sales", "sum", True)
+    base = sheet(client, name)
+    base.update(rows=[use("f_region")], columns=[sales], filters=[], sorts=[], panes=[])
+    base.update(marks={"type": "bar"}, table_calcs=[], reference_lines=[])
+    put(base)
+    totals = {r[0]: float(r[1].replace(",", "")) for r in render(client, name)["table"]["rows"]}
+    assert len(totals) == 4
+    ranked = sorted(totals, key=lambda region: totals[region])
+    threshold = (totals[ranked[1]] + totals[ranked[2]]) / 2
+
+    # 「至少」：只有下限的量值篩選；兩個地區被濾掉
+    ws = sheet(client, name)
+    ws["filters"] = [flt("flt_least", "range", sales, "measure", min=threshold, max=None)]
+    put(ws)
+    assert {r[0] for r in render(client, name)["table"]["rows"]} == set(ranked[2:])
+    # 顯示空的列：被量值篩選濾掉的地區仍顯示標題，儲存格是特殊值的文字
+    ws = sheet(client, name)
+    ws.update(show_empty=["rows"], null_text="—")
+    put(ws)
+    rendered = render(client, name)
+    rows = rendered["table"]["rows"]
+    assert [r[0] for r in rows] == sorted(totals)  # 依值排序：補在依值應該在的位置
+    assert {r[0] for r in rows if r[1] == "—"} == set(ranked[:2])
+    records = rendered["spec"]["data"]["values"]
+    assert sum(1 for record in records if record["c1"] is None) == 2
+
+    # 「特殊值＞Null 值」：只保留 Null 的列（計算欄位在 East 是 Null）
+    made = client.post(
+        "/api/edit/demo/calcs",
+        json={
+            "datasource": "ds_orders",
+            "caption": "Maybe Sales",
+            "formula": 'IIF([Region] = "East", NULL, [Sales])',
+        },
+    )
+    assert made.status_code == 200, made.text
+    maybe = made.json()["field"]["id"]
+    ws = sheet(client, name)
+    ws.update(show_empty=[], null_text=None)
+    ws["filters"] = [
+        flt("flt_null", "range", use(maybe, continuous=True), "dimension", only_null=True)
+    ]
+    saved = put(ws)
+    assert saved["filters"][0]["only_null"] is True
+    assert [r[0] for r in render(client, name)["table"]["rows"]] == ["East"]
+    wrong = dict(ws, filters=[dict(ws["filters"][0], min=1)])
+    response = client.put(f"/api/edit/demo/worksheets/{name}", json={"worksheet": wrong})
+    assert response.status_code == 422 and "不能有範圍" in response.text
+
+    # 篩選控制項的自訂與「內容中的所有值」：可選值只套用內容篩選
+    ws = sheet(client, name)
+    ws["filters"] = [
+        flt(
+            "flt_cat",
+            "categorical",
+            use("f_category"),
+            "context",
+            mode="include",
+            values=["Furniture"],
+        ),
+        flt("flt_sub", "categorical", use("f_sub_category"), "dimension", mode="all", values=[]),
+        flt(
+            "flt_region",
+            "categorical",
+            use("f_region"),
+            "dimension",
+            mode="include",
+            values=["East"],
+        ),
+    ]
+    options = {"context_values": True, "show_apply": True, "show_all": False}
+    ws["controls"] = [
+        {
+            "kind": "filter",
+            "field": use("f_sub_category"),
+            "parameter": None,
+            "control": "multi_list",
+            "relevant": False,
+            "options": options,
+        }
+    ]
+    saved = put(ws)
+    assert saved["controls"][0]["options"] == {
+        "context_values": True,
+        "show_all": False,
+        "show_search": True,
+        "show_exclude": False,
+        "show_apply": True,
+    }
+    domain = "/api/workbooks/demo/fields/f_sub_category/domain"
+    everything = client.post(domain, json={}).json()["values"]
+    scoped = client.post(domain, json={"worksheet": name, "scope": "context"})
+    assert scoped.status_code == 200, scoped.text
+    furniture = scoped.json()["values"]
+    assert len(everything) == 17 and len(furniture) == 4 and "Chairs" in furniture
+
+    # 顯示遺漏的值：連續的日（截斷）在最小到最大之間每天一列，沒有資料的日子量值是空的
+    day = use("f_order_date", continuous=True, date={"kind": "trunc", "unit": "day"})
+    ws = sheet(client, name)
+    ws.update(rows=[sales], columns=[day], filters=[], controls=[], marks={"type": "line"})
+    put(ws)
+    plain = render(client, name)["table"]["raw"]
+    ws = sheet(client, name)
+    ws.update(show_missing=[day], tooltip_excluded=[day])
+    put(ws)
+    rendered = render(client, name)
+    padded = rendered["table"]["raw"]
+    assert len(padded) > len(plain)
+    from datetime import date
+
+    first, last = date.fromisoformat(padded[0][0][:10]), date.fromisoformat(padded[-1][0][:10])
+    assert len(padded) == (last - first).days + 1
+    assert sum(1 for row in padded if row[1] in (None, "")) == len(padded) - len(plain)
+    # 包含在工具提示中：取消之後工具提示不列出日期
+    spec = rendered["spec"]
+    tooltip = (
+        spec["encoding"]["tooltip"]
+        if "encoding" in spec
+        else spec["layer"][0]["encoding"]["tooltip"]
+    )
+    assert [t["title"] for t in tooltip] == ["Sales"]
+    # 膠囊移走之後（工作表換成別的欄位）設定仍要對得上檢視中的欄位：伺服器照存，檢視器忽略不在架上的
+    assert sheet(client, name)["show_missing"] == [day]

@@ -100,7 +100,7 @@ export const api = {
     );
   },
   /** relevant：「只顯示相關的值」——只列出套用這張工作表上其他篩選（目前的狀態）之後還有資料的值 */
-  domain: (id: string, fieldKey: string, kind?: "values" | "range", relevant?: { worksheet: string; state: QueryState }) =>
+  domain: (id: string, fieldKey: string, kind?: "values" | "range", relevant?: { worksheet: string; state: QueryState; scope?: "relevant" | "context" }) =>
     request<Domain>(`${wb(id)}/fields/${encodeURIComponent(fieldKey)}/domain`, {
       method: "POST",
       body: JSON.stringify({ ...(kind ? { kind } : {}), ...(relevant ?? {}) }),

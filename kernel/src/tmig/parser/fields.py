@@ -653,6 +653,7 @@ class FilterParser:
         minimum = _literal(text_of(low), datatype) if low is not None else None
         maximum = _literal(text_of(high), datatype) if high is not None else None
         include_null = False
+        only_null = False
         if included == "in-range-or-null":
             include_null = True
         elif included == "all":
@@ -660,6 +661,10 @@ class FilterParser:
             include_null = True
         elif included == "non-null":
             minimum = maximum = None
+        elif included == "null":
+            # 「特殊值」分頁的「Null 值」（寫法依其他選項的命名推定）
+            minimum = maximum = None
+            only_null = True
         elif included != "in-range":
             self.ctx.flag(element, f"範圍篩選的 included-values={included} v0 不支援")
             return None
@@ -685,6 +690,7 @@ class FilterParser:
             min=minimum,
             max=maximum,
             include_null=include_null,
+            only_null=only_null,
             source_ref=_xpath(element),
         )
 

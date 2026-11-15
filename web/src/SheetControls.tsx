@@ -62,6 +62,7 @@ export function SheetControls({
           field: control.field,
           control: control.control,
           relevant: control.relevant === true,
+          options: control.options ?? null,
           children: [],
         } as unknown as Zone;
         return (
@@ -72,7 +73,7 @@ export function SheetControls({
             zone={zone}
             state={view.sheetFilters[worksheet.id]}
             onChange={(key, value) => onView({ ...view, sheetFilters: applyFilter(ir, view.sheetFilters, worksheet.id, key, value) })}
-            query={control.relevant ? stateFor(ir, worksheet.id, view) : undefined}
+            query={control.relevant || control.options?.context_values ? stateFor(ir, worksheet.id, view) : undefined}
           />
         );
       })}

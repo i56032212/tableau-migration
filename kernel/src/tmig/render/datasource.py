@@ -189,8 +189,11 @@ def describe_filter(flt: Filter, fields: dict[str, DataField]) -> str:
             text = f"至少 {_value(flt.min)}"
         elif flt.max is not None:
             text = f"最多 {_value(flt.max)}"
+        elif flt.only_null:
+            return f"{name}：Null 值"
         else:
-            text = "全部"
+            text = "全部" if flt.include_null else "非 Null 值"
+            return f"{name}：{text}"
         return f"{name}：{text}" + ("（含 Null）" if flt.include_null else "")
     if isinstance(flt, TopNFilter):
         direction = "前" if flt.direction == "top" else "後"

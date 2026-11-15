@@ -108,12 +108,17 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
   const [open, setOpen] = useState(control !== "multi_dropdown");
   const value = currentFilter(ir, zone.worksheet!, key, state);
 
-  // 只顯示相關的值：帶著工作表上其他篩選目前的狀態（自己的選取不算）
+  const options = zone.options ?? {};
+  // 只顯示相關的值、內容中的所有值：帶著工作表上其他篩選目前的狀態（自己的選取不算）
+  const scoped = zone.relevant ? "relevant" : options.context_values ? "context" : null;
   const relevant = useMemo(() => {
-    if (!zone.relevant || isRange || !query || !zone.worksheet) return null;
+    if (!scoped || isRange || !query || !zone.worksheet) return null;
     const { [key]: _own, ...filters } = query.filters ?? {};
-    return JSON.stringify({ worksheet: zone.worksheet, state: { ...query, filters } });
-  }, [zone.relevant, zone.worksheet, isRange, query, key]);
+    return JSON.stringify({ worksheet: zone.worksheet, state: { ...query, filters }, scope: scoped });
+  }, [scoped, zone.worksheet, isRange, query, key]);
+  // 顯示套用按鈕：勾選先記在草稿，按「套用」才送出；搜尋：只列出名稱包含輸入文字的成員
+  const [draft, setDraft] = useState<FilterValue | null>(null);
+  const [search, setSearch] = useState("");
   useEffect(() => {
     let cancelled = false;
     api
@@ -162,14 +167,23 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
     );
   }
 
-  const selected = selectedValues(value, domain);
-  const selectedKeys = new Set(selected.map((v) => JSON.stringify(v)));
   const label = (v: Scalar) => memberLabel(ir, use, v);
   const single = control === "single_dropdown" || control === "single_list" || control === "single_slider";
+  const pending = options.show_apply === true && !single && control !== "type_in";
+  const shownValue = pending && draft ? draft : value;
+  // 排除（顯示包含／排除）：勾選的是要排除的值
+  const excluding = options.show_exclude === true && shownValue.mode === "exclude";
+  const selected = excluding
+    ? domain.filter((d) => (shownValue.values ?? []).some((v) => JSON.stringify(v) === JSON.stringify(d)))
+    : selectedValues(shownValue, domain);
+  const selectedKeys = new Set(selected.map((v) => JSON.stringify(v)));
+  const emit = (next: FilterValue) => (pending ? setDraft(next) : onChange(key, next));
   const setSelection = (values: Scalar[]) => {
-    if (values.length === domain.length) onChange(key, { mode: "all", values: [] });
-    else onChange(key, { mode: "include", values });
+    if (excluding) emit({ mode: "exclude", values });
+    else if (values.length === domain.length) emit({ mode: "all", values: [] });
+    else emit({ mode: "include", values });
   };
+  const showAll = options.show_all !== false;
 
   if (single) {
     const current = value.mode === "include" && selected.length === 1 ? JSON.stringify(selected[0]) : "__all__";
@@ -184,7 +198,7 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
               : onChange(key, { mode: "include", values: [JSON.parse(e.target.value) as Scalar] })
           }
         >
-          <option value="__all__">（全部）</option>
+          {showAll ? <option value="__all__">（全部）</option> : current === "__all__" && <option value="__all__" disabled>（請選擇）</option>}
           {domain.map((v) => (
             <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
               {label(v)}
@@ -213,7 +227,11 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
   }
 
   const summary =
-    selected.length === domain.length ? "（全部）" : selected.length === 0 ? "（無）" : selected.map(label).join("、");
+    (excluding ? "排除：" : "") +
+    (selected.length === domain.length ? "（全部）" : selected.length === 0 ? "（無）" : selected.map(label).join("、"));
+  const searchable = options.show_search !== false && domain.length > SEARCH_FROM;
+  const term = search.trim().toLowerCase();
+  const listed = searchable && term ? domain.filter((v) => label(v).toLowerCase().includes(term)) : domain;
   return (
     <fieldset className="control" data-control={control}>
       <legend>{title}</legend>
@@ -225,15 +243,31 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
       )}
       {open && (
         <div className={control === "multi_dropdown" ? "options floating" : "options"}>
-          <label>
-            <input
-              type="checkbox"
-              checked={selected.length === domain.length && domain.length > 0}
-              onChange={(e) => setSelection(e.target.checked ? domain : [])}
-            />
-            （全部）
-          </label>
-          {domain.map((v) => {
+          {searchable && <input type="search" className="control-search" aria-label={`搜尋 ${title}`} placeholder="搜尋" value={search} onChange={(e) => setSearch(e.target.value)} />}
+          {options.show_exclude === true && (
+            <label className="control-exclude" title="勾選的值改為排除">
+              <input
+                type="checkbox"
+                checked={excluding}
+                onChange={(e) =>
+                  // 切換時勾選的值不變：包含 ↔ 排除
+                  emit(e.target.checked ? { mode: "exclude", values: shownValue.mode === "include" ? selected : [] } : selected.length === 0 ? { mode: "all", values: [] } : { mode: "include", values: selected })
+                }
+              />
+              排除
+            </label>
+          )}
+          {showAll && (
+            <label>
+              <input
+                type="checkbox"
+                checked={selected.length === domain.length && domain.length > 0}
+                onChange={(e) => setSelection(e.target.checked ? domain : [])}
+              />
+              （全部）
+            </label>
+          )}
+          {listed.map((v) => {
             const id = JSON.stringify(v);
             return (
               <label key={id}>
@@ -251,11 +285,32 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
               </label>
             );
           })}
+          {pending && (
+            <div className="control-apply">
+              <button
+                type="button"
+                className="primary"
+                disabled={draft === null}
+                onClick={() => {
+                  if (draft) onChange(key, draft);
+                  setDraft(null);
+                }}
+              >
+                套用
+              </button>
+              <button type="button" disabled={draft === null} onClick={() => setDraft(null)}>
+                取消
+              </button>
+            </div>
+          )}
         </div>
       )}
     </fieldset>
   );
 }
+
+/** 成員超過這個數目的多選清單顯示搜尋的輸入框。 */
+const SEARCH_FROM = 10;
 
 /**
  * 集合控制項（Tableau 2020.2 的「顯示集合」）：列出集合所在維度的值，勾選的是集合的成員；改變後使用這個集合的

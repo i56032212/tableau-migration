@@ -62,6 +62,7 @@ from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.datasource import datasource_summary
 from tmig.render.format import fiscal_label
 from tmig.render.format import format_value as display_value
+from tmig.render.missing import COLUMN_ORDER, pad_empty, pad_result
 from tmig.render.vegalite import (
     after_groups,
     build_spec,
@@ -78,6 +79,7 @@ from tmig.sqlgen.query import (
     QueryError,
     custom_sql_parameters,
     domain_sql,
+    empty_headers_sql,
     pane_sql,
     percentages,
     preview_sql,
@@ -120,6 +122,8 @@ class DomainRequest(BaseModel):
     kind: Literal["values", "range"] | None = None
     worksheet: str | None = None
     state: QueryState | None = None
+    scope: Literal["relevant", "context"] = "relevant"
+    """context：「內容中的所有值」——只套用工作表的內容篩選。"""
 
 
 logger = logging.getLogger(__name__)
@@ -965,6 +969,28 @@ def create_app(
             raise HTTPException(503, str(exc)) from exc
         except ExecutionError as exc:
             raise HTTPException(500, str(exc)) from exc
+        rendered_notes: list[str] = []
+        # 顯示遺漏的值：圖表與資料表用同一份補好的結果
+        result = pad_result(ir, sheet, query.columns, result, query.state.parameters)
+        # 表格版面的「顯示空的列／欄」：這一架的成員組合另外查詢，補上沒有標記的
+        roles = {c.key: c.role for c in query.columns}
+        for shelf in sheet.show_empty:
+            try:
+                headers = empty_headers_sql(ir, sheet.id, shelf, state, user)
+                if headers is None:
+                    continue
+                found = data.run(headers, datasource, database)
+            except (QueryError, ExecutionError, SourceConnectionError) as exc:
+                rendered_notes.append(
+                    f"顯示空的{'列' if shelf == 'rows' else '欄'}：查不到成員（{exc}）"
+                )
+                continue
+            keys = [c.key for c in headers.columns if c.role == "dimension"]
+            at = [found.columns.index(key) for key in keys]
+            leading = shelf == "rows" or COLUMN_ORDER not in result.columns
+            result = pad_empty(
+                result, keys, [tuple(row[i] for i in at) for row in found.rows], roles, leading
+            )
         rendered = build_spec(
             ir,
             sheet.id,
@@ -974,7 +1000,7 @@ def create_app(
             panes or None,
             totals or None,
         )
-        rendered.notes.extend(notes)
+        rendered.notes.extend([*notes, *rendered_notes])
         if query.analytics is not None:
             # 叢集與預測在查詢之後計算：估計不了時的說明（例如資料不足以預測）
             rendered.notes.extend(query.analytics.notes)
@@ -1016,6 +1042,8 @@ def create_app(
                     out.append(fy)
                 elif use.date is not None and use.date.kind == "part" and value is not None:
                     out.append(str(value))
+                elif value is None and column.role == "measure" and sheet.null_text is not None:
+                    out.append(sheet.null_text)  # 特殊值的文字
                 else:
                     trunc = use.date.unit if use.date is not None else None
                     fmt = value_format(sheet, fields[use.field], use)
@@ -1282,7 +1310,9 @@ def create_app(
                 raise HTTPException(404, f"找不到工作表「{relevant}」")
             assert request is not None
             try:
-                query = relevant_domain_sql(ir, sheet.id, use, request.state, user)
+                query = relevant_domain_sql(
+                    ir, sheet.id, use, request.state, user, request.scope == "context"
+                )
                 source = next(d for d in ir.datasources if d.id == sheet.datasource)
                 found = data.run(query, source, lambda: workspace.database(wb, sheet.datasource))
             except StateError as exc:

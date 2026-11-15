@@ -2,7 +2,11 @@
 // 每次變更整理後把整張工作表存回（PUT），檢視重新查詢；復原與重做在這裡記錄。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FieldUse, Mark, Scalar } from "../types";
+import { api } from "../api";
+import { Modal } from "../Server";
+import type { FieldUse, IR, Mark, Scalar } from "../types";
+import type { ViewerAccess } from "../viewerApi";
+import { DataDialog } from "../ViewerTools";
 import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
@@ -351,6 +355,7 @@ export function Editor({
   // 檢視上選取的標記（只保留、排除、群組與集合）；工作表或它的定義改變時清除
   const [selected, setSelected] = useState<Mark[]>([]);
   const [showMe, setShowMe] = useState(false);
+  const [viewData, setViewData] = useState(false);
   const [card, setCard] = useState<Card>("all");
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
@@ -627,6 +632,9 @@ export function Editor({
           <button type="button" onClick={() => setDialog({ kind: "sheet-format" })}>
             格式…
           </button>
+          <button type="button" title="這張工作表的摘要資料（每個標記一列）與完整資料（基礎資料列），可以下載 CSV（Tableau 的「檢視資料」）" onClick={() => setViewData(true)}>
+            檢視資料…
+          </button>
           <button
             type="button"
             title="複製這張工作表的格式（Tableau 的「格式＞複製格式」）"
@@ -823,6 +831,7 @@ export function Editor({
         )}
       </div>
       {filter && <FilterDialog target={filter} onClose={() => setFilter(null)} />}
+      {viewData && <ViewDataDialog workbook={workbook} sheet={shown} onClose={() => setViewData(false)} />}
       {calc !== undefined && (
         <CalcDialog
           field={calc.field}
@@ -900,6 +909,47 @@ export function Editor({
         />
       )}
     </EditorContext.Provider>
+  );
+}
+
+/** 編輯器在桌面版本機上：檢視資料不受伺服器的權限限制。 */
+const FULL_ACCESS: ViewerAccess = {
+  export_image: true,
+  export_data: true,
+  underlying_data: true,
+  download_workbook: true,
+  share_view: false,
+  view_comments: false,
+  add_comment: false,
+  store: false,
+};
+
+/** 檢視資料（編輯器）：與檢視器相同的對話框，資料是這張工作表目前存檔的定義（摘要與完整資料）。 */
+function ViewDataDialog({ workbook, sheet, onClose }: { workbook: string; sheet: SheetIR; onClose: () => void }) {
+  const [ir, setIr] = useState<IR | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .ir(workbook)
+      .then((loaded) => !cancelled && setIr(loaded))
+      .catch((e: Error) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [workbook]);
+  if (error) return <Modal title="檢視資料" onClose={onClose}><p className="error">{error}</p></Modal>;
+  if (!ir) return null;
+  return (
+    <DataDialog
+      workbook={workbook}
+      ir={ir}
+      sheets={[{ id: sheet.id, name: sheet.name }]}
+      view={{ sheetFilters: {}, parameters: {}, actions: {}, selections: {} }}
+      access={FULL_ACCESS}
+      desktop
+      onClose={onClose}
+    />
   );
 }
 
