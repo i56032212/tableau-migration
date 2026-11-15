@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
 import { api } from "./api";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
+import { nextSelection, sameMark } from "./state";
 import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TextStyle, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
@@ -15,6 +16,8 @@ export interface MarkEvent {
   additive: boolean;
   x: number;
   y: number;
+  /** 依類別選取（工具提示中點維度的值）：以這些標記取代整個選取 */
+  marks?: Mark[];
 }
 
 interface Props {
@@ -45,6 +48,13 @@ interface Props {
    * 沒有傳入時只在這個檢視中（以新的範圍重新繪製）
    */
   onViewport?: (viewport: Viewport | null) => void;
+  /**
+   * 工具提示的命令按鈕（檢視器）：只保留或排除選取的標記，clear 為清除這張工作表的只保留與排除。
+   * 沒有傳入時點選標記不會釘住工具提示。
+   */
+  onKeep?: (mode: "keep" | "exclude" | "clear", marks: Mark[]) => void;
+  /** 編輯器：拖曳標記或點的註解文字之後，第 index 個註解的文字移動了 dx、dy 像素 */
+  onAnnotationMove?: (index: number, dx: number, dy: number) => void;
 }
 
 /** 停止平移、縮放之後多久以新的範圍重新繪製（毫秒） */
@@ -57,25 +67,137 @@ interface Tip {
   value: unknown;
   mark: Mark | null;
   /** 自訂的工具提示文字（依滑過的標記組成）；沒有時列出 value 的各欄位 */
-  rich?: { text: string; style?: TextStyle }[] | null;
+  rich?: RichPart[] | null;
 }
+
+/** 自訂工具提示的一段文字；key、raw：這一段是維度的值（依類別選取用） */
+interface RichPart {
+  text: string;
+  style?: TextStyle;
+  key?: string;
+  raw?: Scalar;
+}
+
+type TooltipRun = { text?: string; column?: string; value?: string; null?: boolean; style?: TextStyle };
+
+/** 釘住的工具提示（點選標記之後）：命令按鈕與依類別選取 */
+interface PinActions {
+  count: number;
+  commands: boolean;
+  /** 工具提示各列的標題 → 維度的欄位鍵；null 為不允許依類別選取 */
+  titles: Record<string, string> | null;
+  onKeep: (mode: "keep" | "exclude") => void;
+  onCategory: (key: string, value: Scalar) => void;
+}
+
+/**
+ * 摘要卡（Tableau 的「工作表＞顯示摘要」）：檢視中各量值的筆數、總和、平均、最小值、最大值與中位數；
+ * 選取標記時只算選取的標記。數字取自查詢結果的原始值。
+ */
+function SummaryCard({ table, marks }: { table: NonNullable<RenderResponse["table"]>; marks: Mark[] }) {
+  const measures = table.keys.map((key, i) => ({ key, i })).filter(({ i }) => table.roles?.[i] === "measure");
+  if (measures.length === 0) return null;
+  const selected = (row: string[]) =>
+    marks.length === 0 ||
+    marks.some((mark) =>
+      Object.entries(mark).every(([key, value]) => {
+        const at = table.keys.indexOf(key);
+        return at < 0 || row[at] === (value === null ? "" : String(value));
+      }),
+    );
+  const rows = table.raw.filter(selected);
+  const show = (value: number | null) => (value === null ? "" : value.toLocaleString("en-US", { maximumFractionDigits: 2 }));
+  return (
+    <table className="summary-card" aria-label="摘要">
+      <caption>
+        摘要{marks.length > 0 ? `（選取的 ${rows.length} 個標記）` : ""}
+        <span className="muted"> 筆數：{rows.length}</span>
+      </caption>
+      <thead>
+        <tr>
+          <th />
+          <th>總和</th>
+          <th>平均</th>
+          <th>最小值</th>
+          <th>最大值</th>
+          <th>中位數</th>
+        </tr>
+      </thead>
+      <tbody>
+        {measures.map(({ key, i }) => {
+          const values = rows
+            .map((row) => row[i])
+            .filter((v) => v !== "" && v !== null && v !== undefined)
+            .map(Number)
+            .filter(Number.isFinite)
+            .sort((a, b) => a - b);
+          const n = values.length;
+          const sum = values.reduce((a, b) => a + b, 0);
+          const median = n === 0 ? null : n % 2 === 1 ? values[(n - 1) / 2] : (values[n / 2 - 1] + values[n / 2]) / 2;
+          return (
+            <tr key={key} data-measure={key}>
+              <th>{table.headers[i] ?? key}</th>
+              <td>{show(n ? sum : null)}</td>
+              <td>{show(n ? sum / n : null)}</td>
+              <td>{show(n ? values[0] : null)}</td>
+              <td>{show(n ? values[n - 1] : null)}</td>
+              <td>{show(median)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** 工具提示欄位清單中的記號（見 kernel 的 TOOLTIP_CARD）：這一層是第幾張標記卡，不顯示 */
+const CARD_KEY = "__card:";
+/** 「暫留時」的工具提示：停在標記上多久才顯示（毫秒） */
+const HOVER_DELAY = 500;
 
 /** 自訂的工具提示（spec.usermeta.tooltip，見 kernel 的 _tooltip_template）。 */
 interface TooltipTemplate {
   show: boolean;
-  runs: { text?: string; column?: string; value?: string; null?: boolean; style?: TextStyle }[];
+  runs: TooltipRun[];
+  /** 出現的方式：hover 為停在標記上一會兒才顯示（留在原位）；省略為回應式 */
+  mode?: "hover";
+  /** 命令按鈕（只保留、排除）與依類別選取；省略為有 */
+  commands?: boolean;
+  select?: boolean;
+  /** 各標記卡各自的文字（鍵是標記卡的順序）；沒有列出的標記卡用 runs */
+  cards?: Record<string, TooltipRun[]>;
 }
 
 /** 以標記的資料組成自訂的工具提示：欄位是 Null 時不顯示（除非 Null 設有別名）。 */
-function richTooltip(template: TooltipTemplate, record: Record<string, unknown>): { text: string; style?: TextStyle }[] {
-  const parts: { text: string; style?: TextStyle }[] = [];
-  for (const run of template.runs) {
+function richTooltip(runs: TooltipRun[], record: Record<string, unknown>, dimensions: Record<string, string>): RichPart[] {
+  const parts: RichPart[] = [];
+  for (const run of runs) {
     if (run.text !== undefined) parts.push({ text: run.text, style: run.style });
     else if (run.column !== undefined && (run.null || record[run.value ?? run.column] != null)) {
-      parts.push({ text: String(record[run.column] ?? ""), style: run.style });
+      const key = run.value !== undefined ? dimensions[run.value] : undefined;
+      parts.push({
+        text: String(record[run.column] ?? ""),
+        style: run.style,
+        ...(key ? { key, raw: (record[run.value!] ?? null) as Scalar } : {}),
+      });
     }
   }
   return parts;
+}
+
+/** 工具提示各列的標題 → 維度的欄位鍵（工具提示列的是顯示文字欄 cN_label，維度以原始值欄 cN 為鍵）。 */
+function tooltipTitles(spec: Spec, dimensions: Record<string, string>): Record<string, string> {
+  const titles: Record<string, string> = {};
+  visitSpecs(spec, (node) => {
+    const list = node.encoding?.tooltip;
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const field = String(item.field ?? "");
+      const key = dimensions[field] ?? dimensions[field.replace(/_label$/, "")];
+      if (key && typeof item.title === "string") titles[item.title] = key;
+    }
+  });
+  return titles;
 }
 
 function tooltipRunStyle(style: TextStyle | undefined): React.CSSProperties | undefined {
@@ -102,12 +224,15 @@ function VizTooltip({
   sheets,
   workbook,
   stateFor,
+  pinned,
 }: {
   tip: Tip;
   mark: Mark | null;
   sheets: TooltipSheetInfo[];
   workbook: string;
   stateFor: (target: string, mark: Mark) => QueryState;
+  /** 點選標記後釘住的工具提示：可以操作（命令按鈕、依類別選取） */
+  pinned?: PinActions;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: tip.x + 12, top: tip.y + 12 });
@@ -121,29 +246,54 @@ function VizTooltip({
     if (top + height > window.innerHeight - 4) top = Math.max(4, tip.y - height - 12);
     setPosition((current) => (current.left === left && current.top === top ? current : { left, top }));
   }, [tip.x, tip.y, mark, sheets]);
-  const lines =
+  const lines = (
     tip.value !== null && typeof tip.value === "object"
       ? Object.entries(tip.value as Record<string, unknown>)
-      : [["", tip.value] as [string, unknown]];
+      : [["", tip.value] as [string, unknown]]
+  ).filter(([key]) => !key.startsWith(CARD_KEY));
+  // 依類別選取：釘住的工具提示中，維度的值可以點（選取這個值的所有標記）
+  const category = (key: string | undefined, text: string, raw: Scalar | undefined) =>
+    pinned?.titles && key !== undefined && raw !== undefined ? (
+      <button type="button" className="link viz-tooltip-category" title="選取這個值的所有標記" onClick={() => pinned.onCategory(key, raw)}>
+        {text}
+      </button>
+    ) : (
+      text
+    );
   return createPortal(
-    <div ref={ref} className="viz-tooltip" role="tooltip" style={position}>
+    <div ref={ref} className={pinned ? "viz-tooltip pinned" : "viz-tooltip"} role="tooltip" style={position} data-pinned={pinned ? "true" : "false"}>
+      {pinned?.commands && (
+        <div className="viz-tooltip-commands" role="toolbar" aria-label="標記的命令">
+          <button type="button" onClick={() => pinned.onKeep("keep")}>
+            ✓ 只保留
+          </button>
+          <button type="button" onClick={() => pinned.onKeep("exclude")}>
+            ✕ 排除
+          </button>
+          {pinned.count > 1 && <span className="muted">{pinned.count} 個標記</span>}
+        </div>
+      )}
       {tip.rich ? (
         <div className="viz-tooltip-rich" style={{ textAlign: tip.rich.find((r) => r.style?.align)?.style?.align ?? undefined }}>
           {tip.rich.map((run, i) => (
             <span key={i} style={tooltipRunStyle(run.style)}>
-              {run.text}
+              {category(run.key, run.text, run.raw)}
             </span>
           ))}
         </div>
       ) : (
         <table className="viz-tooltip-text">
           <tbody>
-            {lines.map(([key, value]) => (
-              <tr key={key}>
-                {key && <td className="key">{key}</td>}
-                <td>{String(value ?? "")}</td>
-              </tr>
-            ))}
+            {lines.map(([key, value]) => {
+              const field = pinned?.titles?.[key];
+              const raw = field !== undefined && tip.mark && field in tip.mark ? tip.mark[field] : undefined;
+              return (
+                <tr key={key}>
+                  {key && <td className="key">{key}</td>}
+                  <td>{category(field, String(value ?? ""), raw)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -473,8 +623,26 @@ export function WorksheetView({
   onDrill,
   tooltipState,
   onViewport,
+  onKeep,
+  onAnnotationMove,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const onAnnotationMoveRef = useRef(onAnnotationMove);
+  onAnnotationMoveRef.current = onAnnotationMove;
+  const movable = onAnnotationMove !== undefined;
+  const onKeepRef = useRef(onKeep);
+  onKeepRef.current = onKeep;
+  const canKeep = onKeep !== undefined;
+  // 點選標記後釘住的工具提示（命令按鈕、依類別選取）；最近一次滑過的工具提示留著給它用
+  const [pin, setPin] = useState<{ tip: Tip; marks: Mark[] } | null>(null);
+  const lastTip = useRef<Tip | null>(null);
+  const tipData = useRef<{ records: Record<string, unknown>[]; dimensions: Record<string, string>; titles: Record<string, string>; commands: boolean; select: boolean }>({
+    records: [],
+    dimensions: {},
+    titles: {},
+    commands: false,
+    select: false,
+  });
   const onViewportRef = useRef(onViewport);
   onViewportRef.current = onViewport;
   // 地圖的平移、縮放：檢視器中只在這個檢視（重新繪製時帶著顯示範圍）；編輯器由呼叫端存進工作表
@@ -500,7 +668,8 @@ export function WorksheetView({
     return () => window.clearTimeout(timer);
   }, [tipMarkKey]);
   const interactive = onMarks !== undefined;
-  const selectedKey = JSON.stringify(selected ?? []);
+  // 沒有動作的工作表：釘住工具提示的標記也醒目顯示
+  const selectedKey = JSON.stringify(selected ?? pin?.marks ?? []);
   const highlightKey = JSON.stringify(highlighted ?? null);
   const [response, setResponse] = useState<RenderResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -576,16 +745,40 @@ export function WorksheetView({
     // 工具提示中的工作表：以自己的工具提示取代 Vega 的（文字相同，下方加上以標記篩選的工作表）
     // 自訂的工具提示（文字與格式，或不顯示工具提示）也用自己的工具提示
     const custom = spec.usermeta?.tooltip as TooltipTemplate | undefined;
+    // 命令按鈕與依類別選取（檢視器）：點選標記後工具提示釘住，可以操作
+    const commands = canKeep && custom?.commands !== false;
+    const select = canKeep && custom?.select !== false;
+    const pinnable = (commands || select) && custom?.show !== false;
+    tipData.current = { records, dimensions, titles: tooltipTitles(spec, dimensions), commands, select };
+    let hoverTimer: number | undefined;
+    let hoverItem: unknown = null;
     const tooltip = (_handler: unknown, event: MouseEvent, item: any, value: unknown) => {
       if (value === null || value === undefined || value === "" || custom?.show === false) {
+        window.clearTimeout(hoverTimer);
+        hoverItem = null;
+        lastTip.current = null;
         setTip(null);
         return;
       }
       const row = item?.datum?.__row;
       const record = typeof row === "number" ? records[row] : undefined;
       const mark = record ? markOf(record, dimensions) : null;
-      const rich = custom && custom.runs.length > 0 && record ? richTooltip(custom, record) : null;
-      setTip({ x: event.clientX, y: event.clientY, value, mark, rich });
+      // 各標記卡各自的文字：這一層的工具提示欄位清單帶著標記卡的記號
+      const card = typeof value === "object" ? Object.keys(value as object).find((k) => k.startsWith(CARD_KEY)) : undefined;
+      const runs = (card !== undefined ? custom?.cards?.[card.slice(CARD_KEY.length)] : undefined) ?? custom?.runs ?? [];
+      const rich = runs.length > 0 && record ? richTooltip(runs, record, dimensions) : null;
+      const next: Tip = { x: event.clientX, y: event.clientY, value, mark, rich };
+      lastTip.current = next;
+      if (custom?.mode !== "hover") {
+        setTip(next);
+        return;
+      }
+      // 暫留時：停在同一個標記上一會兒才顯示，顯示之後留在原位
+      if (item === hoverItem) return;
+      hoverItem = item;
+      window.clearTimeout(hoverTimer);
+      setTip(null);
+      hoverTimer = window.setTimeout(() => setTip(next), HOVER_DELAY);
     };
     // 畫好之前（例如地圖的形狀還在下載）標記為未完成：匯出、訂閱的截圖等它完成
     element.dataset.drawn = "false";
@@ -598,7 +791,7 @@ export function WorksheetView({
     let viewTimer: number | undefined;
     /** 平移、縮放過（放開滑鼠時不當成點選標記） */
     let moved = false;
-    embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom ? { tooltip } : {}) })
+    embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom || pinnable ? { tooltip } : {}) })
       .then(async (result) => {
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
@@ -630,7 +823,37 @@ export function WorksheetView({
         }
         // 捲動時與 Tableau 相同，欄標題、座標軸與列標題固定在區塊邊緣
         freezeHeaders(element, result, scroll, (original.usermeta?.background as string | undefined) ?? undefined);
-        if (!interactive) return;
+        if (movable) {
+          // 註解的文字可以拖曳（改變文字相對於標記或點的位置）；放開時回報移動的像素
+          element.dataset.annotations = "movable";
+          result.view.addEventListener("mousedown", (event: any, item: any) => {
+            const found = /^__deco_annotation(\d+)_marks$/.exec(String(item?.mark?.name ?? ""));
+            if (!found) return;
+            event.preventDefault?.();
+            const index = Number(found[1]);
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const node = (event.target as Element | null)?.closest?.("text") as SVGElement | null;
+            const drag = (move: MouseEvent) => {
+              if (node) node.style.transform = `translate(${move.clientX - startX}px, ${move.clientY - startY}px)`;
+            };
+            const drop = (up: MouseEvent) => {
+              document.removeEventListener("mousemove", drag);
+              document.removeEventListener("mouseup", drop);
+              const dx = Math.round(up.clientX - startX);
+              const dy = Math.round(up.clientY - startY);
+              if (Math.abs(dx) + Math.abs(dy) > 2) {
+                moved = true; // 拖曳之後放開滑鼠不算點選
+                onAnnotationMoveRef.current?.(index, dx, dy);
+              }
+              // 位置由重新繪製的圖決定（區域的註解不能拖曳，放回原位）
+              if (node) node.style.transform = "";
+            };
+            document.addEventListener("mousemove", drag);
+            document.addEventListener("mouseup", drop);
+          });
+        }
+        if (!interactive && !pinnable) return;
         const markAt = (item: any): Mark | null | undefined => {
           const row = item?.datum?.__row;
           if (typeof row === "number" && records[row]) return markOf(records[row], dimensions);
@@ -659,8 +882,21 @@ export function WorksheetView({
             return;
           }
           const mark = markAt(item);
-          if (mark !== undefined) emit("click", event, mark, item);
+          if (mark === undefined) return;
+          if (pinnable) {
+            // 釘住這個標記的工具提示（按住 Ctrl／⌘／Shift 加入或移除標記）
+            const additive = Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey);
+            const last = lastTip.current;
+            setPin((current) => {
+              const marks = nextSelection(current?.marks ?? [], mark, additive);
+              if (!mark || marks.length === 0) return null;
+              const base = last?.mark && sameMark(last.mark, mark) ? last : { value: mark, mark, rich: null };
+              return { tip: { ...base, x: event.clientX, y: event.clientY }, marks };
+            });
+          }
+          if (interactive) emit("click", event, mark, item);
         });
+        if (!interactive) return;
         result.view.addEventListener("mouseover", (event: any, item: any) => {
           const mark = markAt(item);
           if (!mark) return;
@@ -680,11 +916,46 @@ export function WorksheetView({
       disposed = true;
       window.clearTimeout(leaveTimer);
       window.clearTimeout(viewTimer);
+      window.clearTimeout(hoverTimer);
       view?.finalize();
       viewRef.current = null;
       setTip(null);
     };
-  }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips]);
+  }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable]);
+
+  // 釘住的工具提示：資料重新查詢、按 Esc 或點別的地方時放開
+  useEffect(() => setPin(null), [response]);
+  const pinned = pin !== null;
+  useEffect(() => {
+    if (!pinned) return;
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") setPin(null);
+        return;
+      }
+      const target = event.target as Element | null;
+      if (target?.closest(".viz-tooltip") || (chartRef.current && target && chartRef.current.contains(target))) return;
+      setPin(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [pinned]);
+  /** 依類別選取：這個維度的值相同的所有標記 */
+  const selectCategory = (key: string, value: Scalar) => {
+    const { records, dimensions } = tipData.current;
+    const marks: Mark[] = [];
+    for (const record of records) {
+      const mark = markOf(record, dimensions);
+      if (mark[key] === value && !marks.some((m) => sameMark(m, mark))) marks.push(mark);
+    }
+    if (marks.length === 0 || !pin) return;
+    setPin({ tip: pin.tip, marks });
+    onMarksRef.current?.({ kind: "click", mark: marks[0], marks, additive: false, x: pin.tip.x, y: pin.tip.y });
+  };
 
   /** 地圖工具列：以畫面中央放大、縮小，或重設地圖（依標記的位置自動縮放）。 */
   const zoomBy = (factor: number) => {
@@ -712,9 +983,17 @@ export function WorksheetView({
           type="button"
           className="link selection"
           title="清除選取"
-          onClick={() => onMarks?.({ kind: "click", mark: null, additive: false, x: 0, y: 0 })}
+          onClick={() => {
+            setPin(null);
+            onMarks?.({ kind: "click", mark: null, additive: false, x: 0, y: 0 });
+          }}
         >
           已選取 {count} 個標記 ✕
+        </button>
+      )}
+      {onKeep && (state.marks?.length ?? 0) > 0 && (
+        <button type="button" className="link kept" title="清除只保留與排除" onClick={() => onKeep("clear", [])}>
+          已只保留／排除 ✕
         </button>
       )}
       {onDrill &&
@@ -825,14 +1104,35 @@ export function WorksheetView({
           {response.caption}
         </div>
       )}
-      {tip && (
+      {response?.summary_shown && response.table && !hideLegend && <SummaryCard table={response.table} marks={selected ?? pin?.marks ?? []} />}
+      {pin ? (
         <VizTooltip
-          tip={tip}
-          mark={tipMark}
-          sheets={tooltipSheets}
+          tip={pin.tip}
+          mark={null}
+          sheets={[]}
           workbook={workbook}
-          stateFor={(target, mark) => tooltipStateRef.current?.(target, mark) ?? { filters: {}, parameters: {} }}
+          stateFor={() => ({ filters: {}, parameters: {} })}
+          pinned={{
+            count: pin.marks.length,
+            commands: tipData.current.commands,
+            titles: tipData.current.select ? tipData.current.titles : null,
+            onKeep: (mode) => {
+              onKeepRef.current?.(mode, pin.marks);
+              setPin(null);
+            },
+            onCategory: selectCategory,
+          }}
         />
+      ) : (
+        tip && (
+          <VizTooltip
+            tip={tip}
+            mark={tipMark}
+            sheets={tooltipSheets}
+            workbook={workbook}
+            stateFor={(target, mark) => tooltipStateRef.current?.(target, mark) ?? { filters: {}, parameters: {} }}
+          />
+        )
       )}
     </div>
   );

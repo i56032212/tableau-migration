@@ -4666,6 +4666,69 @@
       "title": "NestedTableCalc",
       "type": "object"
     },
+    "PageHistory": {
+      "additionalProperties": false,
+      "description": "頁面的顯示歷程（頁面控制項的「顯示歷程」）：目前這一頁之外，也畫出之前幾頁的標記（淡化）或\n同一個標記在各頁之間的軌跡。只影響圖表；目前這一頁的數字不變。",
+      "properties": {
+        "show": {
+          "default": "marks",
+          "description": "顯示之前各頁的標記、軌跡（同一個標記依頁面的順序連成線）或兩者",
+          "enum": [
+            "marks",
+            "trails",
+            "both"
+          ],
+          "title": "Show",
+          "type": "string"
+        },
+        "length": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "顯示之前幾頁；None 為全部",
+          "title": "Length"
+        },
+        "fade": {
+          "default": true,
+          "description": "之前各頁的標記淡化",
+          "title": "Fade",
+          "type": "boolean"
+        },
+        "previous": {
+          "description": "查詢時由查詢服務填入：要一併顯示的之前各頁（依頁面的順序）；存檔的報表中是空的",
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Previous",
+          "type": "array"
+        }
+      },
+      "title": "PageHistory",
+      "type": "object"
+    },
     "Pane": {
       "additionalProperties": false,
       "description": "個別量值的標記卡：同一架上有多個量值（各自一個軸）或雙軸時，每個量值可以有自己的標記設定。",
@@ -5829,6 +5892,30 @@
           "description": "與主要計算相同的寫法，例如差異的 relative_to、排名的 direction",
           "title": "Options",
           "type": "object"
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "次要計算的「計算層級」；與 restart 都沒有指定、也沒有自己的計算方向時沿用主要計算的。年初至今成長率：主要計算每年重新累計（restart 是年），次要計算在年的層級與前一年比較"
+        },
+        "restart": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "次要計算的「重新開始間隔」"
         }
       },
       "required": [
@@ -6963,6 +7050,18 @@
           "default": null,
           "description": "次要計算；只有累計與移動計算可以有"
         },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableCalcSort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "自訂排序順序；None 為依維度在檢視中的順序"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -6977,6 +7076,30 @@
         "source_ref"
       ],
       "title": "TableCalc",
+      "type": "object"
+    },
+    "TableCalcSort": {
+      "additionalProperties": false,
+      "description": "表計算的自訂排序順序（「編輯 Table Calculation」指定維度時的「排序順序＞自訂」）：沿著計算方向的\n標記依這個彙總值排列，而不是依維度在檢視中的順序。",
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "排序依據的彙總量值（可以不在檢視中）"
+        },
+        "order": {
+          "default": "asc",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "title": "Order",
+          "type": "string"
+        }
+      },
+      "required": [
+        "by"
+      ],
+      "title": "TableCalcSort",
       "type": "object"
     },
     "TableRelation": {
@@ -8110,6 +8233,28 @@
           "title": "Tooltips",
           "type": "boolean"
         },
+        "tooltip_mode": {
+          "default": "responsive",
+          "description": "工具提示出現的方式：responsive 為「回應式」（滑過立即顯示、跟著游標）；hover 為「暫留時」（停在標記上一會兒才顯示，留在原位）。.twb 的 tooltip-mode smooth／sticky",
+          "enum": [
+            "responsive",
+            "hover"
+          ],
+          "title": "Tooltip Mode",
+          "type": "string"
+        },
+        "tooltip_commands": {
+          "default": true,
+          "description": "包含命令按鈕：選取標記後工具提示上有「只保留」「排除」（.twb 的 <customized-tooltip show-buttons='false'> 為不包含）",
+          "title": "Tooltip Commands",
+          "type": "boolean"
+        },
+        "tooltip_select": {
+          "default": true,
+          "description": "允許依類別選取：選取標記後點工具提示中的維度值，選取這個值的所有標記",
+          "title": "Tooltip Select",
+          "type": "boolean"
+        },
         "formats": {
           "additionalProperties": {
             "type": "string"
@@ -8138,6 +8283,12 @@
           "default": false,
           "description": "顯示說明（工作表選單的「顯示說明」）：說明在檢視的下方",
           "title": "Caption Shown",
+          "type": "boolean"
+        },
+        "summary_shown": {
+          "default": false,
+          "description": "顯示摘要卡（工作表選單的「顯示摘要」）：檢視中各量值的筆數、總和、平均、最小值、最大值與中位數；選取標記時只算選取的標記",
+          "title": "Summary Shown",
           "type": "boolean"
         },
         "totals": {
@@ -8418,6 +8569,18 @@
           "default": null,
           "description": "目前的頁（Tableau 存檔時的頁面）；None 為第一頁（檢視器依可選值決定）",
           "title": "Page"
+        },
+        "page_history": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageHistory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "頁面的顯示歷程；None 為只顯示目前這一頁"
         },
         "blends": {
           "description": "Data Blending：次要資料源與連結欄位；欄列架與標記卡上可以有這些資料源的量值",

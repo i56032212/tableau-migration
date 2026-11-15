@@ -552,6 +552,7 @@ class WorksheetQuery:
         self._names: dict[str, int] = {}
         self._canon: dict[Node, Node] = {}
         self._sort_ctes: dict[str, tuple[str, str, list[Dim]]] = {}
+        self._measure_cols: dict[str, Measure] = {}
         self.model_plan: ModelPlan | None = None
         """Relationship 模型的連接方式（build 時決定）。"""
         self._guards: dict[tuple[int, int], list[str]] = {}
@@ -881,6 +882,14 @@ class WorksheetQuery:
             key = use_key(flt.field)
             if not any(m.key == key for m in measures):
                 measures.append(self._measure(flt.field, key, output=False, index=len(measures)))
+        # 表計算的自訂排序順序：排序依據的量值也要算，但不輸出
+        for tc in ws.table_calcs:
+            if tc.sort is not None and not any(m.key == use_key(tc.sort.by) for m in measures):
+                if not self.is_measure(tc.sort.by):
+                    raise QueryError("表計算的自訂排序順序要以彙總的量值排序")
+                key = use_key(tc.sort.by)
+                measures.append(self._measure(tc.sort.by, key, output=False, index=len(measures)))
+        self._measure_cols = {m.key: m for m in measures}
         sorts = {s.field: s for s in ws.sorts}
         for m in measures:
             self._check_measure(m)
@@ -1516,18 +1525,19 @@ class WorksheetQuery:
         """次要計算當作一個表計算（計算方向沒有指定時與主要計算相同）。"""
         secondary = tc.secondary
         assert secondary is not None
-        if not secondary.addressing:
-            return tc.model_copy(
-                update={"type": secondary.type, "options": secondary.options, "secondary": None}
-            )
-        return TableCalc(
-            id=tc.id,
-            type=secondary.type,
-            preset="specific",
-            addressing=secondary.addressing,
-            options=secondary.options,
-            source_ref=tc.source_ref,
-        )
+        update: dict[str, Any] = {
+            "type": secondary.type,
+            "options": secondary.options,
+            "secondary": None,
+        }
+        own = secondary.level is not None or secondary.restart is not None
+        if own or secondary.addressing:
+            # 次要計算自己的計算層級與重新開始間隔（年初至今成長率：在年的層級與前一年比較）
+            update.update(level=secondary.level, restart=secondary.restart)
+        if secondary.addressing:
+            update.update(preset="specific", addressing=secondary.addressing, instances=[])
+            update.update(nested=[], inferred=False, sort=None)
+        return tc.model_copy(update=update)
 
     def _quick_calc(self, tc: TableCalc, base: Node) -> Node:
         if tc.type == "formula":
@@ -2288,6 +2298,15 @@ class WorksheetQuery:
                     addressing = addressing[hits[-1] + 1 :]
         partition = [ident(d.col) for d in dims if d not in addressing]
         order: list[str] = []
+        if isinstance(tc, TableCalc) and tc.sort is not None:
+            # 自訂排序順序：沿著計算方向的標記依這個彙總值排列，同值時依維度的順序
+            by = self._measure_cols.get(use_key(tc.sort.by))
+            if by is None or by.is_tc:
+                raise QueryError(
+                    "表計算的自訂排序順序要以彙總的量值排序（不能是 Table Calculation）"
+                )
+            direction = "DESC" if tc.sort.order == "desc" else "ASC"
+            order.append(f"{ident(by.col)} {direction} NULLS LAST")
         for d in addressing:
             if d.key in sort_cols:
                 order.append(sort_cols[d.key][1])

@@ -548,6 +548,10 @@ class SheetParser:
             table_calcs=table_calcs,
             reference_lines=reference_lines,
             tooltips=self._tooltips(child(table, "tooltip-style")),
+            tooltip_mode=self._tooltip_mode(child(table, "tooltip-style")),
+            tooltip_commands=not any(
+                t.get("show-buttons") == "false" for t in el.iter("customized-tooltip")
+            ),
             annotations=annotations,
             cluster=cluster,
             forecast=forecast,
@@ -1735,6 +1739,13 @@ class SheetParser:
     def _tooltips(style: etree._Element | None) -> bool:
         """是否顯示工具提示：<tooltip-style tooltip-mode='none'> 為不顯示（sticky、smooth 是顯示的方式）。"""
         return style is None or style.get("tooltip-mode") != "none"
+
+    @staticmethod
+    def _tooltip_mode(style: etree._Element | None) -> Literal["responsive", "hover"]:
+        """工具提示出現的方式：tooltip-mode='sticky' 為「暫留時」，其餘（smooth 或沒有寫）為「回應式」。"""
+        return (
+            "hover" if style is not None and style.get("tooltip-mode") == "sticky" else "responsive"
+        )
 
     def _check_label_text(self, uses: list[FieldUse], cards: list[Marks]) -> None:
         """自訂標籤中的欄位必須在標記卡或欄列架上（查詢結果才有它的值）。自訂工具提示中不在檢視中的欄位

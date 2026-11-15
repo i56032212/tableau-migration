@@ -15,6 +15,7 @@ import {
   nextSelection,
   parameterValue,
   runActions,
+  keepMarks,
   setDrill,
   sourceActions,
   stateFor,
@@ -184,7 +185,8 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
   };
   const onMarks = (worksheet: string, event: MarkEvent) => {
     if (event.kind === "click") {
-      const marks = nextSelection(view.selections[worksheet] ?? [], event.mark, event.additive);
+      // 依類別選取（工具提示中點維度的值）以它的標記取代整個選取
+      const marks = event.marks ?? nextSelection(view.selections[worksheet] ?? [], event.mark, event.additive);
       const selectActions = sourceActions(ir, worksheet, dashboard.id, "select");
       const result = runActions(selectActions, marks, view.actions);
       const values = marks.length > 0 && event.values ? [event.values] : [];
@@ -474,6 +476,7 @@ function ZoneContent({
           highlighted={highlightsFor(ir, zone.worksheet!, view)}
           onDrill={(key, delta) => onView(setDrill(view, zone.worksheet!, key, delta))}
           tooltipState={(target, mark) => tooltipStateFor(ir, zone.worksheet!, target, view, mark)}
+          onKeep={(mode, marks) => onView(keepMarks(view, zone.worksheet!, mode, marks))}
         />
       );
     case "filter":

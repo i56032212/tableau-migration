@@ -13,6 +13,8 @@ Tableau 的叢集編號規則沒有公開：依分割產生的順序編號（叢
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 MAX_AUTO = 25
@@ -87,6 +89,55 @@ def calinski_harabasz(points: np.ndarray, labels: np.ndarray) -> float:
     if within == 0:
         return float("inf")
     return (between / (k - 1)) / (within / (n - k))
+
+
+def describe(values: list[list[float]], labels: list[int]) -> dict[str, Any]:
+    """叢集的摘要（Tableau 的「描述叢集」）：叢集數、點數、組間／組內／總平方和（正規化後的值），
+    各叢集的項目數與各變數的中心（原本的單位），以及各變數的變異數分析（F 統計量與 P 值）。"""
+    from tmig.render.trends import f_sf
+
+    raw = np.asarray(values, dtype=float)
+    assigned = np.asarray(labels, dtype=int)
+    n = len(raw)
+    if n == 0:
+        return {"count": 0, "points": 0, "clusters": [], "variables": []}
+    points = scale(raw)
+    groups = sorted(set(int(v) for v in assigned))
+    k = len(groups)
+    mean = points.mean(axis=0)
+    between = np.zeros(points.shape[1])
+    within = np.zeros(points.shape[1])
+    clusters: list[dict[str, Any]] = []
+    for g in groups:
+        chosen = assigned == g
+        members = points[chosen]
+        center = members.mean(axis=0)
+        between += len(members) * (center - mean) ** 2
+        within += ((members - center) ** 2).sum(axis=0)
+        clusters.append(
+            {
+                "cluster": g,
+                "items": len(members),
+                "centers": [float(v) for v in raw[chosen].mean(axis=0)],
+            }
+        )
+    variables: list[dict[str, Any]] = []
+    for j in range(points.shape[1]):
+        f: float | None = None
+        p: float | None = None
+        if k > 1 and n > k and within[j] > 0:
+            f = float((between[j] / (k - 1)) / (within[j] / (n - k)))
+            p = f_sf(f, k - 1, n - k)
+        variables.append({"f": f, "p": p, "between": float(between[j]), "within": float(within[j])})
+    return {
+        "count": k,
+        "points": n,
+        "between": float(between.sum()),
+        "within": float(within.sum()),
+        "total": float(between.sum() + within.sum()),
+        "clusters": clusters,
+        "variables": variables,
+    }
 
 
 def cluster(values: list[list[float]], k: int | None = None) -> list[int]:

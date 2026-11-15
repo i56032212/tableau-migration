@@ -506,6 +506,9 @@ class WorkbookParser:
                 elif kind == "caption":
                     ws.caption_shown = True  # 顯示說明
                     continue
+                elif kind == "summary":
+                    ws.summary_shown = True  # 顯示摘要卡
+                    continue
                 else:
                     continue
                 if item not in controls:

@@ -442,6 +442,33 @@ def test_sort_table_calc_wildcard_and_annotations(engine: str) -> None:
         settle(page)
         (calc,) = sheet()["table_calcs"]
         assert (calc["type"], calc["level"]["date"]["unit"]) == ("percent_difference", "year")
+        # 年初至今成長率：每年重新累計，次要計算在年的層級與前一年比較
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "快速表計算", "年初至今成長率")
+        settle(page)
+        (calc,) = sheet()["table_calcs"]
+        assert (calc["type"], calc["restart"]["date"]["unit"]) == ("running_total", "year")
+        assert calc["secondary"]["type"] == "percent_difference"
+        assert calc["secondary"]["level"]["date"]["unit"] == "year"
+        # 表計算的自訂排序順序：沿著計算方向的標記依 Profit 的總和由大到小排列
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        menu(page, "編輯表計算…")
+        dialog = page.locator(".table-calc-dialog")
+        dialog.get_by_label("表計算的排序順序").select_option("f_profit")
+        dialog.get_by_label("表計算排序的方向").select_option("desc")
+        dialog.get_by_role("button", name="確定").click()
+        settle(page)
+        (calc,) = sheet()["table_calcs"]
+        assert calc["sort"]["order"] == "desc"
+        assert (calc["sort"]["by"]["field"], calc["sort"]["by"]["agg"]) == ("f_profit", "sum")
+        # 次要計算自己的計算層級留著
+        assert calc["secondary"]["level"]["date"]["unit"] == "year"
+        assert (
+            call(engine, f"/api/workbooks/demo/worksheets/{sheet()['id']}/render", {})[
+                "unsupported"
+            ]
+            is None
+        )
         assert errors == []
         browser.close()
 
@@ -1842,8 +1869,8 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         confirm(page, ".caption-dialog")
         assert sheet()["caption_shown"] is True and sheet()["caption"] == []
         note = page.locator(".editor .worksheet-caption")
-        expect(note).to_contain_text("Region的Sales。")
-        expect(note).to_contain_text("資料依Category、Sub-Category篩選。")
+        expect(note).to_contain_text("每個 Region 的 Sales")
+        expect(note).to_contain_text("檢視依 Category 篩選")
         page.get_by_role("button", name="說明…").click()
         page.get_by_role("textbox", name="說明的文字").click()
         page.keyboard.type("各區的業績（家具）")
@@ -2545,5 +2572,220 @@ def test_toolbar_sort_manual_drag_hidden_sheet_and_crosstab(engine: str) -> None
         assert [u["field"] for u in copy["rows"]] == ["f_region"]
         assert [u["field"] for u in copy["marks"]["label"]] == ["f_sales"]
         assert regions(copy_id) == expected  # 排序照原樣
+        assert errors == []
+        browser.close()
+
+
+def test_tooltip_options_describe_models_annotations_format_and_page_history(engine: str) -> None:
+    """工具提示的選項（暫留時、命令按鈕）、描述趨勢模型與描述叢集（存成群組）、拖曳註解、下拉線的值標籤、
+    摘要卡、分隔線的細部與清除格式、頁面的顯示歷程，以及檢視器的簡報模式。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+
+    def render() -> dict[str, Any]:
+        response = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})
+        assert response["unsupported"] is None, response
+        return response
+
+    def layers() -> list[str]:
+        """圖中所有圖層的名稱（含巢狀的圖層）。"""
+        names: list[str] = []
+
+        def visit(node: dict[str, Any]) -> None:
+            for layer in node.get("layer", []):
+                names.append(str(layer.get("name", "")))
+                visit(layer)
+
+        visit(render()["spec"])
+        return names
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/ws_1",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    def confirm(page: Page, dialog: str) -> None:
+        page.locator(dialog).get_by_role("button", name="確定").click()
+        expect(page.locator(dialog)).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
+    def use(field: str, **extra: Any) -> dict[str, Any]:
+        base = {"field": field, "agg": None, "date": None, "continuous": False, "table_calc": None}
+        return {**base, **extra}
+
+    sales = use("f_sales", agg="sum", continuous=True)
+    profit = use("f_profit", agg="sum", continuous=True)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        # 散佈圖：業績對利潤、每個子類別一個圓點，有趨勢線與一個點的註解
+        base = sheet()
+        base.update(columns=[sales], rows=[profit])
+        base["marks"].update(type="circle", detail=[use("f_sub_category")], trend={"fit": "linear"})
+        base["annotations"] = [
+            {
+                "kind": "point",
+                "text": [{"text": "注意這裡"}],
+                "point": {"x": 100000, "x_axis": sales, "y": 10000, "y_axis": profit},
+                "offset": [0, 0],
+            }
+        ]
+        put(base)
+        page.reload()
+        settle(page)
+
+        # 工具提示：暫留時顯示、不包含命令按鈕
+        page.locator(".mark-buttons").get_by_role("button", name="工具提示…").click()
+        dialog = page.locator(".tooltip-dialog")
+        dialog.get_by_label("工具提示出現的方式").select_option("hover")
+        dialog.get_by_label("包含命令按鈕").uncheck()
+        page.get_by_role("dialog").get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+        saved = sheet()
+        assert (saved["tooltip_mode"], saved["tooltip_commands"], saved["tooltip_select"]) == (
+            "hover",
+            False,
+            True,
+        )
+        assert render()["spec"]["usermeta"]["tooltip"]["mode"] == "hover"
+
+        # 描述趨勢模型：公式、R 平方與 P 值
+        page.get_by_role("button", name="描述趨勢模型…").click()
+        described = page.locator('.describe-dialog[data-describe="trend"]')
+        expect(described.locator("table.describe-table")).to_have_count(1)
+        expect(described).to_contain_text("R 平方")
+        expect(described).to_contain_text("建立模型的觀測數")
+        described.get_by_role("button", name="關閉").click()
+
+        # 叢集：兩群；描述叢集並存成群組
+        page.get_by_role("button", name="＋ 叢集…").click()
+        cluster = page.locator(".cluster-dialog")
+        cluster.get_by_label("自動決定叢集數").uncheck()
+        cluster.get_by_role("spinbutton", name="叢集數").fill("2")
+        confirm(page, ".cluster-dialog")
+        assert sheet()["cluster"]["count"] == 2
+        page.get_by_role("button", name="描述叢集…").click()
+        described = page.locator('.describe-dialog[data-describe="cluster"]')
+        expect(described).to_contain_text("各叢集的中心")
+        expect(described.locator("table.describe-table").nth(1).locator("tbody tr")).to_have_count(
+            2
+        )
+        described.get_by_role("button", name="存成群組").click()
+        expect(page.locator(".toast", has_text="已建立群組").first).to_be_visible()
+        described.get_by_role("button", name="關閉").click()
+        catalog = call(engine, "/api/edit/demo/catalog")["datasources"][0]["fields"]
+        group = next(f for f in catalog if f["caption"] == "Sub-Category（叢集）")
+        assert group["role"] == "dimension"
+
+        # 拖曳註解的文字：文字相對於點的位置跟著改變
+        assert "__deco_annotation0" in layers()
+        note = page.locator('.editor .worksheet g[class*="__deco_annotation0"] text')
+        note.first.wait_for()
+        box = note.first.bounding_box()
+        assert box is not None
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x + 20, y - 15, steps=4)
+        page.mouse.move(x + 40, y - 30, steps=4)
+        page.mouse.up()
+        page.wait_for_timeout(300)
+        settle(page)
+        assert sheet()["annotations"][0]["offset"] == [40, -30]
+
+        # 下拉線與座標軸上的值標籤
+        page.get_by_label("下拉線", exact=True).select_option("always")
+        settle(page)
+        page.get_by_label("下拉線的值標籤").click()
+        expect(page.get_by_label("下拉線的值標籤")).to_be_checked()
+        settle(page)
+        assert sheet()["drop_lines"]["labels"] is True
+        assert any(name.startswith("__deco_drop") and name.endswith("_label") for name in layers())
+
+        # 摘要卡：各量值的總和、平均等
+        page.get_by_label("顯示摘要").click()  # 存檔之後才勾選
+        expect(page.get_by_label("顯示摘要")).to_be_checked()
+        settle(page)
+        assert sheet()["summary_shown"] is True
+        card = page.locator(".editor .summary-card")
+        expect(card.locator("tbody tr")).to_have_count(2)
+        expect(card).to_contain_text("中位數")
+
+        # 格式：分隔線的細部；清除格式後回到預設
+        page.get_by_role("button", name="格式…", exact=True).click()
+        page.get_by_label("列分隔線的線寬").fill("3")
+        page.get_by_label("列分隔線的層級").fill("2")
+        page.get_by_role("dialog").get_by_role("button", name="確定").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        divider = sheet()["row_style"]["divider"]
+        assert (divider["width"], divider["level"]) == (3, 2)
+        assert sheet()["row_style"]["header_divider"]["width"] == 3
+        page.get_by_role("button", name="清除格式").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        divider = sheet()["row_style"]["divider"]
+        assert (divider["width"], divider["level"]) == (1, None)
+
+        # 頁面的顯示歷程：第二頁時畫出前一頁的標記與軌跡
+        page.locator('.data-pane [data-field="f_order_date"]').drag_to(
+            page.locator('[data-drop="pages"]')
+        )
+        control = page.locator(".editor [data-page-control]")
+        control.wait_for()
+        page.wait_for_function(
+            "() => document.querySelector('.editor [data-page-control] select')?.value === '0'"
+        )
+        settle(page)
+        page.get_by_label("顯示歷程").select_option("both")
+        settle(page)
+        assert sheet()["page_history"]["show"] == "both"
+        assert not any(name.startswith("__deco_history") for name in layers())  # 第一頁沒有歷程
+        control.get_by_role("button", name="下一頁").click()
+        settle(page)
+        names = layers()
+        assert "__deco_history" in names and "__deco_trail" in names
+        page.get_by_label("顯示歷程").select_option("")
+        settle(page)
+        assert sheet()["page_history"] is None
+
+        # 檢視器的簡報模式：只留檢視，可以切換前後一張，Esc 結束
+        page.goto(f"{engine}/w/demo/s/ws_1")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.get_by_role("button", name="簡報模式").click()
+        expect(page.locator(".page.presenting")).to_have_count(1)
+        expect(page.locator(".page > .toolbar")).to_be_hidden()
+        bar = page.locator(".presentation-bar")
+        expect(bar).to_be_visible()
+        before = page.url
+        bar.get_by_role("button", name="下一張").click()
+        page.wait_for_function("(url) => window.location.href !== url", arg=before)
+        expect(page.locator(".page.presenting")).to_have_count(1)
+        page.keyboard.press("Escape")
+        expect(page.locator(".page.presenting")).to_have_count(0)
+        expect(page.locator(".page > .toolbar")).to_be_visible()
         assert errors == []
         browser.close()

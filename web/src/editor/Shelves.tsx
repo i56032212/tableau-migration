@@ -439,7 +439,7 @@ export function usePillMenu() {
           {
             label: "年初至今總計",
             disabled: !levels || levels.finer.length === 0,
-            checked: tc?.type === "running_total" && Boolean(tc.restart),
+            checked: tc?.type === "running_total" && Boolean(tc.restart) && !tc.secondary,
             action: () => levels && quick("ytd total", (id) => dateCalc(newTableCalc(id, "running_total", {}), "ytd", levels)),
           },
           {
@@ -452,6 +452,12 @@ export function usePillMenu() {
             disabled: !levels,
             checked: tc?.type === "percent_difference" && Boolean(tc.level),
             action: () => levels && quick("year over year", (id) => dateCalc(newTableCalc(id, "percent_difference", {}), "yoy", levels)),
+          },
+          {
+            label: "年初至今成長率",
+            disabled: !levels || levels.finer.length === 0,
+            checked: tc?.type === "running_total" && Boolean(tc.restart) && tc.secondary?.type === "percent_difference",
+            action: () => levels && quick("ytd growth", (id) => dateCalc(newTableCalc(id, "running_total", {}), "ytd_growth", levels)),
           },
         ],
       });

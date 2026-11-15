@@ -1958,7 +1958,62 @@ def test_worksheet_caption(tmp_path: Path) -> None:
     ir = parse(tmp_path / "auto", b.workbook(worksheets=sheet).replace("<windows />", windows))
     ws = ir.worksheets[0]
     assert ws.caption == [] and ws.caption_shown
-    assert worksheet_caption(ir, ws) == "Region的Sales。色彩顯示Category。"
+    assert worksheet_caption(ir, ws) == "每個 Region 的 Sales。色彩顯示有關 Category 的詳細資料。"
+    assert not ws.summary_shown
+    # 與 Tableau 相同的句子結構：趨勢、量值對量值、細分，篩選寫出保留的成員或範圍
+    from tmig.ir import CategoricalFilter, FieldUse, RangeFilter
+
+    region, sales = ws.rows[0], ws.columns[0]
+    category = ws.marks.color
+    assert category is not None
+    scatter = ws.model_copy(
+        update={
+            "rows": [sales.model_copy(update={"agg": "avg"})],
+            "columns": [sales],
+            "marks": ws.marks.model_copy(update={"color": None, "detail": [region], "size": sales}),
+            "filters": [
+                CategoricalFilter(
+                    kind="categorical",
+                    id="f1",
+                    field=category,
+                    stage="dimension",
+                    mode="include",
+                    values=["Furniture", "Technology"],
+                    source_ref="/t",
+                ),
+                RangeFilter(
+                    kind="range", id="f2", field=sales, stage="measure", min=100, source_ref="/t"
+                ),
+            ],
+        }
+    )
+    assert worksheet_caption(ir, scatter, force=True) == (
+        "Sales 對 AVG(Sales)。大小顯示 Sales。顯示 Region 的詳細資料。"
+        "檢視依 Category 篩選，保留 Furniture 與 Technology。"
+        "檢視依 Sales 篩選，保留大於或等於 100 的值。"
+    )
+    date_id = next(f.id for f in ir.datasources[0].fields if f.caption == "Order Date")
+    month = FieldUse(field=date_id, date={"kind": "trunc", "unit": "month"}, continuous=True)  # type: ignore[arg-type]
+    trend = ws.model_copy(
+        update={
+            "rows": [sales],
+            "columns": [month],
+            "marks": ws.marks.model_copy(update={"type": "line"}),
+        }
+    )
+    text = worksheet_caption(ir, trend, force=True)
+    assert text is not None and text.endswith("的 Sales 趨勢。色彩顯示有關 Category 的詳細資料。")
+    nested = ws.model_copy(update={"rows": [category, region]})
+    assert worksheet_caption(ir, nested, force=True).startswith(  # type: ignore[union-attr]
+        "每個 Region 的 Sales，依 Category 細分。"
+    )
+    # 摘要卡：視窗的 <card type='summary'>
+    (tmp_path / "summary").mkdir()
+    cards = windows.replace("<card type='caption' />", "<card type='summary' />")
+    summarized = parse(
+        tmp_path / "summary", b.workbook(worksheets=sheet).replace("<windows />", cards)
+    )
+    assert summarized.worksheets[0].summary_shown and not summarized.worksheets[0].caption_shown
     (tmp_path / "hidden").mkdir()
     ir = parse(tmp_path / "hidden", b.workbook(worksheets=custom))
     assert not ir.worksheets[0].caption_shown and worksheet_caption(ir, ir.worksheets[0]) is None

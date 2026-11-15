@@ -1192,6 +1192,20 @@ class SecondaryTableCalc(IRModel):
         default_factory=dict,
         description="與主要計算相同的寫法，例如差異的 relative_to、排名的 direction",
     )
+    level: FieldUse | None = Field(
+        default=None,
+        description="次要計算的「計算層級」；與 restart 都沒有指定、也沒有自己的計算方向時沿用主要計算的。"
+        "年初至今成長率：主要計算每年重新累計（restart 是年），次要計算在年的層級與前一年比較",
+    )
+    restart: FieldUse | None = Field(default=None, description="次要計算的「重新開始間隔」")
+
+
+class TableCalcSort(IRModel):
+    """表計算的自訂排序順序（「編輯 Table Calculation」指定維度時的「排序順序＞自訂」）：沿著計算方向的
+    標記依這個彙總值排列，而不是依維度在檢視中的順序。"""
+
+    by: FieldUse = Field(description="排序依據的彙總量值（可以不在檢視中）")
+    order: Literal["asc", "desc"] = "asc"
 
 
 class TableCalc(IRModel):
@@ -1222,6 +1236,9 @@ class TableCalc(IRModel):
     )
     secondary: SecondaryTableCalc | None = Field(
         default=None, description="次要計算；只有累計與移動計算可以有"
+    )
+    sort: TableCalcSort | None = Field(
+        default=None, description="自訂排序順序；None 為依維度在檢視中的順序"
     )
     source_ref: SourceRef
 
@@ -1999,6 +2016,22 @@ class SheetControl(IRModel):
         return self
 
 
+class PageHistory(IRModel):
+    """頁面的顯示歷程（頁面控制項的「顯示歷程」）：目前這一頁之外，也畫出之前幾頁的標記（淡化）或
+    同一個標記在各頁之間的軌跡。只影響圖表；目前這一頁的數字不變。"""
+
+    show: Literal["marks", "trails", "both"] = Field(
+        default="marks",
+        description="顯示之前各頁的標記、軌跡（同一個標記依頁面的順序連成線）或兩者",
+    )
+    length: int | None = Field(default=None, ge=1, description="顯示之前幾頁；None 為全部")
+    fade: bool = Field(default=True, description="之前各頁的標記淡化")
+    previous: list[Scalar] = Field(
+        default_factory=list,
+        description="查詢時由查詢服務填入：要一併顯示的之前各頁（依頁面的順序）；存檔的報表中是空的",
+    )
+
+
 class DropLines(IRModel):
     """下拉線（Tableau 的「分析＞下拉線」）：從標記畫到座標軸的線。"""
 
@@ -2058,6 +2091,20 @@ class Worksheet(IRModel):
     tooltips: bool = Field(
         default=True, description="滑過標記時顯示工具提示（工具提示編輯器的「顯示工具提示」）"
     )
+    tooltip_mode: Literal["responsive", "hover"] = Field(
+        default="responsive",
+        description="工具提示出現的方式：responsive 為「回應式」（滑過立即顯示、跟著游標）；hover 為"
+        "「暫留時」（停在標記上一會兒才顯示，留在原位）。.twb 的 tooltip-mode smooth／sticky",
+    )
+    tooltip_commands: bool = Field(
+        default=True,
+        description="包含命令按鈕：選取標記後工具提示上有「只保留」「排除」"
+        "（.twb 的 <customized-tooltip show-buttons='false'> 為不包含）",
+    )
+    tooltip_select: bool = Field(
+        default=True,
+        description="允許依類別選取：選取標記後點工具提示中的維度值，選取這個值的所有標記",
+    )
     formats: dict[str, str] = Field(
         default_factory=dict,
         description="工作表上設定的數字格式（欄位鍵 → Tableau 格式字串），優先於欄位的預設格式",
@@ -2072,6 +2119,11 @@ class Worksheet(IRModel):
     )
     caption_shown: bool = Field(
         default=False, description="顯示說明（工作表選單的「顯示說明」）：說明在檢視的下方"
+    )
+    summary_shown: bool = Field(
+        default=False,
+        description="顯示摘要卡（工作表選單的「顯示摘要」）：檢視中各量值的筆數、總和、平均、最小值、"
+        "最大值與中位數；選取標記時只算選取的標記",
     )
     totals: list[Literal["rows", "columns"]] = Field(
         default_factory=list,
@@ -2168,6 +2220,9 @@ class Worksheet(IRModel):
     page: Scalar = Field(
         default=None,
         description="目前的頁（Tableau 存檔時的頁面）；None 為第一頁（檢視器依可選值決定）",
+    )
+    page_history: PageHistory | None = Field(
+        default=None, description="頁面的顯示歷程；None 為只顯示目前這一頁"
     )
     blends: list[Blend] = Field(
         default_factory=list,

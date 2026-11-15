@@ -12,7 +12,7 @@ import duckdb
 import pytest
 
 from tmig.data.executor import execute
-from tmig.ir import IR, TextRun, TextStyle
+from tmig.ir import IR, Pane, TextRun, TextStyle
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import build_spec, main_encoding, worksheet_title
 from tmig.sqlgen.query import GRAND_TOTAL, totals_sql, worksheet_sql
@@ -205,6 +205,82 @@ def test_custom_tooltip_text(tmp_path: Path, db: Path) -> None:
     assert render(ir, db).spec["usermeta"]["tooltip"] == {"show": False, "runs": []}
     ir = parse(tmp_path, sheet.replace(tooltip, ""))
     assert "tooltip" not in render(ir, db).spec["usermeta"]
+
+    # 暫留時顯示（tooltip-mode='sticky'）、不包含命令按鈕（show-buttons='false'）
+    sticky = sheet.replace("<customized-tooltip>", "<customized-tooltip show-buttons='false'>")
+    sticky = sticky.replace("</table>", "<tooltip-style tooltip-mode='sticky' /></table>")
+    ir = parse(tmp_path, sticky + other)
+    ws = ir.worksheets[0]
+    assert (ws.tooltips, ws.tooltip_mode, ws.tooltip_commands, ws.tooltip_select) == (
+        True,
+        "hover",
+        False,
+        True,
+    )
+    template = render(ir, db).spec["usermeta"]["tooltip"]
+    assert (template["mode"], template["commands"]) == ("hover", False) and "select" not in template
+    # 只有選項、沒有自訂文字：範本只帶選項
+    plain = ir.model_copy(deep=True)
+    plain.worksheets[0].marks.tooltip_text = []
+    plain.worksheets[0].tooltip_select = False
+    assert render(plain, db).spec["usermeta"]["tooltip"] == {
+        "show": True,
+        "runs": [],
+        "mode": "hover",
+        "commands": False,
+        "select": False,
+    }
+
+
+def test_tooltip_text_per_marks_card(tmp_path: Path, db: Path) -> None:
+    """各標記卡各自的自訂工具提示：文字不只一種時，每一層的工具提示欄位清單帶著標記卡的記號，
+    範本列出各標記卡的文字；只有一種時所有的標記用同一份。"""
+    from tmig.render.vegalite import TOOLTIP_CARD
+
+    sheet = worksheet(
+        "Two",
+        [REGION, SALES, PROFIT],
+        rows=ref("none:Region:nk"),
+        cols=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    ws = ir.worksheets[0]
+    # 兩個量值各自一張標記卡（Tableau 的 <panes> 各有自己的 <customized-tooltip>）
+    ws.panes = [
+        Pane(measure=use, axis="columns", marks=ws.marks.model_copy(deep=True))
+        for use in ws.columns
+    ]
+    assert len(ws.panes) == 2
+    ws.panes[0].marks.tooltip_text = [TextRun(text="Sales of "), TextRun(use=ws.rows[0])]
+    same = render(ir, db).spec
+    assert "cards" not in same["usermeta"]["tooltip"]
+
+    def titles(spec: dict[str, Any]) -> list[str]:
+        found: list[str] = []
+
+        def visit(node: Any) -> None:
+            if isinstance(node, dict):
+                for item in node.get("encoding", {}).get("tooltip", []) or []:
+                    if str(item.get("title", "")).startswith(TOOLTIP_CARD):
+                        found.append(item["title"])
+                for value in node.values():
+                    visit(value)
+            elif isinstance(node, list):
+                for value in node:
+                    visit(value)
+
+        visit(spec)
+        return sorted(set(found))
+
+    assert titles(same) == []
+    ws.panes[1].marks.tooltip_text = [TextRun(text="Profit of "), TextRun(use=ws.rows[0])]
+    spec = render(ir, db).spec
+    template = spec["usermeta"]["tooltip"]
+    assert sorted(template["cards"]) == ["1", "2"]
+    assert template["cards"]["1"][0] == {"text": "Sales of "}
+    assert template["cards"]["2"][0] == {"text": "Profit of "}
+    assert titles(spec) == [f"{TOOLTIP_CARD}1", f"{TOOLTIP_CARD}2"]
 
 
 def test_sheet_name_title_is_the_default(tmp_path: Path) -> None:

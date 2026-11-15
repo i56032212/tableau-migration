@@ -160,6 +160,38 @@ def test_render_tooltip_sheet(client: TestClient) -> None:
     assert client.post(url, json=bad).status_code == 422
 
 
+def test_render_keep_only_and_exclude(client: TestClient) -> None:
+    """工具提示的命令按鈕：只保留、排除選取的標記（等同以標記的維度值篩選），依序套用；量值的欄位鍵略過。"""
+    url = "/api/workbooks/superstore_features/worksheets/ws_category_mix/render"
+
+    def categories(marks: list[dict[str, object]]) -> list[str]:
+        response = client.post(url, json={"marks": marks})
+        assert response.status_code == 200, response.text
+        table = response.json()["table"]
+        return sorted(row[table["keys"].index("f_category")] for row in table["raw"])
+
+    everything = categories([])
+    assert everything == ["Furniture", "Office Supplies", "Technology"]
+    furniture = {"f_category": "Furniture", "sum(f_sales)": 1.0}
+    assert categories([{"mode": "keep", "marks": [furniture]}]) == ["Furniture"]
+    assert categories([{"mode": "exclude", "marks": [furniture]}]) == [
+        "Office Supplies",
+        "Technology",
+    ]
+    two = [{"f_category": "Furniture"}, {"f_category": "Technology"}]
+    assert categories([{"mode": "keep", "marks": two}]) == ["Furniture", "Technology"]
+    # 先只保留兩個、再排除其中一個
+    steps = [{"mode": "keep", "marks": two}, {"mode": "exclude", "marks": [furniture]}]
+    assert categories(steps) == ["Technology"]
+    # 沒有維度的標記不篩選；格式不對的不接受
+    assert categories([{"mode": "keep", "marks": [{"sum(f_sales)": 1.0}]}]) == everything
+    assert client.post(url, json={"marks": [{"mode": "keep", "marks": []}]}).status_code == 422
+    assert (
+        client.post(url, json={"marks": [{"mode": "only", "marks": [furniture]}]}).status_code
+        == 422
+    )
+
+
 def test_relative_date_defaults_to_cases_today(client: TestClient) -> None:
     """相對日期篩選的基準日：沒有指定時用 cases.yaml 的 today（與計算比對相同）。"""
     url = "/api/workbooks/superstore_features/worksheets/ws_recent_sales_by_category/render"
@@ -256,6 +288,7 @@ def test_cases(client: TestClient) -> None:
         "drill": {},
         "tooltip": None,
         "viewport": None,
+        "marks": [],
     }
 
 

@@ -448,6 +448,14 @@ export interface QueryState {
   tooltip?: { source: string; mark: Mark } | null;
   /** 地圖平移、縮放後的顯示範圍（只影響地圖的繪製） */
   viewport?: { west: number; south: number; east: number; north: number } | null;
+  /** 工具提示的「只保留」「排除」：依序套用在這張工作表上 */
+  marks?: MarkSelection[];
+}
+
+/** 工具提示的命令按鈕：只保留或排除選取的標記 */
+export interface MarkSelection {
+  mode: "keep" | "exclude";
+  marks: Mark[];
 }
 
 /** 工具提示中的工作表（Viz in Tooltip）：滑過標記時顯示，以標記的值篩選 */
@@ -512,6 +520,8 @@ export interface RenderResponse {
   caption?: string | null;
   /** 工作表本身是否顯示說明（單獨檢視時；dashboard 的區塊各自決定） */
   caption_shown?: boolean;
+  /** 工作表是否顯示摘要卡（各量值的筆數、總和、平均、最小值、最大值與中位數） */
+  summary_shown?: boolean;
   rows: number;
   mark?: string;
   spec: Record<string, unknown> | null;
@@ -523,7 +533,9 @@ export interface RenderResponse {
   drill?: DrillControl[];
   /** 工具提示中的工作表 */
   tooltip_sheets?: TooltipSheetInfo[];
-  table?: { keys: string[]; headers: string[]; rows: string[][]; raw: string[][] };
+  table?: { keys: string[]; headers: string[]; rows: string[][]; raw: string[][]; roles?: string[] };
+  /** 叢集與預測的模型摘要（編輯器的「描述叢集」「描述預測」） */
+  describe?: { cluster?: unknown; forecast?: unknown };
 }
 
 export type Domain =

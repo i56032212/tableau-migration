@@ -49,10 +49,12 @@ from tmig.ir.models import (
     AnnotationPoint,
     Axis,
     Banding,
+    CategoricalFilter,
     ColorPalette,
     DataField,
     Divider,
     FieldUse,
+    Filter,
     FontElement,
     FontStyle,
     LabelScope,
@@ -60,11 +62,13 @@ from tmig.ir.models import (
     Marks,
     Pane,
     ParamRef,
+    RangeFilter,
     ReferenceLine,
     Scalar,
     ShelfStyle,
     TextRun,
     TextStyle,
+    TopNFilter,
     TrendLine,
     TupleFilter,
     Worksheet,
@@ -164,6 +168,8 @@ ROW = "__row"
 NEXT = "__next"
 DROP_LINE_COLOR = "#666666"
 """下拉線的顏色。"""
+DROP_LABEL_COLOR = "#333333"
+"""下拉線在座標軸上的值標籤的顏色。"""
 """跳躍的線：同一條線上下一個點的位置（_Builder.jump_layers）。"""
 TOTAL = "__total"
 HEADER_LINE_HEIGHT = 15
@@ -294,6 +300,8 @@ class _Builder:
         self.ws = ws
         self.channels = channels
         self.notes: list[str] = []
+        self.trend_models: list[dict[str, Any]] = []
+        """畫出的趨勢線的模型（「描述趨勢模型」）：寫進 usermeta.trends。"""
         self.pane_values = pane_values or {}
         """詳細程度較粗的標記卡（ws.panes 的索引）各自的資料列（J3）。"""
         self.rows = list(ws.rows)
@@ -943,8 +951,31 @@ class _Builder:
                     "encoding": {**end, **plain},
                 }
             )
-        if layers and settings.labels:
-            self.notes.append("下拉線在座標軸上的標籤尚未畫出")
+            if not settings.labels:
+                continue
+            # 座標軸上的值標籤：下拉線碰到座標軸的地方寫上這個標記的值（顯示文字與標記的標籤相同）
+            source = encoding[axis].get("field")
+            ch = next((c for c in self.channels.values() if source in (c.name, c.label)), None)
+            text = {"field": ch.label if ch is not None else source, "type": "nominal"}
+            at_axis = {"y": {"value": "height"}} if axis == "x" else {"x": {"value": 0}}
+            placed = (
+                {"align": "left", "baseline": "bottom", "dx": 3, "dy": -2}
+                if axis == "x"
+                else {"align": "left", "baseline": "bottom", "dx": 2, "dy": -3}
+            )
+            layers.append(
+                {
+                    "name": f"{prefix}{axis}{self.drop_count}_label",
+                    "transform": list(hidden),
+                    "mark": {"type": "text", "fontSize": 10, "tooltip": None, **placed},
+                    "encoding": {
+                        **at_axis,
+                        "text": text,
+                        "color": {"value": DROP_LABEL_COLOR},
+                        "size": {"value": 10},
+                    },
+                }
+            )
         return layers
 
     def jump_layers(
@@ -1728,6 +1759,12 @@ class _Builder:
             for key, ch in self.channels.items()
             if ch.datatype != "spatial" and key not in excluded
         ]
+        # 各標記卡的自訂工具提示不同時：記下這一層是哪一張標記卡（檢視器依這個記號取用它的文字，不顯示）
+        cards = [self.ws.marks, *(pane.marks for pane in self.ws.panes)]
+        index = next((i for i, card in enumerate(cards) if card is marks), None)
+        if index is not None and encoding["tooltip"] and _tooltip_cards(self.ws):
+            first = encoding["tooltip"][0]["field"]
+            encoding["tooltip"].append({"field": first, "title": f"{TOOLTIP_CARD}{index}"})
 
     def combined_color(
         self,
@@ -2246,6 +2283,21 @@ def build_spec(
         # 地圖：查詢之後找出各標記的位置（篩選掉未知的位置時在列號之前）
         map_plan, values, pane_values = maps.locate(ir, ws, channels, values, pane_values)
         builder.pane_values = pane_values
+    # 頁面的顯示歷程：之前各頁的標記另外畫（淡化的標記或軌跡），主圖只有目前這一頁
+    history: list[dict[str, Any]] = []
+    page_ch = channels.get(use_key(ws.pages)) if ws.pages is not None else None
+    if ws.page_history is not None and ws.page_history.previous and page_ch is not None:
+        now = _page_key(ws.page)
+        current = [v for v in values if v.get(TOTAL) or _page_key(v.get(page_ch.name)) == now]
+        if any(not v.get(TOTAL) for v in current) and map_plan is None:
+            history = [v for v in values if v not in current]
+            order = {
+                key: i
+                for i, key in enumerate(sorted({_page_key(v.get(page_ch.name)) for v in values}))
+            }
+            for v in values:
+                v[PAGE_ORDER] = order[_page_key(v.get(page_ch.name))]
+            values = current
     for i, record in enumerate(values):
         # 列號：檢視器選取標記時，以它找回未經 Vega 解析的原始值；圓餅各塊也依它排列；總計不參與選取
         record[ROW] = -1 if record.get(TOTAL) else i
@@ -2358,6 +2410,12 @@ def build_spec(
     ):
         body = _small_multiples(builder, body, values, rows_dims, cols_dims, rows_meas, cols_meas)
 
+    if history and page_ch is not None:
+        if "mark" in body or "layer" in body:
+            body = _with_page_history(builder, body, values, history, page_ch)
+        else:
+            builder.notes.append("分格、多個量值與圓餅等圖表上的頁面歷程尚未畫出（不影響數字）")
+
     tooltip = _tooltip_template(
         ws, ir, channels, {p.id: p.value for p in ir.parameters} | (parameters or {})
     )
@@ -2395,6 +2453,8 @@ def build_spec(
         spec["usermeta"]["text_color"] = _css_color(ws.text_color)
     if tooltip is not None:
         spec["usermeta"]["tooltip"] = tooltip
+    if builder.trend_models:
+        spec["usermeta"]["trends"] = builder.trend_models
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
     spec["usermeta"]["title_color"] = title_color or _title_color(ws)
     spec["usermeta"]["title_font"] = _title_font(ws)
@@ -3120,6 +3180,22 @@ def _trend_lines(
         else:
             step = (model.high - model.low) / (TREND_SAMPLES - 1)
             samples = [(v, v) for v in (model.low + step * i for i in range(TREND_SAMPLES))]
+        size = (trend.degree if trend.fit == "polynomial" else 1) + (1 if trend.intercept else 0)
+        builder.trend_models.append(
+            {
+                "group": ["" if v is None else str(v) for v in key],
+                "fit": trend.fit,
+                "equation": model.equation(y_title, x_title),
+                "observations": model.n,
+                "filtered": len(points) - model.n,
+                "model_df": size,
+                "residual_df": model.n - size,
+                "r2": model.r2,
+                "p": model.p_value,
+                "standard_error": model.sigma,
+                "terms": list(model.terms),
+            }
+        )
         common: dict[str, Any] = {f"{TREND}_group": group}
         # 窗格的維度值：分面（小倍數）時每個窗格只畫自己的趨勢線
         common.update(zip(keys, key[: len(keys)], strict=True))
@@ -3390,8 +3466,45 @@ def _tooltip_template(
     （style）。檢視器以滑過的標記的資料組成工具提示。各標記卡的自訂文字不同時取第一個。"""
     cards = [ws.marks, *(pane.marks for pane in ws.panes)]
     text = next((marks.tooltip_text for marks in cards if marks.tooltip_text), [])
-    if ws.tooltips and not text:
+    options: dict[str, Any] = {}
+    if ws.tooltip_mode != "responsive":
+        options["mode"] = ws.tooltip_mode
+    if not ws.tooltip_commands:
+        options["commands"] = False
+    if not ws.tooltip_select:
+        options["select"] = False
+    if ws.tooltips and not text and not options:
         return None
+    template: dict[str, Any] = {
+        "show": ws.tooltips,
+        "runs": _tooltip_runs(text, ir, channels, params),
+        **options,
+    }
+    own = _tooltip_cards(ws)
+    if own:
+        # 各標記卡各自的文字（鍵是標記卡的順序：0 是「全部」或唯一的標記卡，之後是各量值的標記卡）
+        template["cards"] = {
+            str(i): _tooltip_runs(runs, ir, channels, params) for i, runs in own.items()
+        }
+    return template
+
+
+TOOLTIP_CARD = "__card:"
+"""工具提示欄位清單中的記號（標題的開頭）：這一層是第幾張標記卡，見 _tooltip_cards。"""
+
+
+def _tooltip_cards(ws: Worksheet) -> dict[int, list[TextRun]]:
+    """各標記卡的自訂工具提示文字不只一種時，標記卡的順序 → 它的文字；只有一種（或沒有）時為空的
+    （所有的標記用同一份文字）。"""
+    cards = [ws.marks, *(pane.marks for pane in ws.panes)]
+    texts = {i: marks.tooltip_text for i, marks in enumerate(cards) if marks.tooltip_text}
+    distinct = {tuple(run.model_dump_json() for run in runs) for runs in texts.values()}
+    return texts if len(distinct) > 1 else {}
+
+
+def _tooltip_runs(
+    text: list[TextRun], ir: IR, channels: dict[str, Channel], params: dict[str, Scalar]
+) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     for run in text:
         item: dict[str, Any]
@@ -3414,7 +3527,7 @@ def _tooltip_template(
         if run.style is not None:
             item["style"] = run.style.model_dump(mode="json", exclude_none=True)
         runs.append(item)
-    return {"show": ws.tooltips, "runs": runs}
+    return runs
 
 
 def compose_text(
@@ -3478,8 +3591,12 @@ def worksheet_caption(
 
 
 def _auto_caption(ir: IR, ws: Worksheet) -> str:
-    """自動產生的說明：欄列架上的維度與量值、標記卡上的欄位與篩選的欄位（Tableau 的自動說明是英文的句子，
-    這裡是相同內容的簡短敘述）。"""
+    """自動產生的說明，依 Tableau 自動說明的句子結構（Tableau 的文字隨介面語言而定，這裡是中文）：
+
+    - 主要的句子：「每個 <維度> 的 <量值>」，其他的維度以「依 … 細分」；橫軸與縱軸都是量值時為
+      「<量值> 對 <量值>」；時間軸上的線為「<日期> 的 <量值> 趨勢」
+    - 標記卡：色彩、大小、形狀顯示的欄位（維度為「顯示有關 … 的詳細資料」）、標籤與詳細資料
+    - 篩選：每個篩選一句，寫出保留或排除的成員（多於三個時寫個數）或範圍"""
     fields = {f.id: f for d in ir.datasources for f in d.fields}
 
     def name(use: FieldUse) -> str:
@@ -3499,28 +3616,106 @@ def _auto_caption(ir: IR, ws: Worksheet) -> str:
             or (data_field is not None and data_field.role == "measure")
         )
 
-    shelves = [*ws.columns, *ws.rows]
-    measures = list(dict.fromkeys(name(u) for u in shelves if measure(u)))
-    dims = list(dict.fromkeys(name(u) for u in shelves if not measure(u)))
+    def listed(names: list[str]) -> str:
+        names = list(dict.fromkeys(names))
+        if len(names) <= 1:
+            return "".join(names)
+        return f"{'、'.join(names[:-1])} 與 {names[-1]}"
+
+    def temporal(use: FieldUse) -> bool:
+        data_field = fields.get(use.field)
+        return (
+            data_field is not None
+            and data_field.datatype in ("date", "datetime")
+            and use.continuous
+            and not measure(use)
+        )
+
+    column_measures = [name(u) for u in ws.columns if measure(u)]
+    row_measures = [name(u) for u in ws.rows if measure(u)]
+    measures = [*column_measures, *row_measures]
+    column_dims = [u for u in ws.columns if not measure(u)]
+    row_dims = [u for u in ws.rows if not measure(u)]
+    dims = [*row_dims, *column_dims]
     parts: list[str] = []
-    if measures and dims:
-        parts.append(f"{'、'.join(dims)}的{'與'.join(measures)}。")
+    if column_measures and row_measures:
+        # 散佈圖：橫軸的量值對縱軸的量值，其餘的維度細分
+        sentence = f"{listed(column_measures)} 對 {listed(row_measures)}"
+        if dims:
+            sentence += f"，依 {listed([name(u) for u in dims])} 細分"
+        parts.append(f"{sentence}。")
+    elif measures and dims:
+        dates = [u for u in dims if temporal(u)]
+        if dates and ws.marks.type in ("automatic", "line", "area"):
+            others = [name(u) for u in dims if u not in dates]
+            sentence = f"{listed([name(u) for u in dates])} 的 {listed(measures)} 趨勢"
+            if others:
+                sentence += f"，依 {listed(others)} 細分"
+        else:
+            # 量值所在的另一個架上最內層的維度是「每個 …」，其餘的維度細分
+            across = row_dims if column_measures else column_dims
+            inner = (across or dims)[-1]
+            others = [name(u) for u in dims if u is not inner]
+            sentence = f"每個 {name(inner)} 的 {listed(measures)}"
+            if others:
+                sentence += f"，依 {listed(others)} 細分"
+        parts.append(f"{sentence}。")
     elif measures or dims:
-        parts.append(f"{'、'.join(measures or dims)}。")
+        parts.append(f"{listed(measures or [name(u) for u in dims])}。")
     marks = ws.marks
     for label, use in (("色彩", marks.color), ("大小", marks.size), ("形狀", marks.shape)):
-        if use is not None:
-            parts.append(f"{label}顯示{name(use)}。")
+        if use is None:
+            continue
+        if measure(use):
+            parts.append(f"{label}顯示 {name(use)}。")
+        else:
+            parts.append(f"{label}顯示有關 {name(use)} 的詳細資料。")
     if marks.label:
-        parts.append(f"標記的標籤為{'、'.join(name(u) for u in marks.label)}。")
+        parts.append(f"標記依 {listed([name(u) for u in marks.label])} 標示。")
     if marks.detail:
-        parts.append(f"詳細資料顯示{'、'.join(name(u) for u in marks.detail)}。")
-    filtered = list(
-        dict.fromkeys(name(f.field) for f in ws.filters if not isinstance(f, TupleFilter))
-    )
-    if filtered:
-        parts.append(f"資料依{'、'.join(filtered)}篩選。")
+        parts.append(f"顯示 {listed([name(u) for u in marks.detail])} 的詳細資料。")
+    for flt in ws.filters:
+        if isinstance(flt, TupleFilter) or _noop_filter(flt):
+            continue
+        parts.append(f"檢視依 {name(flt.field)} 篩選{_filter_phrase(flt)}。")
     return "".join(parts)
+
+
+def _noop_filter(flt: Filter) -> bool:
+    """沒有條件的篩選（全部的值）：說明中不寫。"""
+    if isinstance(flt, CategoricalFilter):
+        return flt.mode == "all"
+    if isinstance(flt, RangeFilter):
+        return flt.min is None and flt.max is None and not flt.only_null
+    return False
+
+
+def _filter_phrase(flt: Filter) -> str:
+    """篩選保留或排除了什麼：成員不多於三個時列出，其餘寫個數；範圍寫起訖。"""
+
+    def text(value: Scalar) -> str:
+        return "Null" if value is None else str(value)
+
+    if isinstance(flt, CategoricalFilter) and not flt.ranges:
+        verb = "保留" if flt.mode == "include" else "排除"
+        if not flt.values:
+            return "，不保留任何成員" if flt.mode == "include" else ""
+        if len(flt.values) > 3:
+            return f"，{verb} {len(flt.values)} 個成員"
+        values = [text(v) for v in flt.values]
+        joined = values[0] if len(values) == 1 else f"{'、'.join(values[:-1])} 與 {values[-1]}"
+        return f"，{verb} {joined}"
+    if isinstance(flt, RangeFilter):
+        if flt.only_null:
+            return "，只保留 Null 值"
+        if flt.min is not None and flt.max is not None:
+            return f"，範圍從 {text(flt.min)} 到 {text(flt.max)}"
+        if flt.min is not None:
+            return f"，保留大於或等於 {text(flt.min)} 的值"
+        return f"，保留小於或等於 {text(flt.max)} 的值"
+    if isinstance(flt, TopNFilter):
+        return f"，保留{'前' if flt.direction == 'top' else '後'}幾名的成員"
+    return ""
 
 
 MULTIPLE_VALUES = "*"
@@ -4028,6 +4223,97 @@ def _with_annotations(
     if not layers:
         return body
     return {"layer": [body, *layers]}
+
+
+PAGE_ORDER = "__page"
+"""頁面的顯示歷程：這一列的頁在各頁中的順序（軌跡依它連線）。"""
+HISTORY_OPACITY = 0.3
+TRAIL_COLOR = "#9a9a9a"
+
+
+def _page_key(value: Any) -> str:
+    """頁面值的比對鍵：日期只比到日（查詢結果是日期時間的字串，狀態中可能只有日期）。"""
+    text = "" if value is None else str(value)
+    if re.match(r"^\d{4}-\d{2}-\d{2}[T ]00:00:00", text):
+        return text[:10]
+    return text
+
+
+def _main_mark(node: dict[str, Any]) -> Any:
+    """主圖的標記：第一個有標記的圖層（共用的 encoding 可能在外層）；參考線、裝飾、標籤與下拉線的圖層除外。"""
+    if "mark" in node:
+        return node["mark"]
+    for child in node.get("layer", []):
+        if str(child.get("name", "")).startswith((REF, DECO, "__label", "__drop")):
+            continue
+        found = _main_mark(child)
+        if found is not None:
+            return found
+    return None
+
+
+def _with_page_history(
+    builder: _Builder,
+    body: dict[str, Any],
+    values: list[dict[str, Any]],
+    history: list[dict[str, Any]],
+    page: Channel,
+) -> dict[str, Any]:
+    """頁面的顯示歷程：之前各頁的標記（與主圖相同的標記，淡化）與軌跡（同一個標記依頁面的順序連成線），
+    畫在目前這一頁的標記後面；都是裝飾的圖層，不參與選取。"""
+    settings = builder.ws.page_history
+    main_mark = _main_mark(body)
+    encoding = main_encoding(body)
+    if settings is None or main_mark is None or encoding is None:
+        builder.notes.append("這張圖表上的頁面歷程尚未畫出（不影響數字）")
+        return body
+    if not ("x" in encoding and "y" in encoding):
+        builder.notes.append("頁面歷程需要橫軸與縱軸，未畫出")
+        return body
+    position = {c: copy.deepcopy(encoding[c]) for c in ("x", "y")}
+    layers: list[dict[str, Any]] = []
+    if settings.show in ("trails", "both"):
+        # 同一個標記：頁面以外的維度值都相同
+        identity = [
+            ch.name
+            for ch in builder.channels.values()
+            if ch.role == "dimension" and ch is not page and ch.use.field not in SPECIAL_FIELDS
+        ]
+        layers.append(
+            {
+                "name": f"{DECO}_trail",
+                "data": {"values": [*history, *(v for v in values if not v.get(TOTAL))]},
+                "mark": {
+                    "type": "line",
+                    "color": TRAIL_COLOR,
+                    "strokeWidth": 1,
+                    "opacity": 0.8,
+                    "tooltip": False,
+                },
+                "encoding": {
+                    **position,
+                    "detail": [{"field": name, "type": "nominal"} for name in identity],
+                    "order": {"field": PAGE_ORDER, "type": "quantitative"},
+                },
+            }
+        )
+    if settings.show in ("marks", "both"):
+        mark = copy.deepcopy(main_mark) if isinstance(main_mark, dict) else {"type": main_mark}
+        mark["tooltip"] = False
+        if settings.fade:
+            mark["opacity"] = HISTORY_OPACITY
+        kept = {
+            channel: copy.deepcopy(encoding[channel])
+            for channel in ("x", "y", "color", "size", "shape", "detail", "xOffset", "yOffset")
+            if channel in encoding
+        }
+        for channel in ("color", "size", "shape"):
+            if isinstance(kept.get(channel), dict):
+                kept[channel]["legend"] = None  # 圖例只列目前這一頁的
+        layers.append(
+            {"name": f"{DECO}_history", "data": {"values": history}, "mark": mark, "encoding": kept}
+        )
+    return {"layer": [*layers, body]}
 
 
 FORECAST_BAND = f"{DECO}_forecast"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -48,6 +49,8 @@ class Analytics:
     cluster: ClusterPlan | None = None
     forecast: ForecastPlan | None = None
     notes: list[str] = field(default_factory=list)
+    details: dict[str, Any] = field(default_factory=dict)
+    """計算之後的模型摘要（「描述叢集」「描述預測」）：cluster、forecast。"""
 
 
 def apply(
@@ -57,9 +60,11 @@ def apply(
     if analytics is None:
         return columns, rows
     if analytics.cluster is not None:
-        rows = _clusters(analytics.cluster, columns, rows)
+        rows = _clusters(analytics.cluster, columns, rows, analytics.details)
     if analytics.forecast is not None:
-        columns, rows = _forecast(analytics.forecast, columns, rows, analytics.notes)
+        columns, rows = _forecast(
+            analytics.forecast, columns, rows, analytics.notes, analytics.details
+        )
     return columns, rows
 
 
@@ -67,14 +72,27 @@ def apply(
 
 
 def _clusters(
-    plan: ClusterPlan, columns: list[str], rows: list[tuple[Any, ...]]
+    plan: ClusterPlan,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    details: dict[str, Any] | None = None,
 ) -> list[tuple[Any, ...]]:
-    from tmig.planner.cluster import cluster
+    from tmig.planner.cluster import cluster, describe
 
     at = columns.index(plan.column)
     measures = [columns.index(m) for m in plan.measures]
     valid = [i for i, row in enumerate(rows) if all(_number(row[j]) is not None for j in measures)]
-    labels = cluster([[float(rows[i][j]) for j in measures] for i in valid], plan.count)
+    values = [[float(rows[i][j]) for j in measures] for i in valid]
+    labels = cluster(values, plan.count)
+    if details is not None:
+        # 描述叢集：變數、沒有分到叢集的標記數（量值是 Null）與各叢集的摘要
+        details["cluster"] = {
+            **describe(values, labels),
+            "measures": plan.measures,
+            "column": plan.column,
+            "unclustered": len(rows) - len(valid),
+            "automatic": plan.count is None,
+        }
     assigned = dict(zip(valid, labels, strict=True))
     return [_replace(row, at, assigned.get(i, 0)) for i, row in enumerate(rows)]
 
@@ -83,7 +101,11 @@ def _clusters(
 
 
 def _forecast(
-    plan: ForecastPlan, columns: list[str], rows: list[tuple[Any, ...]], notes: list[str]
+    plan: ForecastPlan,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    notes: list[str],
+    details: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[tuple[Any, ...]]]:
     from tmig.planner.forecast import AUTO_LENGTH, SEASONS, ForecastError, Model, best_fit, forecast
 
@@ -108,6 +130,7 @@ def _forecast(
     )
     result: list[tuple[Any, ...]] = [(*row, *([None] * len(extra))) for row in rows]
     appended: dict[int, list[tuple[Any, ...]]] = {}
+    models: list[dict[str, Any]] = []
     for key, members in groups.items():
         dated = sorted(
             (i for i in members if rows[i][time_at] is not None), key=lambda i: rows[i][time_at]
@@ -142,6 +165,26 @@ def _forecast(
             predicted = forecast(found, horizon, settings.confidence)
             estimates.append(predicted.values)
             bands.append((predicted.low, predicted.high))
+            models.append(
+                {
+                    "series": list(key),
+                    "measure": columns[j],
+                    "model": found.model.code,
+                    "trend": found.model.trend,
+                    "season": found.model.season,
+                    "alpha": found.params[0],
+                    "beta": found.params[1],
+                    "gamma": found.params[2],
+                    "aic": found.aic,
+                    "rmse": math.sqrt(found.sse / found.n) if found.n else None,
+                    "observations": found.n,
+                    "period": found.period,
+                    "horizon": horizon,
+                    "first": fitted_times[0],
+                    "last": fitted_times[-1],
+                    "until": future[-1] if future else timeline[-1],
+                }
+            )
         if all(e is None for e in estimates):
             continue
         # 忽略的最後幾期：以估計值取代實際值
@@ -176,6 +219,17 @@ def _forecast(
     for i, row in enumerate(result):
         ordered.append(row)
         ordered.extend(appended.get(i, []))
+    if details is not None:
+        # 描述預測：選項與各條時間序列的模型（水準、趨勢、季節的平滑係數與品質）
+        details["forecast"] = {
+            "time": plan.time,
+            "unit": unit,
+            "series": plan.series,
+            "ignore_last": max(settings.ignore_last, 0),
+            "confidence": settings.confidence,
+            "seasonal": seasonal,
+            "models": models,
+        }
     return out_columns, ordered
 
 

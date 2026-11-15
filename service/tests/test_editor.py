@@ -250,6 +250,30 @@ def test_date_table_calcs_from_editor(client: TestClient) -> None:
             assert value in (None, "")  # 第一年沒有前一年
         else:
             assert float(value) == pytest.approx((base[(y, q)] - previous) / abs(previous))
+    # 年初至今成長率：年初至今總計與前一年同一季的年初至今總計比較（次要計算在年的層級）
+    growth = values(
+        calc(
+            "tc_ytd_growth",
+            "running_total",
+            {"aggregation": "sum"},
+            restart=year,
+            secondary={
+                "type": "percent_difference",
+                "addressing": [],
+                "options": {"offset": -1},
+                "level": year,
+                "restart": None,
+            },
+        )
+    )
+    for (y, q), value in growth.items():
+        current = float(ytd[(y, q)])
+        previous = ytd.get((y - 1, q))
+        if previous is None:
+            assert value in (None, "")
+        else:
+            expected = (current - float(previous)) / abs(float(previous))
+            assert float(value) == pytest.approx(expected)
     # 複合成長率：相對於第一個，POWER(目前 / 第一個, 1 / 相隔的標記數) - 1
     first = base[keys[0]]
     compound = values(
@@ -463,9 +487,45 @@ def test_analytics_fields_api(client: TestClient) -> None:
     ws["cluster"] = {"field": cluster["id"], "measures": [ws["columns"][0]], "count": 2}
     saved = client.put(f"/api/edit/demo/worksheets/{ws['id']}", json={"worksheet": ws})
     assert saved.status_code == 200, saved.text
-    spec = render(client, ws["id"])["spec"]
+    data = render(client, ws["id"])
+    spec = data["spec"]
     shown = {v for r in spec["data"]["values"] for v in r.values() if isinstance(v, str)}
     assert {"Cluster 1", "Cluster 2"} <= shown
+    # 描述叢集：叢集數、點數、各叢集的項目數與中心、平方和與各變數的 F 統計量
+    described = data["describe"]["cluster"]
+    measure = described["measures"][0]
+    values = [float(v) for v in column(data["table"], measure)]
+    assert (described["count"], described["points"], described["automatic"]) == (
+        2,
+        len(values),
+        False,
+    )
+    assert sum(c["items"] for c in described["clusters"]) == len(values)
+    assert described["total"] == pytest.approx(described["between"] + described["within"])
+    centers = sorted(c["centers"][0] for c in described["clusters"])
+    assert min(values) <= centers[0] < centers[1] <= max(values)
+    assert described["variables"][0]["f"] > 0 and 0 <= described["variables"][0]["p"] <= 1
+    # 沒有叢集與預測的工作表沒有摘要
+    assert render(client, "ws_sales_by_region")["describe"] == {}
+
+
+def test_describe_forecast(client: TestClient) -> None:
+    """描述預測：選項（時間的細度、忽略最後幾期、信賴水準）與模型（趨勢與季節、平滑係數、品質）。"""
+    month = use("f_order_date", date={"kind": "trunc", "unit": "month"}, continuous=True)
+    sales = use("f_sales", agg="sum", continuous=True)
+    ws = blank(client, rows=[sales], columns=[month])
+    ws["marks"]["type"] = "line"
+    ws["forecast"] = {"measures": [sales]}
+    put(client, ws)
+    data = render(client, "ws_sales_by_region")
+    assert data["unsupported"] is None, data
+    described = data["describe"]["forecast"]
+    assert (described["unit"], described["confidence"]) == ("month", 0.95)
+    (model,) = described["models"]
+    assert model["measure"] == "sum(f_sales)" and model["observations"] > 12
+    assert model["model"] in {"NN", "AN", "MN", "NA", "AA", "NM", "AM", "MM"}
+    assert 0 <= model["alpha"] <= 1 and model["rmse"] > 0 and model["horizon"] > 0
+    assert str(model["first"]) < str(model["last"]) < str(model["until"])
 
 
 def test_hierarchies_api(client: TestClient) -> None:
@@ -1321,6 +1381,30 @@ def test_secondary_table_calculation(client: TestClient) -> None:
     got_text = column(table, key)
     assert got_text[0] == "" and [float(v) for v in got_text[1:]] == pytest.approx(raw[1:])
 
+    # 自訂排序順序：累計沿著 Region，但依利潤由大到小的順序累加（利潤不在檢視中）
+    ordered = calc(None, ["f_region"])
+    ordered["sort"] = {"by": use("f_profit", agg="sum", continuous=True), "order": "desc"}
+    ws["table_calcs"] = [ordered]
+    table, key = values(ws)
+    profit_ws = blank(
+        client, rows=[use("f_region")], columns=[use("f_profit", agg="sum", continuous=True)]
+    )
+    put(client, profit_ws)
+    profit_table = render(client, "ws_sales_by_region")["table"]
+    profit = dict(
+        zip(
+            column(profit_table, "f_region"),
+            [float(v) for v in column(profit_table, "sum(f_profit)")],
+            strict=True,
+        )
+    )
+    by_region = dict(zip(column(table, "f_region"), raw, strict=True))
+    ranked = sorted(by_region, key=lambda r: -profit[r])
+    expected = {r: sum(by_region[x] for x in ranked[: i + 1]) for i, r in enumerate(ranked)}
+    got = dict(zip(column(table, "f_region"), [float(v) for v in column(table, key)], strict=True))
+    assert got == pytest.approx(expected)
+    assert "sum(f_profit)" not in table["keys"]  # 排序依據的量值不輸出
+
     # 兩個維度：累計沿著 Category（每個 Region 重新開始），排名沿著 Region（每個 Category 各自排名）
     ws = blank(
         client,
@@ -1651,3 +1735,66 @@ def test_hidden_sheets_tab_color_and_duplicate_as_crosstab(client: TestClient) -
     again = client.post(f"/api/edit/demo/worksheets/{name}/crosstab").json()["worksheet"]
     assert again["name"] == "Sales by Region (交叉資料表) (2)"
     assert client.post("/api/edit/demo/worksheets/nope/crosstab").status_code == 422
+
+
+def test_page_history(client: TestClient) -> None:
+    """頁面的顯示歷程：目前這一頁之前的幾頁畫成淡化的標記與軌跡；主圖、列數與資料表只有…目前這一頁的標記。"""
+    year = use("f_order_date", date={"kind": "part", "unit": "year"})
+    ws = blank(
+        client,
+        rows=[use("f_profit", agg="sum", continuous=True)],
+        columns=[use("f_sales", agg="sum", continuous=True)],
+    )
+    ws["marks"]["type"] = "circle"
+    ws["marks"]["detail"] = [use("f_region")]
+    ws["pages"] = year
+    put(client, ws)
+    url = "/api/workbooks/demo/worksheets/ws_sales_by_region/render"
+    domain = client.post(
+        "/api/workbooks/demo/fields/year(f_order_date)/domain", json={"kind": "values"}
+    ).json()["values"]
+    assert len(domain) >= 3
+
+    def names(spec: dict[str, Any]) -> list[str]:
+        found: list[str] = []
+
+        def visit(node: dict[str, Any]) -> None:
+            for layer in node.get("layer", []):
+                found.append(str(layer.get("name", "")))
+                visit(layer)
+
+        visit(spec)
+        return found
+
+    third = {"pages": {"ws_sales_by_region": domain[2]}}
+    plain = client.post(url, json=third).json()
+    assert plain["unsupported"] is None and "__deco_history" not in names(plain["spec"])
+    ws["page_history"] = {"show": "both", "length": None, "fade": True}
+    put(client, ws)
+    data = client.post(url, json=third).json()
+    assert data["unsupported"] is None, data
+    found = names(data["spec"])
+    assert "__deco_history" in found and "__deco_trail" in found
+    # 主圖只有目前這一頁的標記（與沒有歷程時相同）；之前兩頁的標記在歷程的圖層
+    assert data["spec"]["usermeta"]["rows"] == plain["spec"]["usermeta"]["rows"]
+    assert len(data["spec"]["data"]["values"]) == len(plain["spec"]["data"]["values"])
+
+    def history(spec: dict[str, Any]) -> list[dict[str, Any]]:
+        stack = [spec]
+        while stack:
+            node = stack.pop()
+            if node.get("name") == "__deco_history":
+                return node["data"]["values"]
+            stack.extend(node.get("layer", []))
+        return []
+
+    assert len(history(data["spec"])) == 2 * len(plain["spec"]["data"]["values"])
+    # 只顯示前一頁
+    ws["page_history"] = {"show": "marks", "length": 1, "fade": False}
+    put(client, ws)
+    data = client.post(url, json=third).json()
+    assert len(history(data["spec"])) == len(plain["spec"]["data"]["values"])
+    assert "__deco_trail" not in names(data["spec"])
+    # 第一頁沒有歷程
+    first = client.post(url, json={"pages": {"ws_sales_by_region": domain[0]}}).json()
+    assert "__deco_history" not in names(first["spec"])

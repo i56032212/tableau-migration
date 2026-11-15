@@ -43,7 +43,7 @@ import {
   VersionsButton,
 } from "./Server";
 import { SessionGate, UserBar } from "./Session";
-import { setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
+import { keepMarks, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
 import { ConnectServerDialog } from "./editor/ConnectServer";
 import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
@@ -427,6 +427,24 @@ function WorkbookPage({
   const [dialog, setDialog] = useState<"crosstab" | "data" | null>(null);
   const [customName, setCustomName] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // 簡報模式（Tableau 的「視窗＞簡報模式」）：全螢幕、只留檢視，下方的列切換前後一張；按 Esc 結束
+  const [presenting, setPresenting] = useState(false);
+  useEffect(() => {
+    if (!presenting) return;
+    const leave = () => {
+      if (!document.fullscreenElement) setPresenting(false);
+    };
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPresenting(false);
+    };
+    document.addEventListener("fullscreenchange", leave);
+    document.addEventListener("keydown", keys);
+    return () => {
+      document.removeEventListener("fullscreenchange", leave);
+      document.removeEventListener("keydown", keys);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    };
+  }, [presenting]);
 
   // 報表的定義在檢視器之外改變（例如報表改用發布的資料源）：重新載入
   useEffect(() => {
@@ -557,8 +575,39 @@ function WorkbookPage({
     else if (to.story) navigate(viewPath(workbook, "story", to.story) + window.location.search);
   };
 
+  // 簡報時依序切換的檢視：dashboard、Story、沒有隱藏的工作表（與「切換檢視」的順序相同）
+  const slides: { path: string; name: string; current: boolean }[] = [
+    ...ir.dashboards.map((d) => ({ path: viewPath(workbook, "d", d.id), name: d.name, current: dashboard?.id === d.id })),
+    ...stories.map((st) => ({ path: viewPath(workbook, "story", st.id), name: st.name, current: story?.id === st.id })),
+    ...ir.worksheets
+      .filter((w) => !w.hidden || w.id === worksheet?.id)
+      .map((w) => ({ path: viewPath(workbook, "s", w.id), name: w.name, current: worksheet?.id === w.id })),
+  ];
+  const slide = slides.findIndex((s) => s.current);
+  const present = (delta: number) => {
+    if (slides.length === 0) return;
+    const next = slides[(((slide < 0 ? 0 : slide) + delta) % slides.length + slides.length) % slides.length];
+    navigate(next.path + window.location.search);
+  };
+
   return (
-    <div className="page">
+    <div className={presenting ? "page presenting" : "page"} data-presenting={presenting ? "true" : "false"}>
+      {presenting && (
+        <nav className="presentation-bar" aria-label="簡報模式">
+          <button type="button" aria-label="上一張" title="上一張" onClick={() => present(-1)}>
+            ◀
+          </button>
+          <span className="presentation-name">
+            {slide >= 0 ? slides[slide].name : ""}（{slide + 1}／{slides.length}）
+          </span>
+          <button type="button" aria-label="下一張" title="下一張" onClick={() => present(1)}>
+            ▶
+          </button>
+          <button type="button" title="結束簡報模式（Esc）" onClick={() => setPresenting(false)}>
+            結束簡報
+          </button>
+        </nav>
+      )}
       <header className="toolbar">
         <Link to="/">報表</Link>
         <span className="sep">/</span>
@@ -668,6 +717,19 @@ function WorkbookPage({
         {me.mode === "desktop" && (datasource || editingDatasource) && (
           <button type="button" title="以資料庫的資料表或自訂 SQL 新增資料源" onClick={() => connectServer(workbook)}>
             連線到伺服器…
+          </button>
+        )}
+        {(dashboard || worksheet || story) && (
+          <button
+            type="button"
+            title="全螢幕、只顯示檢視，可以切換前後一張（Tableau 的「簡報模式」）；按 Esc 結束"
+            onClick={() => {
+              setPresenting(true);
+              // 全螢幕要求可能被瀏覽器拒絕（例如內嵌的視窗）：仍以簡報的版面顯示
+              void document.documentElement.requestFullscreen?.().catch(() => undefined);
+            }}
+          >
+            簡報模式
           </button>
         )}
         {(dashboard || worksheet || story) && (
@@ -887,6 +949,7 @@ function WorkbookPage({
               revision={refresh}
               onDrill={(key, delta) => changeView(setDrill(view, worksheet.id, key, delta))}
               tooltipState={(target, mark) => tooltipStateFor(ir, worksheet.id, target, view, mark)}
+              onKeep={(mode, marks) => changeView(keepMarks(view, worksheet.id, mode, marks))}
             />
           </div>
           {view && <SheetControls ir={ir} workbook={workbook} worksheet={worksheet} view={view} onView={changeView} />}

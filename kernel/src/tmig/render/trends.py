@@ -53,6 +53,11 @@ class Model:
     _t: float | None
     _sign: float
 
+    @property
+    def sigma(self) -> float | None:
+        """殘差的標準誤（轉換後的空間）；殘差自由度為 0 時為 None。"""
+        return self._sigma
+
     def predict(self, x: float) -> float | None:
         """X 對應的趨勢值；X 不在模型的定義域（對數、乘冪的 X ≤ 0）時為 None。"""
         v = self._linear(x)

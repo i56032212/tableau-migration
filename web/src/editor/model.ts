@@ -139,7 +139,9 @@ export interface TableCalcIR {
   options: Record<string, Scalar>;
   nested: unknown[];
   /** 次要計算：主要計算（累計、移動計算）的結果再做一次表計算 */
-  secondary?: { type: string; addressing: string[]; options: Record<string, Scalar> } | null;
+  secondary?: { type: string; addressing: string[]; options: Record<string, Scalar>; level?: FieldUse | null; restart?: FieldUse | null } | null;
+  /** 自訂排序順序：沿著計算方向的標記依這個彙總值排列 */
+  sort?: { by: FieldUse; order: "asc" | "desc" } | null;
   source_ref: string;
 }
 

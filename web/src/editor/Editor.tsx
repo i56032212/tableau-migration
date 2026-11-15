@@ -10,6 +10,7 @@ import { DataDialog } from "../ViewerTools";
 import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
+import { DescribeModelDialog } from "./DescribeDialogs";
 import { DataPane } from "./DataPane";
 import {
   AliasDialog,
@@ -42,7 +43,7 @@ import {
 } from "./Dialogs";
 import { FilterDialog } from "./FilterDialog";
 import { AnnotationsDialog, ApplyFilterDialog, BlendsDialog, LabelDialog, SortDialog, TableCalcDialog } from "./MoreDialogs";
-import { CaptionDialog, ShapesDialog, TotalsDialog, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
+import { CaptionDialog, ShapesDialog, TotalsDialog, clearFormat, copyFormat, hasCopiedFormat, pasteFormat } from "./ViewDialogs";
 import { moreFieldDialog } from "./FieldMoreDialogs";
 import {
   type Card,
@@ -239,6 +240,21 @@ function AnalyticsCard() {
         <button type="button" onClick={() => editor.openDialog({ kind: "cluster" })}>
           {sheet.cluster ? "叢集 ✓" : "＋ 叢集…"}
         </button>
+        {Boolean(trend) && (
+          <button type="button" className="link" title="趨勢線的公式、R 平方、P 值與標準誤" onClick={() => editor.openDialog({ kind: "describe-model", model: "trend" })}>
+            描述趨勢模型…
+          </button>
+        )}
+        {Boolean(sheet.forecast) && (
+          <button type="button" className="link" title="預測的選項與模型（趨勢、季節、平滑係數與品質）" onClick={() => editor.openDialog({ kind: "describe-model", model: "forecast" })}>
+            描述預測…
+          </button>
+        )}
+        {Boolean(sheet.cluster) && (
+          <button type="button" className="link" title="叢集的摘要、各叢集的中心與變異數分析；可以存成群組" onClick={() => editor.openDialog({ kind: "describe-model", model: "cluster" })}>
+            描述叢集…
+          </button>
+        )}
         <button type="button" title="點與區域的註解；標記的註解先在檢視上選取標記" onClick={() => editor.openDialog({ kind: "annotations", mark: null })}>
           {(sheet.annotations as unknown[] | undefined)?.length ? `註解（${(sheet.annotations as unknown[]).length}）` : "＋ 註解…"}
         </button>
@@ -285,6 +301,20 @@ function AnalyticsCard() {
           <option value="always">一律顯示</option>
         </select>
       </label>
+      {Boolean(sheet.drop_lines) && (
+        <label className="hint drop-labels" title="下拉線碰到座標軸的地方寫上標記的值（Tableau 下拉線的「顯示標籤」）">
+          <input
+            type="checkbox"
+            aria-label="下拉線的值標籤"
+            checked={(sheet.drop_lines as { labels?: boolean } | null)?.labels === true}
+            onChange={(e) => {
+              const labels = e.target.checked;
+              editor.apply((s) => ({ ...s, drop_lines: s.drop_lines ? { ...(s.drop_lines as object), labels } : null }));
+            }}
+          />{" "}
+          下拉線的值標籤
+        </label>
+      )}
       <label className="hint percent-of" title="量值顯示成占範圍合計的比例（Tableau 的「分析＞百分比」）">
         百分比{" "}
         <select
@@ -649,6 +679,18 @@ export function Editor({
           <button type="button" onClick={() => setDialog({ kind: "title" })}>
             標題…
           </button>
+          <label className="inline" title="檢視下方顯示各量值的筆數、總和、平均、最小值、最大值與中位數；選取標記時只算選取的標記（Tableau 的「工作表＞顯示摘要」）">
+            <input
+              type="checkbox"
+              aria-label="顯示摘要"
+              checked={sheet.summary_shown === true}
+              onChange={(e) => {
+                const summary_shown = e.target.checked; // 先取值：存檔是非同步的，之後核取方塊已還原
+                apply((s) => ({ ...s, summary_shown }));
+              }}
+            />{" "}
+            摘要
+          </label>
           <button type="button" title="檢視下方的說明（Tableau 的「工作表＞顯示說明」）" onClick={() => setDialog({ kind: "caption" })}>
             說明…
           </button>
@@ -676,6 +718,13 @@ export function Editor({
             onClick={() => apply((s) => pasteFormat(s))}
           >
             貼上格式
+          </button>
+          <button
+            type="button"
+            title="這張工作表的格式（背景、字型、顏色、格線與分隔線、對齊、數字格式）回到預設（Tableau 的「工作表＞清除＞格式」）；可以復原"
+            onClick={() => apply((s) => clearFormat(s))}
+          >
+            清除格式
           </button>
           {quickSort && (
             <>
@@ -839,6 +888,44 @@ export function Editor({
               }}
             />
           )}
+          {Boolean(stored?.pages) &&
+            (() => {
+              // 頁面的顯示歷程（頁面控制項的「顯示歷程」）：之前各頁的標記（淡化）、軌跡或兩者
+              const history = (sheet.page_history as { show: string; length: number | null; fade: boolean } | null | undefined) ?? null;
+              const change = (patch: Record<string, unknown> | null) =>
+                apply((s) => ({ ...s, page_history: patch === null ? null : { show: "marks", length: null, fade: true, ...((s.page_history as object | null) ?? {}), ...patch, previous: [] } }));
+              return (
+                <div className="page-history" data-page-history={history ? history.show : "none"}>
+                  <label className="inline" title="目前這一頁之外，也畫出之前各頁的標記（淡化）或同一個標記在各頁之間的軌跡（Tableau 頁面控制項的「顯示歷程」）">
+                    顯示歷程
+                    <select aria-label="顯示歷程" value={history?.show ?? ""} onChange={(e) => change(e.target.value ? { show: e.target.value } : null)}>
+                      <option value="">無</option>
+                      <option value="marks">標記</option>
+                      <option value="trails">軌跡</option>
+                      <option value="both">兩者</option>
+                    </select>
+                  </label>
+                  {history && (
+                    <>
+                      <label className="inline" title="顯示之前幾頁；空白為全部">
+                        長度
+                        <input
+                          type="number"
+                          min={1}
+                          aria-label="歷程的長度"
+                          placeholder="全部"
+                          value={history.length ?? ""}
+                          onChange={(e) => change({ length: e.target.value ? Math.max(1, Math.round(Number(e.target.value))) : null })}
+                        />
+                      </label>
+                      <label className="inline">
+                        <input type="checkbox" aria-label="歷程的標記淡化" checked={history.fade !== false} onChange={(e) => change({ fade: e.target.checked })} /> 淡化
+                      </label>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           {showMe && <ShowMePanel onClose={() => setShowMe(false)} />}
           <div className="editor-canvas">
             {empty ? (
@@ -878,6 +965,15 @@ export function Editor({
                     });
                   }}
                   tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
+                  onAnnotationMove={(index, dx, dy) =>
+                    // 拖曳註解的文字：改變文字相對於標記或點的位置（區域的註解以對話框調整）
+                    apply((s) => ({
+                      ...s,
+                      annotations: ((s.annotations as { kind: string; offset?: [number, number] }[] | undefined) ?? []).map((a, i) =>
+                        i === index && a.kind !== "area" ? { ...a, offset: [(a.offset?.[0] ?? 0) + dx, (a.offset?.[1] ?? 0) + dy] } : a,
+                      ),
+                    }))
+                  }
                   onViewport={(viewport) =>
                     // 與 Tableau Desktop 相同，平移、縮放後的地圖範圍存進工作表（「重設地圖」改回自動縮放）
                     apply((s) => {
@@ -932,6 +1028,7 @@ export function Editor({
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "forecast" && <ForecastDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "cluster" && <ClusterDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
+      {dialog?.kind === "describe-model" && <DescribeModelDialog kind={dialog.model} onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "colors" && <ColorsDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "tooltip" && <TooltipDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "labels" && <LabelDialog card={dialog.card} onClose={() => setDialog(null)} />}

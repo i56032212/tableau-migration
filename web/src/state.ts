@@ -11,6 +11,7 @@ import type {
   QueryState,
   Scalar,
   SetValue,
+  MarkSelection,
 } from "./types";
 
 /** 檢視器的狀態：各工作表的篩選、參數、篩選動作的選取。 */
@@ -33,6 +34,8 @@ export interface ViewState {
   highlighters?: Record<string, Record<string, Scalar[]>>;
   /** 階層的切入：工作表 id → 一組階層最上層的欄位鍵 → 切入的層數 */
   drills?: Record<string, Record<string, number>>;
+  /** 工具提示的「只保留」「排除」：工作表 id → 依序套用的選取 */
+  kept?: Record<string, MarkSelection[]>;
 }
 
 /** 篩選狀態的欄位鍵，與查詢服務相同：f_region、year(f_order_date)、trunc_month(f_order_date)。 */
@@ -97,6 +100,8 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
   if (view.pages && worksheet in view.pages) state.pages = { [worksheet]: view.pages[worksheet] };
   const drill = view.drills?.[worksheet];
   if (drill && Object.keys(drill).length > 0) state.drill = drill;
+  const kept = view.kept?.[worksheet];
+  if (kept && kept.length > 0) state.marks = kept;
   // 集合動作：只帶這張工作表的資料源中的集合（其他資料源的集合不影響它）
   const sheet = ir.worksheets.find((w) => w.id === worksheet);
   const fields = new Set(ir.datasources.find((d) => d.id === sheet?.datasource)?.fields.map((f) => f.id) ?? []);
@@ -359,6 +364,13 @@ export function highlightsFor(ir: IR, worksheet: string, view: ViewState): Mark[
     for (const value of values) result.push({ [key]: value });
   }
   return result.length > 0 ? result : null;
+}
+
+/** 工具提示的命令按鈕：只保留或排除選取的標記（clear 為清除這張工作表的只保留與排除），並清除選取。 */
+export function keepMarks(view: ViewState, worksheet: string, mode: "keep" | "exclude" | "clear", marks: Mark[]): ViewState {
+  const current = view.kept?.[worksheet] ?? [];
+  const next = mode === "clear" ? [] : [...current, { mode, marks }];
+  return { ...view, kept: { ...view.kept, [worksheet]: next }, selections: { ...view.selections, [worksheet]: [] } };
 }
 
 /** 點選標記後的選取：一般點選取代，按住 Ctrl／⌘／Shift 加入或移除。 */

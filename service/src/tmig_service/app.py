@@ -57,7 +57,13 @@ from tmig.package import read_report_file
 from tmig.planner.drill import apply_drill, drill_info
 from tmig.planner.dynamic import dynamic_fields, resolve_parameters
 from tmig.planner.identity import Identity, protected_fields
-from tmig.planner.state import QueryState, StateError, parse_key, with_viewport
+from tmig.planner.state import (
+    QueryState,
+    StateError,
+    parse_key,
+    with_page_history,
+    with_viewport,
+)
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.datasource import datasource_summary
 from tmig.render.format import fiscal_label
@@ -863,6 +869,19 @@ def create_app(
         ir = apply_drill(ir, ws, state.drill)
         # 地圖平移、縮放後的顯示範圍（只影響繪製）
         ir = with_viewport(ir, ws, state.viewport)
+        if target is not None and target.pages is not None and target.page_history is not None:
+            # 頁面的顯示歷程：頁面欄位依序的值決定目前這一頁之前是哪幾頁；查不到時只顯示目前這一頁
+            source = next(d for d in ir.datasources if d.id == target.datasource)
+            try:
+                found = data.run_sql(
+                    domain_sql(ir, source.id, target.pages, "values", user),
+                    source,
+                    lambda: workspace.database(wb, source.id),
+                    custom_sql_parameters(ir),
+                )
+                ir = with_page_history(ir, ws, state, [_json(r[0]) for r in found.rows])
+            except (QueryError, SourceConnectionError, ExecutionError):
+                pass
         empty = {
             "worksheet": ws,
             "name": target.name if target else ws,
@@ -1068,6 +1087,7 @@ def create_app(
             # 說明的文字一律附上：單獨檢視依工作表的設定顯示，dashboard 的區塊各自決定
             "caption": worksheet_caption(ir, sheet, query.state.parameters, force=True),
             "caption_shown": sheet.caption_shown,
+            "summary_shown": sheet.summary_shown,
             "rows": rendered.rows,
             "mark": rendered.mark,
             "spec": rendered.spec,
@@ -1077,6 +1097,8 @@ def create_app(
             "skipped": query.state.skipped,
             "drill": drill,
             "tooltip_sheets": tooltip_sheets,
+            # 叢集與預測的模型摘要（編輯器的「描述叢集」「描述預測」）；趨勢線的在 spec.usermeta.trends
+            "describe": _plain(query.analytics.details) if query.analytics is not None else {},
             "table": {
                 "keys": [c.key for c in shown],
                 "headers": [caption(fields[c.use.field], c.use, sheet) for c in shown if c.use],
@@ -1360,6 +1382,15 @@ def _cell(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return _json(value)
+
+
+def _plain(value: Any) -> Any:
+    """巢狀的摘要資料 → 合法的 JSON：無限大與 NaN 為 Null，日期為 ISO 格式的字串。"""
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return _cell(value)
 
 
 def _json(value: Any) -> Any:

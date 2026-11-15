@@ -311,6 +311,16 @@ export function hasCopiedFormat(): boolean {
   return storedFormat() !== null;
 }
 
+/**
+ * 清除格式（Tableau 的「工作表＞清除＞格式」）：格式設定與工作表上的數字格式都回到預設（存檔時由引擎補上預設值）；
+ * 欄位、篩選、排序與標記卡的內容不變。
+ */
+export function clearFormat(sheet: SheetIR): SheetIR {
+  const cleared: SheetIR = { ...sheet, formats: {} };
+  for (const key of FORMAT_KEYS) delete cleared[key];
+  return cleared;
+}
+
 /** 貼上格式：以複製的格式取代這張工作表的格式設定；沒有複製過時不變。 */
 export function pasteFormat(sheet: SheetIR): SheetIR {
   const format = storedFormat();

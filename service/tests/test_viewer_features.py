@@ -1064,3 +1064,77 @@ def test_story(server: str) -> None:
         assert page.get_by_role("button", name="上一個故事點").is_disabled()
         assert errors == []
         browser.close()
+
+
+def test_tooltip_commands_keep_only_and_select_by_category(server: str) -> None:
+    """工具提示的命令按鈕與依類別選取：點選標記後工具提示釘住，可以「只保留」「排除」（以標記的維度值
+    篩選這張工作表），點工具提示中的維度值選取這個值的所有標記；工作表上方可以清除。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    renders = Renders()
+    sheet = "ws_sub_category_sales"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/s/{sheet}")
+        renders.wait_for(page, {sheet}, 0)
+        page.wait_for_selector(f".worksheet[data-worksheet='{sheet}'][data-loading='false']")
+        total = renders.items[-1][2]["rows"]
+        # 捲動時固定的標題各有一份圖的複本：只看主要的那一份
+        bars = page.locator(
+            f"[data-worksheet='{sheet}'] .frozen-host > svg path[aria-roledescription='bar']"
+        )
+        expect(bars).to_have_count(total)
+        pinned = page.locator(".viz-tooltip.pinned")
+
+        # 點選一個標記：工具提示釘住，有命令按鈕；按 Esc 放開
+        chairs = bars.and_(page.locator("[aria-label*='Sub-Category: Chairs']"))
+        chairs.hover()
+        page.locator(".viz-tooltip").wait_for()
+        chairs.click()
+        pinned.wait_for()
+        expect(pinned.get_by_role("button", name="✓ 只保留")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(pinned).to_have_count(0)
+
+        # 依類別選取：點工具提示中的 Category 值，選取這個類別的所有標記（4 個）
+        chairs.hover()
+        chairs.click()
+        pinned.wait_for()
+        pinned.locator(".viz-tooltip-category", has_text="Furniture").click()
+        expect(pinned.locator(".viz-tooltip-commands")).to_contain_text("4 個標記")
+
+        # 只保留：這張工作表只剩這些標記
+        start = len(renders.items)
+        pinned.get_by_role("button", name="✓ 只保留").click()
+        renders.wait_for(page, {sheet}, start)
+        _, body, data = renders.items[-1]
+        assert [m["mode"] for m in body["marks"]] == ["keep"]
+        assert {m["f_category"] for m in body["marks"][0]["marks"]} == {"Furniture"}
+        assert data["rows"] == 4
+        expect(bars).to_have_count(4)
+        expect(pinned).to_have_count(0)
+
+        # 再排除其中一個
+        tables = bars.and_(page.locator("[aria-label*='Sub-Category: Tables']"))
+        tables.hover()
+        tables.click()
+        pinned.wait_for()
+        start = len(renders.items)
+        pinned.get_by_role("button", name="✕ 排除").click()
+        renders.wait_for(page, {sheet}, start)
+        _, body, data = renders.items[-1]
+        assert [m["mode"] for m in body["marks"]] == ["keep", "exclude"]
+        assert data["rows"] == 3
+        expect(bars).to_have_count(3)
+
+        # 清除只保留與排除
+        start = len(renders.items)
+        page.locator(f"[data-worksheet='{sheet}'] .worksheet-meta .kept").click()
+        renders.wait_for(page, {sheet}, start)
+        assert "marks" not in renders.items[-1][1] and renders.items[-1][2]["rows"] == total
+        assert errors == []
+        browser.close()

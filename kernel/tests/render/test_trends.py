@@ -213,6 +213,21 @@ def test_trend_lines_by_color(tmp_path: Path, db: Path) -> None:
         for r in line:
             assert r["__ref_trend_y"] == pytest.approx(slope * r["__ref_trend_x"] + intercept)
         assert line[0]["__ref_trend_model"].startswith(f"{main['y']['title']} = ")
+    # 描述趨勢模型：每條線的公式、觀測數、自由度、R 平方、P 值與標準誤
+    described = {m["group"][-1]: m for m in spec["usermeta"]["trends"]}
+    assert set(described) == {r[color] for r in rows}
+    for region, model in described.items():
+        points = [(v[x], v[y]) for v in marks if v[color] == region]
+        slope, intercept = statistics.linear_regression(*zip(*points, strict=True))
+        assert model["fit"] == "linear" and model["observations"] == len(points)
+        assert (model["model_df"], model["residual_df"]) == (2, len(points) - 2)
+        assert model["terms"] == pytest.approx([intercept, slope])
+        assert model["equation"].startswith(f"{main['y']['title']} = ")
+        if len(points) > 2:
+            residuals = [py - (slope * px + intercept) for px, py in points]
+            sse = sum(r * r for r in residuals)
+            assert model["standard_error"] == pytest.approx((sse / (len(points) - 2)) ** 0.5)
+            assert 0 <= model["r2"] <= 1 and 0 <= model["p"] <= 1
 
 
 def test_trend_line_options(tmp_path: Path, db: Path) -> None:

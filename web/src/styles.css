@@ -176,6 +176,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .worksheet-meta .selection { color: var(--accent); font-weight: 600; }
 /* 工具提示中的工作表（Viz in Tooltip）：不攔截滑鼠，文字下方是以標記篩選的工作表 */
 .viz-tooltip { position: fixed; z-index: 1000; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); padding: 6px 8px; font-size: 12px; max-width: calc(100vw - 8px); }
+.viz-tooltip.pinned { pointer-events: auto; }
+.viz-tooltip-commands { display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 5px; margin-bottom: 5px; }
+.viz-tooltip-commands button { font-size: 12px; padding: 2px 8px; }
+.viz-tooltip-category { font: inherit; color: inherit; text-decoration: underline dotted; padding: 0; }
 .viz-tooltip-text { border-collapse: collapse; }
 .viz-tooltip-rich { white-space: pre-wrap; }
 .viz-tooltip-text td { padding: 1px 4px; vertical-align: top; }
@@ -691,3 +695,25 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .manual-sort .value-list li[draggable] { cursor: grab; }
 .manual-sort .value-list li.dragging { opacity: 0.4; }
 .extract-rows { width: 90px; margin: 0 4px; }
+.vega-host[data-annotations="movable"] g[class*="__deco_annotation"] text, [data-annotations="movable"] g[class*="__deco_annotation"] text { cursor: move; }
+.summary-card { border-collapse: collapse; font-size: 12px; margin: 6px 0 2px; }
+.summary-card caption { text-align: left; font-weight: 600; padding-bottom: 2px; }
+.summary-card th, .summary-card td { border: 1px solid var(--line); padding: 2px 8px; text-align: right; }
+.summary-card tbody th { text-align: left; font-weight: 400; }
+.divider-details { display: inline-flex; gap: 8px; align-items: center; }
+.divider-details input[type="number"] { width: 56px; margin-left: 4px; }
+.describe-dialog { min-width: 460px; max-width: 860px; max-height: 70vh; overflow: auto; }
+.describe-table { border-collapse: collapse; margin: 6px 0 14px; font-size: 13px; }
+.describe-table caption { text-align: left; font-weight: 600; padding-bottom: 4px; }
+.describe-table th, .describe-table td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
+.describe-table tbody th { font-weight: 400; color: var(--muted); white-space: nowrap; }
+.describe-table.wide td { text-align: right; }
+.describe-table.wide td:first-child { text-align: left; }
+.tooltip-options { flex-wrap: wrap; gap: 6px 14px; }
+.page-history { display: flex; gap: 12px; align-items: center; font-size: 12px; padding: 2px 8px 4px; }
+.page-history input[type="number"] { width: 64px; margin-left: 4px; }
+.page.presenting { padding: 8px 12px 44px; }
+.page.presenting > .toolbar, .page.presenting .cases { display: none; }
+.presentation-bar { position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 900; display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 4px 12px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18); font-size: 13px; opacity: 0.35; transition: opacity 0.15s; }
+.presentation-bar:hover, .presentation-bar:focus-within { opacity: 1; }
+.presentation-name { min-width: 120px; text-align: center; }

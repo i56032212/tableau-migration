@@ -812,6 +812,25 @@ def test_drop_lines(tmp_path: Path, db: Path) -> None:
     spec = render(parse(tmp_path / "bars", bars), db).spec
     assert [layer.get("name") for layer in spec["layer"][1:]] == ["__deco_dropy1"]
 
+    # 座標軸上的值標籤（haslabel）：每條下拉線碰到座標軸的地方寫上標記的值
+    (tmp_path / "labels").mkdir()
+    labelled = scatter("always").replace("haslabel='false'", "haslabel='true'")
+    ir = parse(tmp_path / "labels", labelled)
+    assert ir.worksheets[0].drop_lines is not None and ir.worksheets[0].drop_lines.labels
+    rendered = render(ir, db)
+    assert not any("下拉線" in note for note in rendered.notes)
+    _, to_x, x_label, to_y, y_label = rendered.spec["layer"]
+    assert (x_label["name"], y_label["name"]) == ("__deco_dropx1_label", "__deco_dropy2_label")
+    assert x_label["mark"]["type"] == "text" and x_label["encoding"]["y"] == {"value": "height"}
+    assert y_label["encoding"]["x"] == {"value": 0}
+    values = rendered.spec["data"]["values"]
+    main = main_encoding(rendered.spec)
+    assert main is not None
+    # 文字是標記的值的顯示文字（與原始值不同的欄）
+    for label, axis in ((x_label, "x"), (y_label, "y")):
+        field = label["encoding"]["text"]["field"]
+        assert field != main[axis]["field"] and all(field in v for v in values)
+
 
 def test_label_vertical_alignment(tmp_path: Path, db: Path) -> None:
     """標籤的對齊：垂直對齊（標記卡樣式的 cell vertical-align）把標籤放在標記的上方或下方。"""

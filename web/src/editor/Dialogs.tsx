@@ -1481,6 +1481,10 @@ export function TooltipDialog({ card, onClose }: { card: Card; onClose: () => vo
   // 自訂的工具提示文字與是否顯示工具提示
   const [text, setText] = useState<RichRun[]>((marks.tooltip_text as RichRun[] | undefined) ?? []);
   const [show, setShow] = useState(editor.sheet.tooltips !== false);
+  // 出現的方式、命令按鈕與依類別選取
+  const [mode, setMode] = useState<"responsive" | "hover">(editor.sheet.tooltip_mode === "hover" ? "hover" : "responsive");
+  const [commands, setCommands] = useState(editor.sheet.tooltip_commands !== false);
+  const [select, setSelect] = useState(editor.sheet.tooltip_select !== false);
   const tokens = textTokens(editor.sheet, editor.fields, editor.catalog, { tableCalcs: true });
   const [outline, setOutline] = useState<Outline | null>(null);
   useEffect(() => {
@@ -1500,7 +1504,13 @@ export function TooltipDialog({ card, onClose }: { card: Card; onClose: () => vo
   const change = (index: number, update: Partial<TooltipSheetIR>) =>
     setSheets(sheets.map((s, i) => (i === index ? { ...s, ...update } : s)));
   const save = () => {
-    editor.apply((s) => ({ ...updateCard(s, card, (m) => ({ ...m, tooltip_sheets: sheets, tooltip_text: text })), tooltips: show }));
+    editor.apply((s) => ({
+      ...updateCard(s, card, (m) => ({ ...m, tooltip_sheets: sheets, tooltip_text: text })),
+      tooltips: show,
+      tooltip_mode: mode,
+      tooltip_commands: commands,
+      tooltip_select: select,
+    }));
     onClose();
   };
   return (
@@ -1509,6 +1519,20 @@ export function TooltipDialog({ card, onClose }: { card: Card; onClose: () => vo
         <label className="inline">
           <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> 顯示工具提示
         </label>
+        <div className="row tooltip-options">
+          <label className="inline" title="回應式：滑過標記立即顯示、跟著游標；暫留時：停在標記上一會兒才顯示，留在原位">
+            <select aria-label="工具提示出現的方式" value={mode} disabled={!show} onChange={(e) => setMode(e.target.value as "responsive" | "hover")}>
+              <option value="responsive">回應式 - 立即顯示工具提示</option>
+              <option value="hover">暫留時 - 暫留時顯示工具提示</option>
+            </select>
+          </label>
+          <label className="inline" title="檢視器中選取標記之後，工具提示上有「只保留」「排除」">
+            <input type="checkbox" checked={commands} disabled={!show} onChange={(e) => setCommands(e.target.checked)} /> 包含命令按鈕
+          </label>
+          <label className="inline" title="檢視器中選取標記之後，點工具提示中的維度值可以選取這個值的所有標記">
+            <input type="checkbox" checked={select} disabled={!show} onChange={(e) => setSelect(e.target.checked)} /> 允許依類別選取
+          </label>
+        </div>
         <p className="hint">工具提示的文字：留空白時列出檢視中各欄位的名稱與值。</p>
         <RichTextEditor label="工具提示的文字" value={text} tokens={tokens} onChange={setText} rows={4} />
         <h4 className="dialog-subtitle">工具提示中的工作表</h4>
@@ -1821,6 +1845,12 @@ interface ShelfStyleIR {
   [key: string]: unknown;
 }
 
+interface DividerIR {
+  color: string;
+  width: number;
+  level: number | null;
+}
+
 const FONT_FAMILIES = ["Tableau Book", "Tableau Medium", "Tableau Semibold", "Tableau Bold", "Arial", "Microsoft JhengHei", "Segoe UI"];
 
 export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
@@ -1912,6 +1942,51 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
           />{" "}
           分隔線
         </label>
+        {value.divider !== null &&
+          (() => {
+            // 框線的細部（Tableau 的「格式＞框線＞列分隔線、欄分隔線」）：顏色、線寬、層級，標題是否也畫
+            const divider = { color: "#d4d4d4", width: 1, level: null, ...(value.divider as Partial<DividerIR>) } as DividerIR;
+            const change = (patch: Partial<DividerIR>) => {
+              const next = { ...divider, ...patch };
+              set({ ...value, divider: next, header_divider: value.header_divider !== null ? next : null });
+            };
+            return (
+              <span className="divider-details">
+                <input type="color" aria-label={`${label}分隔線的顏色`} title="分隔線的顏色" value={divider.color} onChange={(e) => change({ color: e.target.value })} />
+                <label title="分隔線的線寬（像素）">
+                  線寬
+                  <input
+                    type="number"
+                    min={1}
+                    max={6}
+                    aria-label={`${label}分隔線的線寬`}
+                    value={divider.width}
+                    onChange={(e) => change({ width: Math.max(1, Math.min(6, Math.round(Number(e.target.value)) || 1)) })}
+                  />
+                </label>
+                <label title="分隔第幾層的標題（1 為最外層）；空白為預設：最內層以外的每一層">
+                  層級
+                  <input
+                    type="number"
+                    min={1}
+                    aria-label={`${label}分隔線的層級`}
+                    placeholder="預設"
+                    value={divider.level ?? ""}
+                    onChange={(e) => change({ level: e.target.value ? Math.max(1, Math.round(Number(e.target.value))) : null })}
+                  />
+                </label>
+                <label title="標題之間也畫分隔線">
+                  <input
+                    type="checkbox"
+                    aria-label={`${label}標題的分隔線`}
+                    checked={value.header_divider !== null}
+                    onChange={(e) => set({ ...value, header_divider: e.target.checked ? divider : null })}
+                  />{" "}
+                  標題
+                </label>
+              </span>
+            );
+          })()}
         <label title="離散欄位每個成員的高度（列）或寬度（欄），像素（Tableau 的「格式＞儲存格大小」）；空白為預設">
           儲存格大小
           <input

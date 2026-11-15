@@ -354,7 +354,15 @@ export function TableCalcDialog({ tableCalc, onClose }: { tableCalc: string; onC
   const [second, setSecond] = useState<string>(tc?.secondary?.type ?? "");
   const [secondOptions, setSecondOptions] = useState<Record<string, Scalar>>(tc?.secondary?.options ?? {});
   const [secondFields, setSecondFields] = useState<string[]>(tc?.secondary?.addressing ?? []);
+  // 自訂排序順序（指定維度時）：沿著計算方向的標記依一個彙總值排列
+  const sortable = useMemo(() => [...fields.values()].filter((f) => !f.hidden && f.level !== "table_calc" && f.datatype !== "spatial"), [fields]);
+  const [sortField, setSortField] = useState<string>(tc?.sort?.by.field ?? "");
+  const [sortAgg, setSortAgg] = useState<string>(tc?.sort?.by.agg ?? "sum");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">(tc?.sort?.order ?? "asc");
   if (!tc) return null;
+  const sortTarget = fields.get(sortField);
+  const sortNumeric = sortTarget?.datatype === "integer" || sortTarget?.datatype === "real";
+  const sortAggs = sortNumeric ? AGGREGATIONS : AGGREGATIONS.filter(([a]) => ["count", "countd", "min", "max"].includes(a));
   const formula = tc.type === "formula";
   const set = (patch: Record<string, Scalar>) => setOptions((o) => ({ ...o, ...patch }));
   const move = (i: number, delta: number) => {
@@ -389,9 +397,29 @@ export function TableCalcDialog({ tableCalc, onClose }: { tableCalc: string; onC
               level: specific ? (addressed.find((u) => useKey(u) === level) ?? null) : null,
               restart: specific ? (addressed.find((u) => useKey(u) === restart) ?? null) : null,
               inferred: false,
+              sort:
+                specific && sortTarget
+                  ? {
+                      by: {
+                        field: sortTarget.id,
+                        agg: sortTarget.level === "aggregate" ? null : sortAggs.some(([a]) => a === sortAgg) ? sortAgg : sortAggs[0][0],
+                        date: null,
+                        continuous: true,
+                        table_calc: null,
+                      },
+                      order: sortOrder,
+                    }
+                  : null,
               secondary:
                 !formula && second && (type === "running_total" || type === "moving")
-                  ? { type: second, addressing: secondFields, options: secondOptions }
+                  ? {
+                      type: second,
+                      addressing: secondFields,
+                      options: secondOptions,
+                      // 次要計算自己的計算層級（年初至今成長率）：類型沒有改時留著
+                      level: tc.secondary?.type === second ? (tc.secondary.level ?? null) : null,
+                      restart: tc.secondary?.type === second ? (tc.secondary.restart ?? null) : null,
+                    }
                   : null,
             }
           : t,
@@ -565,6 +593,34 @@ export function TableCalcDialog({ tableCalc, onClose }: { tableCalc: string; onC
               ))}
             </ul>
             <p className="hint">勾選的維度為計算的方向（依序）；沒有勾選的維度把資料分成各自計算的區段。</p>
+            <div className="row tc-sort">
+              <label className="inline" title="沿著計算方向的標記依維度在檢視中的順序排列，或依一個彙總值排列（Tableau 的「排序順序＞自訂」）">
+                排序順序
+                <select aria-label="表計算的排序順序" value={sortField} onChange={(e) => setSortField(e.target.value)}>
+                  <option value="">指定維度（檢視中的順序）</option>
+                  {sortable.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      自訂：{f.caption}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {sortTarget && sortTarget.level !== "aggregate" && (
+                <select aria-label="表計算排序的彙總" value={sortAggs.some(([a]) => a === sortAgg) ? sortAgg : sortAggs[0][0]} onChange={(e) => setSortAgg(e.target.value)}>
+                  {sortAggs.map(([agg, label]) => (
+                    <option key={agg} value={agg}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {sortTarget && (
+                <select aria-label="表計算排序的方向" value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}>
+                  <option value="asc">遞增</option>
+                  <option value="desc">遞減</option>
+                </select>
+              )}
+            </div>
             <label className="inline" title="例如年增率：計算方向是年與季、計算層級是年時，每一季各自與前一年的同一季比較">
               計算層級
               <select aria-label="計算層級" value={level} onChange={(e) => setLevel(e.target.value)}>
@@ -680,19 +736,22 @@ export function dateLevels(sheet: SheetIR, fields: Map<string, CatalogField>): {
   return { year, finer };
 }
 
-/** 以日期層級定址的快速表計算：年初至今總計（每年重新累計）與年成長率（每個期間與前一年同期比較）。 */
-export function dateCalc(base: TableCalcIR, kind: "ytd" | "yoy", levels: { year: FieldUse; finer: FieldUse[] }): TableCalcIR {
+/** 以日期層級定址的快速表計算：年初至今總計（每年重新累計）、年成長率（每個期間與前一年同期比較）與
+ * 年初至今成長率（年初至今總計再與前一年同期的年初至今總計比較：次要計算在年的層級）。 */
+export function dateCalc(base: TableCalcIR, kind: "ytd" | "yoy" | "ytd_growth", levels: { year: FieldUse; finer: FieldUse[] }): TableCalcIR {
   const addressed = [levels.year, ...levels.finer];
+  const running = kind !== "yoy";
   return {
     ...base,
-    type: kind === "ytd" ? "running_total" : "percent_difference",
-    options: kind === "ytd" ? { aggregation: "sum" } : { offset: -1 },
+    type: running ? "running_total" : "percent_difference",
+    options: running ? { aggregation: "sum" } : { offset: -1 },
     preset: "specific",
     addressing: [...new Set(addressed.map((u) => u.field))],
     instances: addressed,
     level: kind === "yoy" ? levels.year : null,
-    restart: kind === "ytd" ? levels.year : null,
+    restart: running ? levels.year : null,
     inferred: false,
+    secondary: kind === "ytd_growth" ? { type: "percent_difference", addressing: [], options: { offset: -1 }, level: levels.year, restart: null } : null,
   };
 }
 

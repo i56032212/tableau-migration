@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,6 +78,17 @@ class TooltipMark(BaseModel):
     mark: dict[str, Scalar] = Field(description="滑過的標記：來源工作表的欄位鍵 → 值")
 
 
+class MarkSelection(BaseModel):
+    """工具提示的命令按鈕：只保留（keep）或排除（exclude）選取的標記，等同以標記的維度值篩選這張工作表。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["keep", "exclude"]
+    marks: list[dict[str, Scalar]] = Field(
+        min_length=1, max_length=10000, description="選取的標記：這張工作表的欄位鍵 → 值"
+    )
+
+
 class QueryState(BaseModel):
     """篩選與參數的目前狀態。API 只接受這個格式，不接受 SQL。"""
 
@@ -115,6 +126,11 @@ class QueryState(BaseModel):
         default=None,
         description="地圖平移、縮放後的顯示範圍（檢視器的地圖工具列、滾輪與拖曳）：只影響地圖的繪製"
         "（底圖的細節與地名依新的縮放層級），不影響查詢",
+    )
+    marks: list[MarkSelection] = Field(
+        default_factory=list,
+        max_length=50,
+        description="工具提示的「只保留」「排除」：依序套用在這張工作表上（各自是一個維度篩選）",
     )
 
 
@@ -191,9 +207,16 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
         # 頁面架：只顯示目前這一頁（等同這個值的維度篩選）；不知道是哪一頁時不篩選
         page = state.pages.get(worksheet.id, worksheet.page)
         if worksheet.id in state.pages or worksheet.page is not None:
+            # 顯示歷程：之前的幾頁也查詢（with_page_history 填入），畫成淡化的標記或軌跡
+            history = worksheet.page_history.previous if worksheet.page_history is not None else []
+            shown = [*(v for v in history if v != page), page]
             filters.append(
-                _new_filter("page", worksheet.pages, FilterValue(mode="include", values=[page]))
+                _new_filter("page", worksheet.pages, FilterValue(mode="include", values=shown))
             )
+    for n, selection in enumerate(state.marks, start=1):
+        kept = _mark_filter(n, selection, field_ids - protected)
+        if kept is not None:
+            filters.append(kept)
     applied: list[str] = []
     skipped: list[str] = []
     for n, (key, value) in enumerate(state.filters.items(), start=1):
@@ -263,6 +286,39 @@ def _tooltip_filter(ir: IR, worksheet: Worksheet, tooltip: TooltipMark) -> Tuple
         mode="include",
         tuples=[row],
         source_ref="state:tooltip",
+    )
+
+
+def _mark_filter(n: int, selection: MarkSelection, fields: set[str]) -> TupleFilter | None:
+    """只保留／排除選取的標記：以每個標記都有的維度（這張工作表的資料源中的欄位）的值組合篩選；
+    量值等不是維度的欄位鍵略過，一個維度都沒有時不篩選。"""
+    uses: list[FieldUse] = []
+    keys: list[str] = []
+    for key in selection.marks[0]:
+        if not all(key in mark for mark in selection.marks):
+            continue
+        try:
+            use = parse_key(key)
+        except StateError:
+            continue
+        if use.field in fields:
+            uses.append(use)
+            keys.append(key)
+    if not uses:
+        return None
+    tuples: list[list[Scalar]] = []
+    for mark in selection.marks:
+        row = [mark[key] for key in keys]
+        if row not in tuples:
+            tuples.append(row)
+    return TupleFilter(
+        kind="tuple",
+        id=f"marks_{n}",
+        fields=uses,
+        stage="dimension",
+        mode="include" if selection.mode == "keep" else "exclude",
+        tuples=tuples,
+        source_ref="state:marks",
     )
 
 
@@ -352,6 +408,35 @@ def _new_filter(
         mode=mode,
         values=[] if mode == "all" else list(value.values),
         source_ref=source,
+    )
+
+
+def with_page_history(ir: IR, worksheet: str, state: QueryState, pages: list[Scalar]) -> IR:
+    """頁面的顯示歷程：pages 是頁面欄位依序的所有值。目前這一頁之前的幾頁記在 page_history.previous
+    （查詢時一併取回），頁面欄位加到詳細資料（每一頁各自的標記），目前的頁記在 page。
+    沒有設定顯示歷程、目前是第一頁或找不到目前的頁時原樣回傳。"""
+    ws = next((w for w in ir.worksheets if w.id == worksheet), None)
+    if ws is None or ws.pages is None or ws.page_history is None:
+        return ir
+    page = state.pages.get(worksheet, ws.page)
+    at = next((i for i, value in enumerate(pages) if value == page), -1)
+    if at <= 0:
+        return ir
+    length = ws.page_history.length
+    previous = pages[max(0, at - length) if length else 0 : at]
+    update: dict[str, Any] = {
+        "page": page,
+        "page_history": ws.page_history.model_copy(update={"previous": previous}),
+    }
+    key = use_key(ws.pages)
+    view = [*ws.rows, *ws.columns, *ws.marks.uses()]
+    for pane in ws.panes:
+        view += pane.marks.uses()
+    if not any(use_key(u) == key for u in view):
+        update["marks"] = ws.marks.model_copy(update={"detail": [*ws.marks.detail, ws.pages]})
+    changed = ws.model_copy(update=update)
+    return ir.model_copy(
+        update={"worksheets": [changed if w.id == worksheet else w for w in ir.worksheets]}
     )
 
 
