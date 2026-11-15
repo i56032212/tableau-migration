@@ -215,9 +215,37 @@ def test_invalid_set_values(tmp_path: Path) -> None:
     ir = parse(tmp_path, coast_sheet(), COASTS + top_n("Top Regions"))
     ws = ir.worksheets[0].id
     for sets, message in [
-        ({"f_top_regions": {"members": [["East"]]}}, "不是固定成員的集合"),
         ({"f_coasts": {"members": [["East", "Furniture"]]}}, "數量不同"),
         ({"f_coasts": {"members": [[float("inf")]]}}, "無法寫成公式的數值"),
     ]:
         with pytest.raises(QueryError, match=message):
             worksheet_sql(ir, ws, QueryState.model_validate({"sets": sets}))
+
+
+def test_set_values_select_the_candidates_of_a_top_n_set(run: Run) -> None:
+    """集合控制項改變 Top N 集合「一般」分頁的選取：先選取成員，再從中取前 N 名（原本是 West、East）。"""
+    state = QueryState.model_validate(
+        {
+            "sets": {
+                "f_top_regions": {"mode": "include", "members": [["East"], ["South"], ["North"]]}
+            }
+        }
+    )
+    rows = run(in_out_sheet(TOP), ds_extra=top_n("Top Regions"), state=state)
+    assert membership(rows, "f_top_regions") == {
+        "East": True,
+        "West": False,
+        "South": True,
+        "North": False,
+    }
+    # 沒有排除任何成員等同「全部」：回到原本的前 N 名
+    state = QueryState.model_validate(
+        {"sets": {"f_top_regions": {"mode": "exclude", "members": []}}}
+    )
+    rows = run(in_out_sheet(TOP), ds_extra=top_n("Top Regions"), state=state)
+    assert membership(rows, "f_top_regions") == {
+        "East": True,
+        "West": True,
+        "South": False,
+        "North": False,
+    }

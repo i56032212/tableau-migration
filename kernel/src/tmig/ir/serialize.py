@@ -6,10 +6,16 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from tmig.ir.models import IR, IR_VERSION
+
+REPLACE_ATTEMPTS = 25
+"""存檔時換上新檔的嘗試次數（Windows 上檔案正被讀取時要等它關閉；每次間隔 20 毫秒）。"""
 
 
 def load_ir(path: str | Path) -> IR:
@@ -22,7 +28,23 @@ def dumps_ir(ir: IR) -> str:
 
 
 def save_ir(ir: IR, path: str | Path) -> None:
-    Path(path).write_text(dumps_ir(ir), encoding="utf-8", newline="\n")
+    """寫成 JSON 檔。先寫到同一個資料夾的暫存檔再換上（os.replace）：同時讀取的一方讀到的是舊的或新的
+    完整內容，不會讀到寫到一半的檔案（編輯器存檔時，其他請求可能正在重新載入這個檔案）。"""
+    target = Path(path)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temporary.write_text(dumps_ir(ir), encoding="utf-8", newline="\n")
+        for attempt in range(REPLACE_ATTEMPTS):
+            try:
+                os.replace(temporary, target)
+                break
+            except PermissionError:
+                # Windows：另一個請求正開著這個檔案讀取時不能換上，稍等再試
+                if attempt == REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.02)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def ir_json_schema() -> dict[str, Any]:
