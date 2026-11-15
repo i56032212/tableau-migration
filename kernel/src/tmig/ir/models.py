@@ -1138,6 +1138,23 @@ class NestedTableCalc(IRModel):
     inferred: bool = False
 
 
+class SecondaryTableCalc(IRModel):
+    """次要計算（Tableau「編輯 Table Calculation」的「新增次要計算」）：主要計算（累計或移動計算）的結果
+    再做一次表計算，例如累計之後的合計百分比。"""
+
+    type: Literal[
+        "difference", "percent_difference", "percent_from", "percent_of_total", "rank", "percentile"
+    ]
+    addressing: list[Id] = Field(
+        default_factory=list,
+        description="次要計算的計算方向欄位，依序；空的表示與主要計算相同",
+    )
+    options: dict[str, Scalar] = Field(
+        default_factory=dict,
+        description="與主要計算相同的寫法，例如差異的 relative_to、排名的 direction",
+    )
+
+
 class TableCalc(IRModel):
     """Table Calculation。type 為 formula 表示計算欄位內含 Table Calculation 函式。"""
 
@@ -1164,7 +1181,16 @@ class TableCalc(IRModel):
         default_factory=list,
         description="巢狀計算各自的計算方向；公式參照的 Table Calculation 計算欄位沒有列出時與外層相同",
     )
+    secondary: SecondaryTableCalc | None = Field(
+        default=None, description="次要計算；只有累計與移動計算可以有"
+    )
     source_ref: SourceRef
+
+    @model_validator(mode="after")
+    def _check_secondary(self) -> Self:
+        if self.secondary is not None and self.type not in ("running_total", "moving"):
+            raise ValueError("只有累計與移動計算可以有次要計算")
+        return self
 
 
 class Sort(IRModel):

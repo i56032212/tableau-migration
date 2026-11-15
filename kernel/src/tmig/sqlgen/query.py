@@ -38,7 +38,7 @@ from tmig.formula.ast import (
     children,
     strip_positions,
 )
-from tmig.formula.functions import lookup
+from tmig.formula.functions import PRIMARY, lookup
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
@@ -1485,6 +1485,8 @@ class WorksheetQuery:
             if tc is None:
                 raise QueryError(f"Table Calculation {use.table_calc} 不存在")
             node = self._quick_calc(tc, base)
+            if tc.secondary is not None:
+                node = self._secondary_calc(tc, node)
         is_tc = bool(self.table_calcs_in(node))
         if is_tc and tc is None:
             raise QueryError(f"{key} 含 Table Calculation 函式，卻沒有計算方向設定")
@@ -1496,6 +1498,34 @@ class WorksheetQuery:
             output=output,
             col=f"__m{index}",
             is_tc=is_tc,
+        )
+
+    def _secondary_calc(self, tc: TableCalc, primary: Node) -> Node:
+        """次要計算：主要計算的結果（先依它自己的計算方向算成欄位：__PRIMARY__）再做一次表計算。
+        合計百分比是「值 ÷ 範圍內各值的總和」（WINDOW_SUM），其餘與快速表計算相同的寫法。"""
+        secondary = tc.secondary
+        assert secondary is not None
+        inner: Node = Call(0, PRIMARY, (primary,))
+        if secondary.type == "percent_of_total":
+            return Binary(0, "/", inner, Call(0, "WINDOW_SUM", (inner,)))
+        return self._quick_calc(self._secondary_tc(tc), inner)
+
+    @staticmethod
+    def _secondary_tc(tc: TableCalc) -> TableCalc:
+        """次要計算當作一個表計算（計算方向沒有指定時與主要計算相同）。"""
+        secondary = tc.secondary
+        assert secondary is not None
+        if not secondary.addressing:
+            return tc.model_copy(
+                update={"type": secondary.type, "options": secondary.options, "secondary": None}
+            )
+        return TableCalc(
+            id=tc.id,
+            type=secondary.type,
+            preset="specific",
+            addressing=secondary.addressing,
+            options=secondary.options,
+            source_ref=tc.source_ref,
         )
 
     def _quick_calc(self, tc: TableCalc, base: Node) -> Node:
@@ -2325,13 +2355,17 @@ class WorksheetQuery:
             assert m.table_calc is not None
             tc = m.table_calc
             window = self._window(tc, dims, sorts, sort_cols)
+            # 次要計算：主要計算依它自己的計算方向先算，外層是次要計算的計算方向
+            primary_window = window if tc.secondary is not None else None
+            if tc.secondary is not None:
+                window = self._window(self._secondary_tc(tc), dims, sorts, sort_cols)
             nested_windows = {n.field: self._window(n, dims, sorts, sort_cols) for n in tc.nested}
             items: list[_Nested] = []
             root = m.use.field if tc.type == "formula" else None
             previous = self._has_previous(m.node)
             # PREVIOUS_VALUE 以遞迴的 CTE 逐列計算：其中的其他 Table Calculation 一律先算成欄位
             fields, calls, _ = self._prepare(
-                m.node, window, root, nested_windows, items, inside=previous
+                m.node, window, root, nested_windows, items, inside=previous, primary=primary_window
             )
             for item in items:
                 env = _PostEnv(
@@ -2434,6 +2468,7 @@ class WorksheetQuery:
         nested_windows: dict[str, _Window],
         items: list[_Nested],
         inside: bool = False,
+        primary: _Window | None = None,
     ) -> tuple[dict[str, str], dict[Node, str], int]:
         """找出運算式中必須先算好的巢狀部分，加入 items（依計算順序）。
 
@@ -2475,6 +2510,12 @@ class WorksheetQuery:
                 if spec is not None and spec.kind == "aggregate":
                     return
                 if spec is not None and spec.kind == "table_calc":
+                    if node.name == PRIMARY:
+                        # 次要計算中的主要計算：一律先依它自己的計算方向算成欄位
+                        key = self.canon(node)
+                        if key not in calls:
+                            calls[key] = add(node.args[0], primary or window, root)
+                        return
                     if node.name == "TOTAL":
                         return
                     if node.name == "PREVIOUS_VALUE":

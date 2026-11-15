@@ -129,6 +129,8 @@ export interface TableCalcIR {
   inferred: boolean;
   options: Record<string, Scalar>;
   nested: unknown[];
+  /** 次要計算：主要計算（累計、移動計算）的結果再做一次表計算 */
+  secondary?: { type: string; addressing: string[]; options: Record<string, Scalar> } | null;
   source_ref: string;
 }
 

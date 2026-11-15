@@ -5533,6 +5533,63 @@
       "title": "RelativeDateFilter",
       "type": "object"
     },
+    "SecondaryTableCalc": {
+      "additionalProperties": false,
+      "description": "次要計算（Tableau「編輯 Table Calculation」的「新增次要計算」）：主要計算（累計或移動計算）的結果\n再做一次表計算，例如累計之後的合計百分比。",
+      "properties": {
+        "type": {
+          "enum": [
+            "difference",
+            "percent_difference",
+            "percent_from",
+            "percent_of_total",
+            "rank",
+            "percentile"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "addressing": {
+          "description": "次要計算的計算方向欄位，依序；空的表示與主要計算相同",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Addressing",
+          "type": "array"
+        },
+        "options": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "與主要計算相同的寫法，例如差異的 relative_to、排名的 direction",
+          "title": "Options",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "SecondaryTableCalc",
+      "type": "object"
+    },
     "SetAction": {
       "additionalProperties": false,
       "description": "集合動作：選取標記時，以標記在集合各層級的值改變集合的成員（固定成員的集合）。",
@@ -6634,6 +6691,18 @@
           },
           "title": "Nested",
           "type": "array"
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecondaryTableCalc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "次要計算；只有累計與移動計算可以有"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

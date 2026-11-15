@@ -756,9 +756,19 @@ _EXTERNAL_SPEC = FunctionSpec(
 )
 
 
+PRIMARY = "__PRIMARY__"
+"""內部用的函式：次要表計算中的主要計算（__PRIMARY__(RUNNING_SUM(SUM([Sales])))），先依主要計算自己的
+計算方向算成欄位，再套用次要計算；見 tmig.sqlgen.query。"""
+_PRIMARY_SPEC = FunctionSpec(
+    PRIMARY, "table_calc", 1, 1, lambda infos, _args, _pos: infos[0].datatype
+)
+
+
 def lookup(name: str, arg_count: int) -> FunctionSpec | None:
     if name == EXTERNAL:
         return _EXTERNAL_SPEC
+    if name == PRIMARY:
+        return _PRIMARY_SPEC
     if name in ("MIN", "MAX") and arg_count == 2:
         return REGISTRY[f"{name}2"]
     return REGISTRY.get(name)

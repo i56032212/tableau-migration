@@ -320,6 +320,10 @@ export function TableCalcDialog({ tableCalc, onClose }: { tableCalc: string; onC
   const [chosen, setChosen] = useState<Set<string>>(() => new Set(initial.map(useKey)));
   const [level, setLevel] = useState<string>(tc?.level ? useKey(tc.level) : "");
   const [restart, setRestart] = useState<string>(tc?.restart ? useKey(tc.restart) : "");
+  // 次要計算（累計與移動計算才有）：類型、比較的對象或排名的方向，與它自己的計算方向（不選為與主要計算相同）
+  const [second, setSecond] = useState<string>(tc?.secondary?.type ?? "");
+  const [secondOptions, setSecondOptions] = useState<Record<string, Scalar>>(tc?.secondary?.options ?? {});
+  const [secondFields, setSecondFields] = useState<string[]>(tc?.secondary?.addressing ?? []);
   if (!tc) return null;
   const formula = tc.type === "formula";
   const set = (patch: Record<string, Scalar>) => setOptions((o) => ({ ...o, ...patch }));
@@ -355,6 +359,10 @@ export function TableCalcDialog({ tableCalc, onClose }: { tableCalc: string; onC
               level: specific ? (addressed.find((u) => useKey(u) === level) ?? null) : null,
               restart: specific ? (addressed.find((u) => useKey(u) === restart) ?? null) : null,
               inferred: false,
+              secondary:
+                !formula && second && (type === "running_total" || type === "moving")
+                  ? { type: second, addressing: secondFields, options: secondOptions }
+                  : null,
             }
           : t,
       ),
@@ -550,6 +558,69 @@ export function TableCalcDialog({ tableCalc, onClose }: { tableCalc: string; onC
               </select>
             </label>
           </>
+        )}
+        {!formula && (type === "running_total" || type === "moving") && (
+          <fieldset className="prop-group secondary-calc">
+            <legend>次要計算</legend>
+            <label className="inline" title="主要計算的結果再做一次表計算（Tableau 的「新增次要計算」），例如累計之後的合計百分比">
+              類型
+              <select aria-label="次要計算的類型" value={second} onChange={(e) => setSecond(e.target.value)}>
+                <option value="">無</option>
+                <option value="difference">差異</option>
+                <option value="percent_difference">差異百分比</option>
+                <option value="percent_from">百分比</option>
+                <option value="percent_of_total">合計百分比</option>
+                <option value="rank">排名</option>
+                <option value="percentile">百分位數</option>
+              </select>
+            </label>
+            {(second === "difference" || second === "percent_difference" || second === "percent_from") && (
+              <label className="inline">
+                相對於
+                <select
+                  aria-label="次要計算相對於"
+                  value={String(secondOptions.relative_to ?? (Number(secondOptions.offset ?? -1) > 0 ? "next" : "previous"))}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setSecondOptions(value === "first" || value === "last" ? { relative_to: value } : { offset: value === "next" ? 1 : -1 });
+                  }}
+                >
+                  <option value="previous">上一個</option>
+                  <option value="next">下一個</option>
+                  <option value="first">第一個</option>
+                  <option value="last">最後一個</option>
+                </select>
+              </label>
+            )}
+            {(second === "rank" || second === "percentile") && (
+              <label className="inline">
+                順序
+                <select
+                  aria-label="次要計算的順序"
+                  value={String(secondOptions.direction ?? (second === "rank" ? "desc" : "asc"))}
+                  onChange={(e) => setSecondOptions({ direction: e.target.value })}
+                >
+                  <option value="desc">遞減</option>
+                  <option value="asc">遞增</option>
+                </select>
+              </label>
+            )}
+            {second && (
+              <div className="row" role="group" aria-label="次要計算的計算方向">
+                <span className="hint">計算方向（不勾選為與主要計算相同）</span>
+                {[...new Map(view.map((u) => [u.field, u])).values()].map((u) => (
+                  <label key={u.field}>
+                    <input
+                      type="checkbox"
+                      checked={secondFields.includes(u.field)}
+                      onChange={(e) => setSecondFields((current) => (e.target.checked ? [...current, u.field] : current.filter((f) => f !== u.field)))}
+                    />{" "}
+                    {fields.get(u.field)?.caption ?? u.field}
+                  </label>
+                ))}
+              </div>
+            )}
+          </fieldset>
         )}
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save} disabled={preset === "specific" && chosen.size === 0}>

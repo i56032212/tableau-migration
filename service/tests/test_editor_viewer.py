@@ -1874,6 +1874,28 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         page.goto(f"{engine}/w/demo/edit/ws_1")
         settle(page)
 
+        # 次要計算：業績的累計，再做合計百分比
+        page.locator('[data-shelf="columns"] .pill', has_text="SUM(Sales)").click()
+        page.locator(
+            ".popup-menu li[role=menuitem] > .menu-label", has_text="快速表計算"
+        ).first.hover()
+        menu(page, "累計")
+        settle(page)
+        page.locator('[data-shelf="columns"] .pill').first.click()
+        menu(page, "編輯表計算…")
+        page.get_by_label("次要計算的類型").select_option("percent_of_total")
+        confirm(page, ".table-calc-dialog")
+        (calc,) = sheet()["table_calcs"]
+        assert (calc["type"], calc["secondary"]["type"]) == ("running_total", "percent_of_total")
+        key = next(
+            k
+            for k in call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})["table"]["keys"]
+            if "#" in k
+        )
+        table = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})["table"]
+        shares = [float(row[table["keys"].index(key)]) for row in table["raw"]]
+        assert sum(shares) == pytest.approx(1.0)
+
         # 格式：儲存格大小、對齊，並套用到所有工作表（整份報表一致）
         page.get_by_role("button", name="格式…").click()
         page.get_by_label("列的儲存格大小").fill("28")

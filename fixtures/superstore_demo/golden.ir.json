@@ -1050,6 +1050,7 @@
             "aggregation": "sum"
           },
           "nested": [],
+          "secondary": null,
           "source_ref": "/workbook/worksheets/worksheet[1]/table/view/datasource-dependencies[2]/column-instance[4]/table-calc"
         }
       ],
@@ -1625,6 +1626,7 @@
           "inferred": false,
           "options": {},
           "nested": [],
+          "secondary": null,
           "source_ref": "/workbook/worksheets/worksheet[4]/table/view/datasource-dependencies/column-instance[2]/table-calc"
         }
       ],

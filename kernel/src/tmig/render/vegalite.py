@@ -275,6 +275,8 @@ def caption(ir_field: DataField, use: FieldUse, ws: Worksheet) -> str:
             label = TC_LABELS[tc.type]
             if tc.type == "moving":
                 label = MOVING_LABELS.get(str(tc.options.get("aggregation")), label)
+            if tc.secondary is not None:
+                label = f"{label}的{TC_LABELS.get(tc.secondary.type, tc.secondary.type)}"
             name = f"{name}（{label}）"
     return name
 
@@ -4493,6 +4495,8 @@ def _table_calc_type(ws: Worksheet, use: FieldUse) -> str | None:
     if use.table_calc is None:
         return None
     tc = next((t for t in ws.table_calcs if t.id == use.table_calc), None)
+    if tc is not None and tc.secondary is not None:
+        return tc.secondary.type  # 次要計算決定顯示的格式（例如累計之後的合計百分比以百分比顯示）
     return tc.type if tc is not None else None
 
 

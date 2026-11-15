@@ -1256,3 +1256,94 @@ def test_set_controls(client: TestClient) -> None:
     board["zones"].append(bad)
     refused = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
     assert refused.status_code == 422 and "集合控制項" in refused.json()["detail"]
+
+
+def test_secondary_table_calculation(client: TestClient) -> None:
+    """次要計算：累計之後再做合計百分比、差異或排名；次要計算可以有自己的計算方向。"""
+    sales = use("f_sales", agg="sum", continuous=True)
+
+    def calc(secondary: dict[str, Any] | None, addressing: list[str]) -> dict[str, Any]:
+        return {
+            "id": "tc_run",
+            "type": "running_total",
+            "preset": "specific",
+            "addressing": addressing,
+            "instances": [],
+            "level": None,
+            "restart": None,
+            "inferred": False,
+            "options": {"aggregation": "sum"},
+            "nested": [],
+            "secondary": secondary,
+            "source_ref": "/editor",
+        }
+
+    def values(ws: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        put(client, ws)
+        response = render(client, "ws_sales_by_region")
+        assert response["unsupported"] is None, response
+        return response["table"], "sum(f_sales)#tc_run"
+
+    # 一個維度：累計之後的合計百分比＝累計 ÷ 各累計值的總和
+    ws = blank(client, rows=[use("f_region")], columns=[sales, {**sales, "table_calc": "tc_run"}])
+    ws["table_calcs"] = [
+        calc({"type": "percent_of_total", "addressing": [], "options": {}}, ["f_region"])
+    ]
+    table, key = values(ws)
+    raw = [float(v) for v in column(table, "sum(f_sales)")]
+    running = [sum(raw[: i + 1]) for i in range(len(raw))]
+    got = [float(v) for v in column(table, key)]
+    assert got == pytest.approx([r / sum(running) for r in running])
+    assert table["rows"][0][table["keys"].index(key)].endswith("%")  # 以百分比顯示
+    # 差異：與上一個累計值的差＝這一列的業績；第一列沒有比較的對象
+    ws["table_calcs"] = [
+        calc({"type": "difference", "addressing": [], "options": {}}, ["f_region"])
+    ]
+    table, key = values(ws)
+    got_text = column(table, key)
+    assert got_text[0] == "" and [float(v) for v in got_text[1:]] == pytest.approx(raw[1:])
+
+    # 兩個維度：累計沿著 Category（每個 Region 重新開始），排名沿著 Region（每個 Category 各自排名）
+    ws = blank(
+        client,
+        rows=[use("f_region"), use("f_category")],
+        columns=[sales, {**sales, "table_calc": "tc_run"}],
+    )
+    ws["table_calcs"] = [
+        calc(
+            {"type": "rank", "addressing": ["f_region"], "options": {"direction": "desc"}},
+            ["f_category"],
+        )
+    ]
+    table, key = values(ws)
+    cells: dict[tuple[str, str], float] = {}
+    for region, category, value in zip(
+        column(table, "f_region"),
+        column(table, "f_category"),
+        column(table, "sum(f_sales)"),
+        strict=True,
+    ):
+        cells[region, category] = float(value)
+    regions = list(dict.fromkeys(r for r, _ in cells))
+    categories = list(dict.fromkeys(c for _, c in cells))
+    cumulative = {
+        (r, c): sum(cells[r, x] for x in categories[: i + 1])
+        for r in regions
+        for i, c in enumerate(categories)
+    }
+    expected = {
+        (r, c): 1 + sum(cumulative[o, c] > cumulative[r, c] for o in regions) for r, c in cumulative
+    }
+    got_rank = {
+        (r, c): int(float(v))
+        for r, c, v in zip(
+            column(table, "f_region"), column(table, "f_category"), column(table, key), strict=True
+        )
+    }
+    assert got_rank == expected
+    # 只有累計與移動計算可以有次要計算
+    ws["table_calcs"] = [
+        {**calc({"type": "rank", "addressing": [], "options": {}}, ["f_category"]), "type": "rank"}
+    ]
+    refused = client.put("/api/edit/demo/worksheets/ws_sales_by_region", json={"worksheet": ws})
+    assert refused.status_code == 422
