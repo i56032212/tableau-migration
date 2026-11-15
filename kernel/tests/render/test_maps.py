@@ -341,6 +341,31 @@ def test_density_map(tmp_path: Path, db: Path) -> None:
     assert base64.b64decode(value["url"].split(",", 1)[1])[:8] == b"\x89PNG\r\n\x1a\n"
     assert value["lon"] < -118 and value["lon2"] > -80 and value["lat"] < value["lat2"]
 
+    # 色彩上有離散的維度：每個成員各自一張密度圖（由淺到成員的顏色），另有一層帶出圖例
+    (tmp_path / "colored").mkdir()
+    colored = map_sheet(
+        "Density",
+        [STATE, CITY],
+        "Heatmap",
+        f"<lod column='{b.ref('none:City:nk')}' /><color column='{b.ref('none:State:nk')}' />",
+    )
+    rendered = render(parse(tmp_path / "colored", colored), db)
+    assert rendered.spec is not None
+    assert not any("密度圖" in note for note in rendered.notes)
+    layers = [
+        layer
+        for layer in rendered.spec["layer"]
+        if str(layer.get("name", "")).startswith(f"{DECO}_density0")
+    ]
+    images = [layer for layer in layers if layer["mark"]["type"] == "image"]
+    legend = next(layer for layer in layers if layer["name"].endswith("_legend"))
+    states = legend["encoding"]["color"]["scale"]["domain"]
+    # 找不到位置的成員（Atlantis）沒有密度圖，圖例仍列出所有的成員
+    assert len(images) == 3 and len(states) == 4
+    assert len({layer["data"]["values"][0]["url"] for layer in images}) == len(images)
+    assert legend["mark"]["opacity"] == 0
+    assert len(legend["encoding"]["color"]["scale"]["range"]) == len(states)
+
 
 def test_latitude_longitude_fields(tmp_path: Path, db: Path) -> None:
     """緯度、經度角色的欄位分別在列與欄架上：位置就是欄位的值。"""
@@ -424,3 +449,58 @@ def test_faceted_map_and_reference_lines(tmp_path: Path, db: Path) -> None:
     assert [p["lat"] for p in line["data"]["values"]] == [pytest.approx(average)] * 2
     assert label["data"]["values"][0]["text"]
     assert not [n for n in rendered.notes if "參考線" in n or "分格" in n]
+
+
+def test_map_reference_band_and_trend_line(tmp_path: Path, db: Path) -> None:
+    """地圖上的參考區間（最小與最大的緯度之間塗上底色）與趨勢線（各標記的緯度對經度配適，畫在經度的範圍內；
+    模型列在描述趨勢模型的清單）。"""
+    import statistics
+
+    from ..parser.test_extensions import refline
+    from .test_trends import trendline
+
+    lines = "".join(
+        [
+            refline(
+                0, "min", label="none", axis="Latitude (generated)", extra=" paired-id='refline1'"
+            ),
+            refline(1, "max", label="none", axis="Latitude (generated)"),
+        ]
+    ).replace(b.ref("Latitude (generated)"), GEN_LAT)
+    sheet = worksheet(
+        "Banded",
+        [STATE, CITY, SALES],
+        rows=GEN_LAT,
+        cols=GEN_LON,
+        mark="Circle",
+        encodings=(
+            f"<lod column='{b.ref('none:City:nk')}' /><lod column='{b.ref('none:State:nk')}' />"
+        ),
+        pane_extra=lines + trendline(),
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.worksheets[0].marks.trend is not None
+    rendered = render(ir, db)
+    spec = rendered.spec
+    assert spec is not None and rendered.mark == "map"
+    assert not [n for n in rendered.notes if "趨勢線" in n or "參考" in n]
+    named = {str(layer.get("name", "")): layer for layer in spec["layer"]}
+    located = [r for r in spec["data"]["values"] if r.get("__lat0") is not None]
+    lats = [r["__lat0"] for r in located]
+    lons = [r["__lon0"] for r in located]
+    band = next(layer for name, layer in named.items() if name.endswith("_map_band"))
+    (corners,) = band["data"]["values"]
+    assert band["mark"]["type"] == "rect"
+    assert (corners["lat"], corners["lat2"]) == (pytest.approx(min(lats)), pytest.approx(max(lats)))
+    assert corners["lon"] < corners["lon2"]
+    trend = named["__ref_trend_map0"]
+    path = trend["data"]["values"]
+    slope, intercept = statistics.linear_regression(lons, lats)
+    assert path[0]["lon"] == pytest.approx(min(lons)) and path[-1]["lon"] == pytest.approx(
+        max(lons)
+    )
+    for point in path:
+        assert point["lat"] == pytest.approx(slope * point["lon"] + intercept)
+    (model,) = spec["usermeta"]["trends"]
+    assert model["fit"] == "linear" and model["observations"] == len(located)
+    assert model["equation"].startswith("Latitude = ")

@@ -573,11 +573,14 @@ class DatasourceParser:
         if databases and not self._remote_connections(databases):
             return True, None
         for found in named.values():
-            if found.get("cleaning") == "yes" and found.get("class") != "excel-direct":
+            if found.get("cleaning") == "yes" and found.get("class") not in (
+                "excel-direct",
+                "textscan",
+            ):
                 self.ctx.flag(
                     found,
                     f"資料源「{self.caption}」在 {found.get('class')} 的檔案使用資料解譯器"
-                    "（Data Interpreter），只支援 Excel",
+                    "（Data Interpreter），只支援 Excel 與文字檔",
                 )
                 return True, None
         if not self._expand_wildcards(conn, named):
@@ -816,6 +819,8 @@ class DatasourceParser:
                 separator="\t" if separator == "\\t" else separator,
                 charset=columns_el.get("character-set") or "UTF-8",
                 locale=columns_el.get("locale") or None,
+                # 資料解譯器：依記下的欄名找標題列（與 Excel 相同）
+                interpreted=source.get("cleaning") == "yes",
                 columns=columns,
             )
         if source.get("class") == "ogrdirect":

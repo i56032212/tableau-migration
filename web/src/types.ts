@@ -24,7 +24,14 @@ export interface MemberAlias {
 /** 集合的定義（只列出檢視器用到的部分：層級與固定成員） */
 export interface FieldSet {
   levels: FieldUse[];
-  rule: { kind: "members" | "top_n" | "condition" | "combined"; mode?: "include" | "exclude" | "all"; members?: Scalar[][] };
+  rule: {
+    kind: "members" | "top_n" | "condition" | "combined";
+    mode?: "include" | "exclude" | "all";
+    /** 固定成員的集合：各成員在各層級的值 */
+    members?: Scalar[][];
+    /** Top N 與條件集合：排名或條件之前先選取的成員（「一般」分頁） */
+    values?: Scalar[];
+  };
 }
 
 export interface DataField {
@@ -355,8 +362,32 @@ export interface StoryAction {
 export interface StoryFilter {
   worksheet: string;
   field: FieldUse;
-  mode: "include" | "exclude";
+  /** range：一段範圍（滑桿、日期範圍），min、max 為 null 表示該側不設限 */
+  mode: "include" | "exclude" | "range";
   values: Scalar[];
+  min?: Scalar;
+  max?: Scalar;
+}
+
+/** 故事點上的文字物件：浮在故事點內容上的說明文字（位置與大小為像素） */
+export interface StoryNote {
+  text: ZoneTextRun[];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Story 的格式：底色、標題、導覽與文字物件的樣式 */
+export interface StoryFormat {
+  background?: string | null;
+  title_color?: string | null;
+  title_size?: number | null;
+  title_align?: "left" | "center" | "right" | null;
+  navigator_background?: string | null;
+  navigator_color?: string | null;
+  note_background?: string | null;
+  note_color?: string | null;
 }
 
 /** 故事點記下的選取：工作表上醒目顯示的標記 */
@@ -378,6 +409,8 @@ export interface StoryPoint {
   parameters?: Record<string, Scalar>;
   /** 故事點改過的 dashboard 文字物件：區塊 id → 內容 */
   texts?: Record<string, ZoneTextRun[]>;
+  /** 故事點上的文字物件 */
+  notes?: StoryNote[];
 }
 
 export interface Story {
@@ -388,6 +421,8 @@ export interface Story {
   size: { width: number; height: number };
   navigation: "caption" | "number" | "dots";
   arrows: boolean;
+  /** Story 的格式；null 為預設 */
+  format?: StoryFormat | null;
   points: StoryPoint[];
   /** 開啟時顯示的故事點；null 表示第一個 */
   active: string | null;

@@ -46,6 +46,9 @@ import {
   type TableCalcIR,
   updateCard,
   usesOn,
+  isMapSheet,
+  moveMapLayer,
+  removeMapLayer,
 } from "./model";
 import { dateCalc, dateLevels } from "./MoreDialogs";
 
@@ -887,6 +890,8 @@ export function MarksCard() {
   const { sheet, card, setCard, fields, apply } = editor;
   const marks = cardMarks(sheet, card);
   const tabs = sheet.panes.length > 0;
+  // 地圖的標記圖層：每張標記卡是一個圖層
+  const layered = tabs && isMapSheet(sheet);
   // 空間資料的形狀：資料源有空間欄位時才顯示這一格（Geometry (generated) 不顯示）
   const spatialShown = [...fields.values()].some((f) => f.datatype === "spatial");
   return (
@@ -906,9 +911,23 @@ export function MarksCard() {
               className={card === i ? "active" : ""}
               onClick={() => setCard(i)}
             >
-              {pillLabel(pane.measure, fields, sheet.table_calcs)}
+              {layered ? `圖層 ${i + 1}` : pillLabel(pane.measure, fields, sheet.table_calcs)}
             </button>
           ))}
+        </div>
+      )}
+      {layered && typeof card === "number" && (
+        <div className="row layer-actions">
+          <span className="hint">圖層由下往上畫</span>
+          <button type="button" className="link" title="這個圖層畫在更上面" disabled={card >= sheet.panes.length - 1} onClick={() => { apply((s) => moveMapLayer(s, card, 1)); setCard(card + 1); }}>
+            上移
+          </button>
+          <button type="button" className="link" title="這個圖層畫在更下面" disabled={card === 0} onClick={() => { apply((s) => moveMapLayer(s, card, -1)); setCard(card - 1); }}>
+            下移
+          </button>
+          <button type="button" className="link" title="移除這個標記圖層" onClick={() => { apply((s) => removeMapLayer(s, card)); setCard("all"); }}>
+            移除圖層
+          </button>
         </div>
       )}
       <select

@@ -1,3 +1,4 @@
+import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { DashboardView } from "./Dashboard";
 import { fieldKey, keepMarks, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
@@ -9,7 +10,9 @@ export function pointState(point: StoryPoint, base: ViewState): ViewState {
   const sheetFilters: Record<string, Record<string, FilterValue>> = {};
   for (const [sheet, filters] of Object.entries(base.sheetFilters)) sheetFilters[sheet] = { ...filters };
   for (const f of point.filters) {
-    sheetFilters[f.worksheet] = { ...(sheetFilters[f.worksheet] ?? {}), [fieldKey(f.field)]: { mode: f.mode, values: f.values } };
+    // 範圍（滑桿、日期範圍）以最小值與最大值記下，其餘是保留或排除的值
+    const value: FilterValue = f.mode === "range" ? { min: f.min ?? null, max: f.max ?? null } : { mode: f.mode, values: f.values };
+    sheetFilters[f.worksheet] = { ...(sheetFilters[f.worksheet] ?? {}), [fieldKey(f.field)]: value };
   }
   return {
     ...base,
@@ -37,8 +40,8 @@ export function pointDashboard(point: StoryPoint, dashboard: Dashboard): Dashboa
 }
 
 /**
- * 把目前的檢視狀態記成故事點的狀態（Tableau 故事點的「更新」）：類別篩選的選取、參數值、篩選動作的選取與
- * 醒目顯示的標記。範圍類的篩選（滑桿、日期範圍）記不下來，回傳在 skipped 中（欄位鍵）。
+ * 把目前的檢視狀態記成故事點的狀態（Tableau 故事點的「更新」）：類別篩選的選取、範圍篩選（滑桿、日期範圍）的
+ * 起訖、參數值、篩選動作的選取與醒目顯示的標記。記不下來的篩選回傳在 skipped 中（欄位鍵）。
  */
 export function capturePoint(
   ir: IR,
@@ -55,6 +58,8 @@ export function capturePoint(
         filters.push({ worksheet: sheetId, field: own.field, mode: value.mode, values: value.values ?? [] });
       } else if (value.mode === "all") {
         filters.push({ worksheet: sheetId, field: own.field, mode: "exclude", values: [] });
+      } else if (value.min !== undefined || value.max !== undefined) {
+        filters.push({ worksheet: sheetId, field: own.field, mode: "range", values: [], min: value.min ?? null, max: value.max ?? null });
       } else skipped.push(key);
     }
   }
@@ -81,13 +86,15 @@ interface Props {
   onNavigate: (target: { dashboard?: string | null; worksheet?: string | null; story?: string | null }) => void;
   /** Story 編輯器：目前故事點的檢視狀態（操作之後的） */
   onView?: (point: StoryPoint, view: ViewState) => void;
+  /** Story 編輯器：在文字物件上按下滑鼠（拖曳移動） */
+  onNoteDown?: (index: number, event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 /**
  * Story：上方為標題與故事點導覽（說明文字、序號或圓點，兩側可有上一個／下一個箭頭），下方顯示目前故事點的
  * dashboard 或工作表。在故事點上操作（篩選、選取）只影響目前的畫面，切換故事點時回到記下的狀態。
  */
-export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView }: Props) {
+export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView, onNoteDown }: Props) {
   const [index, setIndex] = useState(() => initialIndex(story));
   useEffect(() => setIndex(initialIndex(story)), [story]);
   const point = story.points[Math.min(index, story.points.length - 1)];
@@ -106,10 +113,26 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView
   const label = (p: StoryPoint, i: number) =>
     story.navigation === "caption" && p.caption ? p.caption : story.navigation === "dots" ? "" : String(i + 1);
 
+  const format = story.format ?? {};
+  const navStyle: React.CSSProperties = {
+    ...(format.navigator_background ? { background: format.navigator_background } : {}),
+    ...(format.navigator_color ? ({ "--story-nav-color": format.navigator_color } as React.CSSProperties) : {}),
+  };
   return (
-    <div className="story" data-story={story.id} style={{ minWidth: story.size.width }}>
-      {story.title && <div className="story-title">{story.title}</div>}
-      <nav className="story-nav" data-navigation={story.navigation} aria-label="故事點">
+    <div className="story" data-story={story.id} style={{ minWidth: story.size.width, ...(format.background ? { background: format.background } : {}) }}>
+      {story.title && (
+        <div
+          className="story-title"
+          style={{
+            ...(format.title_color ? { color: format.title_color } : {}),
+            ...(format.title_size ? { fontSize: `${format.title_size}pt` } : {}),
+            ...(format.title_align ? { textAlign: format.title_align } : {}),
+          }}
+        >
+          {story.title}
+        </div>
+      )}
+      <nav className="story-nav" data-navigation={story.navigation} aria-label="故事點" style={navStyle}>
         {story.arrows && (
           <button type="button" className="story-arrow" aria-label="上一個故事點" disabled={index === 0} onClick={() => go(index - 1)}>
             ‹
@@ -163,6 +186,37 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView
           </div>
         )}
         {!dashboard && !worksheet && <div className="error">找不到故事點顯示的 dashboard 或工作表</div>}
+        {(point.notes ?? []).map((note, i) => (
+          <div
+            key={i}
+            className="story-note"
+            data-note={i}
+            style={{
+              left: note.x,
+              top: note.y,
+              width: note.w,
+              minHeight: note.h,
+              ...(format.note_background ? { background: format.note_background } : {}),
+              ...(format.note_color ? { color: format.note_color } : {}),
+            }}
+            onMouseDown={onNoteDown ? (event) => onNoteDown(i, event) : undefined}
+          >
+            {note.text.map((run, k) => (
+              <span
+                key={k}
+                style={{
+                  fontWeight: run.style?.bold ? 700 : undefined,
+                  fontStyle: run.style?.italic ? "italic" : undefined,
+                  textDecoration: run.style?.underline ? "underline" : undefined,
+                  fontSize: run.style?.size ? `${run.style.size}pt` : undefined,
+                  color: run.style?.color ?? undefined,
+                }}
+              >
+                {run.text ?? ""}
+              </span>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );

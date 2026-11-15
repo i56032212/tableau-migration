@@ -128,7 +128,8 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
       action: () => editor.openDialog({ kind: "set", datasource, levels: set.levels.map((l) => l.field), field: field.id }),
     });
     // 顯示集合：單獨檢視工作表時，檢視旁邊顯示集合控制項（勾選的值是集合的成員）
-    if (set.rule.kind === "members" && set.levels.length === 1) {
+    // 單一維度的固定成員、Top N 與條件集合，或多個維度的固定成員集合（合併集合不行）
+    if (set.levels.length === 1 ? set.rule.kind !== "combined" : set.rule.kind === "members" && set.rule.mode !== "exclude") {
       const controls = (editor.sheet.controls as { kind: string; field: FieldUse | null }[] | undefined) ?? [];
       const shown = controls.some((c) => c.kind === "set" && c.field?.field === field.id);
       items.push({

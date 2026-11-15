@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -76,8 +77,18 @@ from tmig.field_edit import (
     upsert_group,
     upsert_set,
 )
-from tmig.ir import IR, FieldUse, MemberAlias, ParamRef, TupleFilter
+from tmig.ir import (
+    IR,
+    FieldUse,
+    FileConnection,
+    MemberAlias,
+    ParamRef,
+    TupleFilter,
+    has_local_data,
+)
 from tmig.ir.models import GeoAlias, GeoRole, Scalar, SetRule
+from tmig.merge import import_from
+from tmig.package import SOURCES, member_path, read_report_file
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
 from tmig.sqlgen.query import QueryError, custom_sql_parameters, domain_sql, worksheet_sql
@@ -113,6 +124,40 @@ class ExtractSettingsBody(BaseModel):
     """只取前 N 筆（None 為全部）。"""
     aggregate: bool = False
     """彙總可見維度的資料。"""
+
+
+class ImportBody(BaseModel):
+    """匯入另一份報表的工作表：source 是工作區中另一份報表的 id；worksheets 省略時整份匯入。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(min_length=1)
+    worksheets: list[str] | None = None
+
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp")
+
+
+def _image_paths(value: Any) -> list[str]:
+    """內容中的圖片路徑（圖片區塊、圖片按鈕）。"""
+    found: list[str] = []
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for child in item.values():
+                walk(child)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child)
+        elif (
+            isinstance(item, str)
+            and item.lower().endswith(IMAGE_SUFFIXES)
+            and item not in found
+            and not item.lower().startswith(("http://", "https://", "data:"))
+        ):
+            found.append(item)
+
+    walk(value)
+    return found
 
 
 class ExtractModeBody(BaseModel):
@@ -673,6 +718,63 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         ir = workspace(request).get(workbook).ir
         result = run_refresh(request, workbook, datasource, ir, body.incremental)
         return {**extract_state(request, workbook, datasource), "result": result}
+
+    @router.post("/{workbook}/import")
+    def post_import(workbook: str, body: ImportBody, request: Request) -> dict[str, Any]:
+        """匯入另一份報表的工作表（Tableau 的「匯入活頁簿」、書籤與在活頁簿之間複製貼上工作表）：
+        worksheets 省略時整份匯入（含 dashboard、Story 與動作）。資料源的資料、來源檔案與圖片一併複製。"""
+        space = workspace(request)
+        if body.source == workbook:
+            raise HTTPException(422, "不能從同一份報表匯入")
+        source = space.get(body.source)
+        target = space.get(workbook)
+        try:
+            result = import_from(target.ir, source.ir, body.worksheets)
+        except EditError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        copies: list[tuple[Path, Path]] = []
+        for old, new in result.datasources.items():
+            ds = next(d for d in source.ir.datasources if d.id == old)
+            if has_local_data(ds.connection):
+                try:
+                    data_file = space.database(body.source, old)  # 還沒有匯入過的先匯入
+                except (ExecutionError, FileNotFoundError) as exc:
+                    raise HTTPException(422, f"來源報表的資料無法匯入：{exc}") from exc
+                if data_file.is_file():
+                    copies.append((data_file, target.directory / "data" / f"{new}.duckdb"))
+                report = data_file.with_name(f"{old}.refresh.json")
+                if report.is_file():
+                    copies.append((report, target.directory / "data" / f"{new}.refresh.json"))
+            if isinstance(ds.connection, FileConnection):
+                # 檔案型的資料源：來源檔案也複製（之後可以重新匯入、切換資料解譯器）
+                for path in dict.fromkeys(t.path for t in ds.connection.tables):
+                    origin = source.directory / SOURCES / path
+                    if not origin.is_file():
+                        continue
+                    copied = target.directory / SOURCES / path
+                    if copied.is_file() and copied.read_bytes() != origin.read_bytes():
+                        raise HTTPException(
+                            422, f"兩份報表都有來源檔案 {path} 但內容不同，無法匯入這個資料源"
+                        )
+                    copies.append((origin, copied))
+        for origin, copied in copies:
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(origin, copied)
+        if body.worksheets is None:
+            # 整份匯入：dashboard 用到的圖片
+            for path in _image_paths([d.model_dump(mode="json") for d in source.ir.dashboards]):
+                content = read_report_file(source.directory, path)
+                relative = member_path(path)
+                if content is None or relative is None:
+                    continue
+                copied = target.directory.joinpath("files", *relative.parts)
+                if not copied.is_file() and read_report_file(target.directory, path) is None:
+                    copied.parent.mkdir(parents=True, exist_ok=True)
+                    copied.write_bytes(content)
+        space.save_ir(workbook, result.ir)
+        if on_change is not None:
+            on_change(workbook)
+        return result.to_json()
 
     @router.post("/{workbook}/worksheets")
     def post_worksheet(workbook: str, body: NewWorksheetBody, request: Request) -> dict[str, Any]:

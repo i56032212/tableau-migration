@@ -527,6 +527,38 @@ export function buildMap(sheet: SheetIR, use: FieldUse, role: GeoRole): SheetIR 
   };
 }
 
+/**
+ * 地圖的標記圖層（Tableau 2020.4 的「新增標記圖層」）：每個圖層是一張個別的標記卡（panes，由下往上畫），
+ * 共用的標記卡沒有欄位。第一次新增時，原本的標記卡成為第一個圖層。
+ */
+export function addMapLayer(sheet: SheetIR): SheetIR {
+  const latitude = sheet.rows.find((u) => u.field === LATITUDE_GENERATED);
+  if (!latitude) return sheet;
+  const blank: MarksIR = { type: "automatic", color: null, size: null, label: [], detail: [], tooltip: [], shape: null, angle: null, path: null };
+  const layers: PaneIR[] = sheet.panes.length > 0 ? sheet.panes : [{ measure: latitude, axis: "rows", dual: false, marks: sheet.marks }];
+  return {
+    ...sheet,
+    marks: sheet.panes.length > 0 ? sheet.marks : { ...blank, type: sheet.marks.type },
+    panes: [...layers, { measure: latitude, axis: "rows", dual: true, marks: blank }],
+  };
+}
+
+/** 移除地圖的一個標記圖層；只剩一個圖層時改回單一張標記卡。 */
+export function removeMapLayer(sheet: SheetIR, index: number): SheetIR {
+  const panes = sheet.panes.filter((_, i) => i !== index).map((p, i) => ({ ...p, dual: i > 0 }));
+  if (panes.length === 1) return { ...sheet, marks: panes[0].marks, panes: [] };
+  return { ...sheet, panes };
+}
+
+/** 地圖的標記圖層往上（delta 為 1，畫在後面的圖層上方）或往下移。 */
+export function moveMapLayer(sheet: SheetIR, index: number, delta: number): SheetIR {
+  const target = index + delta;
+  if (target < 0 || target >= sheet.panes.length) return sheet;
+  const panes = [...sheet.panes];
+  [panes[index], panes[target]] = [panes[target], panes[index]];
+  return { ...sheet, panes: panes.map((p, i) => ({ ...p, dual: i > 0 })) };
+}
+
 /** 架上的維度（Table Calculation 的定址依它們；Measure Names／Values 不算）。 */
 function isDim(use: FieldUse, fields: Map<string, CatalogField>): boolean {
   return !isSpecial(use) && !isMeasure(use, fields);

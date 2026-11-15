@@ -12154,6 +12154,7 @@
       },
       "navigation": "caption",
       "arrows": true,
+      "format": null,
       "points": [
         {
           "id": "sp1",
@@ -12164,7 +12165,8 @@
           "filters": [],
           "selections": [],
           "parameters": {},
-          "texts": {}
+          "texts": {},
+          "notes": []
         },
         {
           "id": "sp2",
@@ -12201,7 +12203,8 @@
             }
           ],
           "parameters": {},
-          "texts": {}
+          "texts": {},
+          "notes": []
         },
         {
           "id": "sp3",
@@ -12222,12 +12225,15 @@
               "mode": "include",
               "values": [
                 "Consumer"
-              ]
+              ],
+              "min": null,
+              "max": null
             }
           ],
           "selections": [],
           "parameters": {},
-          "texts": {}
+          "texts": {},
+          "notes": []
         }
       ],
       "active": "sp1",

@@ -5668,6 +5668,7 @@
     },
     "Relationship": {
       "additionalProperties": false,
+      "description": "兩張邏輯資料表之間的關聯。效能選項（基數與參考完整性）只是記下來的設定：查詢一律以最保守的方式\n計算（多對多、部分記錄相符——量值在自己的資料表彙總、不相符的列保留），設定與資料相符時數字與\nTableau 相同。",
       "properties": {
         "left": {
           "description": "邏輯資料表 id",
@@ -5689,6 +5690,30 @@
           "minItems": 1,
           "title": "On",
           "type": "array"
+        },
+        "left_unique": {
+          "default": false,
+          "description": "效能選項的基數：左邊的資料表是「一」（關聯欄位的值不重複）；預設是「多」",
+          "title": "Left Unique",
+          "type": "boolean"
+        },
+        "right_unique": {
+          "default": false,
+          "description": "右邊的資料表是「一」",
+          "title": "Right Unique",
+          "type": "boolean"
+        },
+        "left_complete": {
+          "default": false,
+          "description": "效能選項的參考完整性：左邊的資料表「所有記錄相符」；預設是「部分記錄相符」",
+          "title": "Left Complete",
+          "type": "boolean"
+        },
+        "right_complete": {
+          "default": false,
+          "description": "右邊的資料表「所有記錄相符」",
+          "title": "Right Complete",
+          "type": "boolean"
         }
       },
       "required": [
@@ -6621,6 +6646,18 @@
           "title": "Arrows",
           "type": "boolean"
         },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoryFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Story 的格式；None 為預設"
+        },
         "points": {
           "items": {
             "$ref": "#/$defs/StoryPoint"
@@ -6708,7 +6745,7 @@
     },
     "StoryFilter": {
       "additionalProperties": false,
-      "description": "故事點記下的工作表篩選：只保留（或排除）列出的值。",
+      "description": "故事點記下的工作表篩選：只保留（或排除）列出的值，或一段範圍（滑桿、日期範圍：mode 為 range，\nmin、max 為 None 表示該側不設限）。",
       "properties": {
         "worksheet": {
           "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
@@ -6722,7 +6759,8 @@
         "mode": {
           "enum": [
             "include",
-            "exclude"
+            "exclude",
+            "range"
           ],
           "title": "Mode",
           "type": "string"
@@ -6749,6 +6787,48 @@
           },
           "title": "Values",
           "type": "array"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
         }
       },
       "required": [
@@ -6757,6 +6837,170 @@
         "mode"
       ],
       "title": "StoryFilter",
+      "type": "object"
+    },
+    "StoryFormat": {
+      "additionalProperties": false,
+      "description": "Story 的格式（Story＞格式）：整個 Story 的底色、標題、導覽與文字物件的樣式；None 為預設。",
+      "properties": {
+        "background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Story 的底色",
+          "title": "Background"
+        },
+        "title_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title Color"
+        },
+        "title_size": {
+          "anyOf": [
+            {
+              "maximum": 72,
+              "minimum": 6,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標題的字級（pt）",
+          "title": "Title Size"
+        },
+        "title_align": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title Align"
+        },
+        "navigator_background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "導覽的底色",
+          "title": "Navigator Background"
+        },
+        "navigator_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "導覽文字的顏色",
+          "title": "Navigator Color"
+        },
+        "note_background": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字物件的底色",
+          "title": "Note Background"
+        },
+        "note_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字物件的文字顏色",
+          "title": "Note Color"
+        }
+      },
+      "title": "StoryFormat",
+      "type": "object"
+    },
+    "StoryNote": {
+      "additionalProperties": false,
+      "description": "故事點上的文字物件（Story 編輯器的「拖曳以新增文字」）：浮在故事點內容上的說明文字方塊。",
+      "properties": {
+        "text": {
+          "description": "文字（可含格式）",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "title": "Text",
+          "type": "array"
+        },
+        "x": {
+          "default": 20,
+          "description": "相對於故事點內容左上角的位置（像素）",
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "default": 20,
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        },
+        "w": {
+          "default": 220,
+          "minimum": 20,
+          "title": "W",
+          "type": "integer"
+        },
+        "h": {
+          "default": 80,
+          "minimum": 20,
+          "title": "H",
+          "type": "integer"
+        }
+      },
+      "title": "StoryNote",
       "type": "object"
     },
     "StoryPoint": {
@@ -6863,6 +7107,14 @@
           "description": "故事點改過的 dashboard 文字物件：區塊 id → 內容（取代區塊原本的文字）",
           "title": "Texts",
           "type": "object"
+        },
+        "notes": {
+          "description": "故事點上的文字物件（浮在內容上的說明文字）",
+          "items": {
+            "$ref": "#/$defs/StoryNote"
+          },
+          "title": "Notes",
+          "type": "array"
         }
       },
       "required": [

@@ -97,9 +97,18 @@ export interface LogicalView {
   relation: RelationView;
 }
 
+/** 關聯的效能選項：基數（true 為「一」）與參考完整性（true 為「所有記錄相符」） */
+export interface RelationshipOptions {
+  left_unique: boolean;
+  right_unique: boolean;
+  left_complete: boolean;
+  right_complete: boolean;
+}
+
 export interface RelationshipView {
   left: string;
   right: string;
+  options?: RelationshipOptions;
   on: {
     left: string;
     op: string;
@@ -187,10 +196,10 @@ export const datasourceApi = {
       method: "PUT",
       body: JSON.stringify({ join, on }),
     }),
-  setRelationship: (workbook: string, datasource: string, logical: string, on: Condition[]) =>
+  setRelationship: (workbook: string, datasource: string, logical: string, on: Condition[], options?: RelationshipOptions) =>
     request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/relationships/${part(logical)}`, {
       method: "PUT",
-      body: JSON.stringify({ on }),
+      body: JSON.stringify(options ? { on, options } : { on }),
     }),
   pivot: (workbook: string, datasource: string, table: string, columns: string[]) =>
     request<DatasourceModel>(`${edit(workbook)}/datasources/${part(datasource)}/pivot`, {

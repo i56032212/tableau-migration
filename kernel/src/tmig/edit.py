@@ -44,7 +44,14 @@ from tmig.ir import (
     iter_zones,
 )
 from tmig.ir.integrity import check_references
-from tmig.ir.models import Filter, GeoAlias, GeoRole, GeoSettings, TopNFilter
+from tmig.ir.models import (
+    Filter,
+    GeoAlias,
+    GeoRole,
+    GeoSettings,
+    TopNFilter,
+    set_control_allowed,
+)
 from tmig.ir.scope import DatasourceScope, ForeignSource, calc_references
 from tmig.render.palettes import PALETTES
 
@@ -831,12 +838,7 @@ def _sync_controls(ir: IR, sheet: Worksheet) -> Worksheet:
         return sheet
     filtered = {f.field.field for f in sheet.filters if not isinstance(f, TupleFilter)}
     parameters = {p.id for p in ir.parameters}
-    sets = {
-        f.id
-        for ds in ir.datasources
-        for f in ds.fields
-        if f.set is not None and f.set.rule.kind == "members" and len(f.set.levels) == 1
-    }
+    sets = {f.id for ds in ir.datasources for f in ds.fields if set_control_allowed(f.set)}
     kept = [
         c
         for c in sheet.controls
@@ -1404,12 +1406,12 @@ def outline(ir: IR) -> dict[str, Any]:
             {"id": p.id, "caption": p.caption, "datatype": p.datatype, "allowed": p.allowed.kind}
             for p in ir.parameters
         ],
-        # 可以放集合控制項的集合：固定成員、單一維度
+        # 可以放集合控制項的集合：固定成員、Top N 與條件集合（合併集合不行）
         "sets": [
             {"id": f.id, "caption": f.caption}
             for ds in ir.datasources
             for f in ds.fields
-            if f.set is not None and f.set.rule.kind == "members" and len(f.set.levels) == 1
+            if set_control_allowed(f.set)
         ],
         "actions": [a.model_dump(mode="json") for a in ir.actions],
         "images": images,

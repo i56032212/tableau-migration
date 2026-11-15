@@ -152,9 +152,20 @@ class JoinBody(BaseModel):
     on: list[ConditionBody]
 
 
+class RelationshipOptions(BaseModel):
+    """關聯的效能選項：基數（一或多）與參考完整性（所有記錄相符或部分記錄相符）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    left_unique: bool = False
+    right_unique: bool = False
+    left_complete: bool = False
+    right_complete: bool = False
+
+
 class RelationshipBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     on: list[ConditionBody]
+    options: RelationshipOptions | None = None
 
 
 class PivotBody(BaseModel):
@@ -340,6 +351,12 @@ def model_view(ir: IR, ds: Datasource, directory: Path) -> dict[str, Any]:
                     {
                         "left": rel.left,
                         "right": rel.right,
+                        "options": {
+                            "left_unique": rel.left_unique,
+                            "right_unique": rel.right_unique,
+                            "left_complete": rel.left_complete,
+                            "right_complete": rel.right_complete,
+                        },
                         "on": [
                             {
                                 "left": c.left,
@@ -784,7 +801,13 @@ def datasource_editor_router(on_change: Callable[[str], None] | None = None) -> 
             request,
             workbook,
             None,
-            lambda ir: set_relationship(ir, datasource, logical, conditions(body.on)),
+            lambda ir: set_relationship(
+                ir,
+                datasource,
+                logical,
+                conditions(body.on),
+                body.options.model_dump() if body.options is not None else None,
+            ),
         )
         return model_view(
             ir, next(d for d in ir.datasources if d.id == datasource), loaded.directory

@@ -394,10 +394,40 @@ def interpreted_header(grid: list[list[Any]], table: FileTable) -> int:
             best, best_score, best_named = index, score, matched
     if best < 0 or best_named < max(1, (len(named) + 1) // 2):
         sample = "、".join(named[:5])
-        raise FileImportError(
-            f"{table.path} 的工作表「{table.sheet}」中找不到資料解譯器的標題列（{sample}）"
-        )
+        where = f"的工作表「{table.sheet}」" if table.format == "excel" else ""
+        raise FileImportError(f"{table.path} {where}中找不到資料解譯器的標題列（{sample}）")
     return best
+
+
+def named_ranges(book: Any) -> dict[str, tuple[str, str]]:
+    """.xlsx 的具名範圍：名稱 →（工作表、範圍，例如 A1:C10）。只列單一塊連續的範圍；列印範圍、篩選的
+    範圍等 Excel 內部的名稱（_xlnm. 開頭）不算。"""
+    found: dict[str, tuple[str, str]] = {}
+    defined = getattr(book, "defined_names", None)
+    if defined is None:
+        return found
+    items = (
+        defined.items() if hasattr(defined, "items") else [(d.name, d) for d in defined.definedName]
+    )
+    for name, item in items:
+        if str(name).startswith("_xlnm."):
+            continue
+        try:
+            destinations = list(item.destinations)
+        except Exception:
+            continue
+        if len(destinations) != 1:
+            continue
+        sheet, cells = destinations[0]
+        cells = str(cells).replace("$", "")
+        if re.fullmatch(r"[A-Za-z]+\d+:[A-Za-z]+\d+", cells):
+            found[str(name)] = (str(sheet), cells)
+    return found
+
+
+def excel_bounds(cells: str | None) -> tuple[int, int, int | None, int | None]:
+    """Excel 範圍的起訖（給其他模組用，見 _bounds）。"""
+    return _bounds(cells)
 
 
 def _bounds(cells: str | None) -> tuple[int, int, int | None, int | None]:
@@ -430,9 +460,15 @@ def _xlsx_grid(data: bytes, table: FileTable, books: dict[str, Any]) -> list[lis
         except Exception as exc:
             raise FileImportError(f"{table.path} 不是可讀取的 Excel 檔：{exc}") from exc
         books[table.path] = book
-    sheet = _sheet(book.sheetnames, table)
-    worksheet = book[sheet]
-    first_col, first_row, last_col, last_row = _bounds(table.cells)
+    ranges = named_ranges(book)
+    if table.sheet and table.sheet not in book.sheetnames and table.sheet in ranges:
+        # 具名範圍：資料在它所在的工作表的那一塊範圍
+        title, cells = ranges[table.sheet]
+        worksheet = book[title]
+        first_col, first_row, last_col, last_row = _bounds(cells)
+    else:
+        worksheet = book[_sheet(book.sheetnames, table)]
+        first_col, first_row, last_col, last_row = _bounds(table.cells)
     if last_col is None:
         last_col = first_col + len(table.columns) - 1
     grid: list[list[Any]] = []
@@ -487,7 +523,8 @@ def _sheet(names: Iterable[str], table: FileTable) -> str:
     if wanted.casefold() in folded:
         return folded[wanted.casefold()]
     raise FileImportError(
-        f"{table.path} 中找不到工作表「{wanted}」（有：{'、'.join(names)}）；具名範圍尚不支援"
+        f"{table.path} 中找不到工作表或具名範圍「{wanted}」（工作表有：{'、'.join(names)}）；"
+        ".xls 的具名範圍尚不支援"
     )
 
 
@@ -508,9 +545,14 @@ def text_rows(data: bytes, table: FileTable) -> list[list[Any]]:
         raise FileImportError(f"{table.path} 不是 {table.charset} 編碼：{exc}") from exc
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=table.separator)
     rows: list[list[Any]] = [list(r) for r in reader]
+    width = len(table.columns)
+    if table.interpreted:
+        # 資料解譯器：標題列之前的列（標題、說明）與空白的列不算
+        header = interpreted_header(rows, table)
+        rows = [(r + [None] * width)[:width] for r in rows[header + 1 :]]
+        return [r for r in rows if not all(v is None or v == "" for v in r)]
     if table.header and rows:
         rows = rows[1:]
-    width = len(table.columns)
     rows = [(r + [None] * width)[:width] for r in rows]
     while rows and all(v is None or v == "" for v in rows[-1]):
         rows.pop()

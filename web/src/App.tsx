@@ -53,6 +53,7 @@ import { StoryEditor } from "./editor/StoryEditor";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { PageControl, pagesOf } from "./PageControl";
+import { PageSetupDialog } from "./PageSetup";
 import { SheetControls } from "./SheetControls";
 import { WorksheetView } from "./WorksheetView";
 
@@ -424,7 +425,7 @@ function WorkbookPage({
   const [history, setHistory] = useState<{ past: ViewState[]; future: ViewState[] }>({ past: [], future: [] });
   const [refresh, setRefresh] = useState(0);
   const [access, setAccess] = useState<ViewerAccess | null>(null);
-  const [dialog, setDialog] = useState<"crosstab" | "data" | null>(null);
+  const [dialog, setDialog] = useState<"crosstab" | "data" | "print" | null>(null);
   const [customName, setCustomName] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // 簡報模式（Tableau 的「視窗＞簡報模式」）：全螢幕、只留檢視，下方的列切換前後一張；按 Esc 結束
@@ -760,7 +761,8 @@ function WorkbookPage({
                 return;
               }
               if (kind === "pdf") {
-                window.print();
+                // 頁面設定（紙張、方向、縮放、顯示的項目）之後再列印
+                setDialog("print");
                 return;
               }
               const element = document.querySelector<HTMLElement>(
@@ -839,6 +841,12 @@ function WorkbookPage({
         {notice && <span className="success">{notice}</span>}
         <UserBar me={me} />
       </header>
+      {dialog === "print" && (
+        <PageSetupDialog
+          target={() => document.querySelector<HTMLElement>(".page .dashboard, .page .single-sheet, .page .story")}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {dialog === "crosstab" && (dashboard || worksheet) && (
         <CrosstabDialog
           workbook={workbook}

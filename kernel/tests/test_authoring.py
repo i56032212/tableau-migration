@@ -14,6 +14,7 @@ from openpyxl import Workbook
 
 from tmig.authoring import (
     Calculated,
+    Condition,
     add_datasource,
     add_table,
     inspect_file,
@@ -249,6 +250,25 @@ def test_relationship_and_join(book: Path, sources: Path, tmp_path: Path) -> Non
         "Cid": 75,
     }
     ir = set_relationship(ir, ds, people, [(f["Region"], "=", f["Region (People)"])])
+    # 效能選項（基數、參考完整性）：只是記下來的設定，查詢的結果不變；省略時維持原本的設定
+    before = query(ir, sources, out, f["Manager"], f["Sales"])
+    condition: list[Condition] = [(f["Region"], "=", f["Region (People)"])]
+    ir = set_relationship(
+        ir, ds, people, condition, {"right_unique": True, "left_complete": True, "nope": True}
+    )
+    relation = ir.datasources[0].connection.relation  # type: ignore[union-attr]
+    assert isinstance(relation, ModelRelation)
+    link = relation.relationships[0]
+    assert (link.left_unique, link.right_unique, link.left_complete, link.right_complete) == (
+        False,
+        True,
+        True,
+        False,
+    )
+    assert query(ir, sources, out, f["Manager"], f["Sales"]) == before
+    ir = set_relationship(ir, ds, people, condition)
+    relation = ir.datasources[0].connection.relation  # type: ignore[union-attr]
+    assert isinstance(relation, ModelRelation) and relation.relationships[0].right_unique
     with pytest.raises(EditError, match="不在要關聯的資料表中"):
         set_relationship(ir, ds, people, [(f["Manager"], "=", f["Region"])])
     # 邏輯資料表 Orders 中 inner join Returns：只有退貨的訂單

@@ -10,6 +10,7 @@ import { DataDialog } from "../ViewerTools";
 import { WorksheetView } from "../WorksheetView";
 import { editApi } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
+import { ImportSheetsDialog } from "./ImportDialog";
 import { DescribeModelDialog } from "./DescribeDialogs";
 import { DataPane } from "./DataPane";
 import {
@@ -51,6 +52,7 @@ import {
   type CatalogField,
   cardMarks,
   fieldIndex,
+  addMapLayer,
   isMapSheet,
   isMeasure,
   isSpecial,
@@ -176,6 +178,17 @@ function MapCard() {
         />
         {Math.round(options.washout * 100)}%
       </label>
+      <button
+        type="button"
+        title="再加上一個標記圖層（Tableau 的「新增標記圖層」）：每個圖層有自己的標記卡，由下往上畫"
+        onClick={() => {
+          const index = Math.max(editor.sheet.panes.length, 1);
+          editor.apply((s) => addMapLayer(s));
+          editor.setCard(index);
+        }}
+      >
+        ＋ 標記圖層
+      </button>
       <fieldset className="map-layers">
         <legend>地圖圖層</legend>
         {MAP_LAYERS.map(([key, label, preset]) => (
@@ -389,6 +402,7 @@ export function Editor({
   const [selected, setSelected] = useState<Mark[]>([]);
   const [showMe, setShowMe] = useState(false);
   const [viewData, setViewData] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [card, setCard] = useState<Card>("all");
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
@@ -779,6 +793,9 @@ export function Editor({
           >
             新增工作表
           </button>
+          <button type="button" title="從工作區中開啟的另一份報表匯入工作表，或整份匯入（Tableau 的「匯入活頁簿」、書籤與在活頁簿之間複製貼上工作表）" onClick={() => setImporting(true)}>
+            匯入工作表…
+          </button>
           <button
             type="button"
             onClick={() =>
@@ -1028,6 +1045,18 @@ export function Editor({
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "forecast" && <ForecastDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "cluster" && <ClusterDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
+      {importing && (
+        <ImportSheetsDialog
+          workbook={workbook}
+          onClose={() => setImporting(false)}
+          onImported={(first, count) => {
+            setImporting(false);
+            onChanged();
+            notify(`已匯入 ${count} 張工作表`, "info");
+            if (first) onOpen(first);
+          }}
+        />
+      )}
       {dialog?.kind === "describe-model" && <DescribeModelDialog kind={dialog.model} onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "colors" && <ColorsDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "tooltip" && <TooltipDialog card={dialog.card} onClose={() => setDialog(null)} />}

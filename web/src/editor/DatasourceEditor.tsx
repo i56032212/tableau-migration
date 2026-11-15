@@ -19,6 +19,7 @@ import {
   type ModelConnection,
   type ModelField,
   type RelationView,
+  type RelationshipOptions,
   type RemoteTable,
   type Side,
   sideFilled,
@@ -244,8 +245,8 @@ export function DatasourceEditor({
               {!file.available && (
                 <p className="muted">{file.error ?? "報表中沒有這個檔案的複本（以「其他檔案…」重新選擇）"}</p>
               )}
-              {model.editable && file.format === "excel" && (
-                <label className="dse-interpreter" title="去掉工作表上面的標題、說明與空白的列，找出標題列（Tableau 的資料解譯器）">
+              {model.editable && (file.format === "excel" || file.format === "text") && (
+                <label className="dse-interpreter" title="去掉工作表或文字檔上面的標題、說明與空白的列，找出標題列（Tableau 的資料解譯器）">
                   <input
                     type="checkbox"
                     checked={!!file.interpreted}
@@ -330,7 +331,7 @@ export function DatasourceEditor({
                   fields={fields}
                   leftCaption={logicalCaption(r.left)}
                   rightCaption={logicalCaption(r.right)}
-                  onSave={(on) => change(() => datasourceApi.setRelationship(workbook, datasource, r.right, on), "已修改關聯")}
+                  onSave={(on, options) => change(() => datasourceApi.setRelationship(workbook, datasource, r.right, on, options), "已修改關聯")}
                 />
               ))}
             </ul>
@@ -1106,7 +1107,7 @@ function RelationshipRow({
   fields: ModelField[];
   leftCaption: string;
   rightCaption: string;
-  onSave: (on: Condition[]) => Promise<boolean>;
+  onSave: (on: Condition[], options: RelationshipOptions) => Promise<boolean>;
 }) {
   const initial: Condition[] = relationship.on.map((c) => [
     c.left_formula ? { formula: c.left_formula } : c.left,
@@ -1114,7 +1115,18 @@ function RelationshipRow({
     c.right_formula ? { formula: c.right_formula } : c.right,
   ]);
   const [on, setOn] = useState<Condition[]>(initial);
-  const dirty = JSON.stringify(on) !== JSON.stringify(initial);
+  const saved: RelationshipOptions = relationship.options ?? { left_unique: false, right_unique: false, left_complete: false, right_complete: false };
+  const [options, setOptions] = useState<RelationshipOptions>(saved);
+  const dirty = JSON.stringify(on) !== JSON.stringify(initial) || JSON.stringify(options) !== JSON.stringify(saved);
+  const option = (key: keyof RelationshipOptions, label: string, off: string, onLabel: string) => (
+    <label className="inline">
+      {label}
+      <select aria-label={label} value={options[key] ? "1" : "0"} onChange={(e) => setOptions({ ...options, [key]: e.target.value === "1" })}>
+        <option value="0">{off}</option>
+        <option value="1">{onLabel}</option>
+      </select>
+    </label>
+  );
   const left = fields.filter((f) => f.table === relationship.left && f.column !== null);
   const right = fields
     .filter((f) => f.table === relationship.right && f.column !== null)
@@ -1125,8 +1137,21 @@ function RelationshipRow({
         <span className="ds-link">{leftCaption}</span> ⟷ <span className="ds-link">{rightCaption}</span>
       </div>
       <Conditions conditions={on} left={left} right={right} editable onChange={setOn} calcLabel="建立關聯計算…" />
+      <details className="dse-performance">
+        <summary title="Tableau 的「效能選項」：資料表之間的基數與參考完整性。這裡只是記下設定——查詢一律以最保守的方式計算（多對多、部分記錄相符），設定與資料相符時數字相同">
+          效能選項
+        </summary>
+        <div className="row">
+          {option("left_unique", `${leftCaption} 的基數`, "多", "一")}
+          {option("right_unique", `${rightCaption} 的基數`, "多", "一")}
+        </div>
+        <div className="row">
+          {option("left_complete", `${leftCaption} 的參考完整性`, "部分記錄相符", "所有記錄相符")}
+          {option("right_complete", `${rightCaption} 的參考完整性`, "部分記錄相符", "所有記錄相符")}
+        </div>
+      </details>
       {dirty && (
-        <button type="button" className="primary" onClick={() => void onSave(on.filter((c) => sideFilled(c[0]) && sideFilled(c[2])))}>
+        <button type="button" className="primary" onClick={() => void onSave(on.filter((c) => sideFilled(c[0]) && sideFilled(c[2])), options)}>
           套用
         </button>
       )}

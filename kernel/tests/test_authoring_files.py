@@ -114,6 +114,78 @@ def test_data_interpreter(tmp_path: Path) -> None:
         set_interpreter(ir, ir.datasources[0].id, "Data/Other.xlsx", plain)
 
 
+def test_data_interpreter_for_text_files(tmp_path: Path) -> None:
+    """文字檔的資料解譯器：檔案上面有標題、說明的列時找出標題列，之前的列與空白的列不算。"""
+    path = tmp_path / "report.csv"
+    path.write_text(
+        "Quarterly sales report\n\nAll figures in USD\n"
+        "Region,Year,Sales\nEast,2023,100.5\nWest,2023,200\n,,\nEast,2024,50.25\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "sources" / "Data").mkdir(parents=True)
+    (tmp_path / "sources" / "Data" / "report.csv").write_bytes(path.read_bytes())
+    plain = inspect_file(path)
+    assert [c.name for c in plain.tables[0].columns][:1] == ["Quarterly sales report"]
+    cleaned = inspect_file(path, interpreter=True)
+    (table,) = cleaned.tables
+    assert table.interpreted and table.rows == 3
+    assert [(c.name, c.datatype) for c in table.columns] == [
+        ("Region", "string"),
+        ("Year", "integer"),
+        ("Sales", "real"),
+    ]
+    ir = new_workbook("Report", plain, None, "Data/report.csv")
+    ir = set_interpreter(ir, ir.datasources[0].id, "Data/report.csv", cleaned)
+    connection = ir.datasources[0].connection
+    assert isinstance(connection, FileConnection) and connection.tables[0].interpreted
+    f = ids(ir)
+    assert query(ir, tmp_path, f["Region"], f["Sales"]) == {"East": 150.75, "West": 200.0}
+    # 一開始就使用資料解譯器建立的報表
+    ir = new_workbook("Report", cleaned, None, "Data/report.csv")
+    f = ids(ir)
+    assert query(ir, tmp_path, f["Region"], f["Sales"]) == {"East": 150.75, "West": 200.0}
+    ir = set_interpreter(ir, ir.datasources[0].id, "Data/report.csv", plain)
+    assert "Quarterly sales report" in ids(ir)
+
+
+def test_excel_named_ranges(tmp_path: Path) -> None:
+    """Excel 的具名範圍也是一張資料表：資料在它所在工作表的那一塊範圍（範圍以外的列與欄不算）。"""
+    from openpyxl.workbook.defined_name import DefinedName
+
+    book = Workbook()
+    ws = book.active
+    assert ws is not None
+    ws.title = "Sheet1"
+    ws["A1"] = "Notes above the table"
+    for row, values in enumerate(
+        [("Region", "Sales"), ("East", 100.5), ("West", 200.0), ("South", 75.0)], 3
+    ):
+        for col, value in enumerate(values, 2):
+            ws.cell(row, col, value)
+    ws["B8"] = "Total"
+    ws["C8"] = 375.5
+    book.defined_names["SalesData"] = DefinedName("SalesData", attr_text="Sheet1!$B$3:$C$6")
+    path = tmp_path / "Ranges.xlsx"
+    book.save(path)
+    (tmp_path / "sources" / "Data").mkdir(parents=True)
+    (tmp_path / "sources" / "Data" / "Ranges.xlsx").write_bytes(path.read_bytes())
+    inspected = inspect_file(path)
+    assert [t.name for t in inspected.tables] == ["Sheet1", "SalesData"]
+    table = inspected.table("SalesData")
+    assert (table.rows, table.sheet) == (3, "SalesData")
+    assert [(c.name, c.datatype) for c in table.columns] == [
+        ("Region", "string"),
+        ("Sales", "real"),
+    ]
+    ir = new_workbook("Ranges", inspected, "SalesData", "Data/Ranges.xlsx")
+    f = ids(ir)
+    assert query(ir, tmp_path, f["Region"], f["Sales"]) == {
+        "East": 100.5,
+        "South": 75.0,
+        "West": 200.0,
+    }
+
+
 def orders(path: Path, rows: list[tuple[str, float]], note: bool = False) -> Path:
     book = Workbook()
     ws = book.active

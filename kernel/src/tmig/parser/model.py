@@ -120,6 +120,7 @@ def relationships(
             ctx.flag(rel, f"資料源「{caption}」的關聯無法解析")
             return None
         assert left is not None and right is not None
+        assert first is not None and second is not None
         conditions = _conditions(expression, state, left, right, ctx)
         if not conditions:
             ctx.flag(
@@ -128,7 +129,16 @@ def relationships(
                 "尚不支援",
             )
             return None
-        result.append(Relationship(left=left, right=right, on=conditions))
+        result.append(
+            Relationship(
+                left=left,
+                right=right,
+                on=conditions,
+                # 效能選項的基數（依公開資料推定的寫法）：端點的 unique-key='true' 為「一」
+                left_unique=first.get("unique-key") == "true",
+                right_unique=second.get("unique-key") == "true",
+            )
+        )
     if not result:
         ctx.flag(
             graph if graph is not None else ds_el,

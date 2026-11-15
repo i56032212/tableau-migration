@@ -200,6 +200,7 @@ def check_references(ir: IR) -> list[str]:
         ParamRef,
         TopNFilter,
         TupleFilter,
+        set_control_allowed,
     )
 
     errors: list[str] = []
@@ -575,18 +576,15 @@ def check_references(ir: IR) -> list[str]:
             if zone.parameter is not None and zone.parameter not in params:
                 errors.append(f"{where}：參數「{zone.parameter}」不存在")
             if zone.kind == "set" and zone.field is not None:
-                # 集合控制項：固定成員、單一層級的集合
+                # 集合控制項：單一維度的固定成員、Top N、條件集合，或多個維度的固定成員集合
                 target = next(
                     (f for ds in ir.datasources for f in ds.fields if f.id == zone.field.field),
                     None,
                 )
-                if (
-                    target is None
-                    or target.set is None
-                    or target.set.rule.kind != "members"
-                    or len(target.set.levels) != 1
-                ):
-                    errors.append(f"{where}：集合控制項的欄位必須是固定成員、單一維度的集合")
+                if target is None or not set_control_allowed(target.set):
+                    errors.append(
+                        f"{where}：集合控制項的欄位必須是固定成員、Top N 或條件的集合（合併集合不行）"
+                    )
             if zone.worksheet is None:
                 continue
             sheet = sheets.get(zone.worksheet)

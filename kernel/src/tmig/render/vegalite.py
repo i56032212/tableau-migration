@@ -2324,7 +2324,6 @@ def build_spec(
         body = maps.body(builder, ir, ws, map_plan, rows_dims, cols_dims, params)
         mark = "map"
         for name, present in (
-            ("趨勢線", any(m.trend for m in [ws.marks, *(p.marks for p in ws.panes)])),
             ("預測", ws.forecast),
             ("註解", ws.annotations),
         ):

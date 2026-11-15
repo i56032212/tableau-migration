@@ -62,7 +62,9 @@ from tmig.ir.models import (
     RangeFilter,
     RelativeDateFilter,
     Scalar,
+    SetCondition,
     SetMembers,
+    SetTop,
     Sort,
     TableCalc,
     TopNFilter,
@@ -418,7 +420,8 @@ class _PostEnv:
 
 
 def with_set_values(datasource: Datasource, values: dict[str, SetValue]) -> Datasource:
-    """集合動作改變後的成員：重新產生固定成員集合的公式（只影響這次查詢）。
+    """集合動作或集合控制項改變後的成員（只影響這次查詢）：固定成員的集合重新產生公式；Top N 與條件集合
+    改的是「一般」分頁的選取（排名或條件之前先選取的成員），Top N 與條件照樣套用。
     不在這個資料源的集合略過（檢視器把同一份狀態送給每張工作表）。"""
     fields: list[DataField] = []
     for data_field in datasource.fields:
@@ -426,8 +429,30 @@ def with_set_values(datasource: Datasource, values: dict[str, SetValue]) -> Data
         if value is None:
             fields.append(data_field)
             continue
+        current = data_field.set.rule if data_field.set is not None else None
+        if (
+            data_field.set is not None
+            and isinstance(current, SetTop | SetCondition)
+            and len(data_field.set.levels) == 1
+        ):
+            # 沒有排除任何成員等同「全部」
+            everything = value.mode == "exclude" and not value.members
+            selected = current.model_copy(
+                update={
+                    "mode": "all" if everything else value.mode,
+                    "values": [] if everything else [m[0] for m in value.members if m],
+                }
+            )
+            fields.append(
+                data_field.model_copy(
+                    update={"set": data_field.set.model_copy(update={"rule": selected})}
+                )
+            )
+            continue
         if data_field.set is None or data_field.set.rule.kind != "members":
-            raise QueryError(f"「{data_field.caption}」不是固定成員的集合，不能由集合動作改變成員")
+            raise QueryError(
+                f"「{data_field.caption}」是合併集合或不是集合，不能由集合動作或集合控制項改變成員"
+            )
         try:
             formula = members_formula(
                 set_levels(datasource.fields, data_field.set), value.members, value.mode

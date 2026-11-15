@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
+from tmig.data.file_import import excel_bounds, named_ranges
 from tmig.edit import (
     EDITOR_REF,
     EditError,
@@ -201,7 +202,8 @@ class InspectedFile:
 
 
 def inspect_file(path: Path, interpreter: bool = False) -> InspectedFile:
-    """檔案的資料表、欄名、型別與列數；interpreter 時 Excel 依資料解譯器找標題列。"""
+    """檔案的資料表、欄名、型別與列數；interpreter 時 Excel 與文字檔依資料解譯器找標題列。
+    Excel 的具名範圍也列為資料表（Tableau 的連線畫面同樣列出）。"""
     suffix = path.suffix.lower()
     if suffix == ".gdb" and path.is_dir():
         return _inspect_spatial(path, b"")
@@ -214,7 +216,7 @@ def inspect_file(path: Path, interpreter: bool = False) -> InspectedFile:
     if suffix in EXCEL_SUFFIXES:
         return InspectedFile(path, "excel", _inspect_excel(path.name, data, interpreter))
     if suffix in TEXT_SUFFIXES:
-        table, separator, charset = _inspect_text(path.name, data)
+        table, separator, charset = _inspect_text(path.name, data, interpreter)
         return InspectedFile(path, "text", [table], separator, charset)
     if suffix in SPATIAL_SUFFIXES:
         return _inspect_spatial(path, data)
@@ -270,6 +272,23 @@ def _inspect_excel(name: str, data: bytes, interpreter: bool = False) -> list[In
                 grid.pop()
                 count -= 1
             grids.append((title, grid, max(count - 1, 0)))
+        # 具名範圍：也是一張資料表（名稱與工作表相同的不列）
+        for range_name, (title, cells) in sorted(named_ranges(book).items()):
+            if range_name in book.sheetnames or title not in book.sheetnames:
+                continue
+            first_col, first_row, last_col, last_row = excel_bounds(cells)
+            grid = [
+                list(cells_row)
+                for cells_row in book[title].iter_rows(
+                    min_row=first_row,
+                    max_row=last_row,
+                    min_col=first_col,
+                    max_col=last_col,
+                    values_only=True,
+                )
+            ]
+            if grid:
+                grids.append((range_name, grid[: SAMPLE_ROWS + 1], max(len(grid) - 1, 0)))
         book.close()
     tables: list[InspectedTable] = []
     for title, grid, rows in grids:
@@ -315,7 +334,9 @@ def interpret_header(grid: list[list[Any]]) -> int | None:
     return None
 
 
-def _inspect_text(name: str, data: bytes) -> tuple[InspectedTable, str, str]:
+def _inspect_text(
+    name: str, data: bytes, interpreter: bool = False
+) -> tuple[InspectedTable, str, str]:
     text: str | None = None
     charset = CHARSETS[0]
     for candidate in CHARSETS:
@@ -343,8 +364,18 @@ def _inspect_text(name: str, data: bytes) -> tuple[InspectedTable, str, str]:
         count -= 1
     if not grid:
         raise EditError(f"{name} 是空的")
-    columns = _columns(grid[0], grid[1:], excel=False)
     stem = PurePosixPath(name).name
+    if interpreter:
+        # 資料解譯器：檔案上面有標題、說明的列時，找出標題列，之前的列與空白的列不算
+        header = interpret_header(grid)
+        if header is not None:
+            body = [r for r in grid[header + 1 :] if not all(_blank(v) for v in r)]
+            columns = _columns(grid[header], body, excel=False)
+            if columns:
+                rows = len(body) if count <= SAMPLE_ROWS + 1 else max(count - header - 1, 0)
+                table = InspectedTable(stem, columns, rows, interpreted=True)
+                return table, separator, charset
+    columns = _columns(grid[0], grid[1:], excel=False)
     return InspectedTable(stem, columns, max(count - 1, 0)), separator, charset
 
 
@@ -523,6 +554,7 @@ def file_table(source: InspectedFile, table: str | None, package_path: str, name
             separator=source.separator,
             charset=source.charset,
             locale=TEXT_LOCALE,
+            interpreted=found.interpreted,
             columns=found.columns,
         )
     return FileTable(
@@ -723,14 +755,18 @@ def set_interpreter(ir: IR, datasource: str, path: str, source: InspectedFile) -
     檔案中各資料表的欄換成新的欄（名稱相同的欄位沿用）。聯集與樞紐中的資料表不能切換。"""
     ds = _datasource(ir, datasource)
     connection = _file_connection(ds)
-    targets = [t for t in connection.tables if t.path == path and t.format == "excel"]
+    targets = [t for t in connection.tables if t.path == path and t.format in ("excel", "text")]
     if not targets:
-        raise EditError(f"資料源中沒有 Excel 檔 {path}")
+        raise EditError(f"資料源中沒有 Excel 檔或文字檔 {path}")
     top = _relation_of(connection)
     tables = list(connection.tables)
     fields = list(ds.fields)
     for target in targets:
-        found = next((t for t in source.tables if t.sheet == target.sheet), None)
+        found = (
+            source.tables[0]
+            if target.format == "text"
+            else next((t for t in source.tables if t.sheet == target.sheet), None)
+        )
         if found is None:
             raise EditError(f"{source.path.name} 中沒有工作表「{target.sheet}」")
         owner, current = _owner_of(top, target.name)
@@ -1513,9 +1549,16 @@ def set_join(
     return _validated(_replace_datasource(ir, ds), "修改 join 失敗")
 
 
-def set_relationship(ir: IR, datasource: str, logical: str, on: list[Condition]) -> IR:
+def set_relationship(
+    ir: IR,
+    datasource: str,
+    logical: str,
+    on: list[Condition],
+    options: dict[str, bool] | None = None,
+) -> IR:
     """改變邏輯資料表的關聯條件（條件：另一張資料表的欄位 id 或關聯計算、比較、這張資料表的欄位 id 或
-    關聯計算）；不再用到的關聯計算一併移除。"""
+    關聯計算）；不再用到的關聯計算一併移除。options：效能選項（left_unique、right_unique、left_complete、
+    right_complete），省略時不變。"""
     ds = _datasource(ir, datasource)
     connection = _editable(ds)
     model = _relation_of(connection)
@@ -1537,7 +1580,9 @@ def set_relationship(ir: IR, datasource: str, logical: str, on: list[Condition])
         right = _link_side(ds, right_side, rel.right, created, taken)
         conditions.append(RelationshipCondition(left=left.id, op=op, right=right.id))
     relationships = list(model.relationships)
-    relationships[index] = rel.model_copy(update={"on": conditions})
+    known = ("left_unique", "right_unique", "left_complete", "right_complete")
+    changed = {k: bool(v) for k, v in (options or {}).items() if k in known}
+    relationships[index] = rel.model_copy(update={"on": conditions, **changed})
     connection = _with(connection, None, model.model_copy(update={"relationships": relationships}))
     ds = ds.model_copy(update={"connection": connection, "fields": [*ds.fields, *created]})
     return _validated(_replace_datasource(ir, _without_stale_links(ds)), "修改關聯失敗")

@@ -654,9 +654,35 @@ def test_dashboard_story_and_action_api(client: TestClient) -> None:
     # Story：新增、加入故事點
     story = client.post("/api/edit/demo/stories", json={}).json()["story"]
     story["points"].append({"id": "sp2", "caption": "新儀表板", "dashboard": created["id"]})
+    # 故事點上的文字物件、記下的範圍篩選與 Story 的格式
+    story["points"][1]["notes"] = [
+        {"text": [{"text": "重點", "style": {"bold": True}}], "x": 30, "y": 40, "w": 200, "h": 60}
+    ]
+    story["points"][1]["filters"] = [
+        {
+            "worksheet": "ws_sales_by_region",
+            "field": {"field": "f_sales", "agg": "sum", "continuous": True},
+            "mode": "range",
+            "min": 1000,
+            "max": None,
+        }
+    ]
+    story["format"] = {"background": "#fafafa", "title_size": 18, "title_align": "center"}
+    saved = client.put(f"/api/edit/demo/stories/{story['id']}", json={"story": story})
+    assert saved.status_code == 200, saved.text
+    kept = client.get(f"/api/edit/demo/stories/{story['id']}").json()["story"]
+    assert kept["points"][1]["notes"][0]["text"][0]["style"]["bold"] is True
+    assert (kept["points"][1]["filters"][0]["mode"], kept["points"][1]["filters"][0]["min"]) == (
+        "range",
+        1000,
+    )
+    assert kept["format"]["title_align"] == "center"
+    # 範圍以外的篩選不能有 min、max
+    wrong = {**story, "points": [dict(p) for p in story["points"]]}
+    wrong["points"][1]["filters"] = [{**story["points"][1]["filters"][0], "mode": "include"}]
     assert (
-        client.put(f"/api/edit/demo/stories/{story['id']}", json={"story": story}).status_code
-        == 200
+        client.put(f"/api/edit/demo/stories/{story['id']}", json={"story": wrong}).status_code
+        == 422
     )
     # Story 用到的 dashboard 不能刪
     refused = client.delete(f"/api/edit/demo/dashboards/{created['id']}")
@@ -1335,6 +1361,71 @@ def test_set_controls(client: TestClient) -> None:
     refused = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
     assert refused.status_code == 422 and "集合控制項" in refused.json()["detail"]
 
+    # Top N 集合的控制項：改的是排名之前先選取的成員（「一般」分頁），再從中取前 2 名
+    top = client.post(
+        f"{base}/sets",
+        json={
+            "levels": ["f_region"],
+            "caption": "Top 2 Regions",
+            "rule": {"kind": "top_n", "direction": "top", "count": 2, "by": "SUM([Sales])"},
+        },
+    ).json()["field"]["id"]
+    outline = client.get("/api/edit/demo/outline").json()
+    assert {"id": top, "caption": "Top 2 Regions"} in outline["sets"]
+    ws = blank(
+        client,
+        rows=[use("f_region"), use(top)],
+        columns=[use("f_sales", agg="sum", continuous=True)],
+    )
+    ws["controls"] = [
+        {
+            "kind": "set",
+            "field": use(top),
+            "parameter": None,
+            "control": "multi_list",
+            "relevant": False,
+        }
+    ]
+    assert [c["field"]["field"] for c in put(client, ws)["controls"]] == [top]
+
+    def ranked(state: dict[str, Any] | None = None) -> tuple[dict[str, float], set[str]]:
+        response = client.post(
+            "/api/workbooks/demo/worksheets/ws_sales_by_region/render", json=state or {}
+        )
+        assert response.status_code == 200, response.text
+        table = response.json()["table"]
+        regions = column(table, "f_region")
+        sales = dict(zip(regions, [float(v) for v in column(table, "sum(f_sales)")], strict=True))
+        members = {r for r, v in zip(regions, column(table, top), strict=True) if v == "true"}
+        return sales, members
+
+    sales, members = ranked()
+    by_sales = sorted(sales, key=lambda r: -sales[r])
+    assert members == set(by_sales[:2])
+    # 取消勾選第一名：從其餘的成員中取前 2 名
+    rest = [[r] for r in by_sales[1:]]
+    _, members = ranked({"sets": {top: {"mode": "include", "members": rest}}})
+    assert members == set(by_sales[1:3])
+    # 沒有排除任何成員等同全部
+    _, members = ranked({"sets": {top: {"mode": "exclude", "members": []}}})
+    assert members == set(by_sales[:2])
+
+    # 多個維度的固定成員集合也可以放控制項（列出的成員組合可以勾選或取消）；合併集合不行
+    pairs = client.post(
+        f"{base}/sets",
+        json={
+            "levels": ["f_region", "f_category"],
+            "caption": "Pairs",
+            "rule": {
+                "kind": "members",
+                "mode": "include",
+                "members": [["East", "Furniture"], ["West", "Technology"]],
+            },
+        },
+    ).json()["field"]["id"]
+    listed = {s["id"] for s in client.get("/api/edit/demo/outline").json()["sets"]}
+    assert pairs in listed and set_id in listed
+
 
 def test_secondary_table_calculation(client: TestClient) -> None:
     """次要計算：累計之後再做合計百分比、差異或排名；次要計算可以有自己的計算方向。"""
@@ -1798,3 +1889,50 @@ def test_page_history(client: TestClient) -> None:
     # 第一頁沒有歷程
     first = client.post(url, json={"pages": {"ws_sales_by_region": domain[0]}}).json()
     assert "__deco_history" not in names(first["spec"])
+
+
+def test_import_worksheets_from_another_workbook(client: TestClient, tmp_path: Path) -> None:
+    """匯入另一份報表的工作表（匯入活頁簿、書籤、在活頁簿之間複製貼上）：資料源與資料一併帶過來，匯入後的
+    工作表與來源報表的數字相同；整份匯入時連 dashboard、Story 與動作。"""
+    features = ROOT / "fixtures" / "superstore_features" / "superstore_features.twbx"
+    copied = tmp_path / "features.twbx"
+    shutil.copy(features, copied)
+    opened = client.post("/api/desktop/open", json={"path": str(copied)})
+    assert opened.status_code == 200, opened.text
+    source = opened.json()["document"]["id"]
+    listing = {w["id"]: w for w in client.get("/api/workbooks").json()}
+    sheet = listing[source]["worksheets"][0]["id"]
+    expected = client.post(f"/api/workbooks/{source}/worksheets/{sheet}/render", json={}).json()
+    assert expected["unsupported"] is None, expected
+    before = client.get("/api/edit/demo/outline").json()
+
+    refused = client.post("/api/edit/demo/import", json={"source": "demo"})
+    assert refused.status_code == 422 and "同一份" in refused.json()["detail"]
+    missing = client.post("/api/edit/demo/import", json={"source": source, "worksheets": ["x"]})
+    assert missing.status_code == 422
+    assert client.post("/api/edit/demo/import", json={"source": "nope"}).status_code == 404
+
+    done = client.post("/api/edit/demo/import", json={"source": source, "worksheets": [sheet]})
+    assert done.status_code == 200, done.text
+    result = done.json()
+    (new_sheet,) = result["worksheets"]
+    assert not result["dashboards"] and len(result["datasources"]) >= 1
+    after = client.get("/api/edit/demo/outline").json()
+    assert len(after["worksheets"]) == len(before["worksheets"]) + 1
+    data = client.post(f"/api/workbooks/demo/worksheets/{new_sheet}/render", json={}).json()
+    assert data["unsupported"] is None, data
+    assert data["table"]["raw"] == expected["table"]["raw"] and data["rows"] == expected["rows"]
+    # 原本的工作表不受影響
+    assert render(client, "ws_sales_by_region")["unsupported"] is None
+
+    # 整份匯入：dashboard 也帶過來
+    everything = client.post("/api/edit/demo/import", json={"source": source})
+    assert everything.status_code == 200, everything.text
+    result = everything.json()
+    assert len(result["worksheets"]) == len(listing[source]["worksheets"])
+    assert len(result["dashboards"]) == len(listing[source]["dashboards"])
+    outline = client.get("/api/edit/demo/outline").json()
+    assert len(outline["worksheets"]) == len(after["worksheets"]) + len(result["worksheets"])
+    for sheet_id in result["worksheets"][:3]:
+        again = client.post(f"/api/workbooks/demo/worksheets/{sheet_id}/render", json={}).json()
+        assert again["unsupported"] is None, again

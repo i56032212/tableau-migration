@@ -86,6 +86,8 @@ const PARAMETER_CONTROLS: Record<string, [string, string][]> = {
 };
 
 const DEFAULT_FLOAT = { w: 400, h: 300 };
+/** 格線的設定記在瀏覽器（localStorage）的鍵 */
+const GRID_STORE = "tmig.dashboard-grid";
 
 interface Drag {
   id: string;
@@ -166,6 +168,26 @@ export function DashboardEditor({
   // 編輯格式文字的文字物件（區塊 id）
   const [textZone, setTextZone] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | "fit">("fit");
+  // 格線（Tableau 的「dashboard＞顯示格線」與「格線選項」）：畫面上的輔助線，顯示時浮動區塊的拖曳貼齊格線；
+  // 是編輯器的設定（記在瀏覽器），不存進報表
+  const [grid, setGridState] = useState<{ shown: boolean; size: number }>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(GRID_STORE) ?? "null") as { shown?: boolean; size?: number } | null;
+      return { shown: stored?.shown === true, size: Math.max(4, Math.min(200, Number(stored?.size) || 10)) };
+    } catch {
+      return { shown: false, size: 10 };
+    }
+  });
+  const setGrid = (next: { shown: boolean; size: number }) => {
+    setGridState(next);
+    try {
+      window.localStorage.setItem(GRID_STORE, JSON.stringify(next));
+    } catch {
+      // 不能用 localStorage 時只在這次編輯中有效
+    }
+  };
+  const gridRef = useRef(grid);
+  gridRef.current = grid;
   const [view, setView] = useState(() => caseState(ir, undefined));
   const [drag, setDrag] = useState<Drag | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -228,12 +250,19 @@ export function DashboardEditor({
       dragRef.current = null;
       setDrag(null);
       if (!current || (Math.abs(current.dx) <= 1 && Math.abs(current.dy) <= 1)) return;
+      // 顯示格線時貼齊格線：移動時貼齊左上角，調整大小時貼齊右下角
+      const snap = (value: number) => (gridRef.current.shown ? Math.round(value / gridRef.current.size) * gridRef.current.size : value);
       applyRef.current((d) =>
         updateZone(d, current.id, (z) => {
           const box =
             current.mode === "move"
-              ? { x: Math.max(0, Math.min(d.size.width - z.w, z.x + current.dx)), y: Math.max(0, Math.min(d.size.height - z.h, z.y + current.dy)), w: z.w, h: z.h }
-              : { x: z.x, y: z.y, w: Math.max(20, Math.min(d.size.width - z.x, z.w + current.dx)), h: Math.max(20, Math.min(d.size.height - z.y, z.h + current.dy)) };
+              ? { x: Math.max(0, Math.min(d.size.width - z.w, snap(z.x + current.dx))), y: Math.max(0, Math.min(d.size.height - z.h, snap(z.y + current.dy))), w: z.w, h: z.h }
+              : {
+                  x: z.x,
+                  y: z.y,
+                  w: Math.max(20, Math.min(d.size.width - z.x, snap(z.x + z.w + current.dx) - z.x)),
+                  h: Math.max(20, Math.min(d.size.height - z.y, snap(z.y + z.h + current.dy) - z.y)),
+                };
           return placeZone(z, box);
         }),
       );
@@ -873,6 +902,23 @@ export function DashboardEditor({
             <option value="1">100%</option>
           </select>
         </label>
+        <label className="inline" title="顯示對齊用的格線；顯示時拖曳浮動區塊會貼齊格線（Tableau 的「dashboard＞顯示格線」）">
+          <input type="checkbox" aria-label="顯示格線" checked={grid.shown} onChange={(e) => setGrid({ ...grid, shown: e.target.checked })} /> 格線
+        </label>
+        {grid.shown && (
+          <label className="inline" title="格線的間距（像素，Tableau 的「格線選項」）">
+            <input
+              type="number"
+              min={4}
+              max={200}
+              aria-label="格線大小"
+              className="narrow-number"
+              value={grid.size}
+              onChange={(e) => setGrid({ ...grid, size: Math.max(4, Math.min(200, Math.round(Number(e.target.value)) || 10)) })}
+            />{" "}
+            px
+          </label>
+        )}
         <label className="inline">
           版面
           <select
@@ -1194,7 +1240,9 @@ export function DashboardEditor({
               cases={[]}
             />
             <div
-              className="dash-overlay"
+              className={grid.shown ? "dash-overlay with-grid" : "dash-overlay"}
+              data-grid={grid.shown ? grid.size : undefined}
+              style={grid.shown ? { backgroundSize: `${grid.size}px ${grid.size}px` } : undefined}
               onDragOver={(e) => {
                 if (e.dataTransfer.types.includes("application/x-tmig-sheet")) e.preventDefault();
               }}

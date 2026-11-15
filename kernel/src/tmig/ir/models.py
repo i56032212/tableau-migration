@@ -208,6 +208,17 @@ class FieldSet(IRModel):
     rule: SetRule
 
 
+def set_control_allowed(field_set: FieldSet | None) -> bool:
+    """可以放集合控制項的集合：單一維度的固定成員、Top N 與條件集合（控制項改變「一般」分頁的選取，
+    Top N 與條件照樣套用）；多個維度的固定成員集合（列出的成員組合可以勾選或取消，mode 要是 include）。"""
+    if field_set is None:
+        return False
+    rule = field_set.rule
+    if len(field_set.levels) == 1:
+        return rule.kind in ("members", "top_n", "condition")
+    return rule.kind == "members" and rule.mode == "include"
+
+
 class GroupItem(IRModel):
     """群組中的一組：這些來源欄位的成員（Null 也可以是成員）顯示為 name。"""
 
@@ -534,9 +545,23 @@ class RelationshipCondition(IRModel):
 
 
 class Relationship(IRModel):
+    """兩張邏輯資料表之間的關聯。效能選項（基數與參考完整性）只是記下來的設定：查詢一律以最保守的方式
+    計算（多對多、部分記錄相符——量值在自己的資料表彙總、不相符的列保留），設定與資料相符時數字與
+    Tableau 相同。"""
+
     left: str = Field(min_length=1, description="邏輯資料表 id")
     right: str = Field(min_length=1, description="邏輯資料表 id")
     on: list[RelationshipCondition] = Field(min_length=1, description="以 AND 連接")
+    left_unique: bool = Field(
+        default=False,
+        description="效能選項的基數：左邊的資料表是「一」（關聯欄位的值不重複）；預設是「多」",
+    )
+    right_unique: bool = Field(default=False, description="右邊的資料表是「一」")
+    left_complete: bool = Field(
+        default=False,
+        description="效能選項的參考完整性：左邊的資料表「所有記錄相符」；預設是「部分記錄相符」",
+    )
+    right_complete: bool = Field(default=False, description="右邊的資料表「所有記錄相符」")
 
 
 class ModelRelation(IRModel):
@@ -2551,12 +2576,46 @@ class StoryAction(IRModel):
 
 
 class StoryFilter(IRModel):
-    """故事點記下的工作表篩選：只保留（或排除）列出的值。"""
+    """故事點記下的工作表篩選：只保留（或排除）列出的值，或一段範圍（滑桿、日期範圍：mode 為 range，
+    min、max 為 None 表示該側不設限）。"""
 
     worksheet: Id
     field: FieldUse
-    mode: Literal["include", "exclude"]
+    mode: Literal["include", "exclude", "range"]
     values: list[Scalar] = Field(default_factory=list)
+    min: Scalar = None
+    max: Scalar = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.mode == "range" and self.values:
+            raise ValueError("mode 為 range 時 values 必須為空")
+        if self.mode != "range" and (self.min is not None or self.max is not None):
+            raise ValueError("只有 mode 為 range 時可以指定 min、max")
+        return self
+
+
+class StoryNote(IRModel):
+    """故事點上的文字物件（Story 編輯器的「拖曳以新增文字」）：浮在故事點內容上的說明文字方塊。"""
+
+    text: list[TextRun] = Field(default_factory=list, description="文字（可含格式）")
+    x: int = Field(default=20, ge=0, description="相對於故事點內容左上角的位置（像素）")
+    y: int = Field(default=20, ge=0)
+    w: int = Field(default=220, ge=20)
+    h: int = Field(default=80, ge=20)
+
+
+class StoryFormat(IRModel):
+    """Story 的格式（Story＞格式）：整個 Story 的底色、標題、導覽與文字物件的樣式；None 為預設。"""
+
+    background: HexColor | None = Field(default=None, description="Story 的底色")
+    title_color: HexColor | None = None
+    title_size: int | None = Field(default=None, ge=6, le=72, description="標題的字級（pt）")
+    title_align: Literal["left", "center", "right"] | None = None
+    navigator_background: HexColor | None = Field(default=None, description="導覽的底色")
+    navigator_color: HexColor | None = Field(default=None, description="導覽文字的顏色")
+    note_background: HexColor | None = Field(default=None, description="文字物件的底色")
+    note_color: HexColor | None = Field(default=None, description="文字物件的文字顏色")
 
 
 class StorySelection(IRModel):
@@ -2585,6 +2644,9 @@ class StoryPoint(IRModel):
         default_factory=dict,
         description="故事點改過的 dashboard 文字物件：區塊 id → 內容（取代區塊原本的文字）",
     )
+    notes: list[StoryNote] = Field(
+        default_factory=list, description="故事點上的文字物件（浮在內容上的說明文字）"
+    )
 
     @model_validator(mode="after")
     def _one_target(self) -> Self:
@@ -2606,6 +2668,7 @@ class Story(IRModel):
         default="caption", description="導覽的樣式：說明文字、序號或圓點"
     )
     arrows: bool = Field(default=True, description="導覽兩側是否有上一個、下一個的箭頭")
+    format: StoryFormat | None = Field(default=None, description="Story 的格式；None 為預設")
     points: list[StoryPoint] = Field(min_length=1)
     active: Id | None = Field(
         default=None, description="開啟時顯示的故事點（儲存報表時停留的故事點）；None 表示第一個"

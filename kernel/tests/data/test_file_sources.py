@@ -158,7 +158,8 @@ def workbook_xml() -> str:
         f"<object caption='Returns' id='Returns_2'><properties context=''>{RETURNS_REL}</properties></object>"
         "</objects><relationships><relationship><expression op='='>"
         "<expression op='[Order ID]' /><expression op='[Order ID (Returns)]' /></expression>"
-        "<first-end-point object-id='Orders_1' /><second-end-point object-id='Returns_2' />"
+        "<first-end-point object-id='Orders_1' />"
+        "<second-end-point object-id='Returns_2' unique-key='true' />"
         "</relationship></relationships></object-graph>"
     )
     model = datasource(
@@ -288,6 +289,9 @@ def test_parse_file_connections(parsed: IR) -> None:
     assert isinstance(joined.relation, JoinRelation)
     assert [t.name for t in joined.tables] == ["Orders", "Returns"]
     assert isinstance(connection(parsed, "Model").relation, ModelRelation)
+    # 效能選項的基數：端點的 unique-key='true' 為「一」（只是記下來，查詢不變）
+    (link,) = connection(parsed, "Model").relation.relationships  # type: ignore[union-attr]
+    assert (link.left_unique, link.right_unique) == (False, True)
     model_join = connection(parsed, "Model Join")
     assert isinstance(model_join.relation, ModelRelation)
     assert isinstance(model_join.relation.tables[0].relation, JoinRelation)

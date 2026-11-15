@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -37,7 +39,9 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.planner.state import use_key
+from tmig.render.colors import member_order
 from tmig.render.density import KERNEL_RADIUS, MAX_GRID, density_image, palette_of
+from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
 
 if TYPE_CHECKING:
     from tmig.render.vegalite import Channel, _Builder
@@ -421,6 +425,7 @@ def _body(
     base = _base_layers(box, zoom, layers_on, style)
     names = _place_labels(box, zoom, project, width, height, layers_on, style, placed)
     references = _reference_layers(builder, ir, ws, plan, box, params)
+    references += _trend_layers(builder, plan)
     layers = [*base, *marks_layers, *references, *names, *label_layers]
     if plan.unknown:
         layers.append(_unknown_indicator(plan.unknown, builder.text_color(), bool(facet)))
@@ -456,7 +461,7 @@ def _reference_layers(
 ) -> list[dict[str, Any]]:
     """地圖上的參考線：緯度（列架）、經度（欄架）座標軸上的參考線，與 Tableau 相同畫成橫跨地圖的緯線、
     經線，以第一個圖層的標記位置計算（平均、中位數、最小、最大、常數或參數等）；標籤寫在線的左端（經線在
-    上端）。參考區間、分布與盒鬚圖尚未畫出。"""
+    上端）。參考區間（兩條參考線配成一對）在兩條線之間塗上底色。分布與盒鬚圖尚未畫出。"""
     if not ws.reference_lines or not plan.layers:
         return []
     from tmig.render.vegalite import (
@@ -472,13 +477,15 @@ def _reference_layers(
     fields = {f.id: f for d in ir.datasources for f in d.fields}
     main = plan.layers[0]
     layers: list[dict[str, Any]] = []
+    drawn: dict[str, tuple[str, float, str | None]] = {}
+    """畫好的參考線：id →（緯度或經度、值、底色），給參考區間配對用。"""
     for n, line in enumerate(ws.reference_lines):
         role = _coordinate_role(line.axis, fields)
         if role is None:
             builder.notes.append(f"地圖上的參考線 {line.id} 不在經緯度的座標軸上，沒有畫出")
             continue
-        if line.kind != "line" or line.paired is not None:
-            builder.notes.append(f"地圖上的參考區間、分布與盒鬚圖尚未畫出（參考線 {line.id}）")
+        if line.kind != "line":
+            builder.notes.append(f"地圖上的分布與盒鬚圖尚未畫出（參考線 {line.id}）")
             continue
         position = main.name(LAT if role == "latitude" else LON)
         source: str | _Constant | None = _reference_source(line, builder.channels, params, False)
@@ -497,6 +504,8 @@ def _reference_layers(
         style = _line_style(line)
         east = box.east if box.east >= box.west else box.east + 360
         name = f"{REF}{n}_map"
+        if values:
+            drawn[line.id] = (role, values[0], line.fill_color)
         for value in values:
             if role == "latitude":
                 points = [{"lon": box.west, "lat": value}, {"lon": east, "lat": value}]
@@ -539,6 +548,124 @@ def _reference_layers(
                     },
                 }
             )
+    # 參考區間：配成一對的兩條參考線之間塗上底色（畫在線的下面）
+    east = box.east if box.east >= box.west else box.east + 360
+    bands: list[dict[str, Any]] = []
+    done: set[frozenset[str]] = set()
+    for n, line in enumerate(ws.reference_lines):
+        pair = frozenset({line.id, line.paired or ""})
+        first, second = drawn.get(line.id), drawn.get(line.paired or "")
+        if first is None or second is None or first[0] != second[0] or pair in done:
+            continue
+        done.add(pair)
+        low, high = sorted([first[1], second[1]])
+        corners = (
+            {"lon": box.west, "lat": low, "lon2": east, "lat2": high}
+            if first[0] == "latitude"
+            else {"lon": low, "lat": box.south, "lon2": high, "lat2": box.north}
+        )
+        bands.append(
+            {
+                "name": f"{REF}{n}_map_band",
+                "data": {"values": [corners]},
+                "mark": {
+                    "type": "rect",
+                    "clip": True,
+                    "color": _band_color(first[2] or second[2]),
+                    "opacity": BAND_OPACITY,
+                    "tooltip": False,
+                },
+                "encoding": {
+                    "longitude": {"field": "lon", "type": "quantitative"},
+                    "latitude": {"field": "lat", "type": "quantitative"},
+                    "longitude2": {"field": "lon2"},
+                    "latitude2": {"field": "lat2"},
+                },
+            }
+        )
+    return [*bands, *layers]
+
+
+BAND_OPACITY = 0.25
+"""地圖上參考區間的底色的不透明度。"""
+TREND_POINTS = 60
+"""地圖上的趨勢線取的點數。"""
+
+
+def _band_color(color: str | None) -> str:
+    """參考區間的底色：#rrggbb（帶透明度的 #rrggbbaa 只取顏色）；沒有設定時是淺灰色。"""
+    if color is None:
+        return "#bab0ac"
+    return color[:7] if color.startswith("#") and len(color) == 9 else color
+
+
+def _trend_layers(builder: _Builder, plan: MapPlan) -> list[dict[str, Any]]:
+    """地圖上的趨勢線：各圖層標記的緯度對經度配適模型（與一般圖表相同的模型），畫在標記的經度範圍內；
+    模型記在描述趨勢模型的清單中。"""
+    from tmig.render.trends import fit_model
+    from tmig.render.vegalite import DASHES, TREND, TREND_COLOR, _css_color
+
+    layers: list[dict[str, Any]] = []
+    for layer in plan.layers:
+        trend = layer.marks.trend
+        if trend is None:
+            continue
+        points = [
+            (float(r[layer.name(LON)]), float(r[layer.name(LAT)]))
+            for r in layer.records
+            if isinstance(r.get(layer.name(LON)), int | float)
+            and isinstance(r.get(layer.name(LAT)), int | float)
+        ]
+        model = fit_model(points, trend.fit, trend.degree, trend.intercept)
+        if model is None:
+            builder.notes.append("地圖上趨勢線的資料不足，未畫出")
+            continue
+        step = (model.high - model.low) / (TREND_POINTS - 1)
+        path = []
+        for i in range(TREND_POINTS):
+            lon = model.low + step * i
+            lat = model.predict(lon)
+            if lat is not None and -MAX_LATITUDE <= lat <= MAX_LATITUDE:
+                path.append({"lon": lon, "lat": lat, "order": i})
+        if len(path) < 2:
+            continue
+        size = (trend.degree if trend.fit == "polynomial" else 1) + (1 if trend.intercept else 0)
+        builder.trend_models.append(
+            {
+                "group": [],
+                "fit": trend.fit,
+                "equation": model.equation("Latitude", "Longitude"),
+                "observations": model.n,
+                "filtered": len(points) - model.n,
+                "model_df": size,
+                "residual_df": model.n - size,
+                "r2": model.r2,
+                "p": model.p_value,
+                "standard_error": model.sigma,
+                "terms": list(model.terms),
+            }
+        )
+        mark: dict[str, Any] = {
+            "type": "line",
+            "clip": True,
+            "strokeWidth": trend.width,
+            "color": _css_color(trend.color) if trend.color is not None else TREND_COLOR,
+            "tooltip": False,
+        }
+        if trend.pattern != "solid":
+            mark["strokeDash"] = DASHES[trend.pattern]
+        layers.append(
+            {
+                "name": f"{TREND}_map{layer.index}",
+                "data": {"values": path},
+                "mark": mark,
+                "encoding": {
+                    "longitude": {"field": "lon", "type": "quantitative"},
+                    "latitude": {"field": "lat", "type": "quantitative"},
+                    "order": {"field": "order", "type": "quantitative"},
+                },
+            }
+        )
     return layers
 
 
@@ -797,8 +924,7 @@ def _data_layer(
     builder.common(encoding, marks)
     drawn: list[dict[str, Any]] = []
     if layer.kind == "density":
-        image = _density_layer(builder, layer, project)
-        return ([image] if image is not None else []), []
+        return _density_layers(builder, layer, project, encoding, position), []
     if layer.kind == "geometry":
         drawn = _geometry_layers(builder, layer, project, encoding, data)
     elif layer.kind == "polygon":
@@ -1107,17 +1233,21 @@ def _overlap(a: tuple[float, float, float, float], b: tuple[float, float, float,
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def _density_layer(builder: _Builder, layer: Layer, project: Projector) -> dict[str, Any] | None:
-    """密度圖：伺服器端算好的密度圖片，以四角的經緯度疊在地圖上。"""
+def _density_layers(
+    builder: _Builder,
+    layer: Layer,
+    project: Projector,
+    encoding: dict[str, Any],
+    position: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """密度圖：伺服器端算好的密度圖片，以四角的經緯度疊在地圖上。色彩上有離散的維度時，每個成員各自
+    一張密度圖（由淺到這個成員的顏色），另有一層看不見的點帶出色彩的圖例。"""
     width, height = builder.extent
     radius = KERNEL_RADIUS * (layer.marks.mark_size or 1.0)
-    points = [
-        project(r[layer.name(LON)], r[layer.name(LAT)])
-        for r in layer.records
-        if r.get(layer.name(LON)) is not None
-    ]
-    if not points:
-        return None
+    located = [r for r in layer.records if r.get(layer.name(LON)) is not None]
+    if not located:
+        return []
+    points = [project(r[layer.name(LON)], r[layer.name(LAT)]) for r in located]
     margin = 3 * radius
     left = max(min(x for x, _ in points) - margin, -width)
     right = min(max(x for x, _ in points) + margin, 2 * width)
@@ -1128,30 +1258,85 @@ def _density_layer(builder: _Builder, layer: Layer, project: Projector) -> dict[
     grid_h = max(int((bottom - top) * scale), 1)
     shifted = [((x - left) * scale, (y - top) * scale) for x, y in points]
     style = layer.marks.density
-    image = density_image(
-        shifted,
-        grid_w,
-        grid_h,
-        radius * scale,
-        palette_of(style.palette if style else None),
-        style.intensity if style else None,
-    )
     west, north = project.invert(left, top)
     east, south = project.invert(left + grid_w / scale, top + grid_h / scale)
     south, north = max(south, -MAX_LATITUDE), min(north, MAX_LATITUDE)
-    if layer.marks.color is not None:
-        builder.notes.append("密度圖依色彩欄位分組的密度尚未支援，以全部標記的密度呈現")
-    return {
-        "name": f"{DECO}_density{layer.index}",
-        "data": {
-            "values": [{"url": image, "lon": west, "lat": south, "lon2": east, "lat2": north}]
-        },
-        "mark": {"type": "image", "aspect": False, "clip": True},
-        "encoding": {
-            "longitude": {"field": "lon", "type": "quantitative"},
-            "latitude": {"field": "lat", "type": "quantitative"},
-            "longitude2": {"field": "lon2"},
-            "latitude2": {"field": "lat2"},
-            "url": {"field": "url", "type": "nominal"},
-        },
-    }
+
+    def image(
+        name: str, chosen: list[tuple[float, float]], colors: Sequence[str]
+    ) -> dict[str, Any]:
+        url = density_image(
+            chosen, grid_w, grid_h, radius * scale, colors, style.intensity if style else None
+        )
+        return {
+            "name": name,
+            "data": {
+                "values": [{"url": url, "lon": west, "lat": south, "lon2": east, "lat2": north}]
+            },
+            "mark": {"type": "image", "aspect": False, "clip": True},
+            "encoding": {
+                "longitude": {"field": "lon", "type": "quantitative"},
+                "latitude": {"field": "lat", "type": "quantitative"},
+                "longitude2": {"field": "lon2"},
+                "latitude2": {"field": "lat2"},
+                "url": {"field": "url", "type": "nominal"},
+            },
+        }
+
+    color = encoding.get("color")
+    grouped = (
+        isinstance(color, dict)
+        and color.get("type") in ("nominal", "ordinal")
+        and "field" in color
+        and layer.marks.color is not None
+    )
+    if not grouped:
+        colors = palette_of(style.palette if style else None)
+        return [image(f"{DECO}_density{layer.index}", shifted, colors)]
+    assert isinstance(color, dict) and layer.marks.color is not None
+    field = color["field"]
+    members: dict[Any, list[tuple[float, float]]] = {}
+    for record, point in zip(located, shifted, strict=True):
+        members.setdefault(record.get(field), []).append(point)
+    scale_def = color.get("scale") if isinstance(color.get("scale"), dict) else None
+    if scale_def is not None and "domain" in scale_def and "range" in scale_def:
+        domain, shades = list(scale_def["domain"]), list(scale_def["range"])
+    else:
+        # 沒有指定色盤：與離散色彩相同，成員依原值排序後依序取 Tableau 10 的顏色
+        channel = builder.ch(layer.marks.color)
+        raw = {r.get(field): r.get(channel.name) for r in located}
+        domain = sorted(members, key=lambda label: member_order(raw.get(label)))
+        base = PALETTES[DEFAULT_REGULAR].colors
+        shades = [base[i % len(base)] for i in range(len(domain))]
+    tints = dict(zip(domain, shades, strict=False))
+    layers = [
+        image(
+            f"{DECO}_density{layer.index}_{i}",
+            members[label],
+            (_tint(tints.get(label, "#4e79a7")), tints.get(label, "#4e79a7")),
+        )
+        for i, label in enumerate(d for d in domain if d in members)
+    ]
+    # 色彩的圖例：看不見的點（密度圖是圖片，本身沒有圖例）
+    legend = copy.deepcopy(color)
+    legend["scale"] = {"domain": domain, "range": shades}
+    legend["legend"] = {**(legend.get("legend") or {}), "symbolOpacity": 1, "symbolType": "square"}
+    layers.append(
+        {
+            "name": f"{DECO}_density{layer.index}_legend",
+            "data": {"values": located},
+            "mark": {"type": "point", "opacity": 0, "filled": True, "tooltip": False},
+            "encoding": {**position, "color": legend},
+        }
+    )
+    return layers
+
+
+def _tint(color: str, amount: float = 0.8) -> str:
+    """顏色與白色混合（amount 為白色的比例）：密度由低到高是淺色到這個顏色。"""
+    digits = color.lstrip("#")
+    if len(digits) != 6:
+        return "#ffffff"
+    parts = [int(digits[i : i + 2], 16) for i in (0, 2, 4)]
+    mixed = [round(c + (255 - c) * amount) for c in parts]
+    return "#" + "".join(f"{c:02x}" for c in mixed)

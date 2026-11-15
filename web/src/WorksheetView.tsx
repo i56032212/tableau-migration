@@ -53,6 +53,8 @@ interface Props {
    * 沒有傳入時點選標記不會釘住工具提示。
    */
   onKeep?: (mode: "keep" | "exclude" | "clear", marks: Mark[]) => void;
+  /** 點選標記後另有動作選單（在點選處的右下方展開）時：釘住的工具提示放在點選處的上方，不擋住選單 */
+  pinAbove?: boolean;
   /** 編輯器：拖曳標記或點的註解文字之後，第 index 個註解的文字移動了 dx、dy 像素 */
   onAnnotationMove?: (index: number, dx: number, dy: number) => void;
 }
@@ -86,8 +88,40 @@ interface PinActions {
   commands: boolean;
   /** 工具提示各列的標題 → 維度的欄位鍵；null 為不允許依類別選取 */
   titles: Record<string, string> | null;
+  /** 放在點選處的上方（點選處的右下方有動作選單） */
+  above?: boolean;
   onKeep: (mode: "keep" | "exclude") => void;
   onCategory: (key: string, value: Scalar) => void;
+}
+
+type SelectTool = "rect" | "radius" | "lasso";
+/** 地圖工具列的選取工具（Tableau 地圖工具列的矩形、半徑與套索選取） */
+const SELECT_TOOLS: [SelectTool, string, string][] = [
+  ["rect", "▭", "矩形選取"],
+  ["radius", "◯", "半徑選取"],
+  ["lasso", "✎", "套索選取"],
+];
+
+/** 選取的範圍（視窗座標）：矩形與半徑是起點與終點，套索是路徑上的各點；回傳判斷一個點在不在範圍內的函式。 */
+function regionTest(tool: SelectTool, points: [number, number][]): (x: number, y: number) => boolean {
+  const [[x0, y0], [x1, y1]] = [points[0], points[points.length - 1]];
+  if (tool === "rect") {
+    return (x, y) => x >= Math.min(x0, x1) && x <= Math.max(x0, x1) && y >= Math.min(y0, y1) && y <= Math.max(y0, y1);
+  }
+  if (tool === "radius") {
+    const radius = Math.hypot(x1 - x0, y1 - y0);
+    return (x, y) => Math.hypot(x - x0, y - y0) <= radius;
+  }
+  // 套索：射線法判斷點在多邊形內
+  return (x, y) => {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const [xi, yi] = points[i];
+      const [xj, yj] = points[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
 }
 
 /**
@@ -244,8 +278,16 @@ function VizTooltip({
     let top = tip.y + 12;
     if (left + width > window.innerWidth - 4) left = Math.max(4, tip.x - width - 12);
     if (top + height > window.innerHeight - 4) top = Math.max(4, tip.y - height - 12);
+    if (pinned?.above) {
+      // 動作選單在點選處的右下方：工具提示放上方；上方放不下時放左邊
+      top = tip.y - height - 12;
+      if (top < 4) {
+        top = Math.max(4, tip.y - height / 2);
+        left = Math.max(4, tip.x - width - 12);
+      }
+    }
     setPosition((current) => (current.left === left && current.top === top ? current : { left, top }));
-  }, [tip.x, tip.y, mark, sheets]);
+  }, [tip.x, tip.y, mark, sheets, pinned?.above]);
   const lines = (
     tip.value !== null && typeof tip.value === "object"
       ? Object.entries(tip.value as Record<string, unknown>)
@@ -624,6 +666,7 @@ export function WorksheetView({
   tooltipState,
   onViewport,
   onKeep,
+  pinAbove,
   onAnnotationMove,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -923,6 +966,53 @@ export function WorksheetView({
     };
   }, [response, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable]);
 
+  // 地圖的選取工具（矩形、半徑、套索）：選了工具之後在圖上拖曳，範圍內的標記都選取
+  const [tool, setTool] = useState<SelectTool | null>(null);
+  const [region, setRegion] = useState<[number, number][] | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const startSelection = (event: React.MouseEvent<HTMLDivElement>) => {
+    const body = bodyRef.current;
+    const chart = chartRef.current;
+    if (!tool || !body || !chart || event.button !== 0) return;
+    event.preventDefault();
+    const origin = body.getBoundingClientRect();
+    const start: [number, number] = [event.clientX, event.clientY];
+    let path: [number, number][] = [start];
+    const local = (points: [number, number][]) => points.map(([x, y]) => [x - origin.left, y - origin.top] as [number, number]);
+    const move = (e: MouseEvent) => {
+      path = tool === "lasso" ? [...path, [e.clientX, e.clientY]] : [start, [e.clientX, e.clientY]];
+      setRegion(local(path));
+    };
+    const up = (e: MouseEvent) => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      setRegion(null);
+      const end: [number, number] = [e.clientX, e.clientY];
+      const inside = regionTest(tool, tool === "lasso" ? path : [start, end]);
+      const { records, dimensions } = tipData.current;
+      const marks: Mark[] = [];
+      // Vega 的 SVG 元素帶著場景圖的項目（__data__）；固定標題的複本沒有，不會重複計算
+      chart.querySelectorAll<SVGGraphicsElement>("svg .role-mark > *").forEach((node) => {
+        const row = (node as unknown as { __data__?: { datum?: { __row?: unknown } } }).__data__?.datum?.__row;
+        if (typeof row !== "number" || row < 0 || !records[row]) return;
+        const box = node.getBoundingClientRect();
+        if (box.width === 0 && box.height === 0) return;
+        if (!inside((box.left + box.right) / 2, (box.top + box.bottom) / 2)) return;
+        const mark = markOf(records[row], dimensions);
+        if (Object.keys(mark).length > 0 && !marks.some((m) => sameMark(m, mark))) marks.push(mark);
+      });
+      const pinnable = tipData.current.commands || tipData.current.select;
+      setPin(
+        marks.length > 0 && pinnable
+          ? { tip: { x: end[0], y: end[1], value: { 選取: `${marks.length} 個標記` }, mark: null, rich: null }, marks }
+          : null,
+      );
+      onMarksRef.current?.({ kind: "click", mark: marks[0] ?? null, marks, additive: false, x: end[0], y: end[1] });
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  };
+
   // 釘住的工具提示：資料重新查詢、按 Esc 或點別的地方時放開
   useEffect(() => setPin(null), [response]);
   const pinned = pin !== null;
@@ -934,7 +1024,7 @@ export function WorksheetView({
         return;
       }
       const target = event.target as Element | null;
-      if (target?.closest(".viz-tooltip") || (chartRef.current && target && chartRef.current.contains(target))) return;
+      if (target?.closest(".viz-tooltip, .select-overlay") || (chartRef.current && target && chartRef.current.contains(target))) return;
       setPin(null);
     };
     document.addEventListener("mousedown", close);
@@ -1054,7 +1144,7 @@ export function WorksheetView({
           {meta}
         </div>
       )}
-      <div className="worksheet-body">
+      <div className="worksheet-body" ref={bodyRef}>
         {error && <div className="placeholder error">查詢失敗：{error}</div>}
         {!error && response?.unsupported && (
           <div className="placeholder unsupported">未支援：{response.unsupported}</div>
@@ -1095,6 +1185,38 @@ export function WorksheetView({
             <button type="button" title="重設地圖（依標記的位置自動縮放）" aria-label="重設地圖" onClick={resetMap}>
               ⌂
             </button>
+            {(interactive || canKeep) &&
+              SELECT_TOOLS.map(([kind, icon, label]) => (
+                <button
+                  key={kind}
+                  type="button"
+                  title={`${label}：在地圖上拖曳，範圍內的標記都選取；再按一次回到平移`}
+                  aria-label={label}
+                  aria-pressed={tool === kind}
+                  className={tool === kind ? "active" : ""}
+                  onClick={() => setTool(tool === kind ? null : kind)}
+                >
+                  {icon}
+                </button>
+              ))}
+          </div>
+        )}
+        {tool && zoomable && !showTable && !error && (
+          <div className="select-overlay" data-tool={tool} onMouseDown={startSelection}>
+            {region && region.length > 1 && (
+              <svg aria-hidden="true">
+                {tool === "rect" && (
+                  <rect
+                    x={Math.min(region[0][0], region[1][0])}
+                    y={Math.min(region[0][1], region[1][1])}
+                    width={Math.abs(region[1][0] - region[0][0])}
+                    height={Math.abs(region[1][1] - region[0][1])}
+                  />
+                )}
+                {tool === "radius" && <circle cx={region[0][0]} cy={region[0][1]} r={Math.hypot(region[1][0] - region[0][0], region[1][1] - region[0][1])} />}
+                {tool === "lasso" && <polygon points={region.map(([x, y]) => `${x},${y}`).join(" ")} />}
+              </svg>
+            )}
           </div>
         )}
         {loading && !response && <div className="placeholder">載入中…</div>}
@@ -1116,6 +1238,7 @@ export function WorksheetView({
             count: pin.marks.length,
             commands: tipData.current.commands,
             titles: tipData.current.select ? tipData.current.titles : null,
+            above: pinAbove,
             onKeep: (mode) => {
               onKeepRef.current?.(mode, pin.marks);
               setPin(null);

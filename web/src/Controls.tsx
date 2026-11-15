@@ -348,7 +348,36 @@ export function SetControl({
   }, [workbook, key]);
   if (!data?.set || !level) return <div className="placeholder unsupported">找不到集合 {field}</div>;
   const rule = data.set.rule;
-  const current: SetValue = value ?? { mode: rule.mode === "exclude" ? "exclude" : "include", members: rule.members ?? [] };
+  const levels = data.set.levels;
+  if (levels.length > 1) {
+    // 多個維度的集合：列出的成員組合可以勾選或取消（集合原本的成員就是可選的範圍）
+    const tuples = rule.members ?? [];
+    const now: SetValue = value ?? { mode: "include", members: tuples };
+    const chosen = new Set(now.members.map((m) => JSON.stringify(m)));
+    const pick = (tuple: Scalar[], on: boolean) =>
+      onChange({ mode: "include", members: tuples.filter((t) => (JSON.stringify(t) === JSON.stringify(tuple) ? on : chosen.has(JSON.stringify(t)))) });
+    return (
+      <fieldset className="control" data-control="set" data-set={field}>
+        <legend>{data.caption}</legend>
+        <div className="options">
+          {tuples.map((tuple) => (
+            <label key={JSON.stringify(tuple)}>
+              <input type="checkbox" checked={chosen.has(JSON.stringify(tuple))} onChange={(e) => pick(tuple, e.target.checked)} />
+              {tuple.map((v, i) => memberLabel(ir, levels[i] ?? level, v)).join("、")}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    );
+  }
+  // Top N 與條件集合：控制項改的是「一般」分頁的選取（排名或條件之前先選取的成員），全部時等同沒有排除任何成員
+  const saved: SetValue =
+    rule.kind === "members"
+      ? { mode: rule.mode === "exclude" ? "exclude" : "include", members: rule.members ?? [] }
+      : rule.mode === "include" || rule.mode === "exclude"
+        ? { mode: rule.mode, members: (rule.values ?? []).map((v) => [v]) }
+        : { mode: "exclude", members: [] };
+  const current: SetValue = value ?? saved;
   const listed = new Set(current.members.map((m) => JSON.stringify(m[0] ?? null)));
   const inSet = (v: Scalar) => listed.has(JSON.stringify(v)) !== (current.mode === "exclude");
   const toggle = (v: Scalar, on: boolean) => {
@@ -356,8 +385,9 @@ export function SetControl({
     onChange({ mode: "include", members });
   };
   return (
-    <fieldset className="control" data-control="set" data-set={field}>
+    <fieldset className="control" data-control="set" data-set={field} data-rule={rule.kind}>
       <legend>{data.caption}</legend>
+      {rule.kind !== "members" && <div className="hint">{rule.kind === "top_n" ? "勾選的成員中再取前（後）N 名" : "勾選的成員中符合條件的"}</div>}
       <div className="options">
         {domain.map((v) => (
           <label key={JSON.stringify(v)}>

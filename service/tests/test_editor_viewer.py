@@ -789,6 +789,16 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         ).to_be_visible()
         expect(page.locator(".dash-editor .dashboard .worksheet-caption")).to_have_count(1)
 
+        # 格線：顯示對齊用的格線（編輯器的設定，不存進報表），可以改間距
+        assert page.locator(".dash-overlay.with-grid").count() == 0
+        page.get_by_label("顯示格線").check()
+        expect(page.locator(".dash-overlay.with-grid")).to_have_count(1)
+        page.get_by_label("格線大小").fill("20")
+        expect(page.locator('.dash-overlay[data-grid="20"]')).to_have_count(1)
+        assert "20px" in (page.locator(".dash-overlay").get_attribute("style") or "")
+        page.get_by_label("顯示格線").uncheck()
+        expect(page.locator(".dash-overlay.with-grid")).to_have_count(0)
+
         # 選取工作表區塊後移除（版面配置與畫面都選得到）
         page.locator('[data-tree-zone="z10"]').click()
         expect(page.locator('[data-zone-props="z10"]')).to_be_visible()
@@ -909,9 +919,72 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
         assert [p["caption"] for p in saved["points"]] == ["全公司概況", "全公司概況 (2)", ""]
         assert saved["points"][2]["worksheet"] == "ws_monthly_profit"
+
+        # 故事點上的文字物件：新增、輸入文字、在預覽上拖曳移動
+        page.locator('.story-editor [data-point="sp1"]').first.click()
+        page.get_by_role("button", name="＋ 文字物件").click()
+        note_dialog = page.locator(".story-note-dialog")
+        editor_box = note_dialog.get_by_role("textbox", name="文字物件的文字")
+        editor_box.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("第一季的重點")
+        note_dialog.get_by_label("文字物件的左").fill("420")
+        note_dialog.get_by_label("文字物件的上").fill("140")
+        note_dialog.get_by_role("button", name="確定").click()
+        expect(note_dialog).to_have_count(0)
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
+        (note,) = saved["points"][0]["notes"]
+        assert "".join(run["text"] for run in note["text"]) == "第一季的重點"
+        assert (note["x"], note["y"]) == (420, 140)
+        shown_note = page.locator(".story-preview .story-note")
+        expect(shown_note).to_have_text("第一季的重點")
+        shown_note.scroll_into_view_if_needed()  # 前面操作控制項時預覽可能已經捲動
+        box = shown_note.bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + 10, box["y"] + 10)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 70, box["y"] + 50, steps=5)
+        page.mouse.up()
+        settle(page)
+        moved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]["points"][0][
+            "notes"
+        ][0]
+        assert (moved["x"], moved["y"]) == (note["x"] + 60, note["y"] + 40)
+
+        # Story 的格式：底色與標題的對齊
+        page.get_by_role("button", name="格式…").click()
+        format_dialog = page.locator(".story-format-dialog")
+        format_dialog.get_by_label("設定Story 的底色").check()
+        format_dialog.get_by_label("Story 的底色", exact=True).fill("#eef3f8")
+        format_dialog.get_by_label("標題的對齊").select_option("center")
+        format_dialog.get_by_role("button", name="確定").click()
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
+        assert saved["format"]["background"] == "#eef3f8"
+        assert saved["format"]["title_align"] == "center"
+
         page.get_by_role("button", name="完成").click()
         page.wait_for_url(f"{engine}/w/demo/story/{story['id']}")
         expect(page.locator(".story-points button.active")).to_have_text("全公司概況")
+        expect(page.locator(".story .story-note")).to_have_text("第一季的重點")
+        assert (
+            page.evaluate("getComputedStyle(document.querySelector('.story')).backgroundColor")
+            == "rgb(238, 243, 248)"
+        )
+
+        # 列印的頁面設定：紙張、方向與縮放寫成列印用的樣式，再開啟瀏覽器的列印
+        page.evaluate("window.print = () => { window.__printed = true; }")
+        page.get_by_label("匯出").select_option("pdf")
+        setup = page.locator(".page-setup")
+        setup.get_by_label("紙張").select_option("A3")
+        setup.get_by_label("方向").select_option("portrait")
+        setup.get_by_label("列印縮放").select_option("percent")
+        setup.get_by_label("縮放比例").fill("50")
+        setup.get_by_role("button", name="列印").click()
+        page.wait_for_function("window.__printed === true")
+        css = page.evaluate("document.getElementById('tmig-print-setup').textContent")
+        assert "size: A3 portrait" in css and "zoom: 0.5000" in css
         assert errors == []
         browser.close()
 
@@ -1618,6 +1691,68 @@ def test_maps_in_editor(engine: str) -> None:
         catalog = call(engine, "/api/edit/demo/catalog")["datasources"][0]
         assert next(f for f in catalog["fields"] if f["id"] == "f_city")["geo_role"] == "city"
         assert page.locator('.data-pane li[data-field="latitude_generated"]').count() == 1
+
+        # 新增標記圖層：原本的標記卡成為圖層 1，新的圖層 2 放上城市（圓點畫在州的填色上面）
+        card.get_by_role("button", name="＋ 標記圖層").click()
+        settle(page)
+        tabs = page.locator(".marks-card .mark-tabs button")
+        assert tabs.all_inner_texts() == ["全部", "圖層 1", "圖層 2"]
+        assert tabs.nth(2).get_attribute("aria-selected") == "true"
+        page.locator('.data-pane li[data-field="f_city"]').drag_to(
+            page.locator('[data-drop="marks.detail"]')
+        )
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+        assert len(saved["panes"]) == 2 and saved["marks"]["detail"] == []
+        assert [u["field"] for u in saved["panes"][0]["marks"]["detail"]] == ["f_state_province"]
+        assert [u["field"] for u in saved["panes"][1]["marks"]["detail"]] == ["f_city"]
+        rendered = call(engine, f"/api/workbooks/demo/worksheets/{created['id']}/render", {})
+        assert rendered["unsupported"] is None, rendered
+        # 圖層 2 下移成為最下面的圖層，再移除：只剩一個圖層時回到單一張標記卡
+        page.locator(".layer-actions").get_by_role("button", name="下移").click()
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+        assert [u["field"] for u in saved["panes"][0]["marks"]["detail"]] == ["f_city"]
+        page.locator(".layer-actions").get_by_role("button", name="移除圖層").click()
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+        assert saved["panes"] == []
+        assert [u["field"] for u in saved["marks"]["detail"]] == ["f_state_province"]
+
+        # 檢視器的地圖選取工具：矩形拖曳選取範圍內的標記，工具提示釘住（可以只保留、排除）
+        page.goto(f"{engine}/w/demo/s/{created['id']}")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.wait_for_selector('.single-sheet .chart[data-zoomable="true"]', timeout=30000)
+        tools = page.locator(".single-sheet .map-tools")
+        tools.get_by_role("button", name="矩形選取").click()
+        overlay = page.locator(".single-sheet .select-overlay")
+        box = overlay.bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + 5, box["y"] + 5)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=5)
+        page.mouse.move(box["x"] + box["width"] - 5, box["y"] + box["height"] - 5, steps=5)
+        page.mouse.up()
+        pinned = page.locator(".viz-tooltip.pinned")
+        pinned.wait_for()
+        text = pinned.inner_text()
+        found = re.search(r"(\d+) 個標記", text)
+        assert found is not None and int(found.group(1)) > 10, text
+        with page.expect_response(lambda r: r.url.endswith("/render")) as response:
+            pinned.get_by_role("button", name="✓ 只保留").click()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert body["marks"][0]["mode"] == "keep" and len(body["marks"][0]["marks"]) > 10
+        # 半徑選取：從中心拖曳出一個圓
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.wait_for_selector('.single-sheet .chart[data-zoomable="true"]', timeout=30000)
+        tools.get_by_role("button", name="半徑選取").click()
+        cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        page.mouse.move(cx + 60, cy + 40, steps=5)
+        page.mouse.up()
+        tools.get_by_role("button", name="半徑選取").click()  # 再按一次回到平移
+        assert page.locator(".single-sheet .select-overlay").count() == 0
         assert errors == []
         browser.close()
 
@@ -2787,5 +2922,55 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         page.keyboard.press("Escape")
         expect(page.locator(".page.presenting")).to_have_count(0)
         expect(page.locator(".page > .toolbar")).to_be_visible()
+        assert errors == []
+        browser.close()
+
+
+def test_import_worksheets_dialog(engine: str, tmp_path: Path) -> None:
+    """匯入工作表（匯入活頁簿、書籤、在活頁簿之間複製貼上）：從工作區中開啟的另一份報表選取工作表匯入，
+    匯入後直接開啟該工作表，數字與來源報表相同。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    features = ROOT / "fixtures" / "superstore_features" / "superstore_features.twbx"
+    copied = tmp_path / "features.twbx"
+    shutil.copy(features, copied)
+    source = call(engine, "/api/desktop/open", {"path": str(copied)})["document"]["id"]
+    listing = {w["id"]: w for w in call(engine, "/api/workbooks")}
+    first = listing[source]["worksheets"][0]
+    expected = call(engine, f"/api/workbooks/{source}/worksheets/{first['id']}/render", {})
+    before = call(engine, "/api/edit/demo/outline")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+        page.get_by_role("button", name="匯入工作表…").click()
+        dialog = page.locator(".import-dialog")
+        dialog.get_by_label("來源報表").select_option(source)
+        submit = dialog.get_by_role("button", name="匯入", exact=True)
+        expect(submit).to_be_disabled()  # 還沒有選取工作表
+        dialog.get_by_role("list", name="要匯入的工作表").get_by_label(
+            first["name"], exact=True
+        ).check()
+        submit.click()
+        expect(dialog).to_have_count(0)
+        after = call(engine, "/api/edit/demo/outline")
+        added = [
+            w for w in after["worksheets"] if w["id"] not in {x["id"] for x in before["worksheets"]}
+        ]
+        assert len(added) == 1
+        page.wait_for_url(f"{engine}/w/demo/edit/{added[0]['id']}")
+        settle(page)
+        data = call(engine, f"/api/workbooks/demo/worksheets/{added[0]['id']}/render", {})
+        assert data["unsupported"] is None
+        assert data["table"]["raw"] == expected["table"]["raw"]
         assert errors == []
         browser.close()

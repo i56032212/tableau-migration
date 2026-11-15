@@ -6,6 +6,7 @@ import { FilterControl, HighlighterControl, ParameterControl, SetControl } from 
 import { cssColor, displaySize, hasZoneBox, layoutDashboard, zoneBoxStyle } from "./layout";
 import { deviceLayout, useDevice, withDeviceLayout } from "./device";
 import { PageControl, pagesOf } from "./PageControl";
+import { applyPageSetup, loadPageSetup } from "./PageSetup";
 import {
   actionUrl,
   applyHighlights,
@@ -293,6 +294,8 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
       }
       setToggled(next);
     } else if (button.export === "pdf") {
+      // 依記下的頁面設定（紙張、方向、縮放）列印
+      applyPageSetup(loadPageSetup(), document.querySelector<HTMLElement>(".page .dashboard, .page .story"));
       window.print();
     } else if (button.export === "image" || button.export === "powerpoint") {
       // 匯出這個 dashboard（與 Tableau 的匯出按鈕相同，畫面上目前的狀態）
@@ -477,6 +480,7 @@ function ZoneContent({
           onDrill={(key, delta) => onView(setDrill(view, zone.worksheet!, key, delta))}
           tooltipState={(target, mark) => tooltipStateFor(ir, zone.worksheet!, target, view, mark)}
           onKeep={(mode, marks) => onView(keepMarks(view, zone.worksheet!, mode, marks))}
+          pinAbove={sourceActions(ir, zone.worksheet!, dashboard.id, "menu").length > 0}
         />
       );
     case "filter":

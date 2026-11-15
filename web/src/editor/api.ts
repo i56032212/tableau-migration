@@ -329,6 +329,12 @@ export const editApi = {
         from_source: options.fromSource === true,
       }),
     }),
+  /** 匯入另一份報表的工作表；worksheets 為 null 時整份匯入（含 dashboard、Story 與動作） */
+  importSheets: (workbook: string, source: string, worksheets: string[] | null) =>
+    request<{ worksheets: string[]; dashboards: string[]; stories: string[]; datasources: Record<string, string>; shared_parameters: string[] }>(
+      `${edit(workbook)}/import`,
+      { method: "POST", body: JSON.stringify(worksheets === null ? { source } : { source, worksheets }) },
+    ),
   /** 萃取設定：模式、能不能切換、增量更新的欄位、萃取篩選與上次更新的時間 */
   extract: (workbook: string, datasource: string) => request<ExtractInfo>(`${edit(workbook)}/datasources/${part(datasource)}/extract`),
   saveExtract: (workbook: string, datasource: string, settings: { increment: string | null; top_rows: number | null; aggregate: boolean }) =>

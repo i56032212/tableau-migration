@@ -124,6 +124,26 @@ def test_new_workbook_and_model(client: TestClient, book: Path, tmp_path: Path) 
     assert "Region (People)" in fields
     by_manager = render(client, workbook, datasource, fields["Manager"], fields["Sales"], "sum")
     assert by_manager == {"Ann": 150.75, "Bob": 200, "Cid": None}
+    # 關聯的效能選項（基數、參考完整性）：記下設定，查詢的結果不變
+    link = model["relationships"][0]
+    assert link["options"] == {
+        "left_unique": False,
+        "right_unique": False,
+        "left_complete": False,
+        "right_complete": False,
+    }
+    options = {**link["options"], "right_unique": True, "left_complete": True}
+    model = ok(
+        client.put(
+            f"/api/edit/{workbook}/datasources/{datasource}/relationships/{link['right']}",
+            json={"on": [[fields["Region"], "=", fields["Region (People)"]]], "options": options},
+        )
+    )
+    assert model["relationships"][0]["options"] == options
+    assert (
+        render(client, workbook, datasource, fields["Manager"], fields["Sales"], "sum")
+        == by_manager
+    )
     # 邏輯資料表 Orders 中 join Returns（只有退貨的訂單）
     orders = model["logical"][0]["id"]
     model = ok(
