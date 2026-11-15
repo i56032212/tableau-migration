@@ -2309,9 +2309,13 @@ def build_spec(
                 labels.pop()
                 dropped.pop()
             record[name] = SEPARATOR.join(labels)
+    # 另外查詢的標記卡（較粗的詳細程度、地圖的各標記圖層）：列號接在工作表的資料之後，檢視器以它找回
+    # 這個標記的維度值（只有這張標記卡有的維度），可以選取、只保留與排除
+    pane_row = len(values)
     for records in pane_values.values():
         for record in records:
-            record[ROW] = -1  # 較粗的標記卡不參與選取
+            record[ROW] = -1 if record.get(TOTAL) else pane_row
+            pane_row += 1
             for name, members in composites.items():
                 record[name] = SEPARATOR.join(
                     str(record.get(builder.ch(u).label, "")) for u in members

@@ -183,6 +183,21 @@ def test_render_keep_only_and_exclude(client: TestClient) -> None:
     # 先只保留兩個、再排除其中一個
     steps = [{"mode": "keep", "marks": two}, {"mode": "exclude", "marks": [furniture]}]
     assert categories(steps) == ["Technology"]
+
+    # 沒有共同維度的標記（地圖的選取工具同時選到不同標記圖層的標記）：依各自的維度分組，都要符合
+    def sales(marks: list[dict[str, object]]) -> dict[str, float]:
+        table = client.post(url, json={"marks": marks}).json()["table"]
+        at = table["keys"].index("f_category")
+        value = next(i for i, role in enumerate(table["roles"]) if role == "measure")
+        return {row[at]: float(row[value]) for row in table["raw"]}
+
+    mixed = [{"f_category": "Furniture"}, {"f_segment": "Consumer"}]
+    both = sales([{"mode": "keep", "marks": mixed}])
+    assert list(both) == ["Furniture"]
+    assert 0 < both["Furniture"] < sales([{"mode": "keep", "marks": [furniture]}])["Furniture"]
+    without = sales([{"mode": "exclude", "marks": mixed}])
+    assert sorted(without) == ["Office Supplies", "Technology"]
+    assert without["Technology"] < sales([])["Technology"]
     # 沒有維度的標記不篩選；格式不對的不接受
     assert categories([{"mode": "keep", "marks": [{"sum(f_sales)": 1.0}]}]) == everything
     assert client.post(url, json={"marks": [{"mode": "keep", "marks": []}]}).status_code == 422

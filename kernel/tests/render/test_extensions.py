@@ -424,8 +424,14 @@ def test_dual_axis_with_coarser_pane() -> None:
     bars, line = spec["layer"]
     bar_values = bars["data"]["values"]
     assert len(bar_values) == 4  # 各地區一根長條
-    assert {v["__row"] for v in bar_values} == {-1}  # 不參與選取
     assert len(spec["data"]["values"]) == 12  # 折線：地區 × 客群
+    # 較粗的標記卡也可以選取：列號接在工作表的資料之後，資料列只有它自己的維度
+    assert [v["__row"] for v in spec["data"]["values"]] == list(range(12))
+    assert [v["__row"] for v in bar_values] == [12, 13, 14, 15]
+    dimensions = spec["usermeta"]["dimensions"]
+    segment = next(name for name, key in dimensions.items() if key == "f_segment")
+    region = next(name for name, key in dimensions.items() if key == "f_region")
+    assert all(region in v and segment not in v for v in bar_values)
     assert "data" not in line
     assert line["encoding"]["color"]["title"] == "Segment"
     tooltip = {t["field"] for t in bars["encoding"]["tooltip"]}

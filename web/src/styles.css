@@ -735,3 +735,5 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .story-note-dialog, .story-format-dialog, .import-dialog { display: flex; flex-direction: column; gap: 10px; min-width: 380px; }
 .story-note-dialog .row, .story-format-dialog .row, .import-dialog .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .story-note-dialog input[type=number], .story-format-dialog input.narrow-number { width: 5.5em; }
+/* 底圖的地名（國名、州名、城市名）不擋住下面的標記：滑過與點選都落在標記上 */
+.chart svg g.mark-text[class*="__deco_map_"][class*="_names_marks"] { pointer-events: none; }

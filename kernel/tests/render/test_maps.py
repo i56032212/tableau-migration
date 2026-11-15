@@ -270,6 +270,14 @@ def test_map_layers_and_style(tmp_path: Path, db: Path) -> None:
     # 州的圖層有自己的資料（每州一列），城市的圖層用工作表的資料
     assert drawn[0]["mark"]["type"] == "geoshape" and len(drawn[0]["data"]["values"]) == 4
     assert drawn[1]["mark"]["type"] == "circle" and "data" not in drawn[1]
+    # 兩個圖層的標記都可以選取：州的列號接在工作表的資料（城市）之後，資料列只有州
+    cities = [r["__row"] for r in spec["data"]["values"]]
+    assert cities == list(range(len(cities)))
+    states = drawn[0]["data"]["values"]
+    assert [r["__row"] for r in states] == list(range(len(cities), len(cities) + 4))
+    dimensions = spec["usermeta"]["dimensions"]
+    city = next(name for name, key in dimensions.items() if key == "f_city")
+    assert all(city not in r for r in states)
     (west, _), (east, _) = spec["projection"]["fit"]["geometry"]["coordinates"]
     assert (west, east) == (pytest.approx(-125.77, abs=0.01), pytest.approx(-62.88, abs=0.01))
     names = {layer.get("name") for layer in spec["layer"]}

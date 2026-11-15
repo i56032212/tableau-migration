@@ -1753,6 +1753,63 @@ def test_maps_in_editor(engine: str) -> None:
         page.mouse.up()
         tools.get_by_role("button", name="半徑選取").click()  # 再按一次回到平移
         assert page.locator(".single-sheet .select-overlay").count() == 0
+
+        # 兩個標記圖層（州的填色、城市的圓點）：兩層的標記都可以選取，各自只有自己的維度
+        page.goto(f"{engine}/w/demo/edit/{created['id']}")
+        settle(page)
+        page.locator(".map-card").get_by_role("button", name="＋ 標記圖層").click()
+        settle(page)
+        page.locator('.data-pane li[data-field="f_city"]').drag_to(
+            page.locator('[data-drop="marks.detail"]')
+        )
+        settle(page)
+        page.goto(f"{engine}/w/demo/s/{created['id']}")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.wait_for_selector('.single-sheet .chart[data-zoomable="true"]', timeout=30000)
+        # 德州的形狀上沒有被城市蓋住的一點（底圖的州名不擋住標記）
+        point = page.evaluate(
+            """() => {
+              const paths = Array.from(document.querySelectorAll('.single-sheet svg .mark-shape.role-mark path'));
+              const texas = paths.find((p) => p.__data__ && p.__data__.datum && p.__data__.datum.__row >= 0
+                && Object.values(p.__data__.datum).includes('Texas'));
+              if (!texas) return null;
+              const box = texas.getBoundingClientRect();
+              for (let i = 1; i < 20; i++) for (let j = 1; j < 20; j++) {
+                const x = box.left + (box.width * i) / 20, y = box.top + (box.height * j) / 20;
+                if (document.elementFromPoint(x, y) === texas) return [x, y];
+              }
+              return null;
+            }"""
+        )
+        assert point is not None
+        page.mouse.click(point[0], point[1])
+        pinned.wait_for()
+        assert "Texas" in pinned.inner_text()
+        with page.expect_response(lambda r: r.url.endswith("/render")) as response:
+            pinned.get_by_role("button", name="✓ 只保留").click()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert body["marks"] == [{"mode": "keep", "marks": [{"f_state_province": "Texas"}]}]
+        # 只剩德州與德州的城市；矩形選取全部：兩個圖層的標記都選到
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.wait_for_selector('.single-sheet .chart[data-zoomable="true"]', timeout=30000)
+        tools.get_by_role("button", name="矩形選取").click()
+        box = page.locator(".single-sheet .select-overlay").bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + 5, box["y"] + 5)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] - 5, box["y"] + box["height"] - 5, steps=8)
+        page.mouse.up()
+        pinned.wait_for()
+        found = re.search(r"(\d+) 個標記", pinned.inner_text())
+        assert found is not None and int(found.group(1)) > 5, pinned.inner_text()
+        with page.expect_response(lambda r: r.url.endswith("/render")) as response:
+            pinned.get_by_role("button", name="✕ 排除").click()
+        body = json.loads(response.value.request.post_data or "{}")
+        assert {tuple(sorted(m)) for m in body["marks"][1]["marks"]} == {
+            ("f_city",),
+            ("f_state_province",),
+        }
+        assert response.value.json()["unsupported"] is None
         assert errors == []
         browser.close()
 

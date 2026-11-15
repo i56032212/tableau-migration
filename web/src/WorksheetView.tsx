@@ -477,8 +477,26 @@ function cullLabels(result: Result) {
 /** 資料列 → 標記（維度欄位鍵 → 原始值）。 */
 function markOf(record: Record<string, unknown>, dimensions: Record<string, string>): Mark {
   const mark: Mark = {};
-  for (const [name, key] of Object.entries(dimensions)) mark[key] = (record[name] ?? null) as Scalar;
+  // 另外查詢的標記卡（較粗的詳細程度、地圖的各標記圖層）的資料列只有它自己的欄位：沒有的欄位不列
+  for (const [name, key] of Object.entries(dimensions)) if (name in record) mark[key] = (record[name] ?? null) as Scalar;
   return mark;
+}
+
+/**
+ * 各標記的原始資料列（列號 __row → 資料列）：工作表的資料，以及另外查詢的標記卡、地圖的標記圖層自己的資料
+ * （列號接在工作表的資料之後）。總計等不參與選取的列（列號 -1）不在其中，所以陣列中可能有空位。
+ */
+function rowRecords(spec: Spec): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  visitSpecs(spec, (node) => {
+    const values = node.data?.values;
+    if (!Array.isArray(values)) return;
+    for (const record of values) {
+      const row = record?.__row;
+      if (typeof row === "number" && row >= 0 && records[row] === undefined) records[row] = record;
+    }
+  });
+  return records;
 }
 
 /**
@@ -753,7 +771,9 @@ export function WorksheetView({
     let disposed = false;
     let leaveTimer: number | undefined;
     const original = response.spec as Spec;
-    const records = (original.data?.values ?? []) as Record<string, unknown>[];
+    const records = rowRecords(original);
+    /** 工作表的資料的列數：列號在它之後的是另外查詢的標記卡（較粗的詳細程度、地圖的標記圖層）的資料列 */
+    const ownFrom = Array.isArray(original.data?.values) ? original.data.values.length : 0;
     const dimensions = (original.usermeta?.dimensions ?? {}) as Record<string, string>;
     const measures = (original.usermeta?.measures ?? {}) as Record<string, string>;
     const spec = structuredClone(original) as Spec;
@@ -774,7 +794,8 @@ export function WorksheetView({
         .map((record, i) => [markOf(record, dimensions), i] as const)
         .filter(
           ([mark]) =>
-            marks.some((m) => Object.keys(m).every((k) => !(k in mark) || mark[k] === m[k])) ||
+            // 選取的標記中這張工作表有的欄位都要相同；資料列沒有那個欄位（別的標記圖層的標記）時不算
+            marks.some((m) => Object.keys(m).every((k) => !present.has(k) || (k in mark && mark[k] === m[k]))) ||
             lit.some((h) => Object.keys(h).every((k) => mark[k] === h[k])),
         )
         .map(([, i]) => i);
@@ -808,7 +829,9 @@ export function WorksheetView({
       const mark = record ? markOf(record, dimensions) : null;
       // 各標記卡各自的文字：這一層的工具提示欄位清單帶著標記卡的記號
       const card = typeof value === "object" ? Object.keys(value as object).find((k) => k.startsWith(CARD_KEY)) : undefined;
-      const runs = (card !== undefined ? custom?.cards?.[card.slice(CARD_KEY.length)] : undefined) ?? custom?.runs ?? [];
+      // 另外查詢的標記卡沒有自己的文字時不套用工作表的文字（欄位不同），用它自己的欄位清單
+      const own = typeof row === "number" && row >= ownFrom;
+      const runs = (card !== undefined ? custom?.cards?.[card.slice(CARD_KEY.length)] : undefined) ?? (own ? [] : (custom?.runs ?? []));
       const rich = runs.length > 0 && record ? richTooltip(runs, record, dimensions) : null;
       const next: Tip = { x: event.clientX, y: event.clientY, value, mark, rich };
       lastTip.current = next;
@@ -1039,6 +1062,7 @@ export function WorksheetView({
     const { records, dimensions } = tipData.current;
     const marks: Mark[] = [];
     for (const record of records) {
+      if (!record) continue; // 總計等不參與選取的列
       const mark = markOf(record, dimensions);
       if (mark[key] === value && !marks.some((m) => sameMark(m, mark))) marks.push(mark);
     }

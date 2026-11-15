@@ -214,9 +214,7 @@ def apply_state(ir: IR, worksheet: Worksheet, state: QueryState) -> EffectiveSta
                 _new_filter("page", worksheet.pages, FilterValue(mode="include", values=shown))
             )
     for n, selection in enumerate(state.marks, start=1):
-        kept = _mark_filter(n, selection, field_ids - protected)
-        if kept is not None:
-            filters.append(kept)
+        filters.extend(_mark_filters(n, selection, field_ids - protected))
     applied: list[str] = []
     skipped: list[str] = []
     for n, (key, value) in enumerate(state.filters.items(), start=1):
@@ -289,37 +287,52 @@ def _tooltip_filter(ir: IR, worksheet: Worksheet, tooltip: TooltipMark) -> Tuple
     )
 
 
-def _mark_filter(n: int, selection: MarkSelection, fields: set[str]) -> TupleFilter | None:
+def _mark_filters(n: int, selection: MarkSelection, fields: set[str]) -> list[TupleFilter]:
     """只保留／排除選取的標記：以每個標記都有的維度（這張工作表的資料源中的欄位）的值組合篩選；
-    量值等不是維度的欄位鍵略過，一個維度都沒有時不篩選。"""
-    uses: list[FieldUse] = []
-    keys: list[str] = []
-    for key in selection.marks[0]:
-        if not all(key in mark for mark in selection.marks):
-            continue
+    量值等不是維度的欄位鍵略過，一個維度都沒有時不篩選。
+
+    選取的標記沒有共同的維度時（地圖的選取工具同時選到不同標記圖層的標記，例如州與城市），依各自的維度
+    分組、每組一個篩選：都要符合（只保留是各組的交集，排除是各組都排除）。"""
+
+    def dimension(key: str) -> FieldUse | None:
         try:
             use = parse_key(key)
         except StateError:
-            continue
-        if use.field in fields:
-            uses.append(use)
-            keys.append(key)
-    if not uses:
-        return None
-    tuples: list[list[Scalar]] = []
-    for mark in selection.marks:
-        row = [mark[key] for key in keys]
-        if row not in tuples:
-            tuples.append(row)
-    return TupleFilter(
-        kind="tuple",
-        id=f"marks_{n}",
-        fields=uses,
-        stage="dimension",
-        mode="include" if selection.mode == "keep" else "exclude",
-        tuples=tuples,
-        source_ref="state:marks",
-    )
+            return None
+        return use if use.field in fields else None
+
+    marks = selection.marks
+    shared = [
+        key for key in marks[0] if all(key in mark for mark in marks) and dimension(key) is not None
+    ]
+    groups: dict[tuple[str, ...], list[dict[str, Scalar]]] = {}
+    if shared:
+        groups[tuple(shared)] = list(marks)
+    else:
+        for mark in marks:
+            keys = tuple(sorted(key for key in mark if dimension(key) is not None))
+            if keys:
+                groups.setdefault(keys, []).append(mark)
+    filters: list[TupleFilter] = []
+    for g, (keys, members) in enumerate(groups.items(), start=1):
+        tuples: list[list[Scalar]] = []
+        for mark in members:
+            row = [mark[key] for key in keys]
+            if row not in tuples:
+                tuples.append(row)
+        uses = [use for use in map(dimension, keys) if use is not None]
+        filters.append(
+            TupleFilter(
+                kind="tuple",
+                id=f"marks_{n}" if g == 1 else f"marks_{n}_{g}",
+                fields=uses,
+                stage="dimension",
+                mode="include" if selection.mode == "keep" else "exclude",
+                tuples=tuples,
+                source_ref="state:marks",
+            )
+        )
+    return filters
 
 
 def _with_selection(flt: Filter, state: QueryState) -> Filter:
