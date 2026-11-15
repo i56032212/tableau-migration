@@ -175,6 +175,8 @@ export interface MarksIR {
   /** 地圖上標記的形狀：Geometry (generated)，或空間資料的 COLLECT（Shapefile 的 Geometry、MAKEPOINT 等） */
   geometry?: FieldUse | null;
   tooltip_sheets?: TooltipSheetIR[];
+  /** 色彩上的其他維度（以組合著色）：同時在詳細資料中 */
+  color_more?: FieldUse[];
   [key: string]: unknown;
 }
 
@@ -777,7 +779,31 @@ function tidyCards(sheet: SheetIR): SheetIR {
   const aliases = ((sheet.measure_aliases as { use: FieldUse }[] | undefined) ?? []).filter((a) =>
     measureValues.some((u) => sameUse(u, a.use)),
   );
-  return { ...sheet, panes, subtotals, measure_values: measureValues, measure_aliases: aliases };
+  // 色彩上的其他維度：色彩是離散的維度、它們還在詳細資料中才留著
+  const colorMore = (marks: MarksIR): MarksIR => {
+    const more = marks.color_more ?? [];
+    if (more.length === 0) return marks;
+    const color = marks.color;
+    const kept = color && !color.continuous && color.agg === null ? more.filter((u) => marks.detail.some((d) => sameUse(d, u))) : [];
+    return kept.length === more.length ? marks : { ...marks, color_more: kept };
+  };
+  return {
+    ...sheet,
+    marks: colorMore(sheet.marks),
+    panes: panes.map((p) => ({ ...p, marks: colorMore(p.marks) })),
+    subtotals,
+    measure_values: measureValues,
+    measure_aliases: aliases,
+  };
+}
+
+/** 把詳細資料上的維度加到色彩（Tableau 色彩上的多個欄位：以欄位值的組合著色），或拿掉。 */
+export function toggleColorMore(sheet: SheetIR, card: Card, use: FieldUse): SheetIR {
+  return updateCard(sheet, card, (m) => {
+    const more = m.color_more ?? [];
+    const present = more.some((u) => sameUse(u, use));
+    return { ...m, color_more: present ? more.filter((u) => !sameUse(u, use)) : [...more, use] };
+  });
 }
 
 /**

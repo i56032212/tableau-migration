@@ -7,7 +7,7 @@ import type { FieldUse, Scalar } from "../types";
 import { editApi, type SetRuleBody } from "./api";
 import { type EditorContextValue, useEditor } from "./context";
 import { datasourceApi } from "./datasourceApi";
-import { type FormatKind, formatString, parseFormat } from "./Dialogs";
+import { useNumberFormat } from "./Dialogs";
 import { AGGREGATIONS, type CatalogField, isDate } from "./model";
 import { type MenuItem, SEPARATOR } from "./Shelves";
 
@@ -526,17 +526,12 @@ export function FolderDialog({
 export function FieldFormatDialog({ datasource, field, onClose, onSaved }: { datasource: string; field: string; onClose: () => void; onSaved: () => void }) {
   const editor = useEditor();
   const target = useField(datasource, field);
-  const current = parseFormat(target?.format ?? undefined);
-  const [kind, setKind] = useState<FormatKind>(current.kind);
-  const [decimals, setDecimals] = useState(current.decimals);
-  const [grouping, setGrouping] = useState(current.grouping);
-  const [units, setUnits] = useState(current.units);
-  const [symbol, setSymbol] = useState(current.symbol);
+  const number = useNumberFormat(target?.format);
   const [dateFormat, setDateFormat] = useState(target?.format ?? "");
   const { error, busy, run } = useSave(onClose, onSaved);
   if (!target) return null;
   const date = isDate(target);
-  const text = date ? dateFormat.trim() || null : formatString(kind, decimals, grouping, units, symbol);
+  const text = date ? dateFormat.trim() || null : number.text;
   const save = () => run(() => editApi.saveFieldProperties(editor.workbook, datasource, field, { format: text }), `已設定「${target.caption}」的預設格式`);
   return (
     <Modal title={`預設格式：${target.caption}`} onClose={onClose}>
@@ -547,47 +542,7 @@ export function FieldFormatDialog({ datasource, field, onClose, onSaved }: { dat
             <input aria-label="日期格式" value={dateFormat} placeholder="例如 yyyy/mm/dd（空白為自動）" onChange={(e) => setDateFormat(e.target.value)} />
           </label>
         ) : (
-          <>
-            <label className="inline">
-              格式
-              <select aria-label="數字格式" value={kind} onChange={(e) => setKind(e.target.value as FormatKind)}>
-                <option value="auto">自動</option>
-                <option value="number">數字（自訂）</option>
-                <option value="currency">貨幣（自訂）</option>
-                <option value="percent">百分比</option>
-              </select>
-            </label>
-            {kind !== "auto" && (
-              <>
-                <label className="inline">
-                  小數位數
-                  <input type="number" min={0} max={10} aria-label="小數位數" value={decimals} onChange={(e) => setDecimals(Math.max(0, Math.min(10, Number(e.target.value))))} />
-                </label>
-                {kind !== "percent" && (
-                  <>
-                    <label className="inline">
-                      顯示單位
-                      <select aria-label="顯示單位" value={units} onChange={(e) => setUnits(Number(e.target.value))}>
-                        <option value={0}>無</option>
-                        <option value={1}>千（K）</option>
-                        <option value={2}>百萬（M）</option>
-                        <option value={3}>十億（B）</option>
-                      </select>
-                    </label>
-                    <label className="inline">
-                      <input type="checkbox" checked={grouping} onChange={(e) => setGrouping(e.target.checked)} /> 千分位
-                    </label>
-                  </>
-                )}
-                {kind === "currency" && (
-                  <label className="inline">
-                    符號
-                    <input aria-label="貨幣符號" value={symbol} onChange={(e) => setSymbol(e.target.value)} />
-                  </label>
-                )}
-              </>
-            )}
-          </>
+          number.fields
         )}
         <p className="hint">格式字串：{text ?? "（自動）"}；膠囊上另外設定的格式優先。</p>
         {error && <p className="error">{error}</p>}

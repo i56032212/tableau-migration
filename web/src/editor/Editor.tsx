@@ -248,6 +248,21 @@ function AnalyticsCard() {
         />{" "}
         彙總量值
       </label>
+      <label className="hint stack-marks" title="長條與區域預設依標記卡上的維度堆疊（Tableau 的「分析＞堆疊標記」）：關閉時從 0 畫起、互相重疊，開啟時折線與圓點也堆疊">
+        堆疊標記{" "}
+        <select
+          aria-label="堆疊標記"
+          value={(sheet.stack as string | null | undefined) ?? ""}
+          onChange={(e) => {
+            const stack = e.target.value || null;
+            editor.apply((s) => ({ ...s, stack }));
+          }}
+        >
+          <option value="">自動</option>
+          <option value="on">開啟</option>
+          <option value="off">關閉</option>
+        </select>
+      </label>
       <label className="hint drop-lines" title="從標記畫到座標軸的虛線（Tableau 的「分析＞下拉線」）；連續的座標軸才有">
         下拉線{" "}
         <select

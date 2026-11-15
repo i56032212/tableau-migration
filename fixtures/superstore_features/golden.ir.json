@@ -1915,6 +1915,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -2135,6 +2138,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -2158,6 +2162,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -2336,6 +2343,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     },
     {
@@ -2359,6 +2367,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -2516,6 +2527,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[3]"
     },
     {
@@ -2547,6 +2559,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -2705,6 +2720,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[4]"
     },
     {
@@ -2745,6 +2761,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -2888,6 +2907,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[5]"
     },
     {
@@ -2929,6 +2949,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -2970,6 +2993,9 @@
             "mark_color": null,
             "opacity": null,
             "stroke": null,
+            "halo": false,
+            "markers": null,
+            "color_more": [],
             "label_font": null,
             "label_match": false,
             "trend": null,
@@ -3019,6 +3045,9 @@
             "mark_color": null,
             "opacity": null,
             "stroke": null,
+            "halo": false,
+            "markers": null,
+            "color_more": [],
             "label_font": null,
             "label_match": false,
             "trend": null,
@@ -3130,6 +3159,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[6]"
     },
     {
@@ -3151,6 +3181,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -3321,6 +3354,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[7]"
     },
     {
@@ -3352,6 +3386,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -3509,6 +3546,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[8]"
     },
     {
@@ -3540,6 +3578,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -3680,6 +3721,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[9]"
     },
     {
@@ -3711,6 +3753,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -3851,6 +3896,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[10]"
     },
     {
@@ -3882,6 +3928,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4038,6 +4087,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[11]"
     },
     {
@@ -4069,6 +4119,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4187,6 +4240,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[12]"
     },
     {
@@ -4218,6 +4272,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4336,6 +4393,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[13]"
     },
     {
@@ -4367,6 +4425,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4477,6 +4538,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[14]"
     },
     {
@@ -4508,6 +4570,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4647,6 +4712,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[15]"
     },
     {
@@ -4678,6 +4744,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4814,6 +4883,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[16]"
     },
     {
@@ -4845,6 +4915,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -4981,6 +5054,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[17]"
     },
     {
@@ -5012,6 +5086,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -5152,6 +5229,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[18]"
     },
     {
@@ -5186,6 +5264,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -5349,6 +5430,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[19]"
     },
     {
@@ -5380,6 +5462,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -5498,6 +5583,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[20]"
     },
     {
@@ -5536,6 +5622,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -5727,6 +5816,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[21]"
     },
     {
@@ -5758,6 +5848,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -5958,6 +6051,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[22]"
     },
     {
@@ -5992,6 +6086,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -6160,6 +6257,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[23]"
     },
     {
@@ -6190,6 +6288,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -6237,6 +6338,9 @@
             "mark_color": null,
             "opacity": null,
             "stroke": null,
+            "halo": false,
+            "markers": null,
+            "color_more": [],
             "label_font": null,
             "label_match": false,
             "trend": null,
@@ -6292,6 +6396,9 @@
             "mark_color": null,
             "opacity": null,
             "stroke": null,
+            "halo": false,
+            "markers": null,
+            "color_more": [],
             "label_font": null,
             "label_match": false,
             "trend": null,
@@ -6411,6 +6518,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[24]"
     },
     {
@@ -6449,6 +6557,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -6490,6 +6601,9 @@
             "mark_color": null,
             "opacity": null,
             "stroke": null,
+            "halo": false,
+            "markers": null,
+            "color_more": [],
             "label_font": null,
             "label_match": false,
             "trend": null,
@@ -6545,6 +6659,9 @@
             "mark_color": null,
             "opacity": null,
             "stroke": null,
+            "halo": false,
+            "markers": null,
+            "color_more": [],
             "label_font": null,
             "label_match": false,
             "trend": null,
@@ -6656,6 +6773,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[25]"
     },
     {
@@ -6687,6 +6805,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -6844,6 +6965,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[26]"
     },
     {
@@ -6881,6 +7003,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -6991,6 +7116,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[27]"
     },
     {
@@ -7022,6 +7148,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -7161,6 +7290,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[28]"
     },
     {
@@ -7192,6 +7322,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -7310,6 +7443,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[29]"
     },
     {
@@ -7341,6 +7475,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -7498,6 +7635,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[30]"
     },
     {
@@ -7528,6 +7666,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -7685,6 +7826,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[31]"
     }
   ],

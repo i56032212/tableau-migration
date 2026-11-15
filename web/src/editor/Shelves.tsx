@@ -40,6 +40,7 @@ import {
   sameUse,
   setSort,
   setUses,
+  toggleColorMore,
   type ShelfName,
   type SheetIR,
   type TableCalcIR,
@@ -245,6 +246,16 @@ export function useDropTarget(
       if (!use) return;
       if (shelf === "filters") {
         onFilter?.(use);
+        return;
+      }
+      // 按住 Shift 把維度放到已經有離散欄位的色彩上：加到色彩（以欄位值的組合著色），不取代原來的
+      const colored = cardMarks(editor.sheet, card).color;
+      if (shelf === "marks.color" && event.shiftKey && colored && !colored.continuous && !isSpecial(use) && !isMeasure(use, editor.fields)) {
+        editor.apply((sheet) => {
+          const marks = cardMarks(sheet, card);
+          const added = marks.detail.some((d) => sameUse(d, use)) ? sheet : insertUse(sheet, "marks.detail", use, undefined, card);
+          return (cardMarks(added, card).color_more ?? []).some((u) => sameUse(u, use)) ? added : toggleColorMore(added, card, use);
+        });
         return;
       }
       editor.apply(async (sheet) => {
@@ -785,6 +796,15 @@ function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; car
   // 臨時計算：連按兩下「詳細資料」的空白處輸入公式（與 Tableau 標記卡相同，加到詳細資料）
   const adHoc = useAdHoc(shelf, card);
   const typed = slot === "detail";
+  // 色彩上的多個欄位（Tableau 以欄位值的組合著色）：詳細資料上的維度可以「也用於色彩」
+  const marks = cardMarks(editor.sheet, card);
+  const discreteColor = marks.color !== null && !marks.color.continuous && marks.color.agg === null;
+  const alsoColor = (use: FieldUse) => slot === "detail" && (marks.color_more ?? []).some((u) => sameUse(u, use));
+  const withColor = (items: MenuItem[], use: FieldUse): MenuItem[] => {
+    if (slot !== "detail" || !discreteColor || isSpecial(use) || isMeasure(use, editor.fields) || items.length < 2) return items;
+    const toggle: MenuItem = { label: "也用於色彩（組合著色）", checked: alsoColor(use), action: () => editor.apply((s) => toggleColorMore(s, card, use)) };
+    return [...items.slice(0, -2), toggle, ...items.slice(-2)];
+  };
   return (
     <div
       className={`mark-slot${over ? " over" : ""}`}
@@ -796,8 +816,8 @@ function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; car
       <span className="mark-slot-label">{label}</span>
       <span className="mark-slot-pills">
         {uses.map((use, i) => (
-          <span key={`${i}:${use.field}`} className="pill-slot" onDrop={(e) => dropAt(e, i)} onDragOver={handlers.onDragOver}>
-            <Pill use={use} shelf={shelf} index={i} card={card} menu={() => menu(shelf, i, card)} />
+          <span key={`${i}:${use.field}`} className={`pill-slot${alsoColor(use) ? " also-color" : ""}`} onDrop={(e) => dropAt(e, i)} onDragOver={handlers.onDragOver} title={alsoColor(use) ? "也用於色彩（與色彩上的欄位組合著色）" : undefined}>
+            <Pill use={use} shelf={shelf} index={i} card={card} menu={() => withColor(menu(shelf, i, card), use)} />
           </span>
         ))}
         {typed && adHoc.input}

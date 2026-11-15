@@ -74,7 +74,7 @@ from tmig.ir.models import (
 from tmig.planner.state import use_key
 from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
-from tmig.render.colors import continuous_scale, discrete_scale, shape_scale
+from tmig.render.colors import continuous_scale, discrete_scale, member_order, shape_scale
 from tmig.render.fonts import (
     DEFAULT_SIZE,
     LABEL_COLOR,
@@ -301,6 +301,9 @@ class _Builder:
         self.label_fields: dict[int, str] = {}
         """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
         self.label_count = 0
+        self.wrap_count = 0
+        self.combo_count = 0
+        """換行的標籤欄、多個欄位組合的色彩欄的編號。"""
         self.drop_count = 0
         """下拉線圖層的編號。"""
         """標記標籤圖層的編號（圖層名稱與旗標欄各自不同）。"""
@@ -554,11 +557,37 @@ class _Builder:
                 ticks = self.fixed_ticks(use, setting, start, end)
                 if ticks is not None:
                     axis["values"] = ticks
+                    self.minor_ticks(axis, use, setting, start, end)
             if scale:
                 encoding["scale"] = scale
         if axis:
             encoding["axis"] = axis
         return encoding
+
+    def minor_ticks(
+        self, axis: dict[str, Any], use: FieldUse, setting: Axis, start: Any, end: Any
+    ) -> None:
+        """次要刻度（主要刻度是固定間距時）：每隔 minor_spacing 一個較短、沒有文字的刻度；格線只畫在
+        主要刻度上。Vega 的座標軸沒有次要刻度：把主要、次要刻度都列為刻度，再依值是不是主要刻度決定
+        文字、刻度的長度與格線。"""
+        major, minor = setting.tick_spacing, setting.minor_spacing
+        if major is None or minor is None or minor >= major:
+            return
+        found = self.fixed_ticks(
+            use, setting.model_copy(update={"tick_spacing": minor}), start, end
+        )
+        if found is None:
+            return
+        origin = setting.tick_origin or 0.0
+        merged = {round(v, 9) for v in found} | {round(v, 9) for v in axis["values"]}
+        axis["values"] = sorted(merged)
+        position = f"(datum.value - {origin!r}) / {major!r}"
+        test = f"abs({position} - round({position})) < 1e-6"
+        label = axis.get("labelExpr", "datum.label")
+        axis["labelExpr"] = f"{test} ? ({label}) : ''"
+        axis["tickSize"] = {"condition": {"test": test, "value": 5}, "value": 3}
+        if axis.get("grid", True):
+            axis["gridOpacity"] = {"condition": {"test": test, "value": 1}, "value": 0}
 
     def fixed_ticks(self, use: FieldUse, setting: Axis, start: Any, end: Any) -> list[float] | None:
         """固定間距的主要刻度（編輯座標軸的「主要刻度：固定」）：從起點（預設 0）起每隔一個間距一個，涵蓋
@@ -783,9 +812,22 @@ class _Builder:
             if mark == "polygon":
                 # 多邊形：以填滿的折線依序連接各點
                 vl_mark["filled"] = True
+            elif vl_type == "line" and marks.markers == "all":
+                # 色彩的「效果＞標記：全部」：每個資料點畫出與線同色的圓點
+                vl_mark["point"] = {"filled": True, "size": 36}
             elif vl_type in ("line", "area"):
                 # 與 Tableau 的預設相同不畫出點；透明的點讓每個標記都能停留顯示工具提示、點選
                 vl_mark["point"] = "transparent"
+            # 堆疊標記（分析＞堆疊標記）：只有一個量值的座標軸時才有堆疊
+            value_channel = None if rows_meas and cols_meas else "x" if cols_meas else "y"
+            if (
+                self.ws.stack is not None
+                and value_channel is not None
+                and mark != "polygon"
+                and encoding[value_channel].get("type") == "quantitative"
+            ):
+                # 關閉：長條與區域從 0 畫起、互相重疊；開啟：折線、圓點等也依標記卡上的維度累加
+                encoding[value_channel]["stack"] = "zero" if self.ws.stack == "on" else None
             if mark == "shape":
                 vl_mark["filled"] = True
             if any(_fixed_range(encoding.get(c)) for c in ("x", "y")):
@@ -1001,14 +1043,20 @@ class _Builder:
         """標記標籤的圖層：只標示部分標記時依資料中算好的旗標篩選（label_flags），折線與區域的最小值寫在
         點的下方；與 Tableau 相同，互相重疊的標籤由檢視器隱藏（允許重疊時不隱藏）。"""
         setting = marks.labels or MarkLabels()
-        stacked = vl_type == "bar" and (
-            encoding.get("color", {}).get("type") == "nominal"
-            or any(self.ch(u).role == "dimension" for u in marks.detail)
+        stacked = (
+            vl_type == "bar"
+            and self.ws.stack != "off"
+            and (
+                encoding.get("color", {}).get("type") == "nominal"
+                or any(self.ch(u).role == "dimension" for u in marks.detail)
+            )
         )
         size = marks.mark_size if marks.mark_size is not None else 1
+        if setting.wrap:
+            field_name = self.wrapped(marks, field_name)
 
         def layer(extreme: Literal["max", "min"] | None = None) -> dict[str, Any]:
-            return _label_layer(
+            found = _label_layer(
                 encoding,
                 vl_type,
                 field_name,
@@ -1021,6 +1069,9 @@ class _Builder:
                 stacked,
                 marks.label_valign,
             )
+            if setting.direction is not None:
+                _rotate_label(found["mark"], setting.direction)
+            return found
 
         layers: list[dict[str, Any]]
         if setting.marks in ("selected", "highlighted"):
@@ -1048,6 +1099,16 @@ class _Builder:
         horizontal = encoding.get("x", {}).get("type") == "quantitative"
         kind = "k" if setting.overlap else ("ix" if horizontal else "iy") if stacked else "c"
         return [self.named_label(found, kind) for found in layers]
+
+    def wrapped(self, marks: Marks, field_name: str) -> str:
+        """換行的標籤文字（標籤對齊的「換行：開」）：資料中加上換好行的欄，回傳它的名稱。"""
+        self.wrap_count += 1
+        name = f"__wrap{self.wrap_count}"
+        size = self.text_font(marks).size
+        for record in self.records_of(marks):
+            value = record.get(field_name)
+            record[name] = None if value is None else _wrap(value, LABEL_WRAP_WIDTH, size)
+        return name
 
     def named_label(self, layer: dict[str, Any], kind: str) -> dict[str, Any]:
         """標籤圖層的名稱：__label_c（重疊時隱藏）、__label_ix／__label_iy（堆疊長條各段內的標籤：重疊或
@@ -1601,12 +1662,20 @@ class _Builder:
                 setting = marks.color_palette
                 if setting is None or setting.kind != "discrete":
                     setting = AUTOMATIC_DISCRETE
-                scale = discrete_scale(
-                    setting,
-                    ((r.get(ch.label), r.get(ch.name)) for r in records),
-                    self.measure_names if ch.use.field == MEASURE_NAMES else None,
-                    members_first=ch.is_set,
-                )
+                more = [
+                    self.ch(u)
+                    for u in marks.color_more
+                    if u in marks.detail and u != marks.color and self.ch(u).role == "dimension"
+                ]
+                if more and ch.use.field != MEASURE_NAMES:
+                    scale = self.combined_color(encoding, setting, [ch, *more], records)
+                else:
+                    scale = discrete_scale(
+                        setting,
+                        ((r.get(ch.label), r.get(ch.name)) for r in records),
+                        self.measure_names if ch.use.field == MEASURE_NAMES else None,
+                        members_first=ch.is_set,
+                    )
                 if scale is not None:
                     encoding["color"]["scale"] = scale
         if marks.size is not None:
@@ -1637,6 +1706,34 @@ class _Builder:
             for ch in self.channels.values()
             if ch.datatype != "spatial"
         ]
+
+    def combined_color(
+        self,
+        encoding: dict[str, Any],
+        setting: ColorPalette,
+        parts: list[Channel],
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """色彩上有多個維度（Tableau 以欄位值的組合著色）：資料中加上各欄位顯示值以「, 」連接的欄，
+        依它著色；圖例的成員依各欄位的原值排序（第一個欄位在前），指定的顏色以組合的文字對應。"""
+        self.combo_count += 1
+        name = f"__color{self.combo_count}"
+        order: dict[str, tuple[Any, ...]] = {}
+        for record in records:
+            label = ", ".join(
+                "Null" if record.get(c.label) is None else str(record.get(c.label)) for c in parts
+            )
+            record[name] = label
+            order.setdefault(label, tuple(member_order(record.get(c.name)) for c in parts))
+        encoding["color"] = {
+            "field": name,
+            "type": "nominal",
+            "title": ", ".join(c.title for c in parts),
+            "sort": None,
+        }
+        labels = sorted(order, key=lambda label: order[label])
+        # keys 不是 None 時依給的順序（已經排好），指定的顏色以組合的文字對應
+        return discrete_scale(setting, ((label, label) for label in labels), {})
 
     # ------------------------------------------------------------ 多個量值
 
@@ -4527,6 +4624,10 @@ DEFAULT_MARK_COLOR = PALETTES[DEFAULT_REGULAR].colors[0]
 AUTOMATIC_DISCRETE = ColorPalette(kind="discrete")
 """離散欄位沒有設定顏色時：依 Tableau 10 的順序。"""
 BORDERED = frozenset({"bar", "rect", "arc", "circle", "square", "point", "tick"})
+HALOED = frozenset({"circle", "square", "point"})
+"""光暈作用的標記（Vega-Lite 的類型）。"""
+LABEL_WRAP_WIDTH = 120
+"""標籤換行（換行：開）時每一行的寬度上限（像素）；Tableau 依標記與儲存格的大小決定，這裡是固定值。"""
 """可以畫框線的標記（Vega-Lite 的類型）；面積的框線另以折線疊在上緣。"""
 
 
@@ -4544,6 +4645,10 @@ def _mark_style(mark: dict[str, Any], marks: Marks) -> dict[str, Any]:
         elif mark["type"] in BORDERED or (mark["type"] == "line" and mark.get("filled")):
             mark["stroke"] = marks.stroke
             mark["strokeWidth"] = 1
+    elif marks.halo and mark["type"] in HALOED:
+        # 光暈：圓點、形狀與方塊外圍的白色細邊
+        mark["stroke"] = "#ffffff"
+        mark["strokeWidth"] = 1
     return mark
 
 
@@ -4779,6 +4884,13 @@ def _small_multiples(
     col_shown, _, col_color = builder.header(col_uses, "columns") if col_uses else ([], None, None)
     font = builder.font("label")
 
+    def free(measures: list[FieldUse], shelf: Literal["rows", "columns"]) -> bool:
+        setting = builder.axis_of(measures[0], shelf) if measures else None
+        return setting is not None and setting.independent
+
+    y_free = bool(row_chs) and free(rows_meas, "rows")
+    x_free = bool(col_chs) and free(cols_meas, "columns")
+
     def pane(
         row: tuple[Any, ...], col: tuple[Any, ...], first_col: bool, first_row: bool, last_row: bool
     ) -> dict[str, Any]:
@@ -4790,11 +4902,12 @@ def _small_multiples(
             present = [(name, v) for name, v in pairs if name in layer["data"]["values"][0]]
             if present:
                 layer["transform"] = [{"filter": _all_equal(present)}, *layer.get("transform", [])]
-        if not last_row:
+        grid = bool(row_chs) and bool(col_chs)
+        # 欄與列都分窗格、橫軸各窗格獨立時，每一格的範圍不同：每一列都畫橫軸
+        if not last_row and not (x_free and grid):
             _hide_axis(chart, "x")
         if not first_col:
             _hide_axis(chart, "y")
-        grid = bool(row_chs) and bool(col_chs)
         if row_chs and first_col and row_shown:
             if grid:
                 # 欄與列都分窗格：列的標題寫在縱軸標題的上一行（圖的標題留給欄）
@@ -4825,18 +4938,22 @@ def _small_multiples(
             }
         return chart
 
-    shared = {"scale": {"x": "shared", "y": "shared", "color": "shared", "size": "shared"}}
+    shared = {"x": "shared", "y": "shared", "color": "shared", "size": "shared"}
+    # 各窗格獨立的座標軸範圍：列架上的量值在每一列的窗格各自決定範圍（同一列的各欄仍共用），
+    # 欄架上的量值在每一欄
+    across_rows = {"scale": {**shared, "y": "independent" if y_free else "shared"}}
+    across_cols = {"scale": {**shared, "x": "independent" if x_free else "shared"}}
     grid = [
         [pane(row, col, j == 0, i == 0, i == len(row_keys) - 1) for j, col in enumerate(col_keys)]
         for i, row in enumerate(row_keys)
     ]
     if len(col_keys) == 1:
-        return {"vconcat": [line[0] for line in grid], "resolve": shared, "spacing": 4}
+        return {"vconcat": [line[0] for line in grid], "resolve": across_rows, "spacing": 4}
     if len(row_keys) == 1:
-        return {"hconcat": grid[0], "resolve": shared, "spacing": 4}
+        return {"hconcat": grid[0], "resolve": across_cols, "spacing": 4}
     return {
-        "vconcat": [{"hconcat": line, "resolve": shared, "spacing": 4} for line in grid],
-        "resolve": shared,
+        "vconcat": [{"hconcat": line, "resolve": across_cols, "spacing": 4} for line in grid],
+        "resolve": across_rows,
         "spacing": 4,
     }
 
@@ -4998,6 +5115,7 @@ def _label_layer(
     stacked = stacked and vl_type == "bar"
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
     font = font or resolve()
+    transforms: list[dict[str, Any]] = []
     mark: dict[str, Any] = {"type": "text", **font.mark(), "lineBreak": "\n"}
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
     if "size" in encoding:
@@ -5026,10 +5144,21 @@ def _label_layer(
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
         if stacked:
             layer["x"] = {**encoding["x"], "stack": "zero"}
+        elif align == "left":
+            # 水平對齊靠左：標籤在長條的起點（0）內側；置中：在長條的中間
+            layer["x"] = {"datum": 0, "type": "quantitative"}
+        elif align == "center":
+            mark.update(align="center", dx=0)
+            layer["x"] = _bar_middle(encoding["x"], transforms)
     elif vl_type == "bar":
         mark.update(baseline="top", dy=3) if stacked else mark.update(baseline="bottom", dy=-3)
         if stacked:
             layer["y"] = {**encoding["y"], "stack": "zero"}
+        elif valign == "bottom":
+            layer["y"] = {"datum": 0, "type": "quantitative"}
+        elif valign == "center":
+            mark.update(baseline="middle", dy=0)
+            layer["y"] = _bar_middle(encoding["y"], transforms)
     elif extreme == "max":
         mark.update(align="left", baseline="bottom", dx=3, dy=-2)
     elif extreme == "min":
@@ -5056,7 +5185,42 @@ def _label_layer(
                 "field": encoding["color"]["field"],
                 "type": encoding["color"]["type"],
             }
+    if transforms:
+        return {"transform": transforms, "mark": mark, "encoding": layer}
     return {"mark": mark, "encoding": layer}
+
+
+BAR_MIDDLE = "__bar_mid"
+
+
+def _bar_middle(channel: dict[str, Any], transforms: list[dict[str, Any]]) -> dict[str, Any]:
+    """長條中間的位置（標籤置中）：量值的一半；沿用座標軸的刻度與標題。"""
+    transforms.append({"calculate": f"datum[{json.dumps(channel['field'])}] / 2", "as": BAR_MIDDLE})
+    return {**channel, "field": BAR_MIDDLE, "stack": None}
+
+
+def _rotate_label(mark: dict[str, Any], direction: Literal["up", "down"]) -> None:
+    """直寫的標籤（文字方向：由下往上、由上往下）：文字轉 90 度，仍在原來的位置（標記的上、下、左、右）。
+
+    Vega 的 align、baseline 與 dx、dy 都相對於文字自己的方向，所以依旋轉換算：由下往上時文字的起點在下方，
+    「在錨點上方」成為 align=left，「在錨點右邊」成為 baseline=top；由上往下相反。"""
+    sx, sy = mark.pop("dx", 0), mark.pop("dy", 0)
+    horizontal = mark.get("align", "center")  # left：文字在錨點右邊；right：在左邊
+    vertical = mark.get("baseline", "middle")  # bottom：文字在錨點上方；top：在下方
+    if direction == "up":
+        mark["align"] = {"bottom": "left", "top": "right"}.get(vertical, "center")
+        mark["baseline"] = {"left": "top", "right": "bottom"}.get(horizontal, "middle")
+        dx, dy = -sy, sx
+        mark["angle"] = 270
+    else:
+        mark["align"] = {"bottom": "right", "top": "left"}.get(vertical, "center")
+        mark["baseline"] = {"left": "bottom", "right": "top"}.get(horizontal, "middle")
+        dx, dy = sy, -sx
+        mark["angle"] = 90
+    if dx:
+        mark["dx"] = dx
+    if dy:
+        mark["dy"] = dy
 
 
 def _dimension(ch: Channel) -> dict[str, Any]:

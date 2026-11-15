@@ -655,6 +655,26 @@
           "description": "固定間距的刻度的起點；None 為 0",
           "title": "Tick Origin"
         },
+        "minor_spacing": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "次要刻度的固定間距（編輯座標軸的「次要刻度：固定」）：主要刻度之間較短、沒有文字的刻度；主要刻度是固定間距（tick_spacing）時才畫，None 為沒有",
+          "title": "Minor Spacing"
+        },
+        "independent": {
+          "default": false,
+          "description": "各窗格獨立的座標軸範圍（編輯座標軸的「每列或每欄的獨立座標軸範圍」）：列架上的量值在每一列的窗格各自決定範圍，欄架上的量值在每一欄；預設所有窗格共用同一個範圍",
+          "title": "Independent",
+          "type": "boolean"
+        },
         "label_color": {
           "anyOf": [
             {
@@ -3987,6 +4007,29 @@
           "description": "允許標籤與其他標記重疊；否則與 Tableau 相同，互相重疊的標籤只顯示先畫的",
           "title": "Overlap",
           "type": "boolean"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "enum": [
+                "up",
+                "down"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標籤的文字方向（標籤對齊的「方向」）：up＝由下往上（逆時針轉 90 度），down＝由上往下；None 為橫寫",
+          "title": "Direction"
+        },
+        "wrap": {
+          "default": false,
+          "description": "標籤換行（標籤對齊的「換行：開」）：超過 LABEL_WRAP_WIDTH 像素的文字在空白、標點與全形字之間換行；預設不換行",
+          "title": "Wrap",
+          "type": "boolean"
         }
       },
       "title": "MarkLabels",
@@ -4079,6 +4122,37 @@
           "default": null,
           "description": "標記的框線顏色（色彩的「效果＞框線」）；None 為沒有框線",
           "title": "Stroke"
+        },
+        "halo": {
+          "default": false,
+          "description": "光暈（色彩的「效果＞光暈」）：沒有框線時，圓點、形狀與文字外圍加上白色的細邊，與背景、相鄰的標記分開",
+          "title": "Halo",
+          "type": "boolean"
+        },
+        "markers": {
+          "anyOf": [
+            {
+              "enum": [
+                "all",
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "折線上的標記（色彩的「效果＞標記」）：all＝每個資料點畫出圓點，none＝不畫；None 為自動（不畫）",
+          "title": "Markers"
+        },
+        "color_more": {
+          "description": "色彩上的其他維度（Tableau 可以把多個欄位放到色彩上，以欄位值的組合著色）：這些欄位同時在詳細資料（detail）中，color 為第一個欄位；圖例的成員是各欄位的值以「, 」連接",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Color More",
+          "type": "array"
         },
         "label_font": {
           "anyOf": [
@@ -8308,6 +8382,23 @@
           ],
           "default": null,
           "description": "下拉線；None 為不顯示（連續的座標軸才有下拉線）"
+        },
+        "stack": {
+          "anyOf": [
+            {
+              "enum": [
+                "on",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "堆疊標記（分析＞堆疊標記）：on＝一律堆疊（折線、圓點等也依標記卡上的維度累加），off＝不堆疊（長條與區域從 0 畫起、互相重疊）；None 為自動（長條與區域堆疊）",
+          "title": "Stack"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

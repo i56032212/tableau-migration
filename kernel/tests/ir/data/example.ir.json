@@ -306,6 +306,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -499,6 +502,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
     {
@@ -533,6 +537,9 @@
         "mark_color": null,
         "opacity": null,
         "stroke": null,
+        "halo": false,
+        "markers": null,
+        "color_more": [],
         "label_font": null,
         "label_match": false,
         "trend": null,
@@ -678,6 +685,7 @@
       "map": null,
       "controls": [],
       "drop_lines": null,
+      "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }
   ],

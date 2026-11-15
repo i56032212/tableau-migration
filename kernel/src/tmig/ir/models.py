@@ -1425,6 +1425,16 @@ class MarkLabels(IRModel):
         default=False,
         description="允許標籤與其他標記重疊；否則與 Tableau 相同，互相重疊的標籤只顯示先畫的",
     )
+    direction: Literal["up", "down"] | None = Field(
+        default=None,
+        description="標籤的文字方向（標籤對齊的「方向」）：up＝由下往上（逆時針轉 90 度），down＝由上往下；"
+        "None 為橫寫",
+    )
+    wrap: bool = Field(
+        default=False,
+        description="標籤換行（標籤對齊的「換行：開」）：超過 LABEL_WRAP_WIDTH 像素的文字在空白、標點"
+        "與全形字之間換行；預設不換行",
+    )
 
 
 class Marks(IRModel):
@@ -1441,6 +1451,21 @@ class Marks(IRModel):
     )
     stroke: HexColor | None = Field(
         default=None, description="標記的框線顏色（色彩的「效果＞框線」）；None 為沒有框線"
+    )
+    halo: bool = Field(
+        default=False,
+        description="光暈（色彩的「效果＞光暈」）：沒有框線時，圓點、形狀與文字外圍加上白色的細邊，"
+        "與背景、相鄰的標記分開",
+    )
+    markers: Literal["all", "none"] | None = Field(
+        default=None,
+        description="折線上的標記（色彩的「效果＞標記」）：all＝每個資料點畫出圓點，none＝不畫；"
+        "None 為自動（不畫）",
+    )
+    color_more: list[FieldUse] = Field(
+        default_factory=list,
+        description="色彩上的其他維度（Tableau 可以把多個欄位放到色彩上，以欄位值的組合著色）：這些欄位"
+        "同時在詳細資料（detail）中，color 為第一個欄位；圖例的成員是各欄位的值以「, 」連接",
     )
     label_font: FontStyle | None = Field(
         default=None, description="標記標籤的字型（標記卡的 datalabel）；None 依工作表"
@@ -1689,6 +1714,17 @@ class Axis(IRModel):
         default=None, gt=0, description="主要刻度的固定間距（數值的座標軸）；None 為自動"
     )
     tick_origin: float | None = Field(default=None, description="固定間距的刻度的起點；None 為 0")
+    minor_spacing: float | None = Field(
+        default=None,
+        gt=0,
+        description="次要刻度的固定間距（編輯座標軸的「次要刻度：固定」）：主要刻度之間較短、沒有文字的刻度；"
+        "主要刻度是固定間距（tick_spacing）時才畫，None 為沒有",
+    )
+    independent: bool = Field(
+        default=False,
+        description="各窗格獨立的座標軸範圍（編輯座標軸的「每列或每欄的獨立座標軸範圍」）：列架上的量值"
+        "在每一列的窗格各自決定範圍，欄架上的量值在每一欄；預設所有窗格共用同一個範圍",
+    )
     label_color: HexColor | None = Field(
         default=None, description="座標軸刻度或標題（離散欄位的成員）文字的顏色；None 依工作表"
     )
@@ -2109,6 +2145,11 @@ class Worksheet(IRModel):
     )
     drop_lines: DropLines | None = Field(
         default=None, description="下拉線；None 為不顯示（連續的座標軸才有下拉線）"
+    )
+    stack: Literal["on", "off"] | None = Field(
+        default=None,
+        description="堆疊標記（分析＞堆疊標記）：on＝一律堆疊（折線、圓點等也依標記卡上的維度累加），"
+        "off＝不堆疊（長條與區域從 0 畫起、互相重疊）；None 為自動（長條與區域堆疊）",
     )
     source_ref: SourceRef
 

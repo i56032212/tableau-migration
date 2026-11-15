@@ -74,7 +74,7 @@ def discrete_scale(
     if not labels:
         return None
     if keys is None:
-        labels.sort(key=lambda label: _member_order(raw[label], members_first))
+        labels.sort(key=lambda label: member_order(raw[label], members_first))
     chosen = palette(setting.palette)
     if chosen is None or not chosen.colors:
         chosen = PALETTES[DEFAULT_REGULAR]
@@ -131,7 +131,7 @@ def shape_scale(
             labels.append(label)
     if not labels:
         return None
-    labels.sort(key=lambda label: _member_order(raw[label]))
+    labels.sort(key=lambda label: member_order(raw[label]))
     shapes: list[ShapeName] = [
         assigned.get(value_key(raw[label]), SHAPE_ORDER[i % len(SHAPE_ORDER)])
         for i, label in enumerate(labels)
@@ -139,7 +139,7 @@ def shape_scale(
     return {"domain": labels, "range": [VEGA_SHAPES[s] for s in shapes]}
 
 
-def _member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str]:
+def member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str]:
     """成員的排序（與 Tableau 的預設相同）：數字（含布林）由小到大、文字不分大小寫，Null 在最後；
     集合（members_first）的 True（內）在前。"""
     if value is None:

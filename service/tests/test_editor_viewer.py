@@ -2106,3 +2106,151 @@ def test_extract_settings_in_datasource_editor(tmp_path: Path) -> None:
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+def test_stack_color_effects_labels_axis_and_custom_format(engine: str) -> None:
+    """堆疊標記、色彩上的多個欄位、光暈與折線的標記、標籤的方向與換行、次要刻度與各窗格獨立的範圍，
+    以及自訂的數字格式字串。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def menu(page: Page, label: str) -> None:
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text=label).first.click()
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+
+    def spec() -> dict[str, Any]:
+        response = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})
+        assert response["unsupported"] is None, response
+        return response["spec"]
+
+    def confirm(page: Page, dialog: str) -> None:
+        page.locator(dialog).get_by_role("button", name="確定").click()
+        expect(page.locator(dialog)).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.get_by_role("button", name="新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        for field in ("f_category", "f_sales"):
+            page.locator(f'.data-pane [data-field="{field}"]').dblclick()
+            settle(page)
+        page.locator('.data-pane [data-field="f_region"]').drag_to(
+            page.locator('[data-drop="marks.color"]')
+        )
+        settle(page)
+
+        # 堆疊標記：關閉後長條不堆疊（stack: null）
+        measure = "x" if spec()["encoding"]["x"].get("type") == "quantitative" else "y"
+        assert "stack" not in spec()["encoding"][measure]
+        page.get_by_label("堆疊標記", exact=True).select_option("off")
+        settle(page)
+        assert sheet()["stack"] == "off"
+        assert spec()["encoding"][measure]["stack"] is None
+        page.get_by_label("堆疊標記", exact=True).select_option("")
+        settle(page)
+        assert sheet()["stack"] is None
+
+        # 色彩上的多個欄位：Segment 放到詳細資料，再從膠囊選單「也用於色彩」
+        page.locator('.data-pane [data-field="f_segment"]').drag_to(
+            page.locator('[data-drop="marks.detail"]')
+        )
+        settle(page)
+        page.locator('[data-drop="marks.detail"] .pill').click()
+        menu(page, "也用於色彩（組合著色）")
+        settle(page)
+        assert [u["field"] for u in sheet()["marks"]["color_more"]] == ["f_segment"]
+        expect(page.locator('[data-drop="marks.detail"] .pill-slot.also-color')).to_have_count(1)
+        color = spec()["encoding"]["color"]
+        assert color["field"] == "__color1" and color["title"] == "Region, Segment"
+        assert all(", " in member for member in color["scale"]["domain"])
+        # 再選一次即拿掉
+        page.locator('[data-drop="marks.detail"] .pill').click()
+        menu(page, "也用於色彩（組合著色）")
+        settle(page)
+        assert sheet()["marks"]["color_more"] == []
+
+        # 色彩的效果：光暈與折線上的標記
+        page.locator(".mark-buttons").get_by_role("button", name="色彩…").click()
+        dialog = page.locator(".colors-dialog")
+        dialog.get_by_label("光暈").check()
+        dialog.get_by_label("折線上的標記").select_option("all")
+        confirm(page, ".colors-dialog")
+        marks = sheet()["marks"]
+        assert (marks["halo"], marks["markers"]) == (True, "all")
+
+        # 標籤：顯示、由下往上、換行
+        page.locator(".mark-buttons").get_by_role("button", name="標籤…").click()
+        dialog = page.locator(".label-dialog")
+        dialog.get_by_label("顯示標記標籤").select_option("on")
+        dialog.get_by_label("標籤的文字方向").select_option("up")
+        dialog.get_by_label("換行").check()
+        confirm(page, ".label-dialog")
+        labels = sheet()["marks"]["labels"]
+        assert (labels["show"], labels["direction"], labels["wrap"]) == (True, "up", True)
+        texts = [
+            layer["mark"] for layer in spec().get("layer", []) if layer["mark"]["type"] == "text"
+        ]
+        assert texts and all(mark["angle"] == 270 for mark in texts)
+
+        # 編輯座標軸：固定的主要刻度加上次要刻度，各窗格獨立的範圍
+        page.locator(
+            f'.shelf[data-shelf="{"columns" if measure == "x" else "rows"}"] .pill'
+        ).click()
+        menu(page, "編輯座標軸…")
+        dialog = page.locator(".axis-dialog")
+        dialog.get_by_label("各窗格獨立的範圍").check()
+        dialog.get_by_label("主要刻度", exact=True).select_option("fixed")
+        dialog.get_by_label("刻度間距", exact=True).fill("200000")
+        dialog.get_by_label("次要刻度間距").fill("50000")
+        confirm(page, ".axis-dialog")
+        axis = sheet()["axes"][0]
+        assert (axis["tick_spacing"], axis["minor_spacing"], axis["independent"]) == (
+            200000,
+            50000,
+            True,
+        )
+        drawn = spec()["encoding"][measure]["axis"]
+        assert drawn["values"][:3] == [0, 50000, 100000] and drawn["tickSize"]["value"] == 3
+
+        # 自訂的數字格式字串：以千為單位、加上 K
+        page.locator(
+            f'.shelf[data-shelf="{"columns" if measure == "x" else "rows"}"] .pill'
+        ).click()
+        menu(page, "格式…")
+        dialog = page.locator(".format-dialog")
+        dialog.get_by_label("數字格式").select_option("custom")
+        dialog.get_by_label("自訂格式字串").fill('#,##0,"K"')
+        confirm(page, ".format-dialog")
+        assert sheet()["formats"] == {"sum(f_sales)": '#,##0,"K"'}
+        values = spec()["data"]["values"]
+        label = next(
+            k for k in values[0] if k.endswith("_label") and str(values[0][k]).endswith("K")
+        )
+        assert all(str(v[label]).endswith("K") for v in values)
+        # 再開啟時認得是自訂的格式
+        page.locator(
+            f'.shelf[data-shelf="{"columns" if measure == "x" else "rows"}"] .pill'
+        ).click()
+        menu(page, "格式…")
+        dialog = page.locator(".format-dialog")
+        assert dialog.get_by_label("數字格式").input_value() == "custom"
+        assert dialog.get_by_label("自訂格式字串").input_value() == '#,##0,"K"'
+        dialog.get_by_role("button", name="取消").click()
+        assert errors == []
+        browser.close()

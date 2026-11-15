@@ -1412,16 +1412,21 @@ class SheetParser:
             if tag in singles:
                 attr_name = singles[tag]
                 if tag == "color" and marks.color is not None and not self._is_measure(use):
-                    # 色彩上有多個欄位（Tableau 以組合著色）：以第一個欄位著色，其他的維度當作詳細資料
-                    # （詳細程度相同，數字不變）；Measure Names 不改變詳細程度，略過
-                    self.ctx.ignore(
-                        enc,
-                        f"工作表「{self.name}」的色彩上有多個欄位：以第一個欄位著色，"
-                        "其他的欄位當作詳細資料（Tableau 以欄位值的組合著色）",
-                    )
-                    if use.field != MEASURE_NAMES and use not in marks.detail:
+                    # 色彩上有多個欄位（Tableau 以欄位值的組合著色）：第一個是 color，其他的維度記在
+                    # color_more、同時當作詳細資料（詳細程度相同，數字不變）；各組合的顏色依自動色彩
+                    # （.twb 中組合的顏色寫法沒有樣本）。Measure Names 不改變詳細程度，略過
+                    if use.field == MEASURE_NAMES:
+                        self.ctx.ignore(
+                            enc,
+                            f"工作表「{self.name}」的色彩上有多個欄位：Measure Names 略過，"
+                            "依其他的欄位著色",
+                        )
+                        continue
+                    if use not in marks.detail:
                         marks.detail.append(use)
                         dims.append(use)
+                    if use not in marks.color_more:
+                        marks.color_more.append(use)
                     continue
                 if getattr(marks, attr_name) is not None:
                     self.ctx.flag(enc, f"標記編碼 {tag} 重複設定")

@@ -192,16 +192,91 @@ export function parseFormat(text: string | undefined): { kind: FormatKind; decim
   return result;
 }
 
-export function FormatDialog({ use, onClose }: { use: FieldUse; onClose: () => void }) {
-  const editor = useEditor();
-  const key = useKey(use);
-  const current = parseFormat((editor.sheet.formats as Record<string, string> | undefined)?.[key]);
-  const [kind, setKind] = useState<FormatKind>(current.kind);
+/** 數字格式的欄位（自動、數字、貨幣、百分比，或直接輸入 Tableau 的格式字串）與組出來的格式字串。 */
+export function useNumberFormat(initial: string | null | undefined): { text: string | null; fields: React.ReactNode } {
+  const current = parseFormat(initial ?? undefined);
+  // 對話框組不出來的寫法（例如正負數各自的格式、前後的文字）以「自訂」顯示原文
+  const roundTrip = formatString(current.kind, current.decimals, current.grouping, current.units, current.symbol);
+  const [kind, setKind] = useState<FormatKind | "custom">(initial && roundTrip !== initial ? "custom" : current.kind);
   const [decimals, setDecimals] = useState(current.decimals);
   const [grouping, setGrouping] = useState(current.grouping);
   const [units, setUnits] = useState(current.units);
   const [symbol, setSymbol] = useState(current.symbol);
-  const text = formatString(kind, decimals, grouping, units, symbol);
+  const [custom, setCustom] = useState(initial ?? "");
+  const built = kind === "custom" ? null : formatString(kind, decimals, grouping, units, symbol);
+  const text = kind === "custom" ? custom.trim() || null : built;
+  const fields = (
+    <>
+      <label className="inline">
+        格式
+        <select
+          aria-label="數字格式"
+          value={kind}
+          onChange={(e) => {
+            const next = e.target.value as FormatKind | "custom";
+            // 切到自訂時從目前組出來的格式字串開始改
+            if (next === "custom" && kind !== "custom") setCustom(built ?? custom);
+            setKind(next);
+          }}
+        >
+          <option value="auto">自動</option>
+          <option value="number">數字（自訂）</option>
+          <option value="currency">貨幣（自訂）</option>
+          <option value="percent">百分比</option>
+          <option value="custom">自訂（格式字串）</option>
+        </select>
+      </label>
+      {kind === "custom" && (
+        <>
+          <label className="inline">
+            格式字串
+            <input aria-label="自訂格式字串" className="format-custom" value={custom} spellCheck={false} onChange={(e) => setCustom(e.target.value)} />
+          </label>
+          <p className="hint">
+            與 Tableau、Excel 的寫法相同：<code>#,##0.00</code>、<code>0.0%</code>、<code>"NT$"#,##0</code>；以分號分開正數、負數與零，例如{" "}
+            <code>#,##0;(#,##0);"-"</code>、<code>▲0.0%;▼0.0%</code>。
+          </p>
+        </>
+      )}
+      {kind !== "auto" && kind !== "custom" && (
+        <>
+          <label className="inline">
+            小數位數
+            <input type="number" min={0} max={10} aria-label="小數位數" value={decimals} onChange={(e) => setDecimals(Math.max(0, Math.min(10, Number(e.target.value))))} />
+          </label>
+          {kind !== "percent" && (
+            <>
+              <label className="inline">
+                顯示單位
+                <select aria-label="顯示單位" value={units} onChange={(e) => setUnits(Number(e.target.value))}>
+                  <option value={0}>無</option>
+                  <option value={1}>千（K）</option>
+                  <option value={2}>百萬（M）</option>
+                  <option value={3}>十億（B）</option>
+                </select>
+              </label>
+              <label className="inline">
+                <input type="checkbox" checked={grouping} onChange={(e) => setGrouping(e.target.checked)} /> 千分位
+              </label>
+            </>
+          )}
+          {kind === "currency" && (
+            <label className="inline">
+              符號
+              <input aria-label="貨幣符號" value={symbol} onChange={(e) => setSymbol(e.target.value)} />
+            </label>
+          )}
+        </>
+      )}
+    </>
+  );
+  return { text, fields };
+}
+
+export function FormatDialog({ use, onClose }: { use: FieldUse; onClose: () => void }) {
+  const editor = useEditor();
+  const key = useKey(use);
+  const { text, fields } = useNumberFormat((editor.sheet.formats as Record<string, string> | undefined)?.[key]);
   const save = () => {
     editor.apply((s: SheetIR) => {
       const formats = { ...(s.formats as Record<string, string>) };
@@ -214,45 +289,7 @@ export function FormatDialog({ use, onClose }: { use: FieldUse; onClose: () => v
   return (
     <Modal title={`格式：${pillLabel(use, editor.fields, editor.sheet.table_calcs)}`} onClose={onClose}>
       <div className="format-dialog">
-        <label className="inline">
-          格式
-          <select aria-label="數字格式" value={kind} onChange={(e) => setKind(e.target.value as FormatKind)}>
-            <option value="auto">自動</option>
-            <option value="number">數字（自訂）</option>
-            <option value="currency">貨幣（自訂）</option>
-            <option value="percent">百分比</option>
-          </select>
-        </label>
-        {kind !== "auto" && (
-          <>
-            <label className="inline">
-              小數位數
-              <input type="number" min={0} max={10} aria-label="小數位數" value={decimals} onChange={(e) => setDecimals(Math.max(0, Math.min(10, Number(e.target.value))))} />
-            </label>
-            {kind !== "percent" && (
-              <>
-                <label className="inline">
-                  顯示單位
-                  <select aria-label="顯示單位" value={units} onChange={(e) => setUnits(Number(e.target.value))}>
-                    <option value={0}>無</option>
-                    <option value={1}>千（K）</option>
-                    <option value={2}>百萬（M）</option>
-                    <option value={3}>十億（B）</option>
-                  </select>
-                </label>
-                <label className="inline">
-                  <input type="checkbox" checked={grouping} onChange={(e) => setGrouping(e.target.checked)} /> 千分位
-                </label>
-              </>
-            )}
-            {kind === "currency" && (
-              <label className="inline">
-                符號
-                <input aria-label="貨幣符號" value={symbol} onChange={(e) => setSymbol(e.target.value)} />
-              </label>
-            )}
-          </>
-        )}
+        {fields}
         <p className="hint">格式字串：{text ?? "（自動）"}</p>
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>
@@ -317,6 +354,10 @@ interface AxisIR {
   /** 主要刻度的固定間距與起點；null 為自動 */
   tick_spacing?: number | null;
   tick_origin?: number | null;
+  /** 次要刻度的固定間距（主要刻度是固定間距時）；null 為沒有 */
+  minor_spacing?: number | null;
+  /** 各窗格獨立的座標軸範圍 */
+  independent?: boolean;
   [key: string]: unknown;
 }
 
@@ -337,6 +378,8 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
   const [tickMode, setTickMode] = useState<"auto" | "fixed" | "none">(current?.ticks === false ? "none" : current?.tick_spacing ? "fixed" : "auto");
   const [spacing, setSpacing] = useState(current?.tick_spacing ? String(current.tick_spacing) : "");
   const [origin, setOrigin] = useState(current?.tick_origin ? String(current.tick_origin) : "0");
+  const [minor, setMinor] = useState(current?.minor_spacing ? String(current.minor_spacing) : "");
+  const [independent, setIndependent] = useState(Boolean(current?.independent));
   const numeric = !isDate(editor.fields.get(use.field)) || isMeasure(use, editor.fields);
   const number = (text: string): Scalar => {
     if (!text.trim()) return null;
@@ -358,6 +401,8 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
       ticks: tickMode !== "none",
       tick_spacing: numeric && tickMode === "fixed" && Number(spacing) > 0 ? Number(spacing) : null,
       tick_origin: numeric && tickMode === "fixed" && Number(spacing) > 0 && Number(origin) ? Number(origin) : null,
+      minor_spacing: numeric && tickMode === "fixed" && Number(spacing) > 0 && Number(minor) > 0 ? Number(minor) : null,
+      independent,
     };
     editor.apply((s: SheetIR) => {
       const list = (s.axes as AxisIR[] | undefined) ?? [];
@@ -386,6 +431,9 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
             <input aria-label="終點" value={end} disabled={!fixed} onChange={(e) => setEnd(e.target.value)} />
           </label>
         </div>
+        <label className="inline" title="欄列架上有離散的維度把圖分成窗格時：每一列（列架的量值）或每一欄（欄架的量值）的窗格各自決定範圍">
+          <input type="checkbox" checked={independent} disabled={fixed} onChange={(e) => setIndependent(e.target.checked)} /> 各窗格獨立的範圍
+        </label>
         <label className="inline">
           <input type="checkbox" checked={zero} onChange={(e) => setZero(e.target.checked)} /> 自動範圍包含 0
         </label>
@@ -422,6 +470,10 @@ export function AxisDialog({ use, shelf, onClose }: { use: FieldUse; shelf: "row
             <label>
               刻度起點
               <input aria-label="刻度起點" value={origin} onChange={(e) => setOrigin(e.target.value)} />
+            </label>
+            <label title="主要刻度之間較短、沒有文字的刻度；空白為沒有">
+              次要刻度間距
+              <input aria-label="次要刻度間距" value={minor} placeholder="無" onChange={(e) => setMinor(e.target.value)} />
             </label>
           </div>
         )}
@@ -1572,6 +1624,8 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
   const [opacity, setOpacity] = useState(Math.round(((marks.opacity as number | null | undefined) ?? 1) * 100));
   const [stroke, setStroke] = useState((marks.stroke as string | null | undefined) ?? "#000000");
   const [useStroke, setUseStroke] = useState(Boolean(marks.stroke));
+  const [halo, setHalo] = useState(Boolean(marks.halo));
+  const [markers, setMarkers] = useState((marks.markers as string | null | undefined) ?? "");
   const [paletteName, setPaletteName] = useState((palette?.palette as string | null | undefined) ?? "");
   const [reverse, setReverse] = useState(Boolean(palette?.reverse));
   const [steps, setSteps] = useState<string>(palette?.steps ? String(palette.steps) : "");
@@ -1585,6 +1639,8 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
     ),
   );
   const colorKey = colorUse ? useKey(colorUse) : "";
+  // 色彩上有多個欄位（詳細資料上「也用於色彩」的維度）：成員是各欄位值的組合，不個別指定顏色
+  const combined = ((marks.color_more as FieldUse[] | undefined) ?? []).length > 0;
   useEffect(() => {
     if (!colorUse || !discreteColor) return;
     if (colorUse.field === MEASURE_NAMES) {
@@ -1608,9 +1664,16 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
   const save = () => {
     editor.apply((s: SheetIR) =>
       updateCard(s, card, (m) => {
-        const next: MarksIR = { ...m, mark_color: useMarkColor ? markColor.toLowerCase() : null, opacity: opacity >= 100 ? null : opacity / 100, stroke: useStroke ? stroke.toLowerCase() : null };
+        const next: MarksIR = {
+          ...m,
+          mark_color: useMarkColor ? markColor.toLowerCase() : null,
+          opacity: opacity >= 100 ? null : opacity / 100,
+          stroke: useStroke ? stroke.toLowerCase() : null,
+          halo,
+          markers: markers || null,
+        };
         if (colorUse) {
-          const assignments = discreteColor ? Object.values(assigned) : [];
+          const assignments = discreteColor && !combined ? Object.values(assigned) : [];
           if (!paletteName && assignments.length === 0) next.color_palette = null;
           else if (!paletteName) next.color_palette = { kind: "discrete", palette: null, assignments, colors: [], diverging: false, reverse: false, steps: null };
           else {
@@ -1664,7 +1727,8 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
                 <input type="number" min={2} aria-label="分段數" value={steps} placeholder="連續" onChange={(e) => setSteps(e.target.value)} />
               </label>
             )}
-            {discreteColor && members.length > 0 && (
+            {discreteColor && combined && <p className="hint">色彩是多個欄位的組合：各組合依色盤的順序著色。</p>}
+            {discreteColor && !combined && members.length > 0 && (
               <fieldset className="member-colors">
                 <legend>個別成員的顏色</legend>
                 {members.map((member, i) => {
@@ -1716,6 +1780,17 @@ export function ColorsDialog({ card, onClose }: { card: Card; onClose: () => voi
         <label className="inline">
           <input type="checkbox" checked={useStroke} onChange={(e) => setUseStroke(e.target.checked)} /> 框線
           <input type="color" aria-label="框線的顏色" value={stroke} onChange={(e) => setStroke(e.target.value)} disabled={!useStroke} />
+        </label>
+        <label className="inline" title="圓點、形狀與方塊外圍的白色細邊，與背景和相鄰的標記分開（沒有框線時）">
+          <input type="checkbox" checked={halo} onChange={(e) => setHalo(e.target.checked)} /> 光暈
+        </label>
+        <label className="inline" title="折線上每個資料點的圓點">
+          標記（折線）
+          <select aria-label="折線上的標記" value={markers} onChange={(e) => setMarkers(e.target.value)}>
+            <option value="">自動</option>
+            <option value="all">全部</option>
+            <option value="none">無</option>
+          </select>
         </label>
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={save}>

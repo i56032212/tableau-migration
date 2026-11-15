@@ -933,9 +933,25 @@ interface MarkLabelsIR {
   first: boolean;
   last: boolean;
   overlap: boolean;
+  /** 文字方向：由下往上、由上往下；null 為橫寫 */
+  direction: "up" | "down" | null;
+  /** 換行 */
+  wrap: boolean;
 }
 
-const DEFAULT_LABELS: MarkLabelsIR = { show: null, marks: "all", scope: "pane", field: null, minimum: true, maximum: true, first: true, last: true, overlap: false };
+const DEFAULT_LABELS: MarkLabelsIR = {
+  show: null,
+  marks: "all",
+  scope: "pane",
+  field: null,
+  minimum: true,
+  maximum: true,
+  first: true,
+  last: true,
+  overlap: false,
+  direction: null,
+  wrap: false,
+};
 
 /**
  * 標籤（Tableau 標記卡的「標籤」）：是否顯示標記標籤、自訂的標籤文字（文字、欄位值與參數值，可以設定格式）、
@@ -1018,7 +1034,18 @@ export function LabelDialog({ card, onClose }: { card: Card; onClose: () => void
         <label className="inline">
           <input type="checkbox" checked={labels.overlap} onChange={(e) => set({ overlap: e.target.checked })} /> 允許標籤與其他標記重疊
         </label>
-        <label className="inline" title="標籤相對於標記的位置（Tableau 標籤的「對齊」）；文字表是儲存格中的對齊">
+        <label className="inline">
+          文字方向
+          <select aria-label="標籤的文字方向" value={labels.direction ?? ""} onChange={(e) => set({ direction: (e.target.value || null) as MarkLabelsIR["direction"] })}>
+            <option value="">橫寫</option>
+            <option value="up">由下往上</option>
+            <option value="down">由上往下</option>
+          </select>
+        </label>
+        <label className="inline" title="超過寬度的標籤文字在空白、標點與全形字之間換行">
+          <input type="checkbox" checked={labels.wrap} onChange={(e) => set({ wrap: e.target.checked })} /> 換行
+        </label>
+        <label className="inline" title="標籤相對於標記的位置（Tableau 標籤的「對齊」）；文字表是儲存格中的對齊；長條上靠左／下在起點、置中在長條中間">
           水平對齊
           <select aria-label="標籤的水平對齊" value={align} onChange={(e) => setAlign(e.target.value)}>
             <option value="">自動</option>
