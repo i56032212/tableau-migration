@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from tmig.ir import Banding, Divider, iter_zones
+from tmig.ir import Banding, Border, Divider, iter_zones
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import ROW_HEIGHT, apply_fit, main_encoding
 
@@ -569,3 +569,114 @@ def test_divider_patterns(tmp_path: Path, db: Path) -> None:
     spec = render(parse(tmp_path, nested("cols", dashed, mark="Text")), db).spec
     axis = main_encoding(spec)["x"]["axis"]  # type: ignore[index]
     assert (axis["tickColor"], axis["tickDash"]) == ("#d4d4d4", [4, 2])
+
+
+CELL_BORDER = rule(
+    "cell",
+    fmt("border-style", "solid"),
+    fmt("border-width", "1"),
+    fmt("border-color", "#FF0000"),
+)
+PANE_BORDER = rule(
+    "pane",
+    fmt("border-style", "dashed"),
+    fmt("border-width", "2"),
+    fmt("border-color", "#0000FF"),
+)
+NO_DIVIDER = rule("table-div", fmt("line-visibility", "off", scope="rows"))
+
+
+def edge_test(edges: list[str]) -> str:
+    return f"indexof({json.dumps(edges, ensure_ascii=False)}, datum.value) >= 0"
+
+
+def test_borders_are_parsed(tmp_path: Path) -> None:
+    """儲存格與窗格的框線：樣式、線寬與顏色；樣式是 none、沒有寫樣式、寬度 0 或透明時沒有框線。
+    總計的框線（data-class）不算；表頭的框線還沒有畫出，記在 ignored。"""
+    plain = parse(tmp_path, banded()).worksheets[0]
+    assert (plain.cell_border, plain.pane_border) == (None, None)
+    ws = parse(tmp_path, banded(CELL_BORDER, PANE_BORDER)).worksheets[0]
+    assert ws.cell_border == Border(color="#ff0000")
+    assert ws.pane_border == Border(pattern="dashed", width=2, color="#0000ff")
+    # 只寫樣式：預設的顏色與線寬；不認得的樣式視為實線
+    assert parse(tmp_path, banded(rule("cell", fmt("border-style", "dotted")))).worksheets[
+        0
+    ].cell_border == Border(pattern="dotted")
+    assert (
+        parse(tmp_path, banded(rule("cell", fmt("border-style", "double"))))
+        .worksheets[0]
+        .cell_border
+        == Border()
+    )
+    for off in (
+        rule("cell", fmt("border-style", "none"), fmt("border-color", "#FF0000")),
+        rule("cell", fmt("border-color", "#FF0000")),
+        rule("cell", fmt("border-style", "solid"), fmt("border-width", "0")),
+        rule("cell", fmt("border-style", "solid"), fmt("border-color", "#00000000")),
+        rule("cell", "<format attr='border-style' data-class='total' value='solid' />"),
+    ):
+        assert parse(tmp_path, banded(off)).worksheets[0].cell_border is None, off
+    ir = parse(tmp_path, banded(rule("header", fmt("border-style", "solid"))))
+    assert ir.unsupported == []
+    assert [u.reason for u in ir.ignored if "框線" in u.reason] == [
+        "表頭的框線尚未畫出（儲存格與窗格的框線有畫）"
+    ]
+    assert not any("框線" in u.reason for u in parse(tmp_path, banded(CELL_BORDER)).ignored)
+
+
+def test_cell_and_pane_borders_are_rendered(tmp_path: Path, db: Path) -> None:
+    """儲存格的框線畫在每一列之間，窗格的框線畫在各窗格（Region 的各組）之間，外框是窗格（沒有時為儲存格）
+    的框線；同一個位置分隔線優先、其次窗格、最後儲存格。沒有框線時檢視沒有外框。"""
+    regions = ["East｜Technology", "North｜Office", "South｜Office"]  # Region 改變處
+    every = NESTED[:-1]  # 每一列之間
+    plain = render(parse(tmp_path, banded()), db).spec
+    assert plain["config"]["view"] == {"stroke": None}
+
+    # 關掉分隔線：窗格之間是 2 像素的藍色虛線，其餘各列之間是 1 像素的紅色實線
+    spec = render(parse(tmp_path, banded(CELL_BORDER, PANE_BORDER, NO_DIVIDER)), db).spec
+    axis = main_encoding(spec)["y"]["axis"]  # type: ignore[index]
+    pane = {"test": edge_test(regions)}
+    assert (axis["grid"], axis["tickBand"]) == (True, "extent")
+    assert axis["gridColor"] == {"condition": {**pane, "value": "#0000ff"}, "value": "#ff0000"}
+    assert axis["gridWidth"] == {"condition": {**pane, "value": 2}, "value": 1}
+    assert axis["gridDash"] == {"condition": {**pane, "value": [8, 4]}, "value": []}
+    drawn = list(dict.fromkeys([*regions, *every]))
+    assert axis["gridOpacity"] == {"condition": {"test": edge_test(drawn), "value": 1}, "value": 0}
+    assert spec["config"]["view"] == {"stroke": "#0000ff", "strokeWidth": 2, "strokeDash": [8, 4]}
+    assert main_encoding(spec)["y"]["scale"] == {  # type: ignore[index]
+        "type": "band",
+        "paddingInner": 0,
+        "paddingOuter": 0,
+    }
+
+    # 預設的分隔線（Region 之間）在窗格的框線之上
+    spec = render(parse(tmp_path, banded(CELL_BORDER, PANE_BORDER)), db).spec
+    colors = main_encoding(spec)["y"]["axis"]["gridColor"]  # type: ignore[index]
+    assert [c["value"] for c in colors["condition"]] == ["#d4d4d4", "#0000ff"]
+    assert colors["value"] == "#ff0000"
+
+    # 只有儲存格的框線：每一列之間都畫，外框也是它；實線不寫樣式
+    spec = render(parse(tmp_path, banded(CELL_BORDER, NO_DIVIDER)), db).spec
+    axis = main_encoding(spec)["y"]["axis"]  # type: ignore[index]
+    assert (axis["gridColor"], axis["gridWidth"]) == ("#ff0000", 1)
+    assert "gridDash" not in axis
+    assert axis["gridOpacity"]["condition"]["test"] == edge_test(every)
+    assert spec["config"]["view"] == {"stroke": "#ff0000", "strokeWidth": 1}
+
+    # 只有一層標題：整張表是一個窗格，窗格的框線只有外框；儲存格的框線仍畫在每一列之間
+    spec = render(parse(tmp_path, bars(PANE_BORDER)), db).spec
+    assert "gridOpacity" not in main_encoding(spec)["y"].get("axis", {})  # type: ignore[index]
+    assert spec["config"]["view"]["stroke"] == "#0000ff"
+    spec = render(parse(tmp_path, bars(CELL_BORDER)), db).spec
+    y = main_encoding(spec)["y"]  # type: ignore[index]
+    members = list(dict.fromkeys(v[y["field"]] for v in spec["data"]["values"]))
+    assert len(members) == 4
+    assert y["axis"]["gridOpacity"]["condition"]["test"] == edge_test(members[:-1])
+
+    # 文字表：欄的每一欄之間也畫儲存格的框線
+    spec = render(parse(tmp_path, nested("cols", CELL_BORDER, mark="Text")), db).spec
+    x = main_encoding(spec)["x"]["axis"]  # type: ignore[index]
+    # 預設的欄分隔線（Region 之間）優先，其餘各欄之間是儲存格的框線
+    assert x["gridColor"]["condition"]["value"] == "#d4d4d4"
+    assert x["gridColor"]["value"] == "#ff0000"
+    assert x["gridOpacity"]["condition"]["test"].count("｜") == len(NESTED) - 1

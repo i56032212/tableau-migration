@@ -3431,3 +3431,110 @@ def test_null_indicator(engine: str) -> None:
         expect(page.locator(".editor .null-indicator")).to_have_count(0)
         assert errors == []
         browser.close()
+
+
+def test_cell_and_pane_borders(engine: str) -> None:
+    """格式對話框的框線：儲存格的框線畫在每一列之間、窗格的框線是外框；存進工作表、畫面上的格線與外框跟著變，
+    清除格式後回到沒有框線。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def use(field: str, **extra: Any) -> dict[str, Any]:
+        base = {"field": field, "agg": None, "date": None, "continuous": False, "table_calc": None}
+        return {**base, **extra}
+
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "Borders"})["worksheet"]
+    body = {
+        **created,
+        "rows": [use("f_region")],
+        "columns": [use("f_sales", agg="sum", continuous=True)],
+    }
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/{created['id']}",
+        data=json.dumps({"worksheet": body}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    urllib.request.urlopen(request, timeout=60).close()
+
+    def current() -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+
+    def spec() -> dict[str, Any]:
+        response = call(engine, f"/api/workbooks/demo/worksheets/{created['id']}/render", {})
+        assert response["unsupported"] is None, response
+        return response["spec"]
+
+    assert spec()["config"]["view"] == {"stroke": None}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{created['id']}")
+        settle(page)
+        page.get_by_role("button", name="格式…", exact=True).click()
+        dialog = page.locator(".format-dialog")
+        expect(dialog.get_by_label("儲存格框線的樣式")).to_have_count(0)  # 沒有勾選時不顯示細部
+        dialog.get_by_label("儲存格的框線").check()
+        dialog.get_by_label("儲存格框線的樣式").select_option("dotted")
+        dialog.get_by_label("儲存格框線的顏色").fill("#ff0000")
+        dialog.get_by_label("窗格的框線").check()
+        dialog.get_by_label("窗格框線的線寬").fill("2")
+        dialog.get_by_label("窗格框線的顏色").fill("#0000ff")
+        page.get_by_role("dialog").get_by_role("button", name="確定").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        saved = current()
+        assert saved["cell_border"] == {"pattern": "dotted", "width": 1, "color": "#ff0000"}
+        assert saved["pane_border"] == {"pattern": "solid", "width": 2, "color": "#0000ff"}
+        rendered = spec()
+        # 外框是窗格的框線；各區之間是儲存格的框線（紅色的點線）
+        assert rendered["config"]["view"] == {"stroke": "#0000ff", "strokeWidth": 2}
+
+        def y_axis(node: dict[str, Any]) -> dict[str, Any] | None:
+            axis = (node.get("encoding") or {}).get("y", {}).get("axis")
+            if isinstance(axis, dict) and "gridOpacity" in axis:
+                return axis
+            for layer in node.get("layer", []):
+                found = y_axis(layer)
+                if found is not None:
+                    return found
+            return None
+
+        axis = y_axis(rendered)
+        assert axis is not None
+        assert (axis["gridColor"], axis["gridWidth"], axis["gridDash"]) == ("#ff0000", 1, [2, 1])
+        # 畫面上（主圖）：各區之間有 3 條看得見的紅色點線（頭尾兩條不畫），外框是藍色
+        drawn = page.evaluate(
+            """() => {
+                 // 主圖（另有捲動時固定標題用的複本 .frozen）
+                 const svg = document.querySelector('.editor .worksheet .frozen-host > svg')
+                   ?? document.querySelector('.editor .worksheet svg');
+                 const lines = [...svg.querySelectorAll('.role-axis-grid line')]
+                   .filter((line) => line.getAttribute('stroke') === '#ff0000')
+                   .map((line) => [line.getAttribute('stroke-dasharray'), line.getAttribute('opacity')]);
+                 const frames = [...svg.querySelectorAll('path.background')]
+                   .map((path) => [path.getAttribute('stroke'), path.getAttribute('stroke-width')])
+                   .filter(([stroke]) => stroke);
+                 return { lines, frames, charts: document.querySelectorAll('.editor .worksheet svg').length };
+               }"""
+        )
+        visible = [dash for dash, opacity in drawn["lines"] if opacity != "0"]
+        assert visible == ["2,1", "2,1", "2,1"], drawn
+        assert len(drawn["lines"]) - len(visible) == 2, drawn
+        assert drawn["frames"] == [["#0000ff", "2"]], drawn
+        # 清除格式：回到沒有框線
+        page.get_by_role("button", name="清除格式").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        assert (current()["cell_border"], current()["pane_border"]) == (None, None)
+        assert spec()["config"]["view"] == {"stroke": None}
+        assert errors == []
+        browser.close()

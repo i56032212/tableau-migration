@@ -49,6 +49,7 @@ from tmig.ir.models import (
     AnnotationPoint,
     Axis,
     Banding,
+    Border,
     CategoricalFilter,
     ColorPalette,
     DataField,
@@ -2675,8 +2676,21 @@ def build_spec(
             enc = encoding.get(channel)
             if not isinstance(enc, dict) or enc.get("type") not in ("ordinal", "nominal"):
                 continue
-            if style.divider is not None:
-                _divider(spec, enc, channel, values, len(dims), style.divider)
+            if (
+                style.divider is not None
+                or ws.cell_border is not None
+                or ws.pane_border is not None
+            ):
+                _pane_lines(
+                    spec,
+                    enc,
+                    channel,
+                    values,
+                    len(dims),
+                    style.divider,
+                    ws.pane_border,
+                    ws.cell_border,
+                )
             if shelf == "rows" and headers is not None and style.header_divider is not None:
                 _header_divider(spec, enc, values, len(dims), style.header_divider, headers)
             shown = len(builder.header(dims, "columns")[0]) if shelf == "columns" and dims else 0
@@ -2696,6 +2710,13 @@ def build_spec(
                     else (builder.header_extent(dims, shelf) if dims else None)
                 )
                 _banding(spec, enc, channel, values, style.banding, extent, len(dims))
+    frame = ws.pane_border or ws.cell_border
+    if frame is not None and map_plan is None:
+        # 外框：窗格（沒有時為儲存格）的框線畫在整個檢視的四周
+        view: dict[str, Any] = {"stroke": _css_color(frame.color), "strokeWidth": frame.width}
+        if frame.pattern != "solid":
+            view["strokeDash"] = [n * frame.width for n in DASHES[frame.pattern]]
+        spec["config"] = {**spec["config"], "view": view}
     spec["usermeta"]["fit"] = ws.fit
     apply_fit(spec, ws.fit)
     return RenderResult(spec, marks_count, mark, None, builder.notes)
@@ -3161,31 +3182,61 @@ def _divider_level(divider: Divider, levels: int) -> int:
     return divider.level if divider.level is not None else levels - 1
 
 
-def _divider(
+def _pane_lines(
     spec: dict[str, Any],
     encoding: dict[str, Any],
     channel: str,
     values: list[dict[str, Any]],
     levels: int,
-    divider: Divider,
+    divider: Divider | None,
+    pane: Border | None,
+    cell: Border | None,
 ) -> None:
-    """窗格的分隔線：以座標軸的格線畫在各列（欄）的邊界（tickBand extent），只顯示前 level 層的成員
-    改變處。"""
-    level = _divider_level(divider, levels)
-    edges = _band_edges(values, encoding["field"], levels, level) if level >= 1 else []
-    if not edges:
+    """窗格中列（欄）之間的線：分隔線、窗格的框線與儲存格的框線都以座標軸的格線畫在各列（欄）的邊界
+    （tickBand extent）。分隔線畫在前 level 層的成員改變處，窗格的框線畫在最內層以外的成員改變處（各窗格
+    之間），儲存格的框線畫在每一列（欄）之間；同一個位置有不只一種線時，分隔線優先、其次窗格、最後儲存格
+    （Tableau 的文件沒有說明重疊時的順序，是推定的）。"""
+    field_name = encoding["field"]
+    tiers: list[tuple[list[Any], str, int, list[int]]] = []
+    if divider is not None:
+        level = _divider_level(divider, levels)
+        edges = _band_edges(values, field_name, levels, level) if level >= 1 else []
+        dash = _divider_dash(divider) if divider.pattern != "solid" else []
+        tiers.append((edges, _css_color(divider.color), divider.width, dash))
+    for border, level in ((pane, levels - 1), (cell, levels)):
+        if border is None:
+            continue
+        edges = _band_edges(values, field_name, levels, level) if level >= 1 else []
+        dash = [n * border.width for n in DASHES[border.pattern]]
+        tiers.append((edges, _css_color(border.color), border.width, dash))
+    tiers = [tier for tier in tiers if tier[0]]
+    if not tiers:
         return
+
+    def test(edges: list[Any]) -> str:
+        return f"indexof({json.dumps(edges, ensure_ascii=False)}, datum.value) >= 0"
+
+    def conditional(at: int) -> Any:
+        """各層的值：只有一層時直接寫值；多層時依序判斷，最後一層是其餘的線。"""
+        if len(tiers) == 1:
+            return tiers[0][at]
+        conditions = [{"test": test(tier[0]), "value": tier[at]} for tier in tiers[:-1]]
+        return {
+            "condition": conditions[0] if len(conditions) == 1 else conditions,
+            "value": tiers[-1][at],
+        }
+
+    drawn = list(dict.fromkeys(edge for tier in tiers for edge in tier[0]))
     axis = dict(encoding.get("axis") or {})
-    test = f"indexof({json.dumps(edges, ensure_ascii=False)}, datum.value) >= 0"
     axis.update(
         grid=True,
         tickBand="extent",
-        gridColor=_css_color(divider.color),
-        gridWidth=divider.width,
-        gridOpacity={"condition": {"test": test, "value": 1}, "value": 0},
+        gridColor=conditional(1),
+        gridWidth=conditional(2),
+        gridOpacity={"condition": {"test": test(drawn), "value": 1}, "value": 0},
     )
-    if divider.pattern != "solid":
-        axis["gridDash"] = _divider_dash(divider)
+    if any(tier[3] for tier in tiers):
+        axis["gridDash"] = conditional(3)
     encoding["axis"] = axis
     _flush_bands(spec, encoding, channel)
 

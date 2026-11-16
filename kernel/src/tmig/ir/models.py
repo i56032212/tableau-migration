@@ -1930,6 +1930,16 @@ class Divider(IRModel):
     )
 
 
+class Border(IRModel):
+    """儲存格或窗格的框線（格式設定的「框線」）：樣式、線寬與顏色。Tableau 預設沒有框線。"""
+
+    pattern: Literal["solid", "dashed", "dotted"] = Field(
+        default="solid", description="線的樣式：實線、虛線、點線"
+    )
+    width: int = Field(default=1, ge=1, description="線寬（像素）")
+    color: HexColor = "#d4d4d4"
+
+
 class LineStyle(IRModel):
     """格線或座標軸線的樣式（格式設定的「線條＞格線、座標軸尺規」）：顏色、線寬與樣式（實線、虛線、點線）。
     線是否畫出另由 ShelfStyle 的 grid、axis 決定。"""
@@ -2368,6 +2378,15 @@ class Worksheet(IRModel):
         default=None,
         description="座標軸上 Null 值的標記（特殊值＞標記）：connect＝隱藏並連接前後的點（折線不斷開），"
         "zero＝顯示在預設值（0）；None 為隱藏、折線在這裡斷開",
+    )
+    cell_border: Border | None = Field(
+        default=None,
+        description="儲存格的框線（格式＞框線＞儲存格）：每一列、每一欄之間與檢視的外框；None 為沒有",
+    )
+    pane_border: Border | None = Field(
+        default=None,
+        description="窗格的框線（格式＞框線＞窗格）：各窗格（最內層以外的標題成員改變處）之間與檢視的外框；"
+        "只有一層標題時整張表是一個窗格，只有外框。None 為沒有",
     )
     null_indicator: bool = Field(
         default=True,

@@ -36,6 +36,9 @@
   - 字型（Format > Font）：font-family、font-size（pt）、font-weight、font-style，元素為 worksheet（整張
     工作表）、label（標題成員與刻度；有 field 時為這個欄位）、cell（文字表）、field-labels、title、legend、
     legend-title、tooltip；活頁簿 <style> 的設定（all 為預設字型）在前；標記標籤為標記卡的 datalabel
+  - 框線：element='cell'（儲存格）、'pane'（窗格）、'header'（表頭）的 border-style（none、solid、dashed、
+    dotted）、border-width、border-color（屬性名稱與 dashboard 區塊的框線相同；工作表的寫法沒有樣本，
+    是推定的）。表頭的框線還沒有畫出
   - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
     stroke-color、line-pattern-only（樣式，各自設定），table-div 的 div-level（第幾層標題之間，
     0 為不畫），以 scope 區分列與欄；沒有寫時
@@ -58,6 +61,7 @@ from lxml import etree
 from tmig.ir.models import (
     Axis,
     Banding,
+    Border,
     Divider,
     FieldUse,
     FontElement,
@@ -99,6 +103,10 @@ class SheetFormats:
     fonts: dict[FontElement, FontStyle] = field(default_factory=dict)
     field_fonts: dict[str, FontStyle] = field(default_factory=dict)
     field_colors: dict[str, str] = field(default_factory=dict)
+    cell_border: Border | None = None
+    pane_border: Border | None = None
+    header_border: bool = False
+    """有設定表頭的框線（還沒有畫出：由呼叫端記進 ignored）。"""
 
 
 def worksheet_formats(
@@ -189,6 +197,7 @@ def worksheet_formats(
 
     bands: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
     dividers: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
+    borders: dict[str, dict[str, str]] = {"cell": {}, "pane": {}, "header": {}}
 
     def fonts(element: str | None, item: etree._Element) -> bool:
         """沒有 field 的字型格式：活頁簿的在前、工作表的覆寫（all 是活頁簿的預設字型）。"""
@@ -223,6 +232,15 @@ def worksheet_formats(
                     result.field_fonts[key] = font_attr(
                         result.field_fonts.get(key), name or "", value
                     )
+            elif (
+                tag == "format"
+                and element in borders
+                and name in BORDER_ATTRS
+                and ref is None
+                and item.get("data-class") is None
+            ):
+                # 儲存格、窗格、表頭的框線（總計等 data-class 的另外設定，不算）
+                borders[element or ""][name or ""] = value or ""
             elif tag == "format" and name == "background-color" and element == "table":
                 result.background = hex_color(value) or result.background
             elif tag == "format" and name == "background-color" and element == "field-labels":
@@ -302,6 +320,9 @@ def worksheet_formats(
             }
         )
     result.row_style, result.column_style = shelves["rows"], shelves["columns"]
+    result.cell_border = _border(borders["cell"])
+    result.pane_border = _border(borders["pane"])
+    result.header_border = _border(borders["header"]) is not None
     return result
 
 
@@ -339,6 +360,22 @@ def _zero_line(raw: dict[str, str]) -> ZeroLine | None:
         width=width or 1,
         pattern="solid" if pattern == "solid" else "dashed" if pattern == "dashed" else "dotted",
     )
+
+
+BORDER_ATTRS = ("border-style", "border-width", "border-color")
+"""框線的屬性：樣式（none、solid、dashed、dotted）、線寬（像素）與顏色（與 dashboard 區塊的框線相同）。"""
+
+
+def _border(raw: dict[str, str]) -> Border | None:
+    """儲存格或窗格的框線：樣式是 none、沒有寫樣式、寬度 0 或透明時沒有框線。不認得的樣式視為實線。"""
+    style = raw.get("border-style")
+    if style is None or style == "none":
+        return None
+    width = _int(raw.get("border-width"))
+    color = hex_color(raw.get("border-color"))
+    if (width is not None and width <= 0) or (color is not None and _transparent(color)):
+        return None
+    return Border(pattern=_pattern(style), width=width or 1, color=color or Border().color)
 
 
 LINE_ATTRS = ("stroke-color", "stroke-size", "line-pattern-only")

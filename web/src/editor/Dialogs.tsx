@@ -1863,6 +1863,43 @@ interface LineStyleIR {
   pattern: LinePattern;
 }
 
+/** 儲存格或窗格的框線（IR 的 Border）；null 為沒有框線 */
+interface BorderIR {
+  pattern: LinePattern;
+  width: number;
+  color: string;
+}
+
+/** 框線（Tableau 的「格式＞框線」的儲存格、窗格）：勾選後設定樣式、顏色與線寬。 */
+function BorderInputs({ label, value, onChange }: { label: string; value: BorderIR | null; onChange: (value: BorderIR | null) => void }) {
+  const border: BorderIR = { pattern: "solid", width: 1, color: "#d4d4d4", ...(value ?? {}) };
+  const change = (patch: Partial<BorderIR>) => onChange({ ...border, ...patch });
+  return (
+    <span className="divider-details" data-border={label}>
+      <label>
+        <input type="checkbox" aria-label={`${label}的框線`} checked={value !== null} onChange={(e) => onChange(e.target.checked ? border : null)} /> {label}
+      </label>
+      {value !== null && (
+        <>
+          <PatternSelect label={`${label}框線的樣式`} value={border.pattern} onChange={(pattern) => change({ pattern })} />
+          <input type="color" aria-label={`${label}框線的顏色`} title={`${label}框線的顏色`} value={border.color.slice(0, 7)} onChange={(e) => change({ color: e.target.value })} />
+          <label title={`${label}框線的線寬（像素）`}>
+            線寬
+            <input
+              type="number"
+              min={1}
+              max={6}
+              aria-label={`${label}框線的線寬`}
+              value={border.width}
+              onChange={(e) => change({ width: Math.max(1, Math.min(6, Math.round(Number(e.target.value)) || 1)) })}
+            />
+          </label>
+        </>
+      )}
+    </span>
+  );
+}
+
 /** 線的樣式（Tableau 的「格式＞線條」「格式＞框線」中的樣式）：實線、虛線、點線。 */
 function PatternSelect({ label, value, onChange }: { label: string; value: LinePattern; onChange: (value: LinePattern) => void }) {
   return (
@@ -1933,6 +1970,9 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
   const [nullText, setNullText] = useState<string>((sheet.null_text as string | null | undefined) ?? "");
   const [nullMarks, setNullMarks] = useState<string>((sheet.null_marks as string | null | undefined) ?? "");
   const [nullIndicator, setNullIndicator] = useState<boolean>((sheet.null_indicator as boolean | undefined) !== false);
+  // 框線：儲存格（每一列、每一欄之間）與窗格（各窗格之間），外框跟著畫
+  const [cellBorder, setCellBorder] = useState<BorderIR | null>((sheet.cell_border as BorderIR | null | undefined) ?? null);
+  const [paneBorder, setPaneBorder] = useState<BorderIR | null>((sheet.pane_border as BorderIR | null | undefined) ?? null);
   const [empty, setEmpty] = useState<Set<string>>(new Set((sheet.show_empty as string[] | undefined) ?? []));
   const toggleEmpty = (which: "rows" | "columns") =>
     setEmpty((current) => {
@@ -1961,6 +2001,8 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
         null_text: nullText === "" ? null : nullText,
         null_marks: nullMarks || null,
         null_indicator: nullIndicator,
+        cell_border: cellBorder,
+        pane_border: paneBorder,
         show_empty: (["rows", "columns"] as const).filter((which) => empty.has(which)),
       };
   };
@@ -2184,6 +2226,11 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
           <label className="inline">
             <input type="checkbox" checked={empty.has("columns")} onChange={() => toggleEmpty("columns")} /> 顯示空的欄
           </label>
+        </div>
+        <div className="row" title="框線（Tableau 的「格式＞框線」）：儲存格的框線畫在每一列、每一欄之間；窗格的框線畫在各窗格之間；檢視的外框跟著畫">
+          框線
+          <BorderInputs label="儲存格" value={cellBorder} onChange={setCellBorder} />
+          <BorderInputs label="窗格" value={paneBorder} onChange={setPaneBorder} />
         </div>
         {shelf("列", rowStyle, setRowStyle)}
         {shelf("欄", colStyle, setColStyle)}

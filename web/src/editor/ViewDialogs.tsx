@@ -280,6 +280,9 @@ const FORMAT_KEYS = [
   "title_background",
   "null_text",
   "null_marks",
+  "null_indicator",
+  "cell_border",
+  "pane_border",
 ] as const;
 const FORMAT_STORE = "tmig.copied-format";
 let copiedFormat: Record<string, unknown> | null = null;

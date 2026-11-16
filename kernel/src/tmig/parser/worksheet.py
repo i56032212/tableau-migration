@@ -530,6 +530,8 @@ class SheetParser:
         sheet_formats = worksheet_formats(
             child(table, "style"), self.resolve, rows, cols, child(ctx.package.root, "style")
         )
+        if sheet_formats.header_border:
+            ctx.ignore(el, "表頭的框線尚未畫出（儲存格與窗格的框線有畫）")
         title = self._title(child(el, "layout-options"))
         self._check_label_text(card_uses, [marks, *(p.marks for p in panes)])
         on_map = any(u.field in GENERATED_FIELDS for u in [*rows, *cols])
@@ -577,6 +579,8 @@ class SheetParser:
             title_background=sheet_formats.title_background,
             field_colors=sheet_formats.field_colors,
             cell_align=sheet_formats.cell_align,
+            cell_border=sheet_formats.cell_border,
+            pane_border=sheet_formats.pane_border,
             field_label_background=sheet_formats.field_label_background,
             fonts=sheet_formats.fonts,
             label_valign=sheet_formats.label_valign,

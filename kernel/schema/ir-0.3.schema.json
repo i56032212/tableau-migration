@@ -886,6 +886,38 @@
       "title": "BlendLink",
       "type": "object"
     },
+    "Border": {
+      "additionalProperties": false,
+      "description": "儲存格或窗格的框線（格式設定的「框線」）：樣式、線寬與顏色。Tableau 預設沒有框線。",
+      "properties": {
+        "pattern": {
+          "default": "solid",
+          "description": "線的樣式：實線、虛線、點線",
+          "enum": [
+            "solid",
+            "dashed",
+            "dotted"
+          ],
+          "title": "Pattern",
+          "type": "string"
+        },
+        "width": {
+          "default": 1,
+          "description": "線寬（像素）",
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        },
+        "color": {
+          "default": "#d4d4d4",
+          "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+          "title": "Color",
+          "type": "string"
+        }
+      },
+      "title": "Border",
+      "type": "object"
+    },
     "Button": {
       "additionalProperties": false,
       "description": "dashboard 按鈕（I2）：切換到 dashboard 或工作表、顯示或隱藏區塊、匯出。",
@@ -9117,6 +9149,30 @@
           "default": null,
           "description": "座標軸上 Null 值的標記（特殊值＞標記）：connect＝隱藏並連接前後的點（折線不斷開），zero＝顯示在預設值（0）；None 為隱藏、折線在這裡斷開",
           "title": "Null Marks"
+        },
+        "cell_border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Border"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "儲存格的框線（格式＞框線＞儲存格）：每一列、每一欄之間與檢視的外框；None 為沒有"
+        },
+        "pane_border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Border"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "窗格的框線（格式＞框線＞窗格）：各窗格（最內層以外的標題成員改變處）之間與檢視的外框；只有一層標題時整張表是一個窗格，只有外框。None 為沒有"
         },
         "null_indicator": {
           "default": true,
