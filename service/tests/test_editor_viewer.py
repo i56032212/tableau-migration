@@ -209,7 +209,9 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
 
         # 工作表的格式：列的格線、背景
         page.get_by_role("button", name="格式…").click()
-        page.locator(".format-dialog fieldset", has_text="列").get_by_label("格線").uncheck()
+        page.locator(".format-dialog fieldset", has_text="列").get_by_label(
+            "格線", exact=True
+        ).uncheck()
         page.locator(".format-dialog").get_by_role("button", name="確定").click()
         settle(page)
         sheet = call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
