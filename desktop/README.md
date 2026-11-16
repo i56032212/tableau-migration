@@ -47,6 +47,25 @@ CI 的 desktop 工作流程（`.github/workflows/desktop.yml`）在 Windows 上�
 在該次執行的 Artifacts 下載 `TmigDesktop-windows-installer`。安裝在使用者自己的資料夾，不需要系統管理員權限；
 需要 WebView2（Windows 10／11 通常已內建，沒有時安裝程式會下載）。
 
+### 在 Windows 本機建置安裝檔
+
+GitHub Actions 沒有在跑時，可以在 Windows 電腦上自己建。需要 Rust（`winget install --id Rustlang.Rustup -e`）與
+Visual Studio Build Tools 的 C++ 工作負載（`winget install --id Microsoft.VisualStudio.2022.BuildTools -e
+--override "--passive --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`，
+約 9 GB，安裝時要系統管理員確認；公司用途要留意 Visual Studio 的授權）。步驟與 CI 相同，在 repo 根目錄：
+
+```bash
+cd web && pnpm install --frozen-lockfile && pnpm build && cd ..      # 檢視器（web/dist 已是最新時可以略過）
+uv run --with pyinstaller pyinstaller desktop/engine/tmig-engine.spec --distpath desktop/engine/dist --workpath desktop/engine/build --noconfirm
+python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine.exe fixtures/superstore_demo/superstore_demo.twbx
+cd desktop && pnpm install --frozen-lockfile && pnpm tauri build     # 第一次編譯約 8 分鐘
+```
+
+安裝檔在 `desktop/src-tauri/target/release/bundle/nsis/TmigDesktop_<版本>_x64-setup.exe`（約 135 MB）。建置的中間產物
+（`desktop/src-tauri/target` 約 2 GB、`desktop/engine/dist` 約 650 MB）都不進版控，可以刪。安裝檔沒有程式碼簽章，
+第一次執行時 Windows SmartScreen 會警告。不安裝也可以直接執行 `desktop/src-tauri/target/release/tmig-desktop.exe`
+（引擎在同一個資料夾的 `engine/`）。
+
 ## 開發
 
 ```bash

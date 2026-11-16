@@ -85,6 +85,8 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 - Windows 上的完整測試（c929ea3，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2652 項通過、114 項略過
   （其中 110 項需要 PostgreSQL、MySQL、Spark，在 Windows 上還沒跑過）；前端可以建置，結果與 Linux 上的相同。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
-- GitHub Actions 目前沒有在跑（使用者決定先不處理），所以安裝檔的打包這陣子沒有驗證；Windows 上的測試在本機跑
+- GitHub Actions 目前沒有在跑（使用者決定先不處理）；Windows 上的測試與安裝檔的建置在本機做
+- 桌面版安裝檔（82cba62）：2026-11-17 在 Windows 本機建出，引擎的冒煙測試與外殼的啟動測試通過；還沒有實際安裝、
+  也還沒有在視窗中操作過（見 `docs/backlog.md`）。建置的做法在 `desktop/README.md`
 - `scripts/regen_ir.py`、`scripts/check_commit.py` 在 Linux 與 Windows 上都跑過
 - 接下來的工作與待決定的事項見 `docs/backlog.md`
