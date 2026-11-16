@@ -219,8 +219,9 @@ export function FilterDialog({
         if (cancelled || d.kind !== "range") return;
         setBounds({ min: d.min, max: d.max });
         if (!existing || existing.kind !== "range") {
-          setLow(d.min === null ? "" : String(d.min));
-          setHigh(d.max === null ? "" : String(d.max));
+          // 範圍載入之前使用者已經輸入的值不覆蓋（查詢慢的時候，先輸入的下限或上限會被資料的範圍蓋掉）
+          setLow((current) => (current !== "" ? current : d.min === null ? "" : String(d.min)));
+          setHigh((current) => (current !== "" ? current : d.max === null ? "" : String(d.max)));
         }
       })
       .catch((e: Error) => !cancelled && setError(e.message));

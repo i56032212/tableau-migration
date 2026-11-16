@@ -20,6 +20,7 @@
       "weight": 400,
       "italic": false
     },
+    "nulls": 1,
     "sizing": {
       "rows": {
         "step": 20
