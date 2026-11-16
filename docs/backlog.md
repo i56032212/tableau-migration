@@ -17,6 +17,7 @@
 | Ask Data、指標（Metrics）、集合（Collections） | 沒有 | 伺服器上的功能 |
 | 「建立使用者篩選」的對話框 | 部分 | .twb 的使用者篩選會移轉；編輯器裡要用 `USERNAME()`、`ISMEMBEROF()` 的計算欄位 |
 | 書籤（.tbm） | 部分 | 不解析 .tbm；以「匯入工作表…」從來源報表匯入，效果相同 |
+| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：「N 個 Null」指示器、WMS／Mapbox 底圖、萃取的抽樣、列印的頁首頁尾、在檢視上直接拖曳標題排序、預設排序「依欄位」、.xls 的具名範圍、描述預測 Summary 頁的 Initial／Change From Initial／Seasonal Effect／Contribution |
 
 ## 二、開啟 Tableau 檔時還不支援的寫法
 
@@ -30,6 +31,10 @@
 - 合併集合的 XML 寫法（公開報表中還沒看到）、尚未併入 .tdsx 的 Published Data Source、舊版的 .tde 萃取
 - 要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線（要改用列層級權限重寫）
 
+另有一類**不會**列入 `unsupported`：編輯器裡可以設定，但 .twb 中的寫法沒有樣本、解析器不認得，從 Tableau 開啟的
+報表會是預設值——次要計算與表計算的自訂排序順序、堆疊標記的開關、篩選控制項的自訂（顯示「全部」、搜尋、
+套用按鈕等）、頁面的顯示歷程、Story 的格式、分頁顏色。盤點時要留意報表有沒有用到；拿到樣本就能補上解析
+
 ## 三、還沒驗證的
 
 這些比第一部分重要：目標是數字可以驗證與 Tableau 相同，而下面每一項都還沒有在公司的環境證實。
@@ -42,9 +47,14 @@
 3. **Tableau Server 盤點**：由使用者以自己的 PAT 執行 `tools/tableau_server`（見 `tools/README.md`），再以
    `tmig census`、`tmig inventory` 看哪些報表符合起步條件、用到哪些還沒做的功能
 4. **試點**：還沒有拿 1–2 份真實報表從頭到尾移轉並以 `tmig verify` 比對數字
-5. **Windows 桌面版**：這幾輪的測試都在 Linux 上（本機引擎的 API 與瀏覽器端到端）。Tauri 外殼、PyInstaller 打包的
-   引擎與 NSIS 安裝檔由 CI 的 desktop 工作流程在 Windows 上建置與冒煙測試，而 GitHub Actions 目前沒有在跑，
-   所以這陣子加的功能沒有在安裝好的桌面版上確認過
+5. **Windows**：2026-11-16 第一次在 Windows 11 上跑一鍵檢查（ruff、pyright、完整的 pytest）、`regen_ir.py`、
+   `check_commit.py` 與前端的建置，修掉當時發現的四個問題（存檔時檔案正被讀取而換不上、兩個只差大小寫的前端
+   檔名讓建置失敗、一項端到端測試依賴 Linux 字型的行高、示範報表的匯入紀錄過期）。前端在 Windows 上建置的結果
+   與 Linux 上提交的 web/dist 相同。還沒驗證的：
+   - 需要引擎的測試 110 項（PostgreSQL 63、Spark 37、MySQL 10）：那台電腦沒有引擎，略過了。MySQL 的臨時伺服器在
+     Windows 上不啟動（`kernel/tests/engines.py`），要以 `TMIG_TEST_MYSQL` 指向現成的伺服器
+   - 桌面版：Tauri 外殼、PyInstaller 打包的引擎與 NSIS 安裝檔由 CI 的 desktop 工作流程在 Windows 上建置與冒煙
+     測試，而 GitHub Actions 目前沒有在跑，所以這陣子加的功能沒有在安裝好的桌面版上確認過
 6. **與 Tableau 的畫面比對**：README「已知限制與待驗證」中標為「推定」的行為（版面、格式、預設值、圖片形狀的
    大小與著色等）還沒與 Tableau 的畫面對過；`tools/compare_screens` 可以用來比對
 
@@ -59,7 +69,9 @@
 
 ## 五、建議的順序
 
-1. 在公司的 Windows 電腦上 `uv sync`、`uv run python scripts/check.py`：先知道 Windows 上的測試結果
+1. 在 Windows 上補上引擎再跑一次一鍵檢查：裝 PostgreSQL（Spark 另需 Java 17 與 `uv sync --group spark`）後設
+   `TMIG_REQUIRE_ENGINES=1`。沒有引擎的部分 2026-11-16 已經跑過（第三部分的 5）；公司的電腦若不是那一台，
+   也在公司的電腦上跑一次
 2. 盤點 Tableau Server（第三部分的 3），挑試點的報表
 3. 設定公司資料庫的連線並實測（第三部分的 1、2）
 4. 移轉試點的報表、比對數字，把不一致的地方修掉
