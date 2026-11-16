@@ -43,7 +43,7 @@ export interface CatalogField {
   /** 預設屬性：色彩、形狀、排序、總計使用 */
   default_color?: Record<string, unknown> | null;
   default_shapes?: { value: Scalar; shape: string; image?: string | null }[];
-  default_sort?: { kind: "alphabetic" | "manual"; order: "asc" | "desc"; manual_values: Scalar[] } | null;
+  default_sort?: { kind: "alphabetic" | "manual" | "by_field"; order: "asc" | "desc"; manual_values: Scalar[]; by?: FieldUse | null } | null;
   total_using?: "sum" | "avg" | "min" | "max" | null;
 }
 

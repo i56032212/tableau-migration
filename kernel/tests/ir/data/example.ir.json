@@ -522,6 +522,7 @@
       "show_empty": [],
       "null_text": null,
       "null_marks": null,
+      "null_indicator": true,
       "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
     },
@@ -726,6 +727,7 @@
       "show_empty": [],
       "null_text": null,
       "null_marks": null,
+      "null_indicator": true,
       "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
     }

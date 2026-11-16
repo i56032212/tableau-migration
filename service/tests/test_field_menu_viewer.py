@@ -346,6 +346,15 @@ def test_ad_hoc_calculation_and_more_field_commands(engine: str, tmp_path: Path)
         body = call(engine, f"/api/workbooks/{workbook}/worksheets/ws_1/render", {})
         return {row[0]: row[1] for row in body["table"]["rows"]}
 
+    def put_sheet(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/{workbook}/worksheets/ws_1",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
     ids = {caption: f["id"] for caption, f in fields().items()}
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -422,6 +431,67 @@ def test_ad_hoc_calculation_and_more_field_commands(engine: str, tmp_path: Path)
         assert fields()["Region"]["default_sort"]["order"] == "desc"
         assert [(s["field"], s["order"]) for s in sheet()["sorts"]] == [(ids["Region"], "desc")]
         assert list(table()) == ["West", "South", "East"]
+        # 預設屬性＞排序：依欄位（Sales 的總和遞增：South 75、East 150.75、West 200）
+        menu("Region", "預設屬性", "排序…")
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("欄位", exact=True).check()
+        dialog.get_by_label("預設排序的欄位").select_option(label="Sales")
+        dialog.get_by_label("預設排序的彙總").select_option("sum")
+        dialog.get_by_label("預設排序的順序").select_option("asc")
+        confirm()
+        saved = fields()["Region"]["default_sort"]
+        assert (saved["kind"], saved["order"]) == ("by_field", "asc")
+        assert (saved["by"]["field"], saved["by"]["agg"]) == (ids["Sales"], "sum")
+        assert [(s["kind"], s["order"]) for s in sheet()["sorts"]] == [("by_field", "asc")]
+        assert list(table()) == ["South", "East", "West"]
+        # 重新開啟對話框時是原本的設定；改回字母順序遞減
+        menu("Region", "預設屬性", "排序…")
+        assert dialog.get_by_label("欄位", exact=True).is_checked()
+        assert dialog.get_by_label("預設排序的順序").input_value() == "asc"
+        dialog.get_by_label("字母順序：遞減").check()
+        confirm()
+        assert list(table()) == ["West", "South", "East"]
+        # 建立＞使用者篩選：amy 看得到 East，群組「業務」看得到 West 與 South
+        menu("Region", "建立", "使用者篩選…")
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("使用者或群組的名稱").fill("amy")
+        dialog.get_by_role("button", name="新增").click()
+        dialog.get_by_label("看得到的成員").get_by_label("East").check()
+        dialog.get_by_label("對象的種類").select_option("group")
+        dialog.get_by_label("使用者或群組的名稱").fill("業務")
+        dialog.get_by_label("使用者或群組的名稱").press("Enter")
+        dialog.get_by_label("看得到的成員").get_by_label("West").check()
+        dialog.get_by_label("看得到的成員").get_by_label("South").check()
+        entries = dialog.locator(".user-filter-entries li")
+        assert [e.get_attribute("data-entry") for e in entries.all()] == ["amy", "業務"]
+        assert "（2）" in entries.nth(1).inner_text() and "（1）" in entries.nth(0).inner_text()
+        confirm()
+        made = fields()["Region 的使用者篩選"]
+        assert (made["role"], made["datatype"]) == ("dimension", "boolean")
+        assert 'ISUSERNAME("amy")' in made["formula"] and 'ISMEMBEROF("業務")' in made["formula"]
+        # 放到篩選架上選 True：本機引擎的登入者是 amy，只看得到 East；拿掉篩選後恢復
+        before = sheet()
+        filtered = {
+            **before,
+            "filters": [
+                *before["filters"],
+                {
+                    "id": "flt_user",
+                    "kind": "categorical",
+                    "field": {"field": made["id"]},
+                    "stage": "dimension",
+                    "mode": "include",
+                    "values": [True],
+                    "source_ref": "/editor",
+                },
+            ],
+        }
+        put_sheet(filtered)
+        assert list(table()) == ["East"]
+        put_sheet(sheet() | {"filters": before["filters"]})
+        assert list(table()) == ["West", "South", "East"]
+        page.reload()
+        page.wait_for_selector('.editor[data-saving="false"]')
         # 預設屬性＞總計使用
         menu("Sales", "預設屬性", "總計使用", "平均")
         page.wait_for_function("!document.querySelector('.popup-menu')")

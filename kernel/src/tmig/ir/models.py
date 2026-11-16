@@ -1305,16 +1305,21 @@ class Sort(IRModel):
 
 
 class FieldSort(IRModel):
-    """欄位預設的排序（預設屬性＞排序）：字母順序或手動排列的成員。"""
+    """欄位預設的排序（預設屬性＞排序）：字母順序、依另一個欄位的彙總值，或手動排列的成員。"""
 
-    kind: Literal["alphabetic", "manual"]
+    kind: Literal["alphabetic", "manual", "by_field"]
     order: Literal["asc", "desc"] = "asc"
     manual_values: list[Scalar] = Field(default_factory=list, description="kind 為 manual 時的順序")
+    by: FieldUse | None = Field(
+        default=None, description="kind 為 by_field 時的排序依據（同一個資料源的欄位與彙總）"
+    )
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         if (self.kind == "manual") != bool(self.manual_values):
             raise ValueError("只有 kind 為 manual 時必須、也只能指定 manual_values")
+        if (self.kind == "by_field") != (self.by is not None):
+            raise ValueError("只有 kind 為 by_field 時必須、也只能指定 by")
         return self
 
 
@@ -2363,6 +2368,11 @@ class Worksheet(IRModel):
         default=None,
         description="座標軸上 Null 值的標記（特殊值＞標記）：connect＝隱藏並連接前後的點（折線不斷開），"
         "zero＝顯示在預設值（0）；None 為隱藏、折線在這裡斷開",
+    )
+    null_indicator: bool = Field(
+        default=True,
+        description="Null 值的標記隱藏（null_marks 為 None）時，在檢視的右下角顯示「N 個 Null」的指示器"
+        "（Tableau 的「在指示器顯示」）；False 為不顯示（「隱藏指示器」）",
     )
     stack: Literal["on", "off"] | None = Field(
         default=None,

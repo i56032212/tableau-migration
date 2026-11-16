@@ -709,6 +709,19 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .summary-card th, .summary-card td { border: 1px solid var(--line); padding: 2px 8px; text-align: right; }
 .summary-card tbody th { text-align: left; font-weight: 400; }
 .summary-card .summary-more { margin-left: 8px; padding: 0 6px; font-size: 11px; font-weight: 400; }
+/* 建立使用者篩選：左邊是使用者與群組，右邊是看得到的成員 */
+.user-filter-columns { display: flex; gap: 12px; min-height: 220px; }
+.user-filter-entries { flex: 0 0 220px; list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 4px; overflow-y: auto; max-height: 360px; }
+.user-filter-entries li { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; cursor: pointer; }
+.user-filter-entries li.picked { background: #dbeafe; }
+.user-filter-members { flex: 1; min-width: 0; }
+/* 「N 個 Null」指示器：檢視的右下角 */
+.null-indicator { position: absolute; right: 6px; bottom: 6px; z-index: 3; font-size: 11px; color: #666; background: rgba(255, 255, 255, 0.9); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; }
+.null-indicator > button { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.null-indicator .null-menu { position: absolute; right: 0; bottom: 100%; margin-bottom: 4px; display: flex; flex-direction: column; min-width: 150px; background: #fff; border: 1px solid var(--line); border-radius: 3px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
+.null-indicator .null-menu button { border: 0; background: none; text-align: left; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.null-indicator .null-menu button:hover { background: #eef3fb; }
+@media print { .null-indicator { display: none; } }
 .divider-details { display: inline-flex; gap: 8px; align-items: center; }
 .divider-details input[type="number"] { width: 56px; margin-left: 4px; }
 .describe-dialog { min-width: 460px; max-width: 860px; max-height: 70vh; overflow: auto; }

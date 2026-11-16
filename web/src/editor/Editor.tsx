@@ -966,6 +966,10 @@ export function Editor({
                   worksheet={sheet.id}
                   state={EMPTY_STATE}
                   revision={revision}
+                  nullActions={[
+                    { label: "在預設位置顯示資料", run: () => apply((s) => ({ ...s, null_marks: "zero" })) },
+                    { label: "隱藏指示器", run: () => apply((s) => ({ ...s, null_indicator: false })) },
+                  ]}
                   selected={selected}
                   onMarks={(event) => {
                     if (event.kind !== "click") return;

@@ -19,9 +19,10 @@ from tmig.edit import (
     replace_worksheet,
     upsert_calc,
 )
-from tmig.field_edit import set_field_properties, split_field
+from tmig.field_edit import create_user_filter, set_field_properties, split_field
 from tmig.ir import IR, load_ir
 from tmig.ir.integrity import check_references
+from tmig.planner.identity import Identity
 from tmig.sqlgen.query import worksheet_sql
 from tmig.verify.run import ensure_data
 
@@ -112,6 +113,43 @@ def test_unused_ad_hoc_calculations_are_pruned(setup: tuple[IR, Path, Path]) -> 
     changed = update_field(ir, ds, f["Sales"], role="dimension")
     assert field(changed, "Sales").role == "dimension"
     assert not any(x.id == doubled.id for x in changed.datasources[0].fields)
+
+
+def test_default_sort_by_field(setup: tuple[IR, Path, Path]) -> None:
+    """預設排序「依欄位」：依另一個欄位的彙總值排序，排序依據不必在檢視上；預設改變時沿用它的工作表跟著改。
+    各區的 SUM(Sales)：East 150.75、West 200、South 75；SUM(Quantity)：East 5、West 1、South 1。"""
+    ir, sources, out = setup
+    ds = ir.datasources[0].id
+    f = ids(ir)
+    by_sales = {"field": f["Sales"], "agg": "sum"}
+    ir = set_field_properties(
+        ir, ds, f["Region"], default_sort={"kind": "by_field", "order": "desc", "by": by_sales}
+    )
+    quantity = {"field": f["Quantity"], "agg": "sum", "continuous": True}
+    ir = place(ir, rows=[{"field": f["Region"]}], columns=[quantity])
+    (sort,) = ir.worksheets[0].sorts
+    assert (sort.kind, sort.order, sort.nested) == ("by_field", "desc", False)
+    assert sort.by is not None and (sort.by.field, sort.by.agg) == (f["Sales"], "sum")
+    assert [r[0] for r in run(ir, sources, out)] == ["West", "East", "South"]
+    # 預設改成遞增：沿用預設的工作表跟著改
+    ir = set_field_properties(
+        ir, ds, f["Region"], default_sort={"kind": "by_field", "order": "asc", "by": by_sales}
+    )
+    assert [(s.kind, s.order) for s in ir.worksheets[0].sorts] == [("by_field", "asc")]
+    assert [r[0] for r in run(ir, sources, out)] == ["South", "East", "West"]
+    # 拿掉預設：工作表回到沒有排序
+    ir = set_field_properties(ir, ds, f["Region"], default_sort=None)
+    assert ir.worksheets[0].sorts == []
+    # 排序依據要是同一個資料源的另一個欄位、要有彙總；by 與 kind 要一致
+    for bad, message in (
+        ({"kind": "by_field", "by": {"field": "f_nope", "agg": "sum"}}, "不在資料源"),
+        ({"kind": "by_field", "by": {"field": f["Region"], "agg": "count"}}, "自己"),
+        ({"kind": "by_field", "by": {"field": f["Sales"]}}, "彙總方式"),
+        ({"kind": "by_field"}, "預設屬性不正確"),
+        ({"kind": "alphabetic", "by": by_sales}, "預設屬性不正確"),
+    ):
+        with pytest.raises(EditError, match=message):
+            set_field_properties(ir, ds, f["Region"], default_sort=bad)
 
 
 def test_default_sort_color_shape_and_total_using(setup: tuple[IR, Path, Path]) -> None:
@@ -302,3 +340,78 @@ def test_change_data_type_of_an_extract_column() -> None:
     assert not any(f.caption.endswith("（原始型別）") for f in back.datasources[0].fields)
     with pytest.raises(EditError, match="不能轉換成"):
         update_field(ir, ds.id, target.id, datatype="boolean")
+
+
+def test_create_user_filter(setup: tuple[IR, Path, Path]) -> None:
+    """建立使用者篩選：各使用者或群組看得到的成員 → 布林的計算欄位（登入者看得到的為 TRUE）；放到篩選架上
+    選 True 之後，不同的登入者查到不同的列。各區的 SUM(Sales)：East 150.75、West 200、South 75。"""
+    ir, sources, out = setup
+    ds = ir.datasources[0].id
+    f = ids(ir)
+    ir, made = create_user_filter(
+        ir,
+        ds,
+        f["Region"],
+        "",
+        [
+            ("user", "amy", ["East"]),
+            ("group", "業務", ["West", "South"]),
+            ("user", "nobody", []),  # 沒有成員：什麼都看不到，不寫進公式
+        ],
+    )
+    assert (made.caption, made.role, made.datatype) == (
+        "Region 的使用者篩選",
+        "dimension",
+        "boolean",
+    )
+    assert made.calc is not None
+    formula = made.calc.formula
+    assert formula.startswith('ISMEMBEROF("All Users") AND (')
+    assert 'ISUSERNAME("amy")' in formula and 'ISMEMBEROF("業務")' in formula
+    assert "nobody" not in formula
+    ir = place(
+        ir,
+        rows=[{"field": f["Region"]}],
+        columns=[{"field": f["Sales"], "agg": "sum", "continuous": True}],
+        filters=[
+            {
+                "id": "flt_user",
+                "kind": "categorical",
+                "field": {"field": made.id},
+                "stage": "dimension",
+                "mode": "include",
+                "values": [True],
+                "source_ref": "/editor",
+            }
+        ],
+    )
+    assert check_references(ir) == []
+    import_sources(sources, out, ir)
+    database = out / f"{ir.datasources[0].id}.duckdb"
+
+    def visible(user: Identity) -> dict[Any, Any]:
+        query = worksheet_sql(ir, ir.worksheets[0].id, None, user)
+        return dict(execute_query(database, query).rows)
+
+    everyone = ("All Users",)
+    assert visible(Identity(username="amy", groups=everyone)) == pytest.approx({"East": 150.75})
+    assert visible(Identity(username="bob", groups=(*everyone, "業務"))) == pytest.approx(
+        {"West": 200.0, "South": 75.0}
+    )
+    # 同時符合兩個條件：看得到兩邊的成員
+    assert len(visible(Identity(username="amy", groups=(*everyone, "業務")))) == 3
+    assert visible(Identity(username="nobody", groups=everyone)) == {}
+    # 名稱重複時加上序號；名稱與種類要正確、成員的型別要符合、至少一個對象有成員
+    ir, again = create_user_filter(ir, ds, f["Region"], "", [("user", "amy", ["West"])])
+    assert again.caption == "Region 的使用者篩選 2"
+    for entries, message in (
+        ([("user", "amy", [])], "至少要有一個"),
+        ([("user", " ", ["East"])], "需要名稱"),
+        ([("role", "amy", ["East"])], "不認得的對象種類"),
+        ([("user", "amy", ["East"]), ("user", "AMY", ["West"])], "重複"),
+        ([("user", "amy", [1])], "East|Region|型別|不是"),
+    ):
+        with pytest.raises(EditError, match=message):
+            create_user_filter(ir, ds, f["Region"], "", entries)
+    with pytest.raises(EditError, match="不是維度"):
+        create_user_filter(ir, ds, f["Sales"], "", [("user", "amy", [1.0])])

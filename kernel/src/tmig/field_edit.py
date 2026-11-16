@@ -71,6 +71,7 @@ from tmig.ir.setformula import (
     bin_expression,
     formula_literal,
     group_expression,
+    members_condition,
     members_formula,
     set_levels,
 )
@@ -281,6 +282,71 @@ def upsert_group(
     return _put(ir, ds, field, f"群組「{caption}」不正確"), field
 
 
+# ---------------------------------------------------------------- 使用者篩選
+
+USER_FUNCTIONS = {"user": "ISUSERNAME", "group": "ISMEMBEROF"}
+"""使用者篩選中對象的種類 → 判斷登入者的函式（使用者名稱、群組）。"""
+
+
+def create_user_filter(
+    ir: IR,
+    datasource: str,
+    source_id: str,
+    caption: str,
+    entries: Sequence[tuple[str, str, Sequence[Scalar]]],
+) -> tuple[IR, DataField]:
+    """建立使用者篩選（Tableau 的「伺服器＞建立使用者篩選」）：entries 為（種類、名稱、看得到的成員），種類是
+    user（使用者名稱）或 group（群組）。產生布林的計算欄位，登入者看得到的成員為 TRUE——與 .twb 的使用者篩選
+    解析後的公式相同的形狀（tmig.parser.groups.identity_set_formula）：
+
+        ISMEMBEROF("All Users") AND ((ISUSERNAME("amy") AND …成員…) OR (ISMEMBEROF("業務") AND …成員…))
+
+    開頭的 ISMEMBEROF("All Users") 對每個登入者都成立，讓這個欄位一定屬於列層級權限。放到篩選架上選 True
+    即依登入者篩選；之後要修改時編輯這個計算欄位的公式。"""
+    ds = _datasource(ir, datasource)
+    source = _field(ds, source_id)
+    if source.set is not None or not _is_dimension(source) or source.datatype not in GROUPABLE:
+        raise EditError(f"「{source.caption}」不是維度，不能建立使用者篩選")
+    caption = _caption(ds, caption, f"{source.caption} 的使用者篩選", None)
+    seen: set[tuple[str, str]] = set()
+    branches: list[str] = []
+    for kind, name, members in entries:
+        name = name.strip()
+        if kind not in USER_FUNCTIONS:
+            raise EditError(f"不認得的對象種類 {kind}（要是 user 或 group）")
+        if not name:
+            raise EditError("使用者或群組需要名稱")
+        key = (kind, name.casefold())
+        if key in seen:
+            raise EditError(f"「{name}」重複")
+        seen.add(key)
+        if not members:
+            continue  # 沒有勾選成員：這個對象什麼都看不到，不必寫進公式
+        for member in members:
+            _check_value(source, member)
+        try:
+            who = f"{USER_FUNCTIONS[kind]}({formula_literal(name)})"
+            visible = members_condition(list(members), source.name, source.datatype)
+        except FormulaValueError as exc:
+            raise EditError(str(exc)) from exc
+        branches.append(f"(({who}) AND {visible})")
+    if not branches:
+        raise EditError("使用者篩選至少要有一個使用者或群組看得到成員")
+    condition = branches[0] if len(branches) == 1 else "(" + " OR ".join(branches) + ")"
+    formula = f'ISMEMBEROF("All Users") AND ({condition})'
+    check = check_formula(ir, datasource, formula, None)
+    field = DataField(
+        id=_unique_id(ir, "f_" + _slug(caption)),
+        name=_new_name(ds),
+        caption=caption,
+        role="dimension",
+        datatype="boolean",
+        calc=check.calc,
+        source_ref=EDITOR_REF,
+    )
+    return _put(ir, ds, field, f"使用者篩選「{caption}」不正確"), field
+
+
 # ---------------------------------------------------------------- 數值分組
 
 
@@ -483,9 +549,20 @@ def set_field_properties(
         if default_sort is not UNSET:
             if field.role != "dimension":
                 raise EditError("只有維度可以設定預設的排序")
-            update["default_sort"] = (
-                None if default_sort is None else FieldSort.model_validate(default_sort)
-            )
+            sort = None if default_sort is None else FieldSort.model_validate(default_sort)
+            if sort is not None and sort.by is not None:
+                # 依欄位排序：依據是同一個資料源中的另一個欄位（量值要有彙總）
+                by = next((f for f in ds.fields if f.id == sort.by.field), None)
+                if by is None:
+                    raise EditError(f"排序依據的欄位 {sort.by.field} 不在資料源「{ds.caption}」中")
+                if by.id == field.id:
+                    raise EditError("排序依據不能是這個欄位自己")
+                aggregate = by.calc is not None and by.calc.level == "aggregate"
+                if sort.by.agg is None and not aggregate:
+                    raise EditError(f"排序依據「{by.caption}」要指定彙總方式")
+                if sort.by.table_calc is not None:
+                    raise EditError("排序依據不能是表計算")
+            update["default_sort"] = sort
     except ValidationError as exc:
         raise EditError(f"「{field.caption}」的預設屬性不正確：{_first_error(exc)}") from exc
     if total_using is not UNSET:
@@ -721,6 +798,7 @@ def remove_field(ir: IR, datasource: str, field_id: str) -> IR:
 
 __all__ = [
     "IN_OUT",
+    "create_user_filter",
     "duplicate_field",
     "remove_field",
     "set_aliases",

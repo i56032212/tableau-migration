@@ -83,7 +83,7 @@ export type EditorDialog =
   /** 資料源的日期屬性 */
   | { kind: "date-properties"; datasource: string }
   /** 預設屬性的色彩、形狀、排序；分割與自訂分割、取代參照、描述欄位 */
-  | { kind: "default-color" | "default-shapes" | "default-sort" | "split" | "replace-references" | "describe"; datasource: string; field: string };
+  | { kind: "default-color" | "default-shapes" | "default-sort" | "split" | "replace-references" | "describe" | "user-filter"; datasource: string; field: string };
 
 export const EditorContext = createContext<EditorContextValue | null>(null);
 

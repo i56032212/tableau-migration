@@ -202,7 +202,7 @@ export const editApi = {
       fiscal_year_start?: number | null;
       default_color?: Record<string, unknown> | null;
       default_shapes?: { value: Scalar; shape: string; image?: string | null }[];
-      default_sort?: { kind: "alphabetic" | "manual"; order: "asc" | "desc"; manual_values: Scalar[] } | null;
+      default_sort?: { kind: "alphabetic" | "manual" | "by_field"; order: "asc" | "desc"; manual_values: Scalar[]; by?: FieldUse | null } | null;
       total_using?: "sum" | "avg" | "min" | "max" | null;
     },
   ) =>
@@ -245,6 +245,16 @@ export const editApi = {
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/fields/${part(field)}`, {
       method: "DELETE",
     }),
+  /** 建立使用者篩選：各使用者（user）或群組（group）看得到的成員 → 布林的計算欄位 */
+  saveUserFilter: (
+    workbook: string,
+    datasource: string,
+    body: { source: string; caption: string; entries: { kind: "user" | "group"; name: string; members: Scalar[] }[] },
+  ) =>
+    request<{ field: CatalogField }>(`${edit(workbook)}/datasources/${part(datasource)}/user-filters`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then((r) => r.field),
   saveGroup: (
     workbook: string,
     datasource: string,

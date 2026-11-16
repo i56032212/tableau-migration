@@ -2069,3 +2069,42 @@ def test_custom_image_shapes(client: TestClient, tmp_path: Path) -> None:
     assert saved_package.status_code == 200, saved_package.text
     with zipfile.ZipFile(target) as archive:
         assert archive.read("files/Shapes/KPI/up.png") == png
+
+
+def test_create_user_filter_api(client: TestClient) -> None:
+    """建立使用者篩選的 API：各使用者或群組看得到的成員 → 布林的計算欄位；錯誤時 422 並說明原因。"""
+    url = "/api/edit/demo/datasources/ds_orders/user-filters"
+    body = {
+        "source": "f_region",
+        "caption": "區域權限",
+        "entries": [
+            {"kind": "user", "name": "amy", "members": ["East", "West"]},
+            {"kind": "group", "name": "南區業務", "members": ["South"]},
+        ],
+    }
+    response = client.post(url, json=body)
+    assert response.status_code == 200, response.text
+    field = response.json()["field"]
+    assert (field["caption"], field["role"], field["datatype"]) == (
+        "區域權限",
+        "dimension",
+        "boolean",
+    )
+    formula = field["calc"]["formula"]
+    assert formula.startswith('ISMEMBEROF("All Users") AND (')
+    assert 'ISUSERNAME("amy")' in formula and 'ISMEMBEROF("南區業務")' in formula
+    catalog = client.get("/api/edit/demo/catalog").json()["datasources"][0]["fields"]
+    assert any(f["id"] == field["id"] for f in catalog)
+    # 名稱重複、沒有任何成員、量值都不行
+    assert client.post(url, json=body).status_code == 422
+    empty = {**body, "caption": "", "entries": [{"kind": "user", "name": "amy", "members": []}]}
+    refused = client.post(url, json=empty)
+    assert refused.status_code == 422 and "至少要有一個" in refused.text
+    measure = {**body, "caption": "", "source": "f_sales"}
+    assert client.post(url, json=measure).status_code == 422
+    bad_kind = {
+        **body,
+        "caption": "",
+        "entries": [{"kind": "role", "name": "x", "members": ["East"]}],
+    }
+    assert client.post(url, json=bad_kind).status_code == 422

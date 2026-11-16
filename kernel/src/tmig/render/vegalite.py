@@ -2277,6 +2277,7 @@ def build_spec(
 
     # ---------------------------------------------------------- 資料
     # 顯示遺漏的值：日期與數值分組在最小值到最大值之間補上沒有資料的成員
+    unpadded = result
     result = pad_result(ir, ws, columns, result, parameters, builder.notes)
     values = _records(channels, result, ws.null_text)
     if COLUMN_ORDER in result.columns:
@@ -2612,6 +2613,10 @@ def build_spec(
     if totals and not ws.totals_colored:
         _exclude_totals_from_color(spec, mark, builder.text_color(ws.marks, cell=True))
     encoding = main_encoding(spec)
+    if ws.null_marks is None and ws.null_indicator and map_plan is None:
+        hidden = _null_marks(encoding, channels, unpadded)
+        if hidden:
+            spec["usermeta"]["nulls"] = hidden
     sized = (
         map_plan is None
         and encoding is not None
@@ -5170,6 +5175,30 @@ GRID_COLOR = "#f0f0f0"
 RULER_COLOR = "#f4f4f4"
 """座標軸線與刻度的顏色（Tableau 的預設，依畫面量測，幾乎看不出來）。"""
 DASHES = {"solid": [], "dashed": [4, 2], "dotted": [2, 1]}
+
+
+def _null_marks(
+    encoding: dict[str, Any] | None, channels: dict[str, Channel], result: QueryResult
+) -> int:
+    """連續座標軸上的值是 Null 而沒有畫出的標記數（Tableau 檢視右下角的「N 個 Null」）。只算查詢結果中
+    的列：顯示遺漏的值補上的空標記與總計不算。Measure Values 的座標軸（量值攤成多列）不計。"""
+    if encoding is None:
+        return 0
+    names = {
+        channel["field"]
+        for name in ("x", "y")
+        if isinstance(channel := encoding.get(name), dict)
+        and channel.get("type") in ("quantitative", "temporal")
+        and "field" in channel
+    }
+    at = [
+        result.columns.index(key)
+        for key, ch in channels.items()
+        if ch.name in names and key in result.columns
+    ]
+    if not at:
+        return 0
+    return sum(1 for row in result.rows if any(row[i] is None for i in at))
 
 
 def _line_props(prefix: Literal["grid", "domain"], style: LineStyle) -> dict[str, Any]:

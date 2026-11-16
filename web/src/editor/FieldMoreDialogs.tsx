@@ -7,7 +7,7 @@ import type { FieldUse, Scalar } from "../types";
 import { editApi } from "./api";
 import { type EditorDialog, useEditor } from "./context";
 import { memberText } from "./FieldDialogs";
-import type { CatalogField } from "./model";
+import { AGGREGATIONS, type CatalogField } from "./model";
 import { type ShapeChoice, ShapePalettes, ShapeSelect, SHAPES, useShapePalettes } from "./ShapePicker";
 
 const TYPE_NAMES: Record<string, string> = {
@@ -253,14 +253,31 @@ export function DefaultShapesDialog({ datasource, field, onClose, onSaved }: Pro
 
 // ---------------------------------------------------------------- 預設屬性：排序
 
-type SortChoice = "source" | "asc" | "desc" | "manual";
+type SortChoice = "source" | "asc" | "desc" | "field" | "manual";
 
 export function DefaultSortDialog({ datasource, field, onClose, onSaved }: Props) {
   const editor = useEditor();
   const target = useTarget(datasource, field);
   const current = target?.default_sort ?? null;
-  const [choice, setChoice] = useState<SortChoice>(current === null ? "source" : current.kind === "manual" ? "manual" : current.order);
+  const [choice, setChoice] = useState<SortChoice>(
+    current === null ? "source" : current.kind === "manual" ? "manual" : current.kind === "by_field" ? "field" : current.order,
+  );
   const [order, setOrder] = useState<Scalar[] | null>(current?.kind === "manual" ? current.manual_values : null);
+  // 依欄位（Tableau 預設屬性＞排序的「欄位」）：同一個資料源中另一個欄位的彙總值
+  const candidates = useMemo(
+    () =>
+      (editor.catalog.datasources.find((d) => d.id === datasource)?.fields ?? []).filter(
+        (f) => f.id !== field && !f.hidden && !f.ad_hoc && f.level !== "table_calc" && f.datatype !== "spatial",
+      ),
+    [editor.catalog, datasource, field],
+  );
+  const [byField, setByField] = useState<string>(current?.by?.field ?? candidates.find((f) => f.role === "measure")?.id ?? candidates[0]?.id ?? "");
+  const [byAgg, setByAgg] = useState<string>(current?.by?.agg ?? "sum");
+  const [byOrder, setByOrder] = useState<"asc" | "desc">(current?.kind === "by_field" ? current.order : "desc");
+  const by = candidates.find((f) => f.id === byField);
+  const numeric = by?.datatype === "integer" || by?.datatype === "real";
+  const aggs = numeric ? AGGREGATIONS.filter(([a]) => a !== "attr") : AGGREGATIONS.filter(([a]) => ["count", "countd", "min", "max"].includes(a));
+  const agg = aggs.some(([a]) => a === byAgg) ? byAgg : aggs[0][0];
   const { values, error: loadError } = useMembers(field);
   const { error, busy, run } = useSave(onClose, onSaved);
   // 手動排列：先列出已經排好的成員，其餘依資料的順序接在後面
@@ -282,7 +299,14 @@ export function DefaultSortDialog({ datasource, field, onClose, onSaved }: Props
         ? null
         : choice === "manual"
           ? { kind: "manual" as const, order: "asc" as const, manual_values: manual }
-          : { kind: "alphabetic" as const, order: choice, manual_values: [] };
+          : choice === "field"
+            ? {
+                kind: "by_field" as const,
+                order: byOrder,
+                manual_values: [],
+                by: { field: byField, agg: by?.level === "aggregate" ? null : agg, date: null, continuous: true, table_calc: null },
+              }
+            : { kind: "alphabetic" as const, order: choice, manual_values: [] };
     run(() => editApi.saveFieldProperties(editor.workbook, datasource, field, { default_sort: value }), `已設定「${target.caption}」的預設排序`);
   };
   return (
@@ -294,6 +318,7 @@ export function DefaultSortDialog({ datasource, field, onClose, onSaved }: Props
             ["source", "資料來源順序"],
             ["asc", "字母順序：遞增"],
             ["desc", "字母順序：遞減"],
+            ["field", "欄位"],
             ["manual", "手動"],
           ] as [SortChoice, string][]
         ).map(([value, label]) => (
@@ -301,6 +326,39 @@ export function DefaultSortDialog({ datasource, field, onClose, onSaved }: Props
             <input type="radio" name="default-sort" checked={choice === value} onChange={() => setChoice(value)} /> {label}
           </label>
         ))}
+        {choice === "field" && (
+          <div className="row">
+            <label className="inline">
+              欄位名稱
+              <select aria-label="預設排序的欄位" value={byField} onChange={(e) => setByField(e.target.value)}>
+                {candidates.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.caption}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {by && by.level !== "aggregate" && (
+              <label className="inline">
+                彙總
+                <select aria-label="預設排序的彙總" value={agg} onChange={(e) => setByAgg(e.target.value)}>
+                  {aggs.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="inline">
+              排序順序
+              <select aria-label="預設排序的順序" value={byOrder} onChange={(e) => setByOrder(e.target.value as "asc" | "desc")}>
+                <option value="asc">遞增</option>
+                <option value="desc">遞減</option>
+              </select>
+            </label>
+          </div>
+        )}
         {choice === "manual" && (
           <ol className="default-manual-sort" aria-label="手動排列的順序">
             {manual.map((value, i) => (
@@ -317,7 +375,144 @@ export function DefaultSortDialog({ datasource, field, onClose, onSaved }: Props
           </ol>
         )}
         {(error ?? loadError) && <p className="error">{error ?? loadError}</p>}
-        <Actions onSave={save} onClose={onClose} disabled={busy || (choice === "manual" && manual.length === 0)} />
+        <Actions onSave={save} onClose={onClose} disabled={busy || (choice === "manual" && manual.length === 0) || (choice === "field" && !by)} />
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- 建立使用者篩選
+
+interface UserFilterEntry {
+  kind: "user" | "group";
+  name: string;
+  members: Scalar[];
+}
+
+/**
+ * 建立使用者篩選（Tableau 的「伺服器＞建立使用者篩選」）：左邊是使用者與群組，右邊勾選選取的對象看得到的成員。
+ * 存成布林的計算欄位（登入者看得到的成員為 True）；放到篩選架上選 True 即依登入者篩選。
+ */
+export function UserFilterDialog({ datasource, field, onClose, onSaved }: Props) {
+  const editor = useEditor();
+  const target = useTarget(datasource, field);
+  const { values, error: loadError } = useMembers(field, 1000);
+  const { error, busy, run } = useSave(onClose, onSaved);
+  const [caption, setCaption] = useState("");
+  const [entries, setEntries] = useState<UserFilterEntry[]>([]);
+  const [picked, setPicked] = useState(0);
+  const [kind, setKind] = useState<"user" | "group">("user");
+  const [name, setName] = useState("");
+  if (!target) return null;
+  const key = (value: Scalar) => JSON.stringify(value);
+  const add = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const at = entries.findIndex((e) => e.kind === kind && e.name.toLowerCase() === trimmed.toLowerCase());
+    if (at >= 0) setPicked(at);
+    else {
+      setEntries([...entries, { kind, name: trimmed, members: [] }]);
+      setPicked(entries.length);
+    }
+    setName("");
+  };
+  const remove = (index: number) => {
+    setEntries(entries.filter((_, i) => i !== index));
+    setPicked(Math.max(0, index <= picked ? picked - 1 : picked));
+  };
+  const change = (members: (current: Scalar[]) => Scalar[]) => setEntries(entries.map((e, i) => (i === picked ? { ...e, members: members(e.members) } : e)));
+  const toggle = (value: Scalar) => change((current) => (current.some((m) => key(m) === key(value)) ? current.filter((m) => key(m) !== key(value)) : [...current, value]));
+  const current = entries[picked] as UserFilterEntry | undefined;
+  const save = () =>
+    run(
+      () => editApi.saveUserFilter(editor.workbook, datasource, { source: field, caption, entries }),
+      "已建立使用者篩選：放到篩選架上選 True，就依登入者篩選",
+    );
+  return (
+    <Modal title={`建立使用者篩選：${target.caption}`} onClose={onClose} wide>
+      <div className="action-form user-filter-dialog">
+        <p className="hint">
+          每個使用者或群組看得到「{target.caption}」的哪些成員。使用者填登入的帳號，群組填伺服器上的群組名稱；同時符合多個對象的人看得到各對象的成員。
+        </p>
+        <label className="inline">
+          名稱
+          <input aria-label="使用者篩選的名稱" value={caption} placeholder={`${target.caption} 的使用者篩選`} onChange={(e) => setCaption(e.target.value)} />
+        </label>
+        <div className="row">
+          <select aria-label="對象的種類" value={kind} onChange={(e) => setKind(e.target.value as "user" | "group")}>
+            <option value="user">使用者</option>
+            <option value="group">群組</option>
+          </select>
+          <input
+            aria-label="使用者或群組的名稱"
+            value={name}
+            placeholder={kind === "user" ? "登入的帳號" : "群組名稱"}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                add();
+              }
+            }}
+          />
+          <button type="button" disabled={!name.trim()} onClick={add}>
+            新增
+          </button>
+        </div>
+        <div className="user-filter-columns">
+          <ul className="user-filter-entries" aria-label="使用者與群組">
+            {entries.length === 0 && <li className="hint">還沒有使用者或群組</li>}
+            {entries.map((entry, i) => (
+              <li key={`${entry.kind}:${entry.name}`} className={i === picked ? "picked" : ""} data-entry={entry.name} onClick={() => setPicked(i)}>
+                <span>
+                  {entry.kind === "group" ? "群組：" : ""}
+                  {entry.name}
+                  <span className="muted">（{entry.members.length}）</span>
+                </span>
+                <button
+                  type="button"
+                  className="link"
+                  aria-label={`移除${entry.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    remove(i);
+                  }}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="user-filter-members">
+            {current ? (
+              <>
+                <div className="row">
+                  <span>{current.name} 看得到的成員</span>
+                  <button type="button" className="link" onClick={() => change(() => [...(values ?? [])])}>
+                    全選
+                  </button>
+                  <button type="button" className="link" onClick={() => change(() => [])}>
+                    全部清除
+                  </button>
+                </div>
+                {values === null && !loadError && <p className="hint">載入中…</p>}
+                <ul className="value-list" aria-label="看得到的成員">
+                  {(values ?? []).map((value) => (
+                    <li key={key(value)}>
+                      <label className="inline">
+                        <input type="checkbox" checked={current.members.some((m) => key(m) === key(value))} onChange={() => toggle(value)} /> {memberText(value)}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="hint">先新增使用者或群組，再勾選看得到的成員。</p>
+            )}
+          </div>
+        </div>
+        {(error ?? loadError) && <p className="error">{error ?? loadError}</p>}
+        <Actions onSave={save} onClose={onClose} disabled={busy || !entries.some((e) => e.members.length > 0)} />
       </div>
     </Modal>
   );
@@ -532,6 +727,8 @@ export function moreFieldDialog(dialog: EditorDialog, onClose: () => void, onSav
       return <DefaultShapesDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
     case "default-sort":
       return <DefaultSortDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
+    case "user-filter":
+      return <UserFilterDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
     case "split":
       return <SplitDialog datasource={dialog.datasource} field={dialog.field} onClose={onClose} onSaved={onSaved} />;
     case "replace-references":

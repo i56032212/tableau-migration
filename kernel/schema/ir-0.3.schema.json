@@ -2685,12 +2685,13 @@
     },
     "FieldSort": {
       "additionalProperties": false,
-      "description": "欄位預設的排序（預設屬性＞排序）：字母順序或手動排列的成員。",
+      "description": "欄位預設的排序（預設屬性＞排序）：字母順序、依另一個欄位的彙總值，或手動排列的成員。",
       "properties": {
         "kind": {
           "enum": [
             "alphabetic",
-            "manual"
+            "manual",
+            "by_field"
           ],
           "title": "Kind",
           "type": "string"
@@ -2727,6 +2728,18 @@
           },
           "title": "Manual Values",
           "type": "array"
+        },
+        "by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "kind 為 by_field 時的排序依據（同一個資料源的欄位與彙總）"
         }
       },
       "required": [
@@ -9104,6 +9117,12 @@
           "default": null,
           "description": "座標軸上 Null 值的標記（特殊值＞標記）：connect＝隱藏並連接前後的點（折線不斷開），zero＝顯示在預設值（0）；None 為隱藏、折線在這裡斷開",
           "title": "Null Marks"
+        },
+        "null_indicator": {
+          "default": true,
+          "description": "Null 值的標記隱藏（null_marks 為 None）時，在檢視的右下角顯示「N 個 Null」的指示器（Tableau 的「在指示器顯示」）；False 為不顯示（「隱藏指示器」）",
+          "title": "Null Indicator",
+          "type": "boolean"
         },
         "stack": {
           "anyOf": [

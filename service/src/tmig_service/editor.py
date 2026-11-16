@@ -66,6 +66,7 @@ from tmig.extract_edit import (
 from tmig.field_edit import (
     create_combined,
     create_folder,
+    create_user_filter,
     duplicate_field,
     move_to_folder,
     remove_field,
@@ -389,6 +390,24 @@ class GroupItemBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
     members: list[Scalar]
+
+
+class UserFilterEntryBody(BaseModel):
+    """使用者篩選中的一個對象：使用者名稱或群組，與看得到的成員。"""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["user", "group"]
+    name: str
+    members: list[Scalar]
+
+
+class UserFilterBody(BaseModel):
+    """建立使用者篩選：來源的維度、名稱（空白時為「<來源> 的使用者篩選」）與各對象看得到的成員。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source: str
+    caption: str = ""
+    entries: list[UserFilterEntryBody]
 
 
 class GroupBody(BaseModel):
@@ -1069,6 +1088,19 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
             lambda ir: upsert_group(
                 ir, datasource, body.source, body.caption, groups, body.other, body.field
             ),
+        )
+        return {"field": created.model_dump(mode="json")}
+
+    @router.post("/{workbook}/datasources/{datasource}/user-filters")
+    def post_user_filter(
+        workbook: str, datasource: str, body: UserFilterBody, request: Request
+    ) -> dict[str, Any]:
+        """建立使用者篩選（Tableau 的「伺服器＞建立使用者篩選」）：布林的計算欄位，登入者看得到的成員為 TRUE。"""
+        entries = [(e.kind, e.name, e.members) for e in body.entries]
+        created = edit(
+            request,
+            workbook,
+            lambda ir: create_user_filter(ir, datasource, body.source, body.caption, entries),
         )
         return {"field": created.model_dump(mode="json")}
 

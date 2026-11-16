@@ -93,6 +93,7 @@ def apply_field_defaults(ir: IR, sheet: Worksheet) -> Worksheet:
                 field=use.field,
                 kind=default.kind,
                 order=default.order,
+                by=default.by,
                 manual_values=list(default.manual_values),
             )
         )
@@ -153,6 +154,8 @@ def _strip_defaults(sheet: Worksheet, old: DataField) -> Worksheet:
                 and s.kind == default.kind
                 and s.order == default.order
                 and s.manual_values == default.manual_values
+                and s.by == default.by
+                and not s.nested
             )
         ]
     if old.total_using is not None:

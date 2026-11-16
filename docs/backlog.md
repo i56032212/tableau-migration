@@ -15,9 +15,8 @@
 | 預存程序當作資料表 | 沒有 | 開啟 Tableau 檔時列入 unsupported；先看盤點中有沒有報表用到 |
 | Explain Data（資料解釋） | 沒有 | |
 | Ask Data、指標（Metrics）、集合（Collections） | 沒有 | 伺服器上的功能 |
-| 「建立使用者篩選」的對話框 | 部分 | .twb 的使用者篩選會移轉；編輯器裡要用 `USERNAME()`、`ISMEMBEROF()` 的計算欄位 |
 | 書籤（.tbm） | 部分 | 不解析 .tbm；以「匯入工作表…」從來源報表匯入，效果相同 |
-| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：「N 個 Null」指示器、WMS／Mapbox 底圖、萃取的抽樣、列印的頁首頁尾、在檢視上直接拖曳標題排序、預設排序「依欄位」、.xls 的具名範圍、描述預測 Summary 頁的 Initial／Change From Initial／Seasonal Effect／Contribution |
+| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：WMS／Mapbox 底圖、萃取的抽樣（要在來源資料庫取樣，等有引擎的環境再做）、列印時每頁重複標題與依窗格分頁、在檢視上直接拖曳標題排序、.xls 的具名範圍、「N 個 Null」指示器選單的「篩選資料」、描述預測 Summary 頁的 Initial／Change From Initial／Seasonal Effect／Contribution |
 
 ## 二、開啟 Tableau 檔時還不支援的寫法
 

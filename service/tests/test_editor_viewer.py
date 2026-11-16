@@ -3337,3 +3337,97 @@ def test_custom_image_shapes_in_editor_and_viewer(engine: str, tmp_path: Path) -
         expect(chart.locator(images)).to_have_count(0)
         assert errors == []
         browser.close()
+
+
+def test_null_indicator(engine: str) -> None:
+    """「N 個 Null」指示器：連續座標軸上的值是 Null 的標記沒有畫出時，檢視的右下角顯示個數；編輯器中點一下
+    可以改成在預設位置顯示資料，或隱藏指示器。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def use(field: str, **extra: Any) -> dict[str, Any]:
+        base = {"field": field, "agg": None, "date": None, "continuous": False, "table_calc": None}
+        return {**base, **extra}
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{body['id']}",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    # 業績不到各區平均的區沒有值（Null）：各區一個長條，Null 的區沒有畫出
+    made = call(
+        engine,
+        "/api/edit/demo/calcs",
+        {
+            "datasource": "ds_orders",
+            "caption": "大區的業績",
+            "formula": "IF SUM([Sales]) > 500000 THEN SUM([Sales]) END",
+        },
+    )["field"]
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "Nulls"})["worksheet"]
+    sheet = {**created, "rows": [use("f_region")], "columns": [use(made["id"], continuous=True)]}
+    put(sheet)
+
+    def current() -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{created['id']}")["worksheet"]
+
+    def render() -> dict[str, Any]:
+        return call(engine, f"/api/workbooks/demo/worksheets/{created['id']}/render", {})
+
+    table = render()["table"]
+    at = table["keys"].index(made["id"])
+    expected = sum(1 for row in table["raw"] if row[at] in ("", None))
+    assert 0 < expected < len(table["raw"]), table["raw"]
+    assert render()["spec"]["usermeta"]["nulls"] == expected
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 850})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        # 檢視器：只顯示個數，沒有選單
+        page.goto(f"{engine}/w/demo/s/{created['id']}")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        badge = page.locator(".single-sheet .null-indicator")
+        expect(badge).to_have_text(f"{expected} 個 Null")
+        expect(badge.locator("button")).to_have_count(0)
+        # 編輯器：點指示器 →「在預設位置顯示資料」，Null 的標記畫在 0，指示器消失
+        page.goto(f"{engine}/w/demo/edit/{created['id']}")
+        settle(page)
+        badge = page.locator(".editor .null-indicator")
+        expect(badge).to_have_text(f"{expected} 個 Null")
+        badge.get_by_role("button").click()
+        badge.get_by_role("menuitem", name="在預設位置顯示資料").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        assert current()["null_marks"] == "zero"
+        expect(page.locator(".editor .null-indicator")).to_have_count(0)
+        assert "nulls" not in render()["spec"]["usermeta"]
+        # 格式對話框改回隱藏：指示器回來；再從指示器的選單隱藏它
+        page.get_by_role("button", name="格式…", exact=True).click()
+        page.get_by_label("Null 值的標記").select_option("")
+        expect(page.get_by_label("Null 值的指示器")).to_be_checked()
+        page.get_by_role("dialog").get_by_role("button", name="確定").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        badge = page.locator(".editor .null-indicator")
+        expect(badge).to_have_text(f"{expected} 個 Null")
+        badge.get_by_role("button").click()
+        badge.get_by_role("menuitem", name="隱藏指示器").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        saved = current()
+        assert (saved["null_marks"], saved["null_indicator"]) == (None, False)
+        expect(page.locator(".editor .null-indicator")).to_have_count(0)
+        assert errors == []
+        browser.close()

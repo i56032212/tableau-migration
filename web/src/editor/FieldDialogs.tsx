@@ -108,6 +108,8 @@ export function fieldMenu(editor: EditorContextValue, field: CatalogField, datas
   if (dimension && field.kind !== "set" && GROUPABLE.includes(field.datatype)) {
     create.push({ label: "群組…", action: () => editor.openDialog({ kind: "group", datasource, source: field.id, field: null }) });
     create.push({ label: "集合…", action: () => editor.openDialog({ kind: "set", datasource, levels: [field.id], field: null }) });
+    // Tableau 的「伺服器＞建立使用者篩選」：各使用者或群組看得到這個維度的哪些成員
+    create.push({ label: "使用者篩選…", action: () => editor.openDialog({ kind: "user-filter", datasource, field: field.id }) });
   }
   if (numeric && rowLevel(field) && field.kind !== "set")
     create.push({ label: "數值分組…", action: () => editor.openDialog({ kind: "bins", datasource, source: field.id, field: null }) });

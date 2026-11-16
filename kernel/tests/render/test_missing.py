@@ -203,3 +203,41 @@ def test_pad_empty_headers() -> None:
     assert [r[0] for r in padded.rows] == ["West", "East", "North"]
     # 沒有缺的組合時原樣回傳
     assert pad_empty(result, ["f_region"], [("East",), ("West",)], ROLES, leading=True) is result
+
+
+def test_null_indicator_counts_hidden_marks(tmp_path: Path, db: Path) -> None:
+    """「N 個 Null」指示器：連續座標軸上的值是 Null 而沒有畫出的標記數寫在 usermeta.nulls。顯示遺漏的值
+    補上的空標記不算；Null 改畫在預設位置、連接前後的點，或隱藏指示器時沒有。"""
+    month = instance("[Order Date]", "Month-Trunc", "[tmn:Order Date:qk]", "quantitative")
+    line = worksheet(
+        "Trend",
+        [month, SALES, REGION],
+        rows=ref("sum:Sales:qk"),
+        cols=ref("tmn:Order Date:qk"),
+        mark="Line",
+    )
+    ir = parse(tmp_path, line)
+    ws = ir.worksheets[0]
+    query = worksheet_sql(ir, ws.id)
+    result = execute(db, query.sql)
+    plain = build_spec(ir, ws.id, query.columns, result).spec
+    assert plain is not None and "nulls" not in plain["usermeta"]
+    # 兩個月份的量值改成 Null
+    at = result.columns.index("sum(f_sales)")
+    assert len(result.rows) > 3
+    rows = [
+        tuple(None if i in (1, 3) and j == at else v for j, v in enumerate(row))
+        for i, row in enumerate(result.rows)
+    ]
+    nulled = QueryResult(result.columns, rows)
+
+    def usermeta(**update: Any) -> dict[str, Any]:
+        shown = ir.model_copy(update={"worksheets": [ws.model_copy(update=update)]})
+        spec = build_spec(shown, ws.id, query.columns, nulled).spec
+        assert spec is not None
+        return spec["usermeta"]
+
+    assert usermeta()["nulls"] == 2
+    assert usermeta(show_missing=[ws.columns[0]])["nulls"] == 2
+    for update in ({"null_marks": "zero"}, {"null_marks": "connect"}, {"null_indicator": False}):
+        assert "nulls" not in usermeta(**update), update

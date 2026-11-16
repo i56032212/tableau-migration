@@ -1932,6 +1932,7 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
   // 特殊值（Null）：文字表與標籤上的文字、座標軸上的標記；表格版面：顯示空的列與欄
   const [nullText, setNullText] = useState<string>((sheet.null_text as string | null | undefined) ?? "");
   const [nullMarks, setNullMarks] = useState<string>((sheet.null_marks as string | null | undefined) ?? "");
+  const [nullIndicator, setNullIndicator] = useState<boolean>((sheet.null_indicator as boolean | undefined) !== false);
   const [empty, setEmpty] = useState<Set<string>>(new Set((sheet.show_empty as string[] | undefined) ?? []));
   const toggleEmpty = (which: "rows" | "columns") =>
     setEmpty((current) => {
@@ -1959,6 +1960,7 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
         label_valign: headerValign || null,
         null_text: nullText === "" ? null : nullText,
         null_marks: nullMarks || null,
+        null_indicator: nullIndicator,
         show_empty: (["rows", "columns"] as const).filter((which) => empty.has(which)),
       };
   };
@@ -2169,6 +2171,11 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
               <option value="zero">顯示在預設值（0）</option>
             </select>
           </label>
+          {nullMarks === "" && (
+            <label className="inline" title="Null 值的標記隱藏時，在檢視的右下角顯示「N 個 Null」（Tableau 的「在指示器顯示」）">
+              <input type="checkbox" aria-label="Null 值的指示器" checked={nullIndicator} onChange={(e) => setNullIndicator(e.target.checked)} /> 指示器
+            </label>
+          )}
         </div>
         <div className="row" title="篩選之後資料中還有、但檢視中沒有標記的成員也顯示標題（Tableau 的「分析＞表格版面」）">
           <label className="inline">

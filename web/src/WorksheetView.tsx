@@ -41,6 +41,8 @@ interface Props {
   highlighted?: Mark[] | null;
   /** 編輯器：工作表的定義改變後遞增，重新查詢 */
   revision?: number;
+  /** 編輯器：點「N 個 Null」指示器時可以做的事（在預設位置顯示資料、隱藏指示器）；沒有傳入時只顯示個數 */
+  nullActions?: NullAction[];
   /** 階層的切入（檢視器）：一組階層（最上層的欄位鍵）改成切入 delta 層；沒有傳入時不顯示切入的按鈕 */
   onDrill?: (key: string, delta: number) => void;
   /** 工具提示中的工作表（Viz in Tooltip）的查詢狀態；沒有傳入時工具提示只有文字（工具提示中的工作表本身也不再巢狀） */
@@ -253,6 +255,51 @@ function SummaryCard({ table, marks }: { table: NonNullable<RenderResponse["tabl
         })}
       </tbody>
     </table>
+  );
+}
+
+export interface NullAction {
+  label: string;
+  run: () => void;
+}
+
+/**
+ * 「N 個 Null」指示器（Tableau 檢視右下角的指示器）：連續座標軸上的值是 Null 而沒有畫出的標記數
+ * （spec.usermeta.nulls）。編輯器中點一下列出可以做的事。
+ */
+function NullIndicator({ count, actions }: { count: number; actions?: NullAction[] }) {
+  const [open, setOpen] = useState(false);
+  const label = `${count} 個 Null`;
+  const title = "這些標記在連續座標軸上的值是 Null，沒有畫出";
+  if (!actions?.length)
+    return (
+      <span className="null-indicator" data-nulls={count} title={title}>
+        {label}
+      </span>
+    );
+  return (
+    <span className="null-indicator" data-nulls={count}>
+      <button type="button" title={title} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {label}
+      </button>
+      {open && (
+        <span className="null-menu" role="menu">
+          {actions.map((action) => (
+            <button
+              type="button"
+              role="menuitem"
+              key={action.label}
+              onClick={() => {
+                setOpen(false);
+                action.run();
+              }}
+            >
+              {action.label}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -752,6 +799,7 @@ export function WorksheetView({
   selected,
   highlighted,
   revision = 0,
+  nullActions,
   onDrill,
   tooltipState,
   onViewport,
@@ -1166,6 +1214,8 @@ export function WorksheetView({
   // 形狀的圖例有圖片時由這裡畫（規格中已經關掉 Vega 的形狀圖例）
   const legendMeta = (response?.spec as Spec | undefined)?.usermeta?.shape_legend as ShapeLegend | undefined;
   const shapeLegend = legendMeta?.entries.some((entry) => entry.image) ? legendMeta : null;
+  // 連續座標軸上的值是 Null 而沒有畫出的標記數（「N 個 Null」指示器）
+  const nulls = Number((response?.spec?.usermeta as { nulls?: number } | undefined)?.nulls ?? 0);
   // 工作表的背景（含標題，可以透明）與標題的顏色
   const usermeta = (response?.spec as Spec | null | undefined)?.usermeta ?? {};
   const meta = (
@@ -1322,6 +1372,7 @@ export function WorksheetView({
             )}
           </div>
         )}
+        {nulls > 0 && !error && !showTable && !response?.unsupported && <NullIndicator count={nulls} actions={nullActions} />}
         {loading && !response && <div className="placeholder">載入中…</div>}
       </div>
       {response?.caption && (showCaption ?? response.caption_shown === true) && (
