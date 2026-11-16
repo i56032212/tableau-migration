@@ -722,7 +722,7 @@ tableau-migration/
 ├── desktop/                桌面版：Tauri 外殼、本機引擎的打包（PyInstaller）與冒煙測試
 ├── tools/                  連 Tableau Server 的工具：tableau_server（盤點、下載、匯出）、fetch_expected、compare_screens
 ├── fixtures/<報表>/         .twbx、golden IR、cases、mapping、預期結果、SQL 與規格快照
-└── scripts/                一鍵檢查、示範報表的建置與獨立計算
+└── scripts/                一鍵檢查（check.py、check_commit.py）、重新產生 IR 的檔案（regen_ir.py）、示範報表的建置與獨立計算
 ```
 
 核心函式庫不依賴服務、前端與瀏覽器自動化；外圍只透過核心的公開介面工作。
@@ -1677,6 +1677,10 @@ Data Blending 中同一個彙總混用兩個資料源的欄位、LOD 中次要�
 
 - IR 是唯一的報表定義：解析器寫入，其他模組只讀，不回頭讀 .twb
 - 遇到不支援的元素一律寫進 IR 的 `unsupported`，不得默默丟棄
-- IR Schema 有任何欄位異動，必須升 `ir_version` 並重新產生 `kernel/schema/`
+- IR Schema 有任何欄位異動，必須升 `ir_version` 並重新產生 `kernel/schema/`（`uv run python scripts/regen_ir.py`
+  一併重新產生範例 IR 與各 fixture 的 golden IR）
 - SQL 與 Vega-Lite 規格的快照變更須人工審核：`TMIG_UPDATE_SNAPSHOTS=1 uv run pytest` 後檢查差異再提交
 - 任務編號、依賴與驗證方式以 Spec 的任務清單為準
+- 完整的測試約 25 分鐘：提交後以 `uv run python scripts/check_commit.py` 在另一個工作目錄測那個 commit
+  （主目錄可以繼續修改），通過之後才推上去
+- 給 Claude Code 的工作規則在 `CLAUDE.md`；還沒做、還沒驗證與待決定的事在 `docs/backlog.md`
