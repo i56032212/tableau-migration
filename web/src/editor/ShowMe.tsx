@@ -5,7 +5,7 @@ import { useState } from "react";
 import type { FieldUse } from "../types";
 import { editApi } from "./api";
 import { useEditor } from "./context";
-import { CHARTS, recommended, type ShowMeContext, viewParts } from "./showMe";
+import { CHARTS, recommended, type ShowMeContext, viewParts } from "./showMeCharts";
 
 function plain(field: string): FieldUse {
   return { field, agg: null, date: null, continuous: false, table_calc: null };

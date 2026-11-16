@@ -1920,6 +1920,20 @@ class Divider(IRModel):
         ge=1,
         description="分隔第幾層的標題；None 為最內層以外的每一層（Tableau 的預設）",
     )
+    pattern: Literal["solid", "dashed", "dotted"] = Field(
+        default="solid", description="線的樣式：實線、虛線、點線"
+    )
+
+
+class LineStyle(IRModel):
+    """格線或座標軸線的樣式（格式設定的「線條＞格線、座標軸尺規」）：顏色、線寬與樣式（實線、虛線、點線）。
+    線是否畫出另由 ShelfStyle 的 grid、axis 決定。"""
+
+    color: HexColor | None = Field(
+        default=None, description="線的顏色；None 為 Tableau 的預設（很淺的灰色）"
+    )
+    width: int = Field(default=1, ge=1, description="線寬（像素）")
+    pattern: Literal["solid", "dashed", "dotted"] = "solid"
 
 
 class ShelfStyle(IRModel):
@@ -1945,6 +1959,12 @@ class ShelfStyle(IRModel):
     )
     zero_line: ZeroLine | None = Field(
         default_factory=ZeroLine, description="零線（Tableau 預設畫；None 為不畫）"
+    )
+    grid_line: LineStyle | None = Field(
+        default=None, description="格線的顏色、線寬與樣式；None 為預設（淺灰、1 像素的實線）"
+    )
+    axis_line: LineStyle | None = Field(
+        default=None, description="座標軸線的顏色、線寬與樣式；None 為預設（淺灰、1 像素的實線）"
     )
 
 

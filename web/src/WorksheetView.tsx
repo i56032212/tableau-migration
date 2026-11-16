@@ -6,6 +6,7 @@ import { api, fileUrl } from "./api";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
 import { prepareShapeImages, shapeImage, type ShapeLegend } from "./shapeImages";
 import { nextSelection, sameMark } from "./state";
+import { summarize } from "./summaryStats";
 import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TextStyle, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
@@ -171,9 +172,11 @@ export function ShapeLegendView({ workbook, legend }: { workbook: string; legend
 
 /**
  * 摘要卡（Tableau 的「工作表＞顯示摘要」）：檢視中各量值的筆數、總和、平均、最小值、最大值與中位數；
+ * 「更多」另外顯示選用的統計量（標準差、第一與第三四分位數、偏度、超額峰度，Tableau 在卡片的選單中勾選）。
  * 選取標記時只算選取的標記。數字取自查詢結果的原始值。
  */
 function SummaryCard({ table, marks }: { table: NonNullable<RenderResponse["table"]>; marks: Mark[] }) {
+  const [more, setMore] = useState(false);
   const measures = table.keys.map((key, i) => ({ key, i })).filter(({ i }) => table.roles?.[i] === "measure");
   if (measures.length === 0) return null;
   const selected = (row: string[]) =>
@@ -187,10 +190,19 @@ function SummaryCard({ table, marks }: { table: NonNullable<RenderResponse["tabl
   const rows = table.raw.filter(selected);
   const show = (value: number | null) => (value === null ? "" : value.toLocaleString("en-US", { maximumFractionDigits: 2 }));
   return (
-    <table className="summary-card" aria-label="摘要">
+    <table className="summary-card" aria-label="摘要" data-more={more}>
       <caption>
         摘要{marks.length > 0 ? `（選取的 ${rows.length} 個標記）` : ""}
         <span className="muted"> 筆數：{rows.length}</span>
+        <button
+          type="button"
+          className="summary-more"
+          aria-pressed={more}
+          title="標準差、第一與第三四分位數、偏度、超額峰度"
+          onClick={() => setMore(!more)}
+        >
+          {more ? "較少" : "更多"}
+        </button>
       </caption>
       <thead>
         <tr>
@@ -200,27 +212,42 @@ function SummaryCard({ table, marks }: { table: NonNullable<RenderResponse["tabl
           <th>最小值</th>
           <th>最大值</th>
           <th>中位數</th>
+          {more && (
+            <>
+              <th title="樣本標準差">標準差</th>
+              <th title="第 25 百分位數">第一四分位數</th>
+              <th title="第 75 百分位數">第三四分位數</th>
+              <th title="正值：極端值偏向右邊；負值：偏向左邊">偏度</th>
+              <th title="峰度減 3（常態分配為 0）">超額峰度</th>
+            </>
+          )}
         </tr>
       </thead>
       <tbody>
         {measures.map(({ key, i }) => {
-          const values = rows
-            .map((row) => row[i])
-            .filter((v) => v !== "" && v !== null && v !== undefined)
-            .map(Number)
-            .filter(Number.isFinite)
-            .sort((a, b) => a - b);
-          const n = values.length;
-          const sum = values.reduce((a, b) => a + b, 0);
-          const median = n === 0 ? null : n % 2 === 1 ? values[(n - 1) / 2] : (values[n / 2 - 1] + values[n / 2]) / 2;
+          const stats = summarize(
+            rows
+              .map((row) => row[i])
+              .filter((v) => v !== "" && v !== null && v !== undefined)
+              .map(Number),
+          );
           return (
             <tr key={key} data-measure={key}>
               <th>{table.headers[i] ?? key}</th>
-              <td>{show(n ? sum : null)}</td>
-              <td>{show(n ? sum / n : null)}</td>
-              <td>{show(n ? values[0] : null)}</td>
-              <td>{show(n ? values[n - 1] : null)}</td>
-              <td>{show(median)}</td>
+              <td>{show(stats.sum)}</td>
+              <td>{show(stats.average)}</td>
+              <td>{show(stats.minimum)}</td>
+              <td>{show(stats.maximum)}</td>
+              <td>{show(stats.median)}</td>
+              {more && (
+                <>
+                  <td data-stat="deviation">{show(stats.deviation)}</td>
+                  <td data-stat="first-quartile">{show(stats.firstQuartile)}</td>
+                  <td data-stat="third-quartile">{show(stats.thirdQuartile)}</td>
+                  <td data-stat="skewness">{show(stats.skewness)}</td>
+                  <td data-stat="kurtosis">{show(stats.kurtosis)}</td>
+                </>
+              )}
             </tr>
           );
         })}

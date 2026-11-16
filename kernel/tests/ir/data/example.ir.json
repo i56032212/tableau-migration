@@ -463,13 +463,16 @@
         "header_divider": {
           "color": "#d4d4d4",
           "width": 1,
-          "level": null
+          "level": null,
+          "pattern": "solid"
         },
         "zero_line": {
           "color": "#cbcbcb",
           "width": 1,
           "pattern": "dotted"
-        }
+        },
+        "grid_line": null,
+        "axis_line": null
       },
       "column_style": {
         "grid": true,
@@ -482,13 +485,16 @@
         "header_divider": {
           "color": "#d4d4d4",
           "width": 1,
-          "level": null
+          "level": null,
+          "pattern": "solid"
         },
         "zero_line": {
           "color": "#cbcbcb",
           "width": 1,
           "pattern": "dotted"
-        }
+        },
+        "grid_line": null,
+        "axis_line": null
       },
       "background": null,
       "text_color": null,
@@ -661,13 +667,16 @@
         "header_divider": {
           "color": "#d4d4d4",
           "width": 1,
-          "level": null
+          "level": null,
+          "pattern": "solid"
         },
         "zero_line": {
           "color": "#cbcbcb",
           "width": 1,
           "pattern": "dotted"
-        }
+        },
+        "grid_line": null,
+        "axis_line": null
       },
       "column_style": {
         "grid": true,
@@ -680,13 +689,16 @@
         "header_divider": {
           "color": "#d4d4d4",
           "width": 1,
-          "level": null
+          "level": null,
+          "pattern": "solid"
         },
         "zero_line": {
           "color": "#cbcbcb",
           "width": 1,
           "pattern": "dotted"
-        }
+        },
+        "grid_line": null,
+        "axis_line": null
       },
       "background": null,
       "text_color": null,

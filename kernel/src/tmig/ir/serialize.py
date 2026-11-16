@@ -15,12 +15,30 @@ from typing import Any
 from tmig.ir.models import IR, IR_VERSION
 
 REPLACE_ATTEMPTS = 25
-"""存檔時換上新檔的嘗試次數（Windows 上檔案正被讀取時要等它關閉；每次間隔 20 毫秒）。"""
+"""存檔時換上新檔（與讀檔）的嘗試次數（Windows 上檔案正被另一個行程開著時要等它關閉；每次間隔 20 毫秒）。"""
+
+_FILE_LOCK = threading.Lock()
+"""同一個行程中，讀檔與換上新檔互斥。Windows 上檔案開著時不能換上（os.replace 回報「存取被拒」），而讀取的
+執行緒一多，存檔的執行緒每次重試幾乎都會碰上有人開著檔案：只靠重試會失敗。鎖只包住讀取位元組與換上新檔
+（都很短），驗證與序列化在鎖之外；不同行程之間仍靠重試。"""
 
 
 def load_ir(path: str | Path) -> IR:
     """讀取並驗證 IR JSON 檔；不合法時丟出 pydantic.ValidationError。"""
-    return IR.model_validate_json(Path(path).read_bytes())
+    return IR.model_validate_json(_read_bytes(Path(path)))
+
+
+def _read_bytes(path: Path) -> bytes:
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            with _FILE_LOCK:
+                return path.read_bytes()
+        except PermissionError:
+            # Windows：另一個行程正在換上新檔的瞬間開不了這個檔案，稍等再試
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(0.02)
+    raise AssertionError("不會執行到這裡")
 
 
 def dumps_ir(ir: IR) -> str:
@@ -36,10 +54,11 @@ def save_ir(ir: IR, path: str | Path) -> None:
         temporary.write_text(dumps_ir(ir), encoding="utf-8", newline="\n")
         for attempt in range(REPLACE_ATTEMPTS):
             try:
-                os.replace(temporary, target)
+                with _FILE_LOCK:
+                    os.replace(temporary, target)
                 break
             except PermissionError:
-                # Windows：另一個請求正開著這個檔案讀取時不能換上，稍等再試
+                # Windows：另一個行程正開著這個檔案讀取時不能換上，稍等再試
                 if attempt == REPLACE_ATTEMPTS - 1:
                     raise
                 time.sleep(0.02)

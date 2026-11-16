@@ -62,6 +62,20 @@ class Fit:
     n: int
     aic: float
     period: int
+    mae: float | None = None
+    """平均絕對誤差（各期的一步預測誤差）。"""
+    mase: float | None = None
+    """平均絕對誤差 ÷ 單純預測（下一期等於這一期）的平均絕對誤差；資料沒有變動時為 None。"""
+    mape: float | None = None
+    """平均絕對百分比誤差（百分比）；資料中有 0 時沒有定義，為 None。"""
+
+    @property
+    def quality(self) -> Literal["good", "ok", "poor"] | None:
+        """預測的品質（Tableau「描述預測」的 Quality）：與單純預測相比，誤差不到一半為 good、較小為 ok、
+        較大為 poor。"""
+        if self.mase is None:
+            return None
+        return "good" if self.mase < 0.5 else "ok" if self.mase < 1 else "poor"
 
 
 @dataclass
@@ -120,9 +134,13 @@ def _initial(y: np.ndarray, model: Model, m: int) -> tuple[float, float, list[fl
 
 
 def _run(
-    y: np.ndarray, model: Model, m: int, params: tuple[float, float, float]
+    y: np.ndarray,
+    model: Model,
+    m: int,
+    params: tuple[float, float, float],
+    errors: list[float] | None = None,
 ) -> tuple[float, float, float, list[float]]:
-    """平滑：回傳最小平方誤差與最後的水準、趨勢、季節。"""
+    """平滑：回傳最小平方誤差與最後的水準、趨勢、季節；errors 有給時另外記下各期的一步預測誤差。"""
     alpha, beta, gamma = params
     level, trend, seasons = _initial(y, model, m)
     seasons = list(seasons)
@@ -140,6 +158,8 @@ def _run(
             fitted = base
         error = float(value) - fitted
         sse += error * error
+        if errors is not None:
+            errors.append(error)
         if model.season == "additive":
             new_level = alpha * (value - season) + (1 - alpha) * base
         elif model.season == "multiplicative":
@@ -236,12 +256,28 @@ def fit(y: list[float], model: Model, m: int) -> Fit | None:
         return None
     raw = _nelder_mead(objective, [0.0, -1.0, -1.0])
     params = params_of(raw)
-    sse, level, trend, seasons = _run(data, model, m, params)
+    errors: list[float] = []
+    sse, level, trend, seasons = _run(data, model, m, params, errors)
     if not math.isfinite(sse):
         return None
     variance = max(sse / n, 1e-300)
     aic = n * math.log(variance) + 2 * (count + 1)
-    return Fit(model, params, level, trend, seasons, sse, n, aic, m)
+    mae, mase, mape = _quality(data, errors)
+    return Fit(model, params, level, trend, seasons, sse, n, aic, m, mae, mase, mape)
+
+
+def _quality(y: np.ndarray, errors: list[float]) -> tuple[float | None, float | None, float | None]:
+    """品質指標（Tableau「描述預測」的 MAE、MASE、MAPE）：誤差是各期的一步預測誤差。
+    MASE 的分母是單純預測（下一期的值等於這一期）在同一段資料上的平均絕對誤差；MAPE 是誤差占實際值的
+    百分比的平均，資料中有 0 時沒有定義。"""
+    if len(errors) != len(y) or len(y) == 0:
+        return None, None, None
+    absolute = np.abs(np.asarray(errors, dtype=float))
+    mae = float(absolute.mean())
+    naive = float(np.abs(np.diff(y)).mean()) if len(y) > 1 else 0.0
+    mase = mae / naive if naive > 0 else None
+    mape = float((absolute / np.abs(y)).mean() * 100) if (y != 0).all() else None
+    return mae, mase, mape
 
 
 def candidates(y: list[float], period: int, seasonal: bool) -> list[Fit]:

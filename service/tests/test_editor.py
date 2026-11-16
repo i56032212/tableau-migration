@@ -525,6 +525,11 @@ def test_describe_forecast(client: TestClient) -> None:
     assert model["measure"] == "sum(f_sales)" and model["observations"] > 12
     assert model["model"] in {"NN", "AN", "MN", "NA", "AA", "NM", "AM", "MM"}
     assert 0 <= model["alpha"] <= 1 and model["rmse"] > 0 and model["horizon"] > 0
+    # 品質指標：MAE 不大於 RMSE；MASE 與單純預測相比，品質依它分成三級
+    assert 0 < model["mae"] <= model["rmse"] and model["mape"] > 0 and model["mase"] > 0
+    assert model["quality"] == (
+        "good" if model["mase"] < 0.5 else "ok" if model["mase"] < 1 else "poor"
+    )
     assert str(model["first"]) < str(model["last"]) < str(model["until"])
 
 

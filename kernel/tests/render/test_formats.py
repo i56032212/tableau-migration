@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from tmig.ir import Axis, FieldUse, ShelfStyle, ZoneStyle, iter_zones
+from tmig.ir import Axis, FieldUse, LineStyle, ShelfStyle, ZoneStyle, iter_zones
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import main_encoding
 
@@ -644,6 +644,55 @@ def test_zero_lines(tmp_path: Path, db: Path) -> None:
     assert ws.column_style.zero_line is not None and ws.column_style.zero_line.pattern == "solid"
     x = render(parse(tmp_path, solid), db).spec["encoding"]["x"]["axis"]
     assert x["gridDash"]["condition"]["value"] == []
+    assert x["gridOpacity"] == {"condition": {"test": zero, "value": 1}, "value": 0}
+
+
+def test_grid_and_axis_line_styles(tmp_path: Path, db: Path) -> None:
+    """格線與座標軸線的顏色、線寬與樣式（虛線、點線）：沒有寫時為預設（None），依 scope 區分列與欄；
+    零線以外的格線依格線的樣式。"""
+    plain = parse(tmp_path, bars()).worksheets[0]
+    assert (plain.column_style.grid_line, plain.column_style.axis_line) == (None, None)
+    rules = (
+        rule(
+            "gridline",
+            fmt("stroke-color", "#FF0000", scope="cols"),
+            fmt("stroke-size", "2", scope="cols"),
+            fmt("line-pattern-only", "dashed", scope="cols"),
+            fmt("line-pattern-only", "dotted", scope="rows"),
+        ),
+        rule(
+            "axis",
+            fmt("stroke-color", "#333333"),  # 沒有 scope：兩個方向
+            fmt("line-pattern-only", "dotted", scope="cols"),
+        ),
+    )
+    ws = parse(tmp_path, bars(*rules)).worksheets[0]
+    assert ws.column_style.grid_line == LineStyle(color="#ff0000", width=2, pattern="dashed")
+    assert ws.row_style.grid_line == LineStyle(pattern="dotted")
+    assert ws.column_style.axis_line == LineStyle(color="#333333", pattern="dotted")
+    assert ws.row_style.axis_line == LineStyle(color="#333333")
+    assert ws.column_style.grid is True and ws.column_style.axis is True
+    # 只寫了與預設相同的樣式：沒有樣式；透明或寬度 0 是不畫，不是樣式
+    same = rule("gridline", fmt("line-pattern-only", "solid"), fmt("stroke-size", "1"))
+    assert parse(tmp_path, bars(same)).worksheets[0].column_style.grid_line is None
+    hidden = rule("gridline", fmt("stroke-size", "0"), fmt("line-pattern-only", "dashed"))
+    style = parse(tmp_path, bars(hidden)).worksheets[0].column_style
+    assert (style.grid, style.grid_line) == (False, LineStyle(pattern="dashed"))
+
+    # 連續的橫軸（SUM(Sales)）：零線照舊，其餘的格線是 2 像素的紅色虛線；座標軸線是深灰的點線
+    x = render(parse(tmp_path, bars(*rules)), db).spec["encoding"]["x"]["axis"]
+    zero = "datum.value === 0"
+    assert x["gridColor"] == {"condition": {"test": zero, "value": "#cbcbcb"}, "value": "#ff0000"}
+    assert x["gridDash"] == {"condition": {"test": zero, "value": [2, 1]}, "value": [4, 2]}
+    assert x["gridWidth"] == {"condition": {"test": zero, "value": 1}, "value": 2}
+    assert (x["domainColor"], x["domainDash"]) == ("#333333", [2, 1])
+    assert "domainWidth" not in x
+    # 零線關閉：格線的樣式直接寫在座標軸上
+    off = rule("zeroline", fmt("line-visibility", "off"))
+    x = render(parse(tmp_path, bars(*rules, off)), db).spec["encoding"]["x"]["axis"]
+    assert (x["gridColor"], x["gridWidth"], x["gridDash"]) == ("#ff0000", 2, [4, 2])
+    # 格線關閉時不寫樣式（只留零線）
+    x = render(parse(tmp_path, bars(hidden)), db).spec["encoding"]["x"]["axis"]
     assert x["gridOpacity"] == {"condition": {"test": zero, "value": 1}, "value": 0}
 
 

@@ -528,3 +528,44 @@ def test_banding_level_and_column_header_dividers(tmp_path: Path, db: Path) -> N
     assert (axis["ticks"], axis["tickBand"], axis["tickColor"]) == (True, "extent", "#d4d4d4")
     assert axis["tickSize"] == 2 * 15 + 4  # 兩行標題的高度
     assert "indexof(" in axis["tickOpacity"]["condition"]["test"]
+    assert "tickDash" not in axis and "gridDash" not in axis  # 實線不寫樣式
+
+
+def test_divider_patterns(tmp_path: Path, db: Path) -> None:
+    """分隔線的樣式（虛線、點線）：窗格與標題各自設定，沒有寫時為實線；窗格的線是格線、列標題的線是
+    rule 標記、欄標題的線是刻度，樣式都跟著（線段的長度隨線寬放大）。"""
+    rules = (
+        rule(
+            "table-div",
+            fmt("line-pattern-only", "dashed", scope="rows"),
+            fmt("stroke-size", "2", scope="rows"),
+            fmt("line-pattern-only", "dotted", scope="cols"),
+        ),
+        rule("header-div", fmt("line-pattern-only", "dotted", scope="rows")),
+    )
+    ws = parse(tmp_path, three_levels(*rules)).worksheets[0]
+    assert ws.row_style.divider == Divider(width=2, pattern="dashed")
+    assert ws.row_style.header_divider == Divider(pattern="dotted")
+    assert ws.column_style.divider == Divider(pattern="dotted")
+    assert ws.column_style.header_divider == Divider()  # 標題的樣式不沿用窗格的
+    # 不認得的樣式視為實線
+    odd = rule("table-div", fmt("line-pattern-only", "wavy", scope="rows"))
+    assert parse(tmp_path, banded(odd)).worksheets[0].row_style.divider == Divider()
+
+    spec = render(parse(tmp_path, three_levels(*rules)), db).spec
+    axis = spec["layer"][0]["encoding"]["y"]["axis"]
+    assert (axis["gridWidth"], axis["gridDash"]) == (2, [8, 4])  # 2 像素的虛線
+    [line] = [
+        layer for layer in spec["layer"] if layer.get("name") == "__deco__divider_rows_header"
+    ]
+    assert line["mark"] == {
+        "type": "rule",
+        "color": "#d4d4d4",
+        "strokeWidth": 1,
+        "strokeDash": [2, 1],
+    }
+    # 欄標題的分隔線（刻度）
+    dashed = rule("header-div", fmt("line-pattern-only", "dashed", scope="cols"))
+    spec = render(parse(tmp_path, nested("cols", dashed, mark="Text")), db).spec
+    axis = main_encoding(spec)["x"]["axis"]  # type: ignore[index]
+    assert (axis["tickColor"], axis["tickDash"]) == ("#d4d4d4", [4, 2])

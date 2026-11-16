@@ -22,6 +22,8 @@ interface TrendModel {
   p: number | null;
   standard_error: number | null;
   terms: number[];
+  /** 各係數（X 的次方由高到低，截距在最後）：估計值、標準誤、t 值與 P 值 */
+  coefficients?: { power: number; value: number; standard_error: number | null; t: number | null; p: number | null }[];
 }
 
 interface ForecastModel {
@@ -35,6 +37,10 @@ interface ForecastModel {
   gamma: number;
   aic: number | null;
   rmse: number | null;
+  mae?: number | null;
+  mase?: number | null;
+  mape?: number | null;
+  quality?: "good" | "ok" | "poor" | null;
   observations: number;
   period: number;
   horizon: number;
@@ -69,6 +75,15 @@ const TITLES: Record<DescribeKind, string> = { trend: "描述趨勢模型", fore
 const FITS: Record<string, string> = { linear: "線性", log: "對數", exp: "指數", power: "乘冪", polynomial: "多項式" };
 const COMPONENTS: Record<string, string> = { none: "無", additive: "加法", multiplicative: "乘法" };
 const UNITS: Record<string, string> = { year: "年", year_number: "年", quarter: "季", month: "月", week: "週", day: "日", hour: "小時" };
+/** 預測的品質（與「下一期等於這一期」的單純預測相比）：誤差不到一半、較小、較大 */
+const QUALITY: Record<string, string> = { good: "良好", ok: "尚可", poor: "不佳" };
+
+/** 係數的名稱：截距，或自變數（對數與乘冪模型取自然對數）的次方。 */
+function termName(fit: string, power: number): string {
+  if (power === 0) return fit === "exp" || fit === "power" ? "截距（ln b0）" : "截距";
+  const x = fit === "log" || fit === "power" ? "ln(X)" : "X";
+  return power === 1 ? x : `${x}^${power}`;
+}
 
 function number(value: number | null | undefined, digits = 6): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
@@ -114,7 +129,8 @@ export function DescribeModelDialog({ kind, onClose, onSaved }: { kind: Describe
           <div className="describe-trends">
             <p className="hint">模型以最小平方法配適；指數與乘冪模型的係數、R 平方、P 值與標準誤是取對數之後的值。</p>
             {trends.map((model, i) => (
-              <table key={i} className="describe-table" data-trend={i}>
+              <div key={i} className="describe-trend">
+              <table className="describe-table" data-trend={i}>
                 <caption>
                   {FITS[model.fit] ?? model.fit}趨勢模型{model.group.filter(Boolean).length > 0 ? `：${model.group.filter(Boolean).join("、")}` : ""}
                 </caption>
@@ -157,6 +173,33 @@ export function DescribeModelDialog({ kind, onClose, onSaved }: { kind: Describe
                   </tr>
                 </tbody>
               </table>
+              {(model.coefficients ?? []).length > 0 && (
+                // 各係數（Tableau 的 Individual trend lines）：一般最小平方法的標準誤、t 值與 P 值
+                <table className="describe-table wide" data-trend-terms={i}>
+                  <caption>各係數</caption>
+                  <thead>
+                    <tr>
+                      <th>項</th>
+                      <th>值</th>
+                      <th>標準誤</th>
+                      <th>t 值</th>
+                      <th>P 值</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(model.coefficients ?? []).map((c) => (
+                      <tr key={c.power} data-power={c.power}>
+                        <td>{termName(model.fit, c.power)}</td>
+                        <td>{number(c.value)}</td>
+                        <td>{number(c.standard_error)}</td>
+                        <td>{number(c.t)}</td>
+                        <td>{pValue(c.p)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              </div>
             ))}
           </div>
         );
@@ -199,7 +242,11 @@ export function DescribeModelDialog({ kind, onClose, onSaved }: { kind: Describe
                   <th>Alpha</th>
                   <th>Beta</th>
                   <th>Gamma</th>
+                  <th title="與「下一期等於這一期」的單純預測相比：誤差不到一半為良好、較小為尚可、較大為不佳">品質</th>
                   <th>RMSE</th>
+                  <th title="平均絕對誤差">MAE</th>
+                  <th title="平均絕對誤差 ÷ 單純預測的平均絕對誤差">MASE</th>
+                  <th title="平均絕對百分比誤差；資料中有 0 時沒有定義">MAPE</th>
                   <th>AIC</th>
                   <th>觀測數</th>
                   <th>預測期數</th>
@@ -216,7 +263,11 @@ export function DescribeModelDialog({ kind, onClose, onSaved }: { kind: Describe
                     <td>{number(model.alpha, 3)}</td>
                     <td>{model.trend === "none" ? "—" : number(model.beta, 3)}</td>
                     <td>{model.season === "none" ? "—" : number(model.gamma, 3)}</td>
+                    <td data-quality={model.quality ?? ""}>{model.quality ? QUALITY[model.quality] : "—"}</td>
                     <td>{number(model.rmse)}</td>
+                    <td>{number(model.mae)}</td>
+                    <td>{number(model.mase, 3)}</td>
+                    <td>{model.mape === null || model.mape === undefined ? "—" : `${number(model.mape, 3)}%`}</td>
                     <td>{number(model.aic)}</td>
                     <td>{model.observations}</td>
                     <td>{model.horizon}</td>

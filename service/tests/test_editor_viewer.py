@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import statistics
 import threading
 import time
 import urllib.request
@@ -1844,10 +1845,16 @@ def test_overlapping_labels_are_hidden(engine: str) -> None:
     with urllib.request.urlopen(request, timeout=60) as response:
         assert response.status == 200
 
+    # 高度以字級為準（與檢視器的判斷相同）：瀏覽器量到的是字型的行框，含字型本身的行距，
+    # 高度依作業系統的字型而異（Windows 的 Segoe UI 12px 是 16px），行框相疊時字並沒有重疊
     script = """() => {
         const texts = [...document.querySelectorAll('.worksheet g[class*="__label_"] text')];
         const shown = texts.filter((t) => t.textContent);
-        const boxes = shown.map((t) => t.getBoundingClientRect());
+        const boxes = shown.map((t) => {
+          const r = t.getBoundingClientRect();
+          const pad = Math.max(0, (r.height - parseFloat(getComputedStyle(t).fontSize)) / 2);
+          return { left: r.left, right: r.right, top: r.top + pad, bottom: r.bottom - pad };
+        });
         let overlaps = 0;
         for (let i = 0; i < boxes.length; i++)
           for (let j = i + 1; j < boxes.length; j++) {
@@ -2869,9 +2876,22 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         # 描述趨勢模型：公式、R 平方與 P 值
         page.get_by_role("button", name="描述趨勢模型…").click()
         described = page.locator('.describe-dialog[data-describe="trend"]')
-        expect(described.locator("table.describe-table")).to_have_count(1)
+        expect(described.locator("table.describe-table[data-trend]")).to_have_count(1)
         expect(described).to_contain_text("R 平方")
         expect(described).to_contain_text("建立模型的觀測數")
+        # 各係數：斜率（X）在前、截距在後，各有值、標準誤、t 值與 P 值；數字與回應中的模型相同
+        terms = described.locator("table[data-trend-terms] tbody tr")
+        expect(terms).to_have_count(2)
+        assert [row.locator("td").first.inner_text() for row in terms.all()] == ["X", "截距"]
+        (model,) = render()["spec"]["usermeta"]["trends"]
+        slope = model["coefficients"][0]
+        assert slope["power"] == 1 and slope["standard_error"] > 0
+        assert slope["t"] == pytest.approx(slope["value"] / slope["standard_error"])
+        assert slope["p"] == pytest.approx(model["p"])  # 一個自變數：斜率的 t 檢定即模型的 F 檢定
+        cells = [c.replace(",", "") for c in terms.first.locator("td").all_inner_texts()]
+        assert float(cells[1]) == pytest.approx(slope["value"], rel=1e-4)
+        assert float(cells[2]) == pytest.approx(slope["standard_error"], rel=1e-4)
+        assert float(cells[3]) == pytest.approx(slope["t"], rel=1e-4)
         described.get_by_role("button", name="關閉").click()
 
         # 叢集：兩群；描述叢集並存成群組
@@ -2927,22 +2947,104 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         card = page.locator(".editor .summary-card")
         expect(card.locator("tbody tr")).to_have_count(2)
         expect(card).to_contain_text("中位數")
+        # 更多：選用的統計量（樣本標準差、四分位數、樣本偏度與超額峰度），與這裡依定義算出的相同
+        expect(card.locator("[data-stat]")).to_have_count(0)
+        card.get_by_role("button", name="更多").click()
+        expect(card.locator("thead th")).to_have_count(11)
+        table = render()["table"]
+        for key in ("sum(f_sales)", "sum(f_profit)"):
+            at = table["keys"].index(key)
+            values = sorted(float(row[at]) for row in table["raw"] if row[at] not in ("", None))
+            n, mean, deviation = len(values), statistics.fmean(values), statistics.stdev(values)
+            first, _, third = statistics.quantiles(values, n=4, method="inclusive")
+            z = [(v - mean) / deviation for v in values]
+            skewness = n / ((n - 1) * (n - 2)) * sum(v**3 for v in z)
+            kurtosis = n * (n + 1) / ((n - 1) * (n - 2) * (n - 3)) * sum(v**4 for v in z) - 3 * (
+                n - 1
+            ) ** 2 / ((n - 2) * (n - 3))
+            row = card.locator(f'tbody tr[data-measure="{key}"]')
+            shown = {
+                name: float(row.locator(f'[data-stat="{name}"]').inner_text().replace(",", ""))
+                for name in (
+                    "deviation",
+                    "first-quartile",
+                    "third-quartile",
+                    "skewness",
+                    "kurtosis",
+                )
+            }
+            assert n > 4 and shown == {
+                "deviation": pytest.approx(deviation, abs=0.006),
+                "first-quartile": pytest.approx(first, abs=0.006),
+                "third-quartile": pytest.approx(third, abs=0.006),
+                "skewness": pytest.approx(skewness, abs=0.006),
+                "kurtosis": pytest.approx(kurtosis, abs=0.006),
+            }
+        card.get_by_role("button", name="較少").click()
+        expect(card.locator("[data-stat]")).to_have_count(0)
 
         # 格式：分隔線的細部；清除格式後回到預設
         page.get_by_role("button", name="格式…", exact=True).click()
         page.get_by_label("列分隔線的線寬").fill("3")
         page.get_by_label("列分隔線的層級").fill("2")
+        # 線的樣式：分隔線的虛線，格線與座標軸線的線寬與樣式
+        page.get_by_label("列分隔線的樣式").select_option("dashed")
+        page.get_by_label("欄格線的線寬").fill("2")
+        page.get_by_label("欄格線的樣式").select_option("dotted")
+        page.get_by_label("列座標軸線的樣式").select_option("dashed")
         page.get_by_role("dialog").get_by_role("button", name="確定").click()
         page.wait_for_timeout(300)
         settle(page)
         divider = sheet()["row_style"]["divider"]
-        assert (divider["width"], divider["level"]) == (3, 2)
+        assert (divider["width"], divider["level"], divider["pattern"]) == (3, 2, "dashed")
         assert sheet()["row_style"]["header_divider"]["width"] == 3
+        assert sheet()["column_style"]["grid_line"] == {
+            "color": None,
+            "width": 2,
+            "pattern": "dotted",
+        }
+        assert sheet()["row_style"]["axis_line"] == {"color": None, "width": 1, "pattern": "dashed"}
+        assert (sheet()["row_style"]["grid_line"], sheet()["column_style"]["axis_line"]) == (
+            None,
+            None,
+        )
+
+        def axes() -> tuple[dict[str, Any], dict[str, Any]]:
+            """散佈圖的橫軸與縱軸（主要圖層的 encoding）。"""
+
+            def find(node: dict[str, Any]) -> dict[str, Any] | None:
+                encoding = node.get("encoding") or {}
+                if "axis" in encoding.get("x", {}) and "axis" in encoding.get("y", {}):
+                    return encoding
+                for layer in node.get("layer", []):
+                    found = find(layer)
+                    if found is not None:
+                        return found
+                return None
+
+            encoding = find(render()["spec"])
+            assert encoding is not None
+            return encoding["x"]["axis"], encoding["y"]["axis"]
+
+        x_axis, y_axis = axes()
+        # 橫軸（欄）的格線：2 像素的點線（0 的那一條仍是零線）；縱軸（列）的座標軸線是虛線
+        assert (x_axis["gridWidth"]["value"], x_axis["gridDash"]["value"]) == (2, [2, 1])
+        assert y_axis["domainDash"] == [4, 2] and y_axis["gridDash"]["value"] == []
+        # 畫面上的格線也是點線
+        dashes = page.evaluate(
+            """() => [...document.querySelectorAll('.editor .worksheet .role-axis-grid line')]
+                 .map((line) => line.getAttribute('stroke-dasharray') || '')"""
+        )
+        assert "2,1" in dashes
         page.get_by_role("button", name="清除格式").click()
         page.wait_for_timeout(300)
         settle(page)
         divider = sheet()["row_style"]["divider"]
-        assert (divider["width"], divider["level"]) == (1, None)
+        assert (divider["width"], divider["level"], divider["pattern"]) == (1, None, "solid")
+        assert sheet()["column_style"]["grid_line"] is None
+        assert sheet()["row_style"]["axis_line"] is None
+        x_axis, y_axis = axes()
+        assert x_axis["gridDash"]["value"] == [] and "domainDash" not in y_axis
 
         # 頁面的顯示歷程：第二頁時畫出前一頁的標記與軌跡
         page.locator('.data-pane [data-field="f_order_date"]').drag_to(

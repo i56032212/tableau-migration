@@ -58,6 +58,7 @@ from tmig.ir.models import (
     FontElement,
     FontStyle,
     LabelScope,
+    LineStyle,
     MarkLabels,
     Marks,
     Pane,
@@ -546,12 +547,16 @@ class _Builder:
         lines = self.ws.row_style if shelf == "rows" else self.ws.column_style
         if not lines.grid:
             axis["grid"] = False
+        elif lines.grid_line is not None:
+            axis.update(_line_props("grid", lines.grid_line))
         if not lines.axis:
             axis["domain"] = False
+        elif lines.axis_line is not None:
+            axis.update(_line_props("domain", lines.axis_line))
         if not lines.ticks:
             axis["ticks"] = False
         if lines.zero_line is not None and encoding.get("type") == "quantitative":
-            _zero_line(axis, lines.zero_line, lines.grid)
+            _zero_line(axis, lines.zero_line, lines.grid, lines.grid_line)
         setting = self.axis_of(use, shelf)
         if setting is not None:
             temporal = encoding.get("type") == "temporal"
@@ -3174,8 +3179,15 @@ def _divider(
         gridWidth=divider.width,
         gridOpacity={"condition": {"test": test, "value": 1}, "value": 0},
     )
+    if divider.pattern != "solid":
+        axis["gridDash"] = _divider_dash(divider)
     encoding["axis"] = axis
     _flush_bands(spec, encoding, channel)
+
+
+def _divider_dash(divider: Divider) -> list[int]:
+    """分隔線的虛線、點線：線段與間隔隨線寬放大（粗的線才看得出樣式）。"""
+    return [n * divider.width for n in DASHES[divider.pattern]]
 
 
 def _header_divider(
@@ -3208,10 +3220,17 @@ def _header_divider(
         record[flag] = starts.get(record.get(field_name), 0)
     _flush_bands(spec, encoding, "y")
     position = {k: encoding[k] for k in ("field", "type", "sort", "scale") if k in encoding}
+    mark: dict[str, Any] = {
+        "type": "rule",
+        "color": _css_color(divider.color),
+        "strokeWidth": divider.width,
+    }
+    if divider.pattern != "solid":
+        mark["strokeDash"] = _divider_dash(divider)
     layer = {
         "name": f"{DECO}{flag}_header",
         "transform": [{"calculate": "-1", "as": ROW}],
-        "mark": {"type": "rule", "color": _css_color(divider.color), "strokeWidth": divider.width},
+        "mark": mark,
         "encoding": {
             # 線在這一列的尾端（band 的結束處）；不是邊界的列為長度 0 的線
             "y": {**position, "bandPosition": 1},
@@ -3324,6 +3343,7 @@ def _trend_lines(
                 "p": model.p_value,
                 "standard_error": model.sigma,
                 "terms": list(model.terms),
+                "coefficients": [c.as_dict() for c in model.coefficients()],
             }
         )
         common: dict[str, Any] = {f"{TREND}_group": group}
@@ -3434,6 +3454,8 @@ def _column_header_divider(
         tickWidth=divider.width,
         tickOpacity={"condition": {"test": test, "value": 1}, "value": 0},
     )
+    if divider.pattern != "solid":
+        axis["tickDash"] = _divider_dash(divider)
     encoding["axis"] = axis
     _flush_bands(spec, encoding, "x")
 
@@ -5150,17 +5172,35 @@ RULER_COLOR = "#f4f4f4"
 DASHES = {"solid": [], "dashed": [4, 2], "dotted": [2, 1]}
 
 
-def _zero_line(axis: dict[str, Any], zero: ZeroLine, grid: bool) -> None:
+def _line_props(prefix: Literal["grid", "domain"], style: LineStyle) -> dict[str, Any]:
+    """格線（grid）或座標軸線（domain）的樣式 → 座標軸的屬性；與預設相同的不寫。"""
+    props: dict[str, Any] = {}
+    if style.color is not None:
+        props[f"{prefix}Color"] = _css_color(style.color)
+    if style.width != 1:
+        props[f"{prefix}Width"] = style.width
+    if style.pattern != "solid":
+        props[f"{prefix}Dash"] = DASHES[style.pattern]
+    return props
+
+
+def _zero_line(
+    axis: dict[str, Any], zero: ZeroLine, grid: bool, grid_line: LineStyle | None = None
+) -> None:
     """零線：以座標軸在 0 的格線畫出（顏色、線寬與樣式依設定；格線關閉時只畫這一條）。範圍不含 0 時
-    沒有 0 的刻度，與 Tableau 相同不畫。"""
+    沒有 0 的刻度，與 Tableau 相同不畫。其餘的格線依格線的樣式（沒有設定時為預設）。"""
     test = "datum.value === 0"
+    other = grid_line or LineStyle()
     axis["grid"] = True
     axis["gridColor"] = {
         "condition": {"test": test, "value": _css_color(zero.color)},
-        "value": GRID_COLOR,
+        "value": _css_color(other.color) if other.color is not None else GRID_COLOR,
     }
-    axis["gridDash"] = {"condition": {"test": test, "value": DASHES[zero.pattern]}, "value": []}
-    axis["gridWidth"] = {"condition": {"test": test, "value": zero.width}, "value": 1}
+    axis["gridDash"] = {
+        "condition": {"test": test, "value": DASHES[zero.pattern]},
+        "value": DASHES[other.pattern],
+    }
+    axis["gridWidth"] = {"condition": {"test": test, "value": zero.width}, "value": other.width}
     if not grid:
         axis["gridOpacity"] = {"condition": {"test": test, "value": 1}, "value": 0}
 

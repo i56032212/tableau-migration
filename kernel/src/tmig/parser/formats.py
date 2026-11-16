@@ -9,8 +9,11 @@
     <encoding attr='space'>：range-type='fixed'（min、max）、'fixedmin'、'fixedmax'，reverse='true'，
     domain-expand='false'（自動範圍不必包含 0），synchronized='true'（雙軸同步）；日期寫成 #2024-12-30#
   - 沒有 field 的 axis 格式：line-visibility='off'、stroke-size='0'（不畫座標軸線）、tick-color 透明
-    （不畫刻度），scope 為 rows、cols 或省略（兩者）
-  - <style-rule element='gridline'>：line-visibility='off'、stroke-size='0'（不畫格線）
+    （不畫刻度），scope 為 rows、cols 或省略（兩者）；stroke-color、stroke-size、line-pattern-only
+    （solid、dashed、dotted）為座標軸線的顏色、線寬與樣式
+  - <style-rule element='gridline'>：line-visibility='off'、stroke-size='0'（不畫格線）；stroke-color、
+    stroke-size、line-pattern-only 為格線的顏色、線寬與樣式（屬性名稱與零線、趨勢線、參考線相同；
+    格線與分隔線的寫法沒有樣本，是推定的）
   - <style-rule element='table'>：format attr='background-color'（工作表的背景，可以透明）
   - <style-rule element='label'> 加上 field：format attr='display'（value='false' 不顯示離散欄位的標題）、
     attr='color'（標題成員或座標軸刻度文字的顏色）、attr='text-align'（標題成員的水平對齊：left、center、
@@ -34,7 +37,8 @@
     工作表）、label（標題成員與刻度；有 field 時為這個欄位）、cell（文字表）、field-labels、title、legend、
     legend-title、tooltip；活頁簿 <style> 的設定（all 為預設字型）在前；標記標籤為標記卡的 datalabel
   - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
-    stroke-color，table-div 的 div-level（第幾層標題之間，0 為不畫），以 scope 區分列與欄；沒有寫時
+    stroke-color、line-pattern-only（樣式，各自設定），table-div 的 div-level（第幾層標題之間，
+    0 為不畫），以 scope 區分列與欄；沒有寫時
     Tableau 預設畫（使用者常關掉：公開報表中最常見的寫法是 line-visibility='off'）
 - dashboard 的 <style>：<style-rule element='table'> 的 background-color（dashboard 的背景）
 - dashboard 區塊的 <zone-style>：background-color、border-style／border-width／border-color、
@@ -58,6 +62,7 @@ from tmig.ir.models import (
     FieldUse,
     FontElement,
     FontStyle,
+    LineStyle,
     Scalar,
     ShelfStyle,
     TextStyle,
@@ -143,6 +148,8 @@ def worksheet_formats(
             shelves[shelf] = shelves[shelf].model_copy(update={name: on})
 
     zeros: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
+    grids: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
+    rulers: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
 
     def lines(element: str | None, item: etree._Element) -> None:
         """格線、座標軸線、刻度與零線（沒有 field 的格式）；工作表的設定覆寫活頁簿的。"""
@@ -152,10 +159,16 @@ def worksheet_formats(
                 zeros[shelf][name] = value or ""
         elif element == "gridline":
             turn(scope, "grid", _line(name, value))
+            if name in LINE_ATTRS:
+                for shelf in [SHELVES[scope]] if scope in SHELVES else list(grids):
+                    grids[shelf][name] = value or ""
         elif element == "axis" and name == "tick-color":
             turn(scope, "ticks", not _transparent(value) if hex_color(value) else None)
         elif element == "axis":
             turn(scope, "axis", _line(name, value))
+            if name in LINE_ATTRS:
+                for shelf in [SHELVES[scope]] if scope in SHELVES else list(rulers):
+                    rulers[shelf][name] = value or ""
 
     def sizes(element: str, name: str, value: str | None, ref: str | None) -> None:
         size = _int(value)
@@ -284,6 +297,8 @@ def worksheet_formats(
                 "divider": pane,
                 "header_divider": header,
                 "zero_line": _zero_line(zeros[shelf]),
+                "grid_line": _line_style(grids[shelf]),
+                "axis_line": _line_style(rulers[shelf]),
             }
         )
     result.row_style, result.column_style = shelves["rows"], shelves["columns"]
@@ -326,6 +341,30 @@ def _zero_line(raw: dict[str, str]) -> ZeroLine | None:
     )
 
 
+LINE_ATTRS = ("stroke-color", "stroke-size", "line-pattern-only")
+"""線條格式中決定樣子的屬性：顏色、線寬（像素）與樣式（solid、dashed、dotted）。"""
+
+
+def _pattern(value: str | None) -> Literal["solid", "dashed", "dotted"]:
+    """線的樣式（line-pattern-only）：dashed、dotted，其餘（含沒有寫）為實線。"""
+    return "dashed" if value == "dashed" else "dotted" if value == "dotted" else "solid"
+
+
+def _line_style(raw: dict[str, str]) -> LineStyle | None:
+    """格線或座標軸線的樣式：顏色、線寬與樣式都沒有寫（或與預設相同）時為 None；透明的顏色與寬度 0
+    由是否畫出（grid、axis）處理，這裡不算樣式。"""
+    color = hex_color(raw.get("stroke-color"))
+    if color is not None and _transparent(color):
+        color = None
+    width = _int(raw.get("stroke-size"))
+    style = LineStyle(
+        color=color,
+        width=width if width is not None and width >= 1 else 1,
+        pattern=_pattern(raw.get("line-pattern-only")),
+    )
+    return None if style == LineStyle() else style
+
+
 def _valign(value: str | None) -> Literal["top", "center", "bottom"] | None:
     if value == "top" or value == "center" or value == "bottom":
         return value
@@ -347,7 +386,12 @@ def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
             return None
         if color is not None and _transparent(color):
             return None
-        return Divider(color=color or Divider().color, width=width or 1, level=level)
+        return Divider(
+            color=color or Divider().color,
+            width=width or 1,
+            level=level,
+            pattern=_pattern(raw.get(f"{element}:line-pattern-only")),
+        )
 
     pane = line("table-div", None)
     return pane, line("header-div", hex_color(raw.get("table-div:stroke-color")))

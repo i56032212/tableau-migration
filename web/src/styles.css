@@ -708,6 +708,7 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .summary-card caption { text-align: left; font-weight: 600; padding-bottom: 2px; }
 .summary-card th, .summary-card td { border: 1px solid var(--line); padding: 2px 8px; text-align: right; }
 .summary-card tbody th { text-align: left; font-weight: 400; }
+.summary-card .summary-more { margin-left: 8px; padding: 0 6px; font-size: 11px; font-weight: 400; }
 .divider-details { display: inline-flex; gap: 8px; align-items: center; }
 .divider-details input[type="number"] { width: 56px; margin-left: 4px; }
 .describe-dialog { min-width: 460px; max-width: 860px; max-height: 70vh; overflow: auto; }

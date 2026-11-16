@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 import math
 from pathlib import Path
 
@@ -142,6 +143,44 @@ def test_seasonal_model_for_months() -> None:
 def test_multiplicative_models_need_positive_values() -> None:
     values = [0.0, 5, 3, 8, 6, 9, 7, 12]
     assert best_fit(values, 1, seasonal=False).model.trend != "multiplicative"
+
+
+def test_forecast_quality_metrics() -> None:
+    """描述預測的品質指標：MAE、MASE（與「下一期等於這一期」的單純預測相比）、MAPE 與品質。
+    簡單指數平滑的一步預測誤差在這裡依定義重算一次核對。"""
+    values = [12.0, 15, 11, 14, 18, 13, 16, 20, 15, 17, 22, 16]
+    found = best_fit(values, 1, model=Model("none", "none"))
+    alpha = found.params[0]
+    level = values[0]  # 初始的水準是第一個值
+    errors: list[float] = []
+    for value in values:
+        errors.append(value - level)
+        level = alpha * value + (1 - alpha) * level
+    mae = sum(abs(e) for e in errors) / len(values)
+    naive = sum(abs(b - a) for a, b in itertools.pairwise(values)) / (len(values) - 1)
+    assert math.sqrt(found.sse / found.n) == pytest.approx(
+        math.sqrt(sum(e * e for e in errors) / len(values))
+    )
+    assert found.mae == pytest.approx(mae)
+    assert found.mase == pytest.approx(mae / naive)
+    assert found.mape == pytest.approx(
+        100 * sum(abs(e) / v for e, v in zip(errors, values, strict=True)) / len(values)
+    )
+    # 上下跳動的資料：平滑的預測比單純預測好（MASE 小於 1），但不到一半
+    assert found.mase is not None and 0.5 <= found.mase < 1 and found.quality == "ok"
+    # 直線：有趨勢的模型幾乎沒有誤差，單純預測每期差 2
+    line = best_fit([10.0 + 2 * i for i in range(12)], 1, seasonal=False)
+    assert line.mase is not None and line.mase < 0.01 and line.quality == "good"
+    assert line.mae == pytest.approx(0, abs=1e-6) and line.mape == pytest.approx(0, abs=1e-6)
+    # 單純預測比較好時是 poor：隨機漫步配上錯誤的模型（指定沒有趨勢、平滑係數被迫偏離 1 的乘法季節）
+    walk = [100.0, 101, 103, 102, 105, 107, 106, 109, 111, 110, 113, 115, 114, 117, 119, 118]
+    forced = best_fit(walk, 4, model=Model("none", "multiplicative"))
+    assert forced.mase is not None and forced.mase > 1 and forced.quality == "poor"
+    # 資料中有 0：MAPE 沒有定義；資料完全不變：單純預測沒有誤差，MASE 與品質沒有定義
+    zeros = best_fit([0.0, 5, 3, 8, 6, 9, 7, 12], 1, model=Model("none", "none"))
+    assert zeros.mape is None and zeros.mae is not None and zeros.mase is not None
+    flat = best_fit([7.0] * 8, 1, model=Model("none", "none"))
+    assert flat.mae == pytest.approx(0) and flat.mase is None and flat.quality is None
 
 
 FORECAST = (

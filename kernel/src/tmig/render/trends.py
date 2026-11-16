@@ -33,6 +33,27 @@ LOG_Y = ("exp", "power")
 
 
 @dataclass(frozen=True)
+class Coefficient:
+    """模型的一個係數（「描述趨勢模型」中的一列）。"""
+
+    power: int
+    """X（對數、乘冪模型為 ln X）的次方；0 為截距。"""
+    value: float
+    standard_error: float | None
+    t: float | None
+    p: float | None
+
+    def as_dict(self) -> dict[str, float | int | None]:
+        return {
+            "power": self.power,
+            "value": self.value,
+            "standard_error": self.standard_error,
+            "t": self.t,
+            "p": self.p,
+        }
+
+
+@dataclass(frozen=True)
 class Model:
     """配適好的模型。terms 為公式中的係數（索引為 X 的次方；指數與乘冪為 ln(b0)、b1）。"""
 
@@ -57,6 +78,60 @@ class Model:
     def sigma(self) -> float | None:
         """殘差的標準誤（轉換後的空間）；殘差自由度為 0 時為 None。"""
         return self._sigma
+
+    def coefficients(self) -> list[Coefficient]:
+        """各係數的估計值、標準誤、t 值與 P 值（Tableau「描述趨勢模型」的 Individual trend lines）：
+        一般最小平方法的做法，標準誤為 s·√diag((XᵀX)⁻¹)，t = 估計值 ÷ 標準誤，P 值為自由度是殘差自由度的
+        t 分配的雙尾機率。順序依 X 的次方由高到低，截距（次方 0）在最後；通過原點的模型沒有截距。
+        指數與乘冪模型的截距是 ln(b0)（轉換後的空間）。殘差自由度為 0 時標準誤、t 值與 P 值為 None。"""
+        order = len(self.terms) - 1
+        df = self.n - len(self._beta)
+        errors = self._term_errors() if self._sigma is not None and df > 0 else None
+        found: list[Coefficient] = []
+        for power in range(order, -1 if self.intercept else 0, -1):
+            value = self.terms[power]
+            error = errors[power] if errors is not None else None
+            t: float | None = None
+            p: float | None = None
+            if error is not None and error > 0:
+                t = value / error
+                p = t_two_sided(abs(t), df)
+            elif error == 0:
+                # 完全配適：標準誤為 0，係數不是 0 時顯著
+                p = 0.0 if value != 0 else None
+            found.append(Coefficient(power=power, value=value, standard_error=error, t=t, p=p))
+        return found
+
+    def _term_errors(self) -> list[float]:
+        """公式中各次方係數的標準誤。配適是在縮放後的自變數 z = (u − center) / scale 上做的：
+        Cov(β) = s²·R⁻¹R⁻ᵀ，公式的係數是 β 的線性組合 T·β（二項式展開，與 _terms 相同），
+        所以 Cov(係數) = s²·(T·R⁻¹)(T·R⁻¹)ᵀ，標準誤是 s 乘上 T·R⁻¹ 各列的長度。"""
+        assert self._sigma is not None
+        p = len(self._beta)
+        order = len(self.terms) - 1
+        # R 的反矩陣（上三角）：逐欄回代
+        inverse = [[0.0] * p for _ in range(p)]
+        for column in range(p):
+            for i in range(column, -1, -1):
+                rest = math.fsum(
+                    self._r[i][j] * inverse[j][column] for j in range(i + 1, column + 1)
+                )
+                inverse[i][column] = ((1.0 if i == column else 0.0) - rest) / self._r[i][i]
+        first = 0 if self.intercept else 1  # β 的第一個元素對應的次方
+        errors: list[float] = []
+        for j in range(order + 1):
+            row = [
+                math.fsum(
+                    math.comb(k, j)
+                    * (-self._center) ** (k - j)
+                    / self._scale**k
+                    * inverse[k - first][column]
+                    for k in range(max(j, first), order + 1)
+                )
+                for column in range(p)
+            ]
+            errors.append(self._sigma * math.sqrt(math.fsum(v * v for v in row)))
+        return errors
 
     def predict(self, x: float) -> float | None:
         """X 對應的趨勢值；X 不在模型的定義域（對數、乘冪的 X ≤ 0）時為 None。"""
@@ -341,4 +416,15 @@ def t_quantile(p: float, df: float) -> float:
     return (low + high) / 2
 
 
-__all__ = ["Fit", "Model", "betainc", "f_sf", "fit_model", "format_p", "format_r2", "t_quantile"]
+__all__ = [
+    "Coefficient",
+    "Fit",
+    "Model",
+    "betainc",
+    "f_sf",
+    "fit_model",
+    "format_p",
+    "format_r2",
+    "t_quantile",
+    "t_two_sided",
+]

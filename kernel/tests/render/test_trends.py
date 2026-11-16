@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from tmig.ir import FieldUse, TrendLine
-from tmig.render.trends import betainc, f_sf, fit_model, format_p, t_quantile
+from tmig.render.trends import betainc, f_sf, fit_model, format_p, t_quantile, t_two_sided
 from tmig.render.vegalite import main_encoding
 
 from ..parser.builder import instance, ref, worksheet
@@ -124,6 +124,76 @@ def test_models() -> None:
     assert high.predict(45000 + 30 * 20) == pytest.approx(160 + 0.5 * (20 % 3), abs=0.6)
 
 
+def test_coefficients() -> None:
+    """描述趨勢模型的各係數：估計值、標準誤、t 值與 P 值。標準誤以 numpy 在沒有縮放的設計矩陣上獨立算出
+    （s²·(XᵀX)⁻¹ 的對角線）；Anscombe 第一組資料的數字是廣為引用的結果。"""
+    import numpy as np
+
+    points = list(zip(X, Y, strict=True))
+    linear = fit_model(points, "linear")
+    assert linear is not None
+    slope, constant = linear.coefficients()
+    assert (slope.power, constant.power) == (1, 0)
+    assert (slope.value, constant.value) == pytest.approx((0.50009091, 3.00009091))
+    assert (slope.standard_error, constant.standard_error) == pytest.approx(
+        (0.117905500, 1.124746791), rel=1e-6
+    )
+    assert (slope.t, constant.t) == pytest.approx((4.241455, 2.667348), rel=1e-5)
+    assert constant.p == pytest.approx(0.025734, rel=1e-4)
+    # 只有一個自變數時，斜率的 t 檢定與整個模型的 F 檢定是同一件事
+    assert slope.p == pytest.approx(linear.p_value)
+
+    def expected(us: list[float], vs: list[float], powers: list[int]) -> list[tuple[float, float]]:
+        design = np.array([[u**k for k in powers] for u in us])
+        beta, *_ = np.linalg.lstsq(design, np.array(vs), rcond=None)
+        residual = np.array(vs) - design @ beta
+        variance = float(residual @ residual) / (len(us) - len(powers))
+        errors = np.sqrt(variance * np.diag(np.linalg.inv(design.T @ design)))
+        return [(float(b), float(e)) for b, e in zip(beta, errors, strict=True)]
+
+    xs, ys = [float(x) for x in X], list(Y)
+    cases: list[tuple[Any, list[float], list[float], list[int]]] = [
+        (fit_model(points, "polynomial", 3), xs, ys, [3, 2, 1, 0]),
+        (fit_model(points, "polynomial", 2, intercept=False), xs, ys, [2, 1]),
+        (fit_model(points, "linear", intercept=False), xs, ys, [1]),
+        (fit_model(points, "log"), [math.log(x) for x in X], ys, [1, 0]),
+        # 指數與乘冪：取對數之後的空間（截距是 ln(b0)）
+        (fit_model(points, "exp"), xs, [math.log(y) for y in Y], [1, 0]),
+        (
+            fit_model(points, "power"),
+            [math.log(x) for x in X],
+            [math.log(y) for y in Y],
+            [1, 0],
+        ),
+    ]
+    for model, us, vs, powers in cases:
+        assert model is not None
+        found = model.coefficients()
+        assert [c.power for c in found] == powers
+        df = len(us) - len(powers)
+        for c, (value, error) in zip(found, expected(us, vs, powers), strict=True):
+            assert c.value == pytest.approx(value, rel=1e-7, abs=1e-9)
+            assert c.standard_error == pytest.approx(error, rel=1e-6)
+            assert c.t == pytest.approx(value / error, rel=1e-6)
+            assert c.p == pytest.approx(t_two_sided(abs(value / error), df))
+    # 日期的數值（約 45000 天）：自變數縮放之後，標準誤仍與沒有縮放的算法相同
+    dates = [(45000.0 + 30 * i, 100 + 3 * i + 0.5 * (i % 3)) for i in range(40)]
+    dated = fit_model(dates, "linear")
+    assert dated is not None
+    centered = [x - 45000.0 for x, _ in dates]
+    (slope_value, slope_error), _ = expected(centered, [y for _, y in dates], [1, 0])
+    found_slope = dated.coefficients()[0]
+    assert found_slope.value == pytest.approx(slope_value, rel=1e-7)
+    assert found_slope.standard_error == pytest.approx(slope_error, rel=1e-6)
+    # 兩點：殘差自由度是 0，沒有標準誤、t 值與 P 值
+    two = fit_model([(1, 1.0), (3, 5.0)], "linear")
+    assert two is not None
+    assert [(c.value, c.standard_error, c.t, c.p) for c in two.coefficients()] == [
+        (pytest.approx(2.0), None, None, None),
+        (pytest.approx(-1.0), None, None, None),
+    ]
+
+
 def test_distributions() -> None:
     """t 與 F 分配（以 scipy.stats 的數值核對）。"""
     assert [round(t_quantile(0.975, df), 6) for df in (1, 2, 10, 30, 1000)] == [
@@ -222,6 +292,12 @@ def test_trend_lines_by_color(tmp_path: Path, db: Path) -> None:
         assert model["fit"] == "linear" and model["observations"] == len(points)
         assert (model["model_df"], model["residual_df"]) == (2, len(points) - 2)
         assert model["terms"] == pytest.approx([intercept, slope])
+        # 各係數（斜率在前、截距在後）：兩個點的線沒有標準誤，三個點以上有
+        assert [c["power"] for c in model["coefficients"]] == [1, 0]
+        assert [c["value"] for c in model["coefficients"]] == pytest.approx([slope, intercept])
+        assert all(
+            (c["standard_error"] is None) == (len(points) == 2) for c in model["coefficients"]
+        )
         assert model["equation"].startswith(f"{main['y']['title']} = ")
         if len(points) > 2:
             residuals = [py - (slope * px + intercept) for px, py in points]

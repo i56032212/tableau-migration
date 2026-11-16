@@ -643,6 +643,7 @@ def _trend_layers(builder: _Builder, plan: MapPlan) -> list[dict[str, Any]]:
                 "p": model.p_value,
                 "standard_error": model.sigma,
                 "terms": list(model.terms),
+                "coefficients": [c.as_dict() for c in model.coefficients()],
             }
         )
         mark: dict[str, Any] = {

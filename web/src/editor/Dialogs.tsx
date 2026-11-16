@@ -1842,13 +1842,73 @@ interface ShelfStyleIR {
   divider: unknown;
   header_divider: unknown;
   zero_line: unknown;
+  grid_line?: LineStyleIR | null;
+  axis_line?: LineStyleIR | null;
   [key: string]: unknown;
 }
+
+type LinePattern = "solid" | "dashed" | "dotted";
 
 interface DividerIR {
   color: string;
   width: number;
   level: number | null;
+  pattern: LinePattern;
+}
+
+/** 格線或座標軸線的樣式（IR 的 LineStyle）；null 為預設（淺灰、1 像素的實線） */
+interface LineStyleIR {
+  color: string | null;
+  width: number;
+  pattern: LinePattern;
+}
+
+/** 線的樣式（Tableau 的「格式＞線條」「格式＞框線」中的樣式）：實線、虛線、點線。 */
+function PatternSelect({ label, value, onChange }: { label: string; value: LinePattern; onChange: (value: LinePattern) => void }) {
+  return (
+    <select aria-label={label} title="線的樣式" value={value} onChange={(e) => onChange(e.target.value as LinePattern)}>
+      <option value="solid">實線</option>
+      <option value="dashed">虛線</option>
+      <option value="dotted">點線</option>
+    </select>
+  );
+}
+
+/** 格線或座標軸線的顏色、線寬與樣式；都回到預設時存成 null。defaultColor 是沒有設定顏色時畫出來的顏色。 */
+function LineStyleInputs({
+  label,
+  value,
+  defaultColor,
+  onChange,
+}: {
+  label: string;
+  value: LineStyleIR | null;
+  defaultColor: string;
+  onChange: (value: LineStyleIR | null) => void;
+}) {
+  const style: LineStyleIR = { color: null, width: 1, pattern: "solid", ...(value ?? {}) };
+  const change = (patch: Partial<LineStyleIR>) => {
+    const next = { ...style, ...patch };
+    onChange(next.color === null && next.width === 1 && next.pattern === "solid" ? null : next);
+  };
+  return (
+    <span className="divider-details" data-line-style={label}>
+      {label}
+      <input type="color" aria-label={`${label}的顏色`} title={`${label}的顏色`} value={(style.color ?? defaultColor).slice(0, 7)} onChange={(e) => change({ color: e.target.value })} />
+      <label title={`${label}的線寬（像素）`}>
+        線寬
+        <input
+          type="number"
+          min={1}
+          max={6}
+          aria-label={`${label}的線寬`}
+          value={style.width}
+          onChange={(e) => change({ width: Math.max(1, Math.min(6, Math.round(Number(e.target.value)) || 1)) })}
+        />
+      </label>
+      <PatternSelect label={`${label}的樣式`} value={style.pattern} onChange={(pattern) => change({ pattern })} />
+    </span>
+  );
 }
 
 const FONT_FAMILIES = ["Tableau Book", "Tableau Medium", "Tableau Semibold", "Tableau Bold", "Arial", "Microsoft JhengHei", "Segoe UI"];
@@ -1944,8 +2004,8 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
         </label>
         {value.divider !== null &&
           (() => {
-            // 框線的細部（Tableau 的「格式＞框線＞列分隔線、欄分隔線」）：顏色、線寬、層級，標題是否也畫
-            const divider = { color: "#d4d4d4", width: 1, level: null, ...(value.divider as Partial<DividerIR>) } as DividerIR;
+            // 框線的細部（Tableau 的「格式＞框線＞列分隔線、欄分隔線」）：顏色、線寬、樣式、層級，標題是否也畫
+            const divider = { color: "#d4d4d4", width: 1, level: null, pattern: "solid", ...(value.divider as Partial<DividerIR>) } as DividerIR;
             const change = (patch: Partial<DividerIR>) => {
               const next = { ...divider, ...patch };
               set({ ...value, divider: next, header_divider: value.header_divider !== null ? next : null });
@@ -1964,6 +2024,7 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => change({ width: Math.max(1, Math.min(6, Math.round(Number(e.target.value)) || 1)) })}
                   />
                 </label>
+                <PatternSelect label={`${label}分隔線的樣式`} value={divider.pattern} onChange={(pattern) => change({ pattern })} />
                 <label title="分隔第幾層的標題（1 為最外層）；空白為預設：最內層以外的每一層">
                   層級
                   <input
@@ -1999,6 +2060,17 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
           />
         </label>
       </div>
+      {(value.grid || value.axis) && (
+        // 線條的細部（Tableau 的「格式＞線條＞格線、座標軸尺規」）：連續的座標軸才有格線與座標軸線
+        <div className="row">
+          {value.grid && (
+            <LineStyleInputs label={`${label}格線`} value={value.grid_line ?? null} defaultColor="#f0f0f0" onChange={(grid_line) => set({ ...value, grid_line })} />
+          )}
+          {value.axis && (
+            <LineStyleInputs label={`${label}座標軸線`} value={value.axis_line ?? null} defaultColor="#f4f4f4" onChange={(axis_line) => set({ ...value, axis_line })} />
+          )}
+        </div>
+      )}
       <div className="row">
         <label>
           <input
