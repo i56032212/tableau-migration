@@ -3261,7 +3261,8 @@ def test_custom_image_shapes_in_editor_and_viewer(engine: str, tmp_path: Path) -
         }
         assert {tuple(item["center"][:3]) for item in drawn} == wanted
         assert all(item["center"][3] == 255 for item in drawn)
-        assert {item["width"] for item in drawn} == {"10"}
+        # 圖片的邊長：預設大小是 30 像素（IMAGE_DIAMETER）
+        assert {item["width"] for item in drawn} == {"30"}
         # 形狀的圖例：有圖片時由檢視器畫（三張圖片與一個內建的形狀）
         legend = page.locator(".editor-canvas .shape-legend")
         expect(legend.locator("img.shape-swatch")).to_have_count(3)
