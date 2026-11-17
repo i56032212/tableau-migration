@@ -2,7 +2,8 @@
 //
 // - 固定尺寸的 dashboard 使用 IR 的像素座標
 // - 自動與範圍尺寸：最外層與 tiled 容器依比例縮放；horizontal／vertical 容器沿排列方向分配，
-//   固定大小的區塊維持像素大小、間距不變、其餘依比例；另一個方向依比例縮放；隱藏的區塊不占空間
+//   固定大小的區塊維持像素大小、間距不變、其餘依比例；另一個方向依比例縮放；隱藏的區塊不占空間。
+//   Tableau 的固定大小（fixed-size）不含區塊的外距：區塊占的長度是固定大小加上排列方向兩側的外距
 
 import type { CSSProperties } from "react";
 import type { Dashboard, Zone, ZoneStyle } from "./types";
@@ -97,7 +98,13 @@ function flow(zone: Zone, box: Box, result: Map<string, Box>) {
     for (const child of visible) place(child, scaled(child, zone, box), result);
     return;
   }
-  const fixedTotal = visible.reduce((sum, c) => sum + (c.fixed ?? 0), 0);
+  /** 固定大小的區塊在排列方向占的長度：固定大小加上兩側的外距；不是固定大小時為 null */
+  const fixedSpan = (z: Zone): number | null => {
+    if (z.fixed === null || z.fixed === undefined) return null;
+    const [top, right, bottom, left] = z.style?.margin ?? [0, 0, 0, 0];
+    return z.fixed + (horizontal ? left + right : top + bottom);
+  };
+  const fixedTotal = visible.reduce((sum, c) => sum + (fixedSpan(c) ?? 0), 0);
   const freeRef = visible.reduce((sum, c) => sum + (c.fixed === null || c.fixed === undefined ? span(c) : 0), 0);
   const freeNew = newSpan - fixedTotal - gaps.reduce((a, b) => a + b, 0) - trailing;
   const scale = freeRef ? Math.max(freeNew, 0) / freeRef : 0;
@@ -105,7 +112,7 @@ function flow(zone: Zone, box: Box, result: Map<string, Box>) {
   let cursor = newStart;
   visible.forEach((child, i) => {
     cursor += gaps[i];
-    const length = child.fixed !== null && child.fixed !== undefined ? child.fixed : span(child) * scale;
+    const length = fixedSpan(child) ?? span(child) * scale;
     const childBox = horizontal
       ? { x: cursor, y: box.y + (child.y - zone.y) * cross, w: length, h: child.h * cross }
       : { x: box.x + (child.x - zone.x) * cross, y: cursor, w: child.w * cross, h: length };

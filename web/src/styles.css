@@ -146,7 +146,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .placeholder.error { color: var(--error); background: #fef2f2; border-color: #fca5a5; }
 
 .title { font-size: 20px; font-weight: 600; padding: 4px 6px; }
-.text { font-size: 13px; white-space: pre-wrap; padding: 4px 6px; }
+/* dashboard 的文字物件：Tableau 的字型、行高與 Tableau 的字型相近、上下不另外留白，文字在區塊中垂直置中 */
+.text { font-family: var(--tableau-font); font-size: 12px; line-height: 1.2; padding: 0 6px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; justify-content: safe center; }
+.text-body { white-space: pre-wrap; }
 .zone-image { width: 100%; height: 100%; object-fit: contain; display: block; }
 .zone-web { width: 100%; height: 100%; border: 0; display: block; }
 .dashboard-button { width: 100%; height: 100%; border: 0; border-radius: 4px; cursor: pointer; font: 600 13px/1.2 inherit; color: #fff; background: #4c78a8; padding: 4px 8px; overflow: hidden; }
@@ -155,9 +157,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .dashboard-button:disabled { cursor: not-allowed; opacity: 0.5; }
 .dashboard-button:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 1px; }
 
-.control { border: 0; margin: 0; padding: 2px 4px; font-size: 13px; min-width: 0; height: 100%; display: flex; flex-direction: column; gap: 4px; }
-.control legend { font-weight: 600; padding: 0 0 4px; }
-.control select, .control input[type="text"], .control input[type="number"], .control input[type="date"] { font: inherit; padding: 3px 6px; width: 100%; }
+/* 篩選與參數的控制項：與 Tableau 相同是 9pt 的字、緊湊的版面（有標題的下拉選單在 42 像素高的區塊中放得下） */
+.control { border: 0; margin: 0; padding: 1px 4px; font-family: var(--tableau-font); font-size: 12px; line-height: 1.2; min-width: 0; height: 100%; display: flex; flex-direction: column; gap: 2px; }
+.control legend { font-weight: 600; padding: 0 0 2px; }
+.control select, .control input[type="text"], .control input[type="number"], .control input[type="date"] { font: inherit; padding: 1px 4px; width: 100%; box-sizing: border-box; min-height: 21px; }
 .control input[type="range"] { width: 100%; }
 .control .range { display: flex; align-items: center; gap: 6px; }
 .control .range input { min-width: 0; }

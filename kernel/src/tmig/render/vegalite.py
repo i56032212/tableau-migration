@@ -36,7 +36,7 @@ import statistics
 import unicodedata
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal, TypeGuard
 
@@ -209,6 +209,10 @@ BAR_BAND = 0.75
 """長條占列高（欄寬）的比例：Tableau 沒有設定「大小」時的預設（以 Logshark 報表的 Tableau 畫面量測：
 20 像素的列中長條 15 像素，放大的區塊中也是 75%）。設定了大小 s 時為 s / 2（s = 1 為一半、s = 2 填滿）。"""
 POINT_DIAMETER = 10
+IMAGE_DIAMETER = 30
+"""自訂的圖片形狀在大小為 1 時的邊長（像素）。推定的：公開報表中，預設大小的圖片當按鈕用、大小 0.78 的天氣圖示
+與 12pt 的標題並排、大小 3 到 4 的透明圖片蓋住 60 像素左右的圖示當點選的範圍——邊長若與圓點相同（10 像素）
+都小得不合理，30 像素左右才說得通。還沒有與 Tableau 的畫面對過。"""
 """圓點、形狀與方塊的直徑（像素）：Tableau 大小 1（預設）時的直徑，大小 s 時為 s 倍（同樣以 Tableau 的
 畫面量測：大小 1.637 的圓點直徑 16 像素）。"""
 LINE_WIDTH = 2
@@ -582,6 +586,15 @@ class _Builder:
                 scale["domainMax"] = end
             if start is not None or end is not None:
                 scale["nice"] = False  # 固定的範圍不再延伸到整數刻度
+            if temporal and (start is None) != (end is None):
+                # 時間軸只固定一端：另一端仍是自動的，與 Tableau 相同延伸到整齊的刻度（線不會貼到邊緣）
+                extent = self.time_extent(str(encoding.get("field")))
+                if extent is not None and start is not None and extent[1] > start:
+                    scale.pop("domainMin")
+                    scale["domain"] = [start, nice_time(start, extent[1], up=True)]
+                elif extent is not None and end is not None and extent[0] < end:
+                    scale.pop("domainMax")
+                    scale["domain"] = [nice_time(extent[0], end, up=False), end]
             if setting.reverse:
                 scale["reverse"] = True
             if not temporal and (not setting.include_zero or start is not None):
@@ -603,6 +616,16 @@ class _Builder:
         if axis:
             encoding["axis"] = axis
         return encoding
+
+    def time_extent(self, field_name: str) -> tuple[float, float] | None:
+        """資料中這個時間欄位的最小、最大值（UTC 的毫秒數，不含總計）；沒有值時為 None。"""
+        found = [
+            moment
+            for record in self.values
+            if not record.get(TOTAL)
+            and (moment := _axis_value(record.get(field_name), True)) is not None
+        ]
+        return (min(found), max(found)) if found else None
 
     def minor_ticks(
         self, axis: dict[str, Any], use: FieldUse, setting: Axis, start: Any, end: Any
@@ -770,9 +793,13 @@ class _Builder:
         label_type = ""
         highlight_table = False
         if mark == "text" or not (rows_meas or cols_meas):
-            # 只有離散欄位的圓點與形狀（大小上有欄位的方塊也是）：每格一個標記（與 Tableau 相同，不是文字）
+            # 只有離散欄位的圓點與形狀（大小上有欄位的方塊也是）：每格一個標記（與 Tableau 相同，不是文字）；
+            # 欄列架上都沒有欄位、也沒有標籤的形狀標記畫在檢視的中間（例如蓋在圖片上當按鈕的透明圖片形狀），
+            # 有標籤時照舊以文字呈現標籤（各段文字的格式在文字標記上才完整）
             sized_squares = mark == "square" and marks.size is not None
-            dots = (mark in ("circle", "shape") or sized_squares) and bool(rows_dims or cols_dims)
+            dots = (mark in ("circle", "shape") or sized_squares) and (
+                bool(rows_dims or cols_dims) or (mark == "shape" and self.text_field(marks) is None)
+            )
             # 方塊標記、只有維度：醒目提示表（填滿每一格的色塊加上文字）
             highlight = mark == "square" and not sized_squares
             if not dots:
@@ -963,7 +990,7 @@ class _Builder:
         回傳主圖層（{"mark": …}，有圖片時另有它自己的 encoding）與畫圖片的圖層（沒有圖片形狀時是空的）。
         圖片形狀的標記仍畫成看不見的點（工具提示、點選與選取照舊在它上面），圖片另外一層畫在同一個位置：
         資料列記下圖片的路徑與要套用的顏色，檢視器載入圖片後填入網址（見 SHAPE_IMAGE、SHAPE_TINT、
-        SHAPE_URL）。圖片的邊長與點的外框相同（大小上有欄位時跟著大小的比例尺）。"""
+        SHAPE_URL）。圖片的邊長是 IMAGE_DIAMETER 乘上標記卡的大小（大小上有欄位時跟著大小的比例尺）。"""
         main: dict[str, Any] = {"mark": vl_mark}
         if vl_mark.get("type") != "point":
             return main, []
@@ -1025,7 +1052,10 @@ class _Builder:
         if isinstance(size, dict) and isinstance(size.get("field"), str):
             side = {"expr": f"sqrt(scale('size', datum[{json.dumps(size['field'])}]))"}
         else:
-            side = round(math.sqrt(float(vl_mark.get("size", POINT_DIAMETER**2))), 2)
+            side = round(IMAGE_DIAMETER * (marks.mark_size if marks.mark_size else 1), 2)
+            if all(images):
+                # 看不見的點（工具提示、點選的範圍）與圖片一樣大：圖片當按鈕用時整張圖都點得到
+                vl_mark["size"] = round(side**2, 2)
         picture: dict[str, Any] = {
             "type": "image",
             "width": side,
@@ -1037,11 +1067,17 @@ class _Builder:
             picture["opacity"] = marks.opacity
         if vl_mark.get("clip"):
             picture["clip"] = True
+        position: dict[str, Any] = {"url": {"field": url, "type": "nominal"}}
+        # 沒有欄（列）的方向畫在檢視的中間（圖片標記沒有位置時預設在邊緣，與點不同）
+        if "x" not in encoding:
+            position["x"] = {"value": {"expr": "width / 2"}}
+        if "y" not in encoding:
+            position["y"] = {"value": {"expr": "height / 2"}}
         layer = {
             "name": f"{SHAPE_LAYER}{n}",
             "transform": [{"filter": f"isValid(datum['{url}'])"}],
             "mark": picture,
-            "encoding": {"url": {"field": url, "type": "nominal"}},
+            "encoding": position,
         }
         return main, [layer]
 
@@ -1236,11 +1272,12 @@ class _Builder:
                 self.text_font(marks),
                 marks.label_match,
                 marks.cell_align,
-                POINT_DIAMETER * size / 2,
+                (IMAGE_DIAMETER if _image_shapes(marks) else POINT_DIAMETER) * size / 2,
                 extreme,
                 stacked,
                 marks.label_valign,
                 middle,
+                1 + sum(run.text.count("\n") for run in marks.label_text if run.text),
             )
             if setting.direction is not None:
                 _rotate_label(found["mark"], setting.direction)
@@ -5228,6 +5265,15 @@ RULER_COLOR = "#f4f4f4"
 DASHES = {"solid": [], "dashed": [4, 2], "dotted": [2, 1]}
 
 
+def _image_shapes(marks: Marks) -> bool:
+    """形狀標記用的是自訂的圖片（固定的圖片形狀，或依欄位指定、其中有圖片）。"""
+    if marks.type != "shape":
+        return False
+    if marks.shape is not None:
+        return any(a.image is not None for a in marks.shape_assignments)
+    return marks.mark_shape is not None and marks.mark_shape.image is not None
+
+
 def _null_marks(
     encoding: dict[str, Any] | None, channels: dict[str, Channel], result: QueryResult
 ) -> int:
@@ -5322,6 +5368,79 @@ def _css_color(color: str) -> str:
 def _fixed_range(encoding: Any) -> bool:
     scale = encoding.get("scale") if isinstance(encoding, dict) else None
     return isinstance(scale, dict) and any(k in scale for k in ("domain", "domainMin", "domainMax"))
+
+
+_SECOND, _MINUTE, _HOUR, _DAY = 1000.0, 60_000.0, 3_600_000.0, 86_400_000.0
+TIME_INTERVALS: list[tuple[str, int, float]] = [
+    ("second", 1, _SECOND),
+    ("second", 5, 5 * _SECOND),
+    ("second", 15, 15 * _SECOND),
+    ("second", 30, 30 * _SECOND),
+    ("minute", 1, _MINUTE),
+    ("minute", 5, 5 * _MINUTE),
+    ("minute", 15, 15 * _MINUTE),
+    ("minute", 30, 30 * _MINUTE),
+    ("hour", 1, _HOUR),
+    ("hour", 3, 3 * _HOUR),
+    ("hour", 6, 6 * _HOUR),
+    ("hour", 12, 12 * _HOUR),
+    ("day", 1, _DAY),
+    ("day", 2, 2 * _DAY),
+    ("week", 1, 7 * _DAY),
+    ("month", 1, 30 * _DAY),
+    ("month", 3, 90 * _DAY),
+    ("year", 1, 365 * _DAY),
+]
+"""時間刻度的間隔（單位、幾個單位、大約的毫秒數），由小到大：與 D3（Vega 的時間刻度）相同的清單。"""
+
+
+def nice_time(low: float, high: float, up: bool, count: int = 10) -> float:
+    """時間範圍 low–high（UTC 的毫秒數）的一端延伸到整齊的刻度：up 為 True 時回傳不小於 high 的刻度，否則回傳
+    不大於 low 的刻度。刻度的間隔依範圍的長度選擇（大約 count 個刻度），與 Vega 的時間刻度 nice 相同的規則；
+    Tableau 自動範圍延伸的規則沒有文件，這是推定的。"""
+    target = abs(high - low) / count
+    unit, step = "year", 1
+    at = next((i for i, (_, _, span) in enumerate(TIME_INTERVALS) if span > target), None)
+    if at is None:
+        years = target / (365 * _DAY)
+        power = 10 ** math.floor(math.log10(years)) if years > 0 else 1
+        ratio = years / power
+        step = int(
+            power * (10 if ratio >= 7.07 else 5 if ratio >= 3.16 else 2 if ratio >= 1.41 else 1)
+        )
+        step = max(step, 1)
+    elif at == 0:
+        unit, step = TIME_INTERVALS[0][0], TIME_INTERVALS[0][1]
+    else:
+        smaller, larger = TIME_INTERVALS[at - 1], TIME_INTERVALS[at]
+        unit, step, _ = smaller if target / smaller[2] < larger[2] / target else larger
+    return _time_boundary(high if up else low, unit, step, up)
+
+
+def _time_boundary(value: float, unit: str, step: int, up: bool) -> float:
+    """value（UTC 的毫秒數）往後（up）或往前最近的刻度：每 step 個 unit 一個刻度；已經在刻度上時不變。"""
+    if unit in ("second", "minute", "hour"):
+        span = {"second": _SECOND, "minute": _MINUTE, "hour": _HOUR}[unit] * step
+        return (math.ceil(value / span) if up else math.floor(value / span)) * span
+    moment = datetime.fromtimestamp(value / 1000, UTC)
+    day = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def on_boundary(d: datetime) -> bool:
+        if unit == "day":
+            return (d.day - 1) % step == 0
+        if unit == "week":
+            return d.isoweekday() == 7  # 星期日（與 D3 的週相同）
+        if unit == "month":
+            return d.day == 1 and (d.month - 1) % step == 0
+        return d.day == 1 and d.month == 1 and d.year % step == 0
+
+    if up and day < moment:
+        day += timedelta(days=1)
+    for _ in range(366 * max(step, 1) + 31):
+        if on_boundary(day):
+            return day.timestamp() * 1000
+        day += timedelta(days=1 if up else -1)
+    return value
 
 
 def _axis_value(value: Scalar, temporal: bool) -> float | None:
@@ -5676,6 +5795,7 @@ def _label_layer(
     stacked: bool = False,
     valign: Literal["top", "center", "bottom"] | None = None,
     middle: str | None = None,
+    lines: int = 1,
 ) -> dict[str, Any]:
     """標籤：長條在尾端（stacked：依標記卡上的維度堆疊時在各段內側；對齊為靠左／下時在起點、置中時在
     長條中間——middle 為資料中「量值的一半」的欄），圓點、形狀與方塊在右邊（對齊設為
@@ -5690,12 +5810,15 @@ def _label_layer(
     if "size" in encoding:
         layer["size"] = {"value": font.size}  # 大小上的欄位決定標記的大小，不是標籤的字級
     if vl_type in ("cell", "circle", "square", "point"):
+        # 多行的標籤（自訂的標籤文字中有換行）：Vega 把第一行放在定位點、其餘往下排，
+        # 在標記上方或置中時要把整段往上移，最後一行才不會蓋到標記
+        extra = (lines - 1) * (font.size + 2)
         if valign in ("top", "bottom"):
             # 垂直對齊：標籤在標記的上方或下方；水平沒有指定時置中
             gap = radius + 4
             mark.update(
                 baseline="bottom" if valign == "top" else "top",
-                dy=-gap if valign == "top" else gap,
+                dy=-gap - extra if valign == "top" else gap,
             )
             if align == "left":
                 mark.update(align="right", dx=-gap)

@@ -4,7 +4,8 @@
 - 自動與範圍尺寸的 dashboard 依顯示尺寸重排：
   - 最外層與 tiled 容器（layout-basic）的子區塊依比例縮放
   - horizontal／vertical 容器（layout-flow）沿排列方向分配：固定大小的區塊維持像素大小，
-    區塊間的間距維持不變，其餘區塊依參考尺寸下的大小比例分配剩下的空間；另一個方向依比例縮放
+    區塊間的間距維持不變，其餘區塊依參考尺寸下的大小比例分配剩下的空間；另一個方向依比例縮放。
+    Tableau 的固定大小（fixed-size）不含區塊的外距：區塊占的長度是固定大小加上排列方向兩側的外距
   - 隱藏的區塊不占空間；子區塊重疊時（不是正常的並排版面）退回依比例縮放
 - 範圍尺寸的顯示尺寸限制在 min_size 與 max_size 之間
 
@@ -106,7 +107,15 @@ def _flow(zone: Zone, box: Box, result: dict[str, Box]) -> None:
         for child in visible:
             _place(child, _scaled(child, zone, box), result)
         return
-    fixed_total = sum(c.fixed for c in visible if c.fixed is not None)
+
+    def fixed_span(z: Zone) -> float | None:
+        """固定大小的區塊在排列方向占的長度：固定大小加上兩側的外距（Tableau 的 fixed-size 不含外距）。"""
+        if z.fixed is None:
+            return None
+        top, right, bottom, left = z.style.margin if z.style is not None else (0, 0, 0, 0)
+        return float(z.fixed + (left + right if horizontal else top + bottom))
+
+    fixed_total = sum(f for c in visible if (f := fixed_span(c)) is not None)
     free_ref = sum(span(c) for c in visible if c.fixed is None)
     free_new = new_span - fixed_total - sum(gaps) - trailing
     scale = max(free_new, 0.0) / free_ref if free_ref else 0.0
@@ -114,7 +123,8 @@ def _flow(zone: Zone, box: Box, result: dict[str, Box]) -> None:
     cursor = new_start
     for child, gap in zip(visible, gaps, strict=True):
         cursor += gap
-        length = float(child.fixed) if child.fixed is not None else span(child) * scale
+        fixed = fixed_span(child)
+        length = fixed if fixed is not None else span(child) * scale
         if horizontal:
             child_box = Box(cursor, box.y + (child.y - zone.y) * cross, length, child.h * cross)
         else:

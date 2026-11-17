@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tmig.ir.models import Dashboard, Size, Zone
+from tmig.ir.models import Dashboard, Size, Zone, ZoneStyle
 from tmig.render.layout import Box, display_size, layout_dashboard
 
 
@@ -111,3 +111,43 @@ def test_overlapping_flow_children_fall_back_to_scaling() -> None:
     )
     boxes = layout_dashboard(dashboard, 2000, 1000)
     assert approx_box(boxes["z3"]) == approx_box(Box(800, 0, 1200, 1000))
+
+
+def test_fixed_size_excludes_the_outer_padding() -> None:
+    """Tableau 的固定大小不含區塊的外距：區塊占的長度是固定大小加上排列方向兩側的外距（依公開報表中
+    Tableau 存下的座標歸納：固定大小 40、上下外距各 4 的文字區塊高 48）。在參考尺寸下結果與 IR 的座標相同；
+    放大時固定的區塊維持原本的大小，多出來的空間都給沒有固定大小的區塊。"""
+    padded = ZoneStyle(margin=(4, 4, 4, 4))
+    card = zone(
+        "z2",
+        0,
+        0,
+        300,
+        357,
+        layout="vertical",
+        children=[
+            zone("z3", 0, 0, 300, 48, fixed=40, style=padded),  # 標題：40 + 上下外距 8
+            zone("z4", 0, 48, 300, 50, fixed=42, style=padded),
+            zone("z5", 0, 98, 300, 259),  # 其餘的空間
+        ],
+    )
+    side = zone("z6", 300, 0, 108, 357, fixed=100, style=padded)  # 寬 100 + 左右外距 8
+    root = zone("z1", 0, 0, 408, 357, layout="horizontal", children=[card, side])
+    dashboard = Dashboard(
+        id="db",
+        name="db",
+        size=Size(width=408, height=357),
+        sizing="automatic",
+        zones=[root],
+        source_ref="db",
+    )
+    boxes = layout_dashboard(dashboard, 408, 357)
+    assert boxes["z3"] == Box(0, 0, 300, 48)
+    assert boxes["z4"] == Box(0, 48, 300, 50)
+    assert boxes["z5"] == Box(0, 98, 300, 259)
+    assert boxes["z6"] == Box(300, 0, 108, 357)
+    grown = layout_dashboard(dashboard, 608, 457)
+    assert approx_box(grown["z6"]) == approx_box(Box(500, 0, 108, 457))
+    assert approx_box(grown["z3"]) == approx_box(Box(0, 0, 500, 48))
+    assert approx_box(grown["z4"]) == approx_box(Box(0, 48, 500, 50))
+    assert approx_box(grown["z5"]) == approx_box(Box(0, 98, 500, 359))

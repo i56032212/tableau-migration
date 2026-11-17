@@ -13,7 +13,7 @@ from typing import Any
 
 from tmig.ir import Axis, FieldUse, LineStyle, ShelfStyle, ZoneStyle, iter_zones
 from tmig.parser.workbook import parse_workbook
-from tmig.render.vegalite import main_encoding
+from tmig.render.vegalite import main_encoding, nice_time
 
 from ..parser import builder as b
 from ..parser.builder import instance, ref, worksheet
@@ -148,7 +148,29 @@ def test_hidden_reversed_and_date_range_axes(tmp_path: Path, db: Path) -> None:
     assert y["scale"] == {"reverse": True}
     start = datetime(2023, 2, 1, tzinfo=UTC).timestamp() * 1000
     assert x["type"] == "temporal"
-    assert x["scale"] == {"domainMin": start, "nice": False}  # 時間軸沒有 zero
+    # 時間軸沒有 zero；只固定起點時終點仍是自動的，延伸到整齊的刻度（這裡每月一個刻度，資料的最後一個月
+    # 2024-03-01 已經在刻度上）
+    end = datetime(2024, 3, 1, tzinfo=UTC).timestamp() * 1000
+    assert x["scale"] == {"domain": [start, end], "nice": False}
+
+
+def test_nice_time_boundaries() -> None:
+    """時間軸自動的那一端延伸到整齊的刻度：間隔依範圍的長度（大約 10 個刻度），與 Vega 的時間刻度相同。"""
+
+    def at(*parts: int) -> float:
+        return datetime(*parts, tzinfo=UTC).timestamp() * 1000  # type: ignore[arg-type]
+
+    # 約兩年：每季一個刻度
+    assert nice_time(at(2024, 12, 30), at(2026, 11, 16), up=True) == at(2027, 1, 1)
+    assert nice_time(at(2024, 12, 30), at(2026, 11, 16), up=False) == at(2024, 10, 1)
+    # 約三個月：每週（星期日）；十天：每天；一年：每月（已經在刻度上的不動）；三十年：每五年
+    assert nice_time(at(2026, 8, 12), at(2026, 11, 18), up=True) == at(2026, 11, 22)
+    assert nice_time(at(2026, 11, 1), at(2026, 11, 10, 12), up=True) == at(2026, 11, 11)
+    assert nice_time(at(2026, 1, 1), at(2027, 1, 1), up=True) == at(2027, 1, 1)
+    assert nice_time(at(1995, 3, 1), at(2026, 11, 18), up=True) == at(2030, 1, 1)
+    # 一天之內：每三小時
+    assert nice_time(at(2026, 11, 18, 1), at(2026, 11, 18, 22, 30), up=True) == at(2026, 11, 19)
+    assert nice_time(at(2026, 11, 18, 1, 20), at(2026, 11, 18, 22), up=False) == at(2026, 11, 18)
 
 
 def test_axis_on_measure_values(tmp_path: Path, db: Path) -> None:

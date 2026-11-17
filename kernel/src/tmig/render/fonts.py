@@ -5,7 +5,9 @@
 （#555555），座標軸標題、欄位標籤與工作表標題較深（#333333），欄位標籤為半粗體。
 
 Tableau 的字型（Tableau Book、Tableau Semibold 等）是 Tableau 隨附的字型，裝了 Tableau Desktop 的電腦上有；
-沒有時依序改用相近的字型（Benton Sans、Segoe UI、Helvetica Neue、Arial）。
+沒有時依序改用相近的字型（Benton Sans、Segoe UI、Helvetica Neue、Arial）。報表指定的其他字型（例如 Roboto）
+不在電腦上時也依這個順序，不用瀏覽器預設的 sans-serif：它依作業系統的語系而異（繁體中文的 Windows 是比較寬的
+微軟正黑體），同一份報表在不同電腦上文字的寬度會差很多。
 """
 
 from __future__ import annotations
@@ -100,8 +102,8 @@ def css_family(name: str) -> tuple[str, int]:
     weight = SUFFIX_WEIGHTS.get(words[-1].lower(), 400) if len(words) > 1 else 400
     if weight != 400:
         base = '"' + " ".join(words[:-1]).replace('"', "") + '"'
-        return f"{quoted}, {base}, sans-serif", weight
-    return f"{quoted}, sans-serif", 400
+        return f"{quoted}, {base}, {FALLBACK}", weight
+    return f"{quoted}, {FALLBACK}", 400
 
 
 def resolve(

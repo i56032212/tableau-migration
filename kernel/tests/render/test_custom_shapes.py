@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -85,7 +86,7 @@ def test_shape_names_and_image_paths() -> None:
 
 
 def test_fixed_image_shape(tmp_path: Path, db: Path) -> None:
-    """標記卡上固定的圖片形狀：點看不見（仍可以停留、點選），圖片畫在同一個位置，邊長與點的外框相同。"""
+    """標記卡上固定的圖片形狀：點看不見（仍可以停留、點選），圖片畫在同一個位置，邊長是 30 像素乘上標記卡的大小（點的外框與圖片一樣大，整張圖都點得到）。"""
     style = mark_rule(
         "<format attr='shape' value='My Shapes/check_box.png' />",
         "<format attr='size' value='2' />",
@@ -106,7 +107,7 @@ def test_fixed_image_shape(tmp_path: Path, db: Path) -> None:
     assert image["transform"] == [{"filter": "isValid(datum['__shape_url0'])"}]
     assert image["encoding"] == {"url": {"field": "__shape_url0", "type": "nominal"}}
     side = point["mark"]["size"] ** 0.5
-    assert (image["mark"]["width"], image["mark"]["height"]) == (side, side) and side == 20
+    assert (image["mark"]["width"], image["mark"]["height"]) == (side, side) and side == 60
     assert image["mark"]["aspect"] is True
     values = spec["data"]["values"]
     assert {v["__shape_img0"] for v in values} == {"Shapes/My Shapes/check_box.png"}
@@ -148,7 +149,7 @@ def test_automatic_mark_with_a_shape_is_a_shape(tmp_path: Path, db: Path) -> Non
     rendered = render(ir, db)
     assert rendered.mark == "shape"
     point, image = layers(rendered.spec)
-    assert image["mark"]["width"] == point["mark"]["size"] ** 0.5 == 10
+    assert image["mark"]["width"] == point["mark"]["size"] ** 0.5 == 30
 
 
 def test_image_shapes_by_member_with_color_and_size(tmp_path: Path, db: Path) -> None:
@@ -256,3 +257,80 @@ def test_shape_files_of_a_report(tmp_path: Path) -> None:
     assert read_report_file(opened, "Shapes/KPI/up.png") == PNG + b"2"
     assert read_report_file(opened, "Shapes/Mine/star.png") == PNG + b"1"
     assert palettes(opened) == {"KPI": ["Shapes/KPI/up.png"], "Mine": ["Shapes/Mine/star.png"]}
+
+
+def button(pane_extra: str, encodings: str = "") -> str:
+    """欄列架上都沒有欄位的形狀標記（蓋在 dashboard 的圖片上當按鈕用的工作表）。"""
+    return worksheet(
+        "Button",
+        [REGION, SALES],
+        mark="Shape",
+        encodings=f"<lod column='{ref('none:Region:nk')}' />{encodings}",
+        pane_extra=pane_extra,
+    )
+
+
+def test_image_shape_without_shelves_is_drawn_in_the_middle(tmp_path: Path, db: Path) -> None:
+    """欄列架上都沒有欄位、也沒有標籤的形狀標記：畫出圖片（在檢視的中間），不是文字的「Abc」；看不見的點
+    與圖片一樣大（大小 4 的透明圖片是 120 像素的點選範圍）。有標籤時照舊以文字呈現標籤。"""
+    style = mark_rule(
+        "<format attr='shape' value='Clear/blank.png' />", "<format attr='size' value='4' />"
+    )
+    ir = parse(tmp_path, button(style), embedded("Clear/blank.png"))
+    assert ir.unsupported == []
+    spec = render(ir, db).spec
+    point, image = layers(spec)
+    assert "text" not in json.dumps(spec["layer"][0].get("mark"))
+    assert (image["mark"]["width"], image["mark"]["height"]) == (120, 120)
+    assert point["mark"]["size"] == 120**2
+    # 沒有欄、列：圖片與點一樣在檢視的中間
+    assert image["encoding"]["x"] == {"value": {"expr": "width / 2"}}
+    assert image["encoding"]["y"] == {"value": {"expr": "height / 2"}}
+    assert "x" not in point.get("encoding", {}) and "x" not in spec.get("encoding", {})
+
+    # 有標籤：以文字呈現（各段文字的格式在文字標記上才完整），不畫成點
+    labeled = button(style, encodings=f"<text column='{ref('sum:Sales:qk')}' />")
+    spec = render(parse(tmp_path, labeled, embedded("Clear/blank.png")), db).spec
+    marks = json.dumps(spec)
+    assert '"type": "text"' in marks and '"type": "image"' not in marks
+
+
+def test_multiline_label_above_an_image_shape(tmp_path: Path, db: Path) -> None:
+    """圖片形狀上方的多行標籤（自訂的標籤文字中有換行）：整段往上移，最後一行在圖片的上緣之上；
+    偏移依圖片的大小（30 像素乘上標記卡的大小）。"""
+    label = (
+        "<customized-label><formatted-text><run fontsize='5'> </run><run>\n</run>"
+        f"<run fontsize='15'>&lt;{ref('sum:Sales:qk')}&gt;</run></formatted-text></customized-label>"
+    )
+    style = (
+        "<style><style-rule element='cell'><format attr='text-align' value='center' />"
+        "<format attr='vertical-align' value='top' /></style-rule>"
+        "<style-rule element='mark'><format attr='mark-labels-show' value='true' />"
+        "<format attr='shape' value='Clear/blank.png' /><format attr='size' value='2' />"
+        "</style-rule></style>"
+    )
+    sheet = worksheet(
+        "Icons",
+        [REGION, SALES],
+        cols=ref("none:Region:nk"),
+        mark="Shape",
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        pane_extra=label + style,
+    )
+    ir = parse(tmp_path, sheet, embedded("Clear/blank.png"))
+    assert ir.unsupported == [], [u.reason for u in ir.unsupported]
+    marks = ir.worksheets[0].marks
+    assert (marks.cell_align, marks.label_valign) == ("center", "top")
+    spec = render(ir, db).spec
+    text = next(
+        layer for layer in spec["layer"] if str(layer.get("name", "")).startswith("__label_")
+    )
+    font = text["mark"]["fontSize"]
+    # 圖片的半徑 30 + 間隔 4，再往上一行（Vega 的行高是字級 + 2）
+    assert text["mark"]["baseline"] == "bottom" and text["mark"]["align"] == "center"
+    assert text["mark"]["dy"] == pytest.approx(-(30 + 4) - (font + 2))
+    image = next(layer for layer in spec["layer"] if layer["mark"]["type"] == "image")
+    assert image["mark"]["width"] == 60
+    # 只有欄的標題：圖片在這一格的中間（沒有列）
+    assert image["encoding"]["y"] == {"value": {"expr": "height / 2"}}
+    assert "x" not in image["encoding"]

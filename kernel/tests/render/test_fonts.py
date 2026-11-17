@@ -23,12 +23,24 @@ def test_font_names_and_sizes() -> None:
     """Tableau 隨附的字型每個粗細是一個名稱；其他字型名稱結尾的粗細；pt → 像素。"""
     family, weight = css_family("Tableau Semibold")
     assert family.startswith('"Tableau Semibold", "Benton Sans"') and weight == 600
-    assert css_family("Segoe UI Semibold") == ('"Segoe UI Semibold", "Segoe UI", sans-serif', 600)
-    assert css_family("Calibri") == ('"Calibri", sans-serif', 400)
+    # 其他字型不在電腦上時與 Tableau 的字型用同一組後備字型（不用瀏覽器預設的 sans-serif：
+    # 它依作業系統的語系而異，繁體中文的 Windows 是比較寬的微軟正黑體）
+    assert css_family("Segoe UI Semibold") == (
+        '"Segoe UI Semibold", "Segoe UI", "Benton Sans", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif',
+        600,
+    )
+    assert css_family("Calibri") == (
+        '"Calibri", "Benton Sans", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif',
+        400,
+    )
     assert (pixels(9), pixels(15), pixels(8)) == (12, 20, 10.67)
     # 後面的覆寫前面的；粗體為 700，明確不粗體時用字型本身的粗細
     font = resolve(FontStyle(family="Calibri", size=10), FontStyle(bold=True))
-    assert (font.size, font.weight, font.family) == (13.33, 700, '"Calibri", sans-serif')
+    assert (font.size, font.weight, font.family) == (
+        13.33,
+        700,
+        '"Calibri", "Benton Sans", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif',
+    )
     assert resolve(FontStyle(family="Tableau Semibold", bold=False)).weight == 600
     assert resolve(weight=600).weight == 600 and resolve().weight == 400
 
@@ -112,10 +124,16 @@ def test_configured_fonts_render(tmp_path: Path, db: Path) -> None:
     )
     spec = render(parse(tmp_path, sheet), db).spec
     assert spec["config"]["axis"]["titleFontSize"] == 10.67
-    assert spec["config"]["font"] == '"Calibri", sans-serif'
+    assert (
+        spec["config"]["font"]
+        == '"Calibri", "Benton Sans", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif'
+    )
     y = spec["encoding"]["y"]["axis"]
     assert (y["labelFontSize"], y["labelFontWeight"]) == (13.33, 700)
     label = next(layer for layer in spec["layer"] if layer["mark"]["type"] == "text")
     assert label["mark"]["fontSize"] == 9.33
     assert spec["usermeta"]["title_font"]["size"] == 14.67
-    assert spec["usermeta"]["title_font"]["family"] == '"Calibri", sans-serif'
+    assert (
+        spec["usermeta"]["title_font"]["family"]
+        == '"Calibri", "Benton Sans", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif'
+    )

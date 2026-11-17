@@ -552,8 +552,9 @@ function ZoneContent({
       );
     case "text":
       return (
+        // 文字在區塊中垂直置中（與 Tableau 的文字物件相同；文字比區塊高時從上面開始，不切掉開頭）
         <div className="text" style={richAlign(zone.content)}>
-          {zone.content?.length ? <RichText runs={zone.content} ir={ir} values={view.parameters} /> : zone.text}
+          <div className="text-body">{zone.content?.length ? <RichText runs={zone.content} ir={ir} values={view.parameters} /> : zone.text}</div>
         </div>
       );
     case "image":
@@ -707,7 +708,7 @@ function runStyle(style: TextStyle | null | undefined): React.CSSProperties | un
     // Tableau 自帶的字型（Tableau Bold、Tableau Medium…）以字重近似，其他字型照名稱
     const weight = /^Tableau (\w+)$/.exec(style.font)?.[1];
     if (weight && weight in TABLEAU_WEIGHTS) css.fontWeight = style.bold ? 700 : TABLEAU_WEIGHTS[weight];
-    else css.fontFamily = `"${style.font}", sans-serif`;
+    else css.fontFamily = `"${style.font}", var(--tableau-font)`;
   }
   return css;
 }
