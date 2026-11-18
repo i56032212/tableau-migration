@@ -78,11 +78,11 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 - 沒有實機驗證過的（資料庫、Windows 安裝檔、與 Tableau 的畫面比對）在文件與回報中照實寫，不寫成已驗證
 - 其餘見 README 的「開發規則」
 
-## 目前的狀態（2026-11-18）
+## 目前的狀態（2026-11-19）
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（97f9e55，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2660 項通過、114 項略過
+- Windows 上的完整測試（d13dd9c，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2669 項通過、114 項略過
   （其中 110 項需要 PostgreSQL、MySQL、Spark，在 Windows 上還沒跑過）；前端可以建置，結果與 Linux 上的相同。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
 - GitHub Actions 目前沒有在跑（使用者決定先不處理）；Windows 上的測試與安裝檔的建置在本機做
