@@ -3610,3 +3610,50 @@ def test_text_segments_and_bundled_font(engine: str) -> None:
         assert number["family"].startswith("Roboto")
         assert errors == []
         browser.close()
+
+
+def test_dashboard_text_defaults_and_untitled_control(engine: str) -> None:
+    """dashboard 的文字物件沒有指定字型、顏色時用活頁簿格式的「全部」字型；關掉標題的參數控制項
+    （show-title='false'）只顯示控制項本身。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    board = call(engine, "/api/edit/demo/dashboards", {"name": "Text Board"})["dashboard"]
+    board["text_font"] = "Roboto"
+    board["text_color"] = "#101e47"
+    board["zones"][0]["children"][0]["children"] = [
+        {"id": "z3", "kind": "text", "x": 4, "y": 4, "w": 400, "h": 60, "text": "REVENUE",
+         "source_ref": "/editor"},
+        {"id": "z4", "kind": "parameter", "x": 4, "y": 64, "w": 200, "h": 60,
+         "parameter": "p_parameter_1", "control": "type_in", "show_title": False,
+         "source_ref": "/editor"},
+        {"id": "z5", "kind": "parameter", "x": 4, "y": 124, "w": 200, "h": 60,
+         "parameter": "p_parameter_1", "control": "type_in", "source_ref": "/editor"},
+    ]  # fmt: skip
+    update = urllib.request.Request(
+        f"{engine}/api/edit/demo/dashboards/{board['id']}",
+        data=json.dumps({"dashboard": board}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(update, timeout=60) as response:
+        assert response.status == 200
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1100, "height": 800})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/d/{board['id']}")
+        text = page.locator(".dashboard .text", has_text="REVENUE")
+        text.wait_for(timeout=30000)
+        style = text.evaluate("e => [getComputedStyle(e).color, getComputedStyle(e).fontFamily]")
+        assert style[0] == "rgb(16, 30, 71)", style
+        assert style[1].replace('"', "").startswith("Roboto"), style
+        controls = page.locator(".dashboard fieldset.control")
+        expect(controls).to_have_count(2)
+        shown = controls.locator("legend").evaluate_all(
+            "list => list.map((e) => getComputedStyle(e).display !== 'none')"
+        )
+        assert shown == [False, True]  # 第一個關掉了標題
+        assert errors == []
+        browser.close()

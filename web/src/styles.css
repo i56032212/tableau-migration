@@ -160,6 +160,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 篩選與參數的控制項：與 Tableau 相同是 9pt 的字、緊湊的版面（有標題的下拉選單在 42 像素高的區塊中放得下） */
 .control { border: 0; margin: 0; padding: 1px 4px; font-family: var(--tableau-font); font-size: 12px; line-height: 1.2; min-width: 0; height: 100%; display: flex; flex-direction: column; gap: 2px; }
 .control legend { font-weight: 600; padding: 0 0 2px; }
+/* 關掉標題的控制項（Tableau 的「顯示標題」）：只留下控制項本身 */
+.control-untitled { display: contents; }
+.control-untitled > .control > legend { display: none; }
 .control select, .control input[type="text"], .control input[type="number"], .control input[type="date"] { font: inherit; padding: 1px 4px; width: 100%; box-sizing: border-box; min-height: 21px; }
 .control input[type="range"] { width: 100%; }
 .control .range { display: flex; align-items: center; gap: 6px; }

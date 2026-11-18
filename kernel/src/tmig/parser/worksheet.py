@@ -340,6 +340,28 @@ DISTRIBUTIONS = frozenset({"percentile", "stdev", "quantiles", "confidence", "me
 LINE_PATTERNS = {"solid": "solid", "dashed": "dashed", "dotted": "dotted", "dash-dot": "dashed"}
 REFERENCE_SCOPES = {"per-table": "table", "per-pane": "pane", "per-cell": "cell"}
 REFERENCE_LABELS = frozenset({"none", "automatic", "value", "computation", "custom"})
+_REF_ALIGN: dict[str, Literal["left", "center", "right"]] = {
+    "left": "left",
+    "center": "center",
+    "right": "right",
+}
+_REF_VALIGN: dict[str, Literal["top", "center", "bottom"]] = {
+    "top": "top",
+    "center": "center",
+    "middle": "center",
+    "bottom": "bottom",
+}
+
+
+def _positive(text: str | None) -> float | None:
+    """大於 0 的數字（例如字級）；不是時為 None。"""
+    try:
+        value = float(text or "")
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 PercentMode = Literal["table", "column", "row", "pane", "row_in_pane", "column_in_pane", "cell"]
 PERCENT_MODES: dict[str, PercentMode] = {
     "table": "table",
@@ -1300,6 +1322,9 @@ class SheetParser:
             line_width=int(width) if width and width.isdigit() and int(width) > 0 else None,
             line_pattern=LINE_PATTERNS.get(pattern or ""),  # type: ignore[arg-type]
             fill_color=hex_color(style.get("refband:fill-color")),
+            label_align=_REF_ALIGN.get(style.get("refline:text-align") or ""),
+            label_valign=_REF_VALIGN.get(style.get("refline:vertical-align") or ""),
+            label_size=_positive(style.get("refline:font-size")),
             above_color=hex_color(style.get("refline:fill-above")),
             below_color=hex_color(style.get("refline:fill-below")),
             whiskers="minmax" if element.get("boxplot-whisker-type") == "minmax" else "standard",

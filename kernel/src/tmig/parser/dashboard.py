@@ -31,7 +31,7 @@ from tmig.ir.models import (
 )
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.fields import instance_key
-from tmig.parser.formats import dashboard_background, run_style, zone_style
+from tmig.parser.formats import dashboard_background, run_style, workbook_text, zone_style
 from tmig.parser.refs import qualified_parts
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 
@@ -111,6 +111,7 @@ class DashboardParser:
         self._check_toggles(zones)
         layouts = self._layouts(child(el, "devicelayouts"), sizing)
         self.width, self.height = width, height
+        text_font, text_color = workbook_text(child(el.getroottree().getroot(), "style"))
         return Dashboard(
             id=ctx.dashboard_id(self.name),
             name=self.name,
@@ -119,6 +120,8 @@ class DashboardParser:
             min_size=sizing.min_size,
             max_size=sizing.max_size,
             background=dashboard_background(el),
+            text_font=text_font,
+            text_color=text_color,
             zones=zones,
             layouts=layouts,
             source_ref=xpath(el),
@@ -405,6 +408,7 @@ class DashboardParser:
             field=use,
             control=control,
             relevant=element.get("values") == "relevant",
+            show_title=element.get("show-title") != "false",
             **base,
         )
 
@@ -414,7 +418,13 @@ class DashboardParser:
             self.ctx.flag(element, found)
             return Zone(kind="blank", **base)
         parameter, control = found
-        return Zone(kind="parameter", parameter=parameter, control=control, **base)
+        return Zone(
+            kind="parameter",
+            parameter=parameter,
+            control=control,
+            show_title=element.get("show-title") != "false",
+            **base,
+        )
 
     def _check(self, element: etree._Element) -> None:
         for item in children(element):

@@ -726,6 +726,24 @@ def _opaque(value: str | None) -> str | None:
     return None if color is None or _transparent(color) else color
 
 
+def workbook_text(workbook_style: etree._Element | None) -> tuple[str | None, str | None]:
+    """活頁簿格式的「全部」字型（<style> 中 element='all'）：字型名稱與文字顏色，沒有設定的為 None。
+    dashboard 的文字物件與標題沒有指定字型、顏色時用它。"""
+    family: str | None = None
+    color: str | None = None
+    for rule in children(workbook_style, "style-rule"):
+        if rule.get("element") != "all":
+            continue
+        for item in children(rule, "format"):
+            if item.get("field") is not None:
+                continue
+            if item.get("attr") == "font-family":
+                family = item.get("value") or family
+            elif item.get("attr") == "color":
+                color = hex_color(item.get("value")) or color
+    return family, color
+
+
 def default_text_color(workbook_style: etree._Element | None) -> str | None:
     """活頁簿的預設文字顏色：<style> 中 element='worksheet' 的 color，其次 'all'。"""
     found: dict[str, str] = {}
@@ -850,6 +868,7 @@ __all__ = [
     "SheetFormats",
     "dashboard_background",
     "default_text_color",
+    "workbook_text",
     "worksheet_formats",
     "zone_style",
 ]

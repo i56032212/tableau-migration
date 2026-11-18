@@ -126,6 +126,9 @@
             "value": 1
           },
           "value": 1
+        },
+        "tickCount": {
+          "expr": "ceil(height / 50)"
         }
       }
     },

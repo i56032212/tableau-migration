@@ -122,6 +122,12 @@
               },
               "value": 1
             }
+          },
+          "scale": {
+            "domainMax": {
+              "expr": "725457.8245000015 * width / max(width - 65.4, width / 2)"
+            },
+            "nice": false
           }
         },
         "y": {
@@ -222,7 +228,13 @@
         "x": {
           "field": "c1",
           "type": "quantitative",
-          "title": "Sales"
+          "title": "Sales",
+          "scale": {
+            "domainMax": {
+              "expr": "725457.8245000015 * width / max(width - 65.4, width / 2)"
+            },
+            "nice": false
+          }
         },
         "y": {
           "field": "c0_label",
@@ -266,7 +278,13 @@
         "x": {
           "field": "c1",
           "type": "quantitative",
-          "title": "Sales"
+          "title": "Sales",
+          "scale": {
+            "domainMax": {
+              "expr": "725457.8245000015 * width / max(width - 65.4, width / 2)"
+            },
+            "nice": false
+          }
         },
         "y": {
           "field": "c0_label",

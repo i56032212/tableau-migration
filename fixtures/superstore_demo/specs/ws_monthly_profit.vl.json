@@ -91,6 +91,7 @@
     "type": "line",
     "tooltip": true,
     "point": "transparent",
+    "clip": true,
     "color": "#4e79a7",
     "strokeWidth": 2,
     "strokeCap": "round",
@@ -126,6 +127,9 @@
             "value": 1
           },
           "value": 1
+        },
+        "tickCount": {
+          "expr": "ceil(height / 50)"
         }
       }
     },
@@ -133,7 +137,14 @@
       "field": "c0",
       "type": "temporal",
       "timeUnit": "utcyearmonth",
-      "title": "MONTH(Order Date)"
+      "title": "MONTH(Order Date)",
+      "scale": {
+        "domain": [
+          1672319520000.0,
+          1735901280000.0
+        ],
+        "nice": false
+      }
     },
     "tooltip": [
       {

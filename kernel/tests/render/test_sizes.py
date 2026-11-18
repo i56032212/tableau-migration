@@ -486,7 +486,9 @@ def test_point_and_line_sizes(tmp_path: Path, db: Path) -> None:
     assert spec["mark"]["strokeWidth"] == 2
     assert spec["mark"]["strokeCap"] == spec["mark"]["strokeJoin"] == "round"
     spec = render(parse(tmp_path, sized_mark("Line", "2", **timeline)), db).spec
-    assert spec["mark"]["strokeWidth"] == 4
+    assert spec["mark"]["strokeWidth"] == 12  # 大小 × 6（依 Tableau 的畫面：0.38 約 2.3 像素）
+    spec = render(parse(tmp_path, sized_mark("Line", "0.1", **timeline)), db).spec
+    assert spec["mark"]["strokeWidth"] == 1  # 最細 1 像素
 
 
 def test_pie_size(tmp_path: Path, db: Path) -> None:
@@ -515,13 +517,18 @@ def test_pie_size(tmp_path: Path, db: Path) -> None:
 
 
 def test_banding_level_and_column_header_dividers(tmp_path: Path, db: Path) -> None:
-    """色帶的層級（band-level）以前幾層標題的組上色；欄標題區域的分隔線以刻度畫在各組之間。"""
-    level = rule("table", fmt("band-level", "1", scope="rows"))
+    """色帶的層級（band-level）：1 是每一列，等於標題的層數時以最外層標題的組上色（與 Tableau 的畫面
+    相同）；欄標題區域的分隔線以刻度畫在各組之間。"""
+    level = rule("table", fmt("band-level", "2", scope="rows"))
     ws = parse(tmp_path, banded(*BANDING_RULES, level)).worksheets[0]
-    assert ws.row_style.banding is not None and ws.row_style.banding.level == 1
+    assert ws.row_style.banding is not None and ws.row_style.banding.level == 2
     values = render(parse(tmp_path, banded(*BANDING_RULES, level)), db).spec["data"]["values"]
-    # East（2 列）、North、South（2 列）、West（2 列）隔組上色
+    # 兩層標題、層級 2：East（2 列）、North、South（2 列）、West（2 列）隔組上色
     assert [v["__band_rows"] for v in values] == [False, False, True, False, False, True, True]
+    # 層級 1：每一列隔列上色
+    each = rule("table", fmt("band-level", "1", scope="rows"))
+    values = render(parse(tmp_path, banded(*BANDING_RULES, each)), db).spec["data"]["values"]
+    assert [v["__band_rows"] for v in values] == [False, True, False, True, False, True, False]
 
     spec = render(parse(tmp_path, nested("cols", mark="Text")), db).spec
     axis = main_encoding(spec)["x"]["axis"]  # type: ignore[index]

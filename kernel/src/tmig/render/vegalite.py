@@ -97,6 +97,7 @@ from tmig.render.fonts import (
     TITLE_COLOR,
     TITLE_SIZE,
     Font,
+    pixels,
     resolve,
 )
 from tmig.render.format import (
@@ -215,7 +216,30 @@ IMAGE_DIAMETER = 30
 都小得不合理，30 像素左右才說得通。還沒有與 Tableau 的畫面對過。"""
 """圓點、形狀與方塊的直徑（像素）：Tableau 大小 1（預設）時的直徑，大小 s 時為 s 倍（同樣以 Tableau 的
 畫面量測：大小 1.637 的圓點直徑 16 像素）。"""
+TICK_COUNT_Y = "ceil(height / 50)"
+"""縱軸（量值）刻度的數量：依 Tableau 的畫面推定（約 230 像素高、0–84K 的座標軸每 20K 一個刻度，
+Vega 的預設會是每 10K 一個）。"""
+TICK_COUNT_DATE = "ceil(width / 150)"
+"""橫的日期軸刻度的數量：依 Tableau 的畫面推定（約 380 像素寬、兩年半的座標軸每年一個刻度，
+Vega 的預設會是每半年一個）。"""
+TIME_PADDING = 0.05
+"""自動的時間軸兩端各多留的比例（資料範圍的 5%）：依 Tableau 的畫面量測（兩年半的週資料，左右各約一個半月）。"""
+DATE_TICK_LABEL = (
+    "utcmonth(datum.value) === 0 && utcdate(datum.value) === 1 && utchours(datum.value) === 0"
+    " ? utcFormat(datum.value, '%Y') : "
+    "month(datum.value) === 0 && date(datum.value) === 1 && hours(datum.value) === 0"
+    " ? timeFormat(datum.value, '%Y') : datum.label"
+)
+"""日期軸（精確日期、週、日）自動的刻度標籤：年初的刻度只寫年份（與 Tableau 相同），其他照舊。
+刻度落在 UTC 或本地時間的年初都算（依刻度的類型而定）。"""
+LABEL_CHAR_WIDTH = 0.6
+"""估計標籤寬度時每個字占字級的比例（數字與拉丁字母）。"""
+LABEL_ROOM = 15
+"""橫向長條尾端的標籤之外多留的像素（標籤與長條的間距 4，加上右邊的空白）。"""
 LINE_WIDTH = 2
+LINE_SCALE = 6
+"""標記卡的大小換成線寬（像素）的倍率：依 Tableau 的畫面量測，大小 0.38 的折線約 2.3 像素；
+沒有設定大小時為 LINE_WIDTH。"""
 """折線的寬度（像素）：Tableau 大小 1（預設）時的線寬，大小 s 時為 s 倍（以 Tableau 的畫面量測：預設的
 線約 2 像素，大小 14.55 的線約 30 像素，見 HR Dashboards 的啞鈴圖）。"""
 TREEMAP = ("__tm_x", "__tm_x2", "__tm_y", "__tm_y2")
@@ -348,6 +372,7 @@ class _Builder:
         """下拉線圖層的編號。"""
         """標記標籤圖層的編號（圖層名稱與旗標欄各自不同）。"""
         self.text_styles: dict[int, TextStyle] = {}
+        self.text_bases: dict[int, str] = {}
         """自訂標籤文字的格式（標記卡的 id → 各行相同的格式，或第一行的格式）。"""
         self.text_lines: dict[int, list[tuple[str, TextStyle | None]]] = {}
         self.text_segments: dict[int, dict[int, list[tuple[str, TextStyle | None]]]] = {}
@@ -619,6 +644,32 @@ class _Builder:
                     self.minor_ticks(axis, use, setting, start, end)
             if scale:
                 encoding["scale"] = scale
+        kind = encoding.get("type")
+        if shelf == "rows" and kind == "quantitative" and "values" not in axis:
+            # 縱軸刻度的密度：Tableau 的刻度比 Vega 的預設（每 40 像素一個）稀
+            axis.setdefault("tickCount", {"expr": TICK_COUNT_Y})
+        if kind == "temporal":
+            if (
+                encoding.get("timeUnit") == "utcyearmonthdate"
+                and "format" not in axis
+                and "labelExpr" not in axis
+            ):
+                # 自動的日期標籤：年初的刻度只寫年份（與 Tableau 相同）
+                axis["labelExpr"] = DATE_TICK_LABEL
+                if shelf == "columns":
+                    axis.setdefault("tickCount", {"expr": TICK_COUNT_DATE})
+            scale = dict(encoding.get("scale") or {})
+            if not {"domain", "domainMin", "domainMax"} & scale.keys() and self.ws.marks.type in (
+                "automatic",
+                "line",
+                "area",
+            ):
+                # 自動的時間軸兩端各留一點空間，線不會貼到邊緣（與 Tableau 相同）
+                extent = self.time_extent(str(encoding.get("field")))
+                if extent is not None and extent[1] > extent[0]:
+                    pad = (extent[1] - extent[0]) * TIME_PADDING
+                    scale.update(domain=[extent[0] - pad, extent[1] + pad], nice=False)
+                    encoding["scale"] = scale
         if axis:
             encoding["axis"] = axis
         return encoding
@@ -697,7 +748,12 @@ class _Builder:
         """文字表儲存格中文字的水平對齊：標記卡或工作表設定的對齊（Format > 窗格），沒有設定時與
         Tableau 相同數字靠右、文字靠左（只有一格、沒有標題時置中）。有離散的欄時對齊各欄的邊緣
         （band 的起點或終點），否則對齊整張圖的邊緣。"""
-        explicit = marks.cell_align or self.ws.cell_align
+        # 自訂文字各段的對齊（標籤編輯器的對齊按鈕，fontalignment）優先於儲存格的對齊
+        typed = next(
+            (r.style.align for r in marks.label_text if r.style is not None and r.style.align),
+            None,
+        )
+        explicit = typed or marks.cell_align or self.ws.cell_align
         if explicit is None and "x" not in encoding and "y" not in encoding:
             return
         if any(
@@ -850,8 +906,18 @@ class _Builder:
                 vl_mark = {"type": "text", "tooltip": True, "lineBreak": "\n"}
             if not dots:
                 vl_mark.update(self.text_font(marks).mark())
-                if marks.color is None and marks.mark_color is None:
-                    vl_mark["color"] = self.text_fill(marks, self.text_color(marks, cell=True))
+                if marks.color is None:
+                    # 文字的顏色：自訂文字各段的顏色（fontcolor）、格式設定的文字顏色（標籤、窗格、
+                    # 工作表或活頁簿的預設），都沒有時才是標記卡的顏色（與 Tableau 的畫面相同：活頁簿
+                    # 設定了預設的文字顏色時，沒有指定顏色的文字不跟著標記卡的顏色）
+                    explicit = marks.label_color or self.ws.cell_color or self.ws.text_color
+                    base = (
+                        self.text_color(marks, cell=True)
+                        if explicit is not None or marks.mark_color is None
+                        else _css_color(marks.mark_color)
+                    )
+                    self.text_bases[id(marks)] = base
+                    vl_mark["color"] = self.text_fill(marks, base)
                 if text_field is not None:
                     encoding["text"] = {"field": text_field, "type": "nominal"}
                 else:
@@ -996,7 +1062,7 @@ class _Builder:
         回傳主圖層（{"mark": …}，有圖片時另有它自己的 encoding）與畫圖片的圖層（沒有圖片形狀時是空的）。
         圖片形狀的標記仍畫成看不見的點（工具提示、點選與選取照舊在它上面），圖片另外一層畫在同一個位置：
         資料列記下圖片的路徑與要套用的顏色，檢視器載入圖片後填入網址（見 SHAPE_IMAGE、SHAPE_TINT、
-        SHAPE_URL）。圖片的邊長是 IMAGE_DIAMETER 乘上標記卡的大小（大小上有欄位時跟著大小的比例尺）。"""
+        SHAPE_URL）。圖片的邊長見 _image_side（大小上有欄位時跟著大小的比例尺）。"""
         main: dict[str, Any] = {"mark": vl_mark}
         if vl_mark.get("type") != "point":
             return main, []
@@ -1058,10 +1124,14 @@ class _Builder:
         if isinstance(size, dict) and isinstance(size.get("field"), str):
             side = {"expr": f"sqrt(scale('size', datum[{json.dumps(size['field'])}]))"}
         else:
-            side = round(IMAGE_DIAMETER * (marks.mark_size if marks.mark_size else 1), 2)
+            side = _image_side(marks, encoding)
             if all(images):
                 # 看不見的點（工具提示、點選的範圍）與圖片一樣大：圖片當按鈕用時整張圖都點得到
-                vl_mark["size"] = round(side**2, 2)
+                vl_mark["size"] = (
+                    {"expr": f"pow({side}, 2)"} if isinstance(side, str) else round(side**2, 2)
+                )
+            if isinstance(side, str):
+                side = {"expr": side}
         picture: dict[str, Any] = {
             "type": "image",
             "width": side,
@@ -1210,6 +1280,8 @@ class _Builder:
         offset = -sum(heights) / 2
         layers: list[dict[str, Any]] = []
         segments = self.text_segments.get(id(marks), {})
+        # 沒有指定顏色的行（段）用文字的預設顏色，不沿用其他行的顏色
+        plain = self.text_bases.get(id(marks)) or vl_mark.get("color") or TEXT_COLOR
         for index, ((field_name, style), font, height) in enumerate(
             zip(lines, fonts, heights, strict=True)
         ):
@@ -1231,9 +1303,7 @@ class _Builder:
                     }
                     part_mark.pop("lineBreak", None)
                     if "color" in vl_mark:
-                        part_mark["color"] = self.text_fill(
-                            marks, vl_mark["color"], part_style or TextStyle()
-                        )
+                        part_mark["color"] = self.text_fill(marks, plain, part_style or TextStyle())
                     layers.append(
                         {
                             "mark": part_mark,
@@ -1259,7 +1329,7 @@ class _Builder:
             }
             mark.pop("lineBreak", None)
             if "color" in vl_mark:
-                mark["color"] = self.text_fill(marks, vl_mark["color"], style)
+                mark["color"] = self.text_fill(marks, plain, style)
             layers.append(
                 {"mark": mark, "encoding": {"text": {"field": field_name, "type": "nominal"}}}
             )
@@ -1319,7 +1389,9 @@ class _Builder:
                 self.text_font(marks),
                 marks.label_match,
                 marks.cell_align,
-                (IMAGE_DIAMETER if _image_shapes(marks) else POINT_DIAMETER) * size / 2,
+                _image_radius(marks, encoding)
+                if _image_shapes(marks)
+                else POINT_DIAMETER * size / 2,
                 extreme,
                 stacked,
                 marks.label_valign,
@@ -1330,6 +1402,8 @@ class _Builder:
                 _rotate_label(found["mark"], setting.direction)
             return found
 
+        if vl_type == "bar" and horizontal and not stacked and marks.cell_align in (None, "right"):
+            self.label_room(marks, encoding["x"], field_name)
         layers: list[dict[str, Any]]
         if setting.marks in ("selected", "highlighted"):
             # 只標示選取（醒目提示）的標記：檢視器依選取的列改寫篩選
@@ -1396,6 +1470,33 @@ class _Builder:
                     record[LABEL_ID] = n
                 self.culled = True
         return {"name": f"__label_{kind}{self.label_count}", **layer}
+
+    def label_room(self, marks: Marks, x: dict[str, Any], field_name: str) -> None:
+        """橫向長條尾端的標籤：自動的座標軸多留標籤的寬度，最長的長條的標籤才不會被切掉（依 Tableau 的
+        畫面：146 像素寬的窗格，最大值 188 的長條長 110 像素，後面是標籤）。只在值都不是負的、座標軸
+        沒有固定範圍時；標籤的寬度以字數估計。"""
+        scale = dict(x.get("scale") or {})
+        if {"domain", "domainMin", "domainMax"} & scale.keys() or scale.get("type", "linear") != (
+            "linear"
+        ):
+            return
+        records = [r for r in self.records_of(marks) if not r.get(TOTAL)]
+        measure = str(x.get("field"))
+        numbers = [
+            float(v)
+            for r in records
+            if isinstance(v := r.get(measure), int | float) and not isinstance(v, bool)
+        ]
+        if not numbers or min(numbers) < 0 or max(numbers) <= 0:
+            return
+        font = self.text_font(marks)
+        longest = max((len(str(r.get(field_name) or "")) for r in records), default=0)
+        reserve = round(longest * font.size * LABEL_CHAR_WIDTH + LABEL_ROOM, 1)
+        scale["domainMax"] = {
+            "expr": f"{max(numbers)!r} * width / max(width - {reserve}, width / 2)"
+        }
+        scale["nice"] = False
+        x["scale"] = scale
 
     def label_flags(
         self,
@@ -1888,7 +1989,9 @@ class _Builder:
             diameter = POINT_DIAMETER * (size if size is not None else 1)
             vl_mark["size"] = round(diameter**2, 2)  # Vega 的 size 是外框的面積
         elif kind == "line" and not vl_mark.get("filled"):
-            vl_mark["strokeWidth"] = round(LINE_WIDTH * (size if size is not None else 1), 2)
+            vl_mark["strokeWidth"] = (
+                LINE_WIDTH if size is None else round(max(LINE_SCALE * size, 1), 2)
+            )
             # 與 Tableau 相同，線的兩端與轉折是圓的（粗的線最明顯，例如啞鈴圖）
             vl_mark.update(strokeCap="round", strokeJoin="round")
 
@@ -3638,7 +3741,8 @@ def _banding(
     levels: int = 1,
 ) -> None:
     """色帶：每 size 列（欄）為一段，隔段畫上窗格的顏色（列標題的寬度有設定時，標題也畫上標題的
-    顏色）；設定了層級（band-level）時以前幾層標題的組為單位。色帶畫在最下層，不參與選取。"""
+    顏色）；設定了層級（band-level）時以外層標題的組為單位（層級愈大愈往外）。色帶畫在最下層，
+    不參與選取。"""
     shelf = "rows" if channel == "y" else "columns"
     flag = f"{BAND}{shelf}"
     field_name = encoding["field"]
@@ -3646,11 +3750,14 @@ def _banding(
     order: dict[Any, int] = {}
     previous: list[str] | None = None
     index = -1
+    # 層級是 Tableau 的 band-level：1 是每一列（欄），每加 1 往外一層標題；等於標題的層數時
+    # 以最外層標題的組為單位（依 Tableau 的畫面：五層標題、band-level 5 時依最外層的組隔組上色）
+    depth = None if banding.level is None else max(levels - banding.level + 1, 1)
     for value in keys:
-        if banding.level is None or banding.level >= levels:
+        if depth is None or depth >= levels:
             order[value] = len(order)  # 每一列（欄）
             continue
-        group = _levels(value, levels)[: banding.level]
+        group = _levels(value, levels)[:depth]
         if group != previous:
             index += 1
         order[value] = index
@@ -4234,6 +4341,18 @@ def _records(
     顯示文字（特殊值的文字）。"""
     index = {key: i for i, key in enumerate(result.columns)}
     present = [(key, ch) for key, ch in channels.items() if key in index]
+    # 沒有設定格式的實數量值：這一欄有不是整數的值時，整欄用一致的小數位數（Tableau 的自動格式）
+    fixed = {
+        key
+        for key, ch in present
+        if ch.role == "measure"
+        and ch.datatype == "real"
+        and ch.format is None
+        and any(
+            isinstance(v := r[index[key]], (float, Decimal)) and not float(v).is_integer()
+            for r in result.rows
+        )
+    }
     records: list[dict[str, Any]] = []
     for row in result.rows:
         record: dict[str, Any] = {}
@@ -4257,7 +4376,9 @@ def _records(
             elif raw is None and null_text is not None and ch.role == "measure":
                 record[ch.label] = null_text
             else:
-                record[ch.label] = format_value(raw, ch.datatype, ch.format, trunc)
+                record[ch.label] = format_value(
+                    raw, ch.datatype, ch.format, trunc, fixed=key in fixed
+                )
         records.append(record)
     return records
 
@@ -4365,7 +4486,7 @@ def _chart_reference_lines(
     scopes = _scope_keys(builder)
     behind: list[dict[str, Any]] = []
     front: list[dict[str, Any]] = []
-    drawn: dict[str, tuple[str, str]] = {}
+    drawn: dict[str, tuple[str, str, str | None]] = {}
     handled: set[int] = set()
     for n, line in enumerate(ws.reference_lines):
         axis = builder.channels.get(use_key(line.axis))
@@ -4417,7 +4538,7 @@ def _chart_reference_lines(
             for name, value in zip(names, computed, strict=True):
                 for m in members:
                     m[name] = value
-        drawn[line.id] = (names[0], position)
+        drawn[line.id] = (names[0], position, line.fill_color)
         style = _line_style(line)
         if style is not None:
             for name in names:
@@ -4436,11 +4557,14 @@ def _chart_reference_lines(
         partner = drawn.get(line.paired) if line.paired else None
         if partner is not None and partner[1] == position:
             # 參考區間：兩條參考線之間塗上底色（後一條畫的時候兩條都算好了）
-            color = _css_color(line.fill_color) if line.fill_color else BAND_COLOR
+            fill = line.fill_color or partner[2]  # 底色寫在兩條線的其中一條
+            color = _css_color(fill) if fill else BAND_COLOR
             behind.append(place.fill(f"{REF}{n}_band", partner[0], names[0], color))
         if len(groups) == 1:
             for i, text in _reference_labels(line, axis, first, temporal):
-                front.append(place.label(f"{names[i]}_label", names[i], text))
+                front.append(
+                    place.label(f"{names[i]}_label", names[i], text, line, builder.ws.text_color)
+                )
     if not behind and not front:
         return body, handled
     return {"layer": [*behind, body, *front]}, handled
@@ -4892,23 +5016,45 @@ class _Placement:
             "encoding": enc,
         }
 
-    def label(self, name: str, field_name: str, text: str) -> dict[str, Any]:
-        """標籤：與 Tableau 相同寫在窗格的左側、線的上方（縱向的參考線寫在上方、線的右側）。"""
-        place: dict[str, Any] = (
-            {"y": {"value": 0}, "align": "left", "dx": 3, "dy": 0}
-            if self.position == "x"
-            else {"x": {"value": 0}, "align": "left", "dx": 3, "dy": -3}
-        )
+    def label(
+        self,
+        name: str,
+        field_name: str,
+        text: str,
+        line: ReferenceLine | None = None,
+        color: str | None = None,
+    ) -> dict[str, Any]:
+        """標籤：橫向的參考線寫在窗格的左側、線的上方；縱向的參考線（橫軸上的值，例如日期軸上的區間）
+        寫在窗格的下緣、線的右側（與 Tableau 的畫面相同）。參考線設定了對齊時依設定：水平對齊是標籤
+        在線的哪一側（縱向的線）或窗格的哪一邊（橫向的線），垂直對齊是窗格的上、中、下（縱向的線）
+        或線的上方、線上、下方（橫向的線）。顏色是工作表的文字顏色。"""
+        align = line.label_align if line is not None else None
+        valign = line.label_valign if line is not None else None
+        mark: dict[str, Any] = {"type": "text", "color": _css_color(color or REF_LABEL_COLOR)}
+        place: dict[str, Any]
+        if self.position == "x":
+            edge = {"top": 0, "center": {"expr": "height / 2"}, "bottom": "height"}
+            place = {"y": {"value": edge[valign or "bottom"]}}
+            mark["baseline"] = {"top": "top", "center": "middle", "bottom": "bottom"}[
+                valign or "bottom"
+            ]
+            mark["dy"] = {"top": 3, "center": 0, "bottom": -3}[valign or "bottom"]
+            mark["align"] = {"left": "right", "center": "center", "right": "left"}[align or "right"]
+            mark["dx"] = {"left": -3, "center": 0, "right": 3}[align or "right"]
+        else:
+            edge = {"left": 0, "center": {"expr": "width / 2"}, "right": "width"}
+            place = {"x": {"value": edge[align or "left"]}}
+            mark["align"] = align or "left"
+            mark["dx"] = {"left": 3, "center": 0, "right": -3}[align or "left"]
+            mark["baseline"] = {"top": "bottom", "center": "middle", "bottom": "top"}[
+                valign or "top"
+            ]
+            mark["dy"] = {"top": -3, "center": 0, "bottom": 3}[valign or "top"]
+        if line is not None and line.label_size is not None:
+            mark["fontSize"] = pixels(line.label_size)
         return {
             "name": name,
-            "mark": {
-                "type": "text",
-                "color": REF_LABEL_COLOR,
-                "align": place.pop("align"),
-                "baseline": "bottom" if self.position == "y" else "top",
-                "dx": place.pop("dx"),
-                "dy": place.pop("dy"),
-            },
+            "mark": mark,
             "encoding": {
                 self.position: {**self.field(field_name), "aggregate": "max"},
                 **place,
@@ -5276,7 +5422,9 @@ LABEL_WRAP_WIDTH = 120
 
 def _mark_style(mark: dict[str, Any], marks: Marks) -> dict[str, Any]:
     """標記卡上設定的顏色（沒有顏色欄位時；沒有設定時為 Tableau 的預設色，文字除外）、不透明度與框線。"""
-    if marks.color is None and marks.mark_color is not None:
+    if mark["type"] == "text" and "color" in mark:
+        pass  # 文字的顏色已經決定（見 unit：文字顏色的格式優先於標記卡的顏色）
+    elif marks.color is None and marks.mark_color is not None:
         mark["color"] = marks.mark_color
     elif marks.color is None and mark["type"] != "text":
         mark["color"] = DEFAULT_MARK_COLOR
@@ -5855,6 +6003,37 @@ def _color_datum(
     visit(body)
 
 
+def _cell_extent(encoding: dict[str, Any]) -> str | None:
+    """標記所在儲存格較短邊的運算式（像素）：欄與列都沒有連續的座標軸時（離散的欄列是每一格的寬高，
+    沒有欄列是整個檢視）；有連續的座標軸時為 None。"""
+    parts: list[str] = []
+    for channel, full in (("x", "width"), ("y", "height")):
+        enc = encoding.get(channel)
+        if enc is None:
+            parts.append(full)
+        elif isinstance(enc, dict) and enc.get("type") in ("ordinal", "nominal"):
+            parts.append(f"bandwidth('{channel}')")
+        else:
+            return None
+    return f"min({parts[0]}, {parts[1]})"
+
+
+def _image_side(marks: Marks, encoding: dict[str, Any]) -> float | str:
+    """圖片形狀的邊長：標記在儲存格中（欄列都沒有連續的座標軸）時相對於儲存格較短的一邊——大小 s 時為
+    s / 2，最多填滿，與圓餅相同（依 Tableau 的畫面量測：大小 0.78、寬 157 像素的儲存格中圖示約 57
+    像素），回傳運算式；在連續的座標軸上時是 IMAGE_DIAMETER 乘上大小（像素）。"""
+    size = marks.mark_size if marks.mark_size else 1
+    extent = _cell_extent(encoding)
+    if extent is None:
+        return round(IMAGE_DIAMETER * size, 2)
+    return f"{extent} * {round(min(size / 2, 1.0), 4)}"
+
+
+def _image_radius(marks: Marks, encoding: dict[str, Any]) -> float | str:
+    side = _image_side(marks, encoding)
+    return f"({side}) / 2" if isinstance(side, str) else side / 2
+
+
 def _pie_fraction(marks: Marks) -> float:
     """圓餅的直徑占區塊（分面的每一格）較短邊的比例：大小 s 時為 s / 2，最多填滿（依 Tableau 的畫面量測：
     大小 1.505 的圓餅直徑約為區塊高度的 76%，甜甜圈內外圈的直徑比與大小的比相同）。"""
@@ -5870,7 +6049,7 @@ def _label_layer(
     font: Font | None = None,
     match: bool = False,
     align: Literal["left", "center", "right"] | None = None,
-    radius: float = POINT_DIAMETER / 2,
+    radius: float | str = POINT_DIAMETER / 2,
     extreme: Literal["max", "min"] | None = None,
     stacked: bool = False,
     valign: Literal["top", "center", "bottom"] | None = None,
@@ -5893,25 +6072,31 @@ def _label_layer(
         # 多行的標籤（自訂的標籤文字中有換行）：Vega 把第一行放在定位點、其餘往下排，
         # 在標記上方或置中時要把整段往上移，最後一行才不會蓋到標記
         extra = (lines - 1) * (font.size + 2)
+
+        def gap(sign: int, more: float = 0) -> Any:
+            """標記的邊緣再往外 4 像素；半徑是運算式時（大小相對於儲存格的圖片）回傳運算式。"""
+            if isinstance(radius, str):
+                return {"expr": f"{sign} * (({radius}) + {4 + more})"}
+            return sign * (radius + 4 + more)
+
         if valign in ("top", "bottom"):
             # 垂直對齊：標籤在標記的上方或下方；水平沒有指定時置中
-            gap = radius + 4
             mark.update(
                 baseline="bottom" if valign == "top" else "top",
-                dy=-gap - extra if valign == "top" else gap,
+                dy=gap(-1, extra) if valign == "top" else gap(1),
             )
             if align == "left":
-                mark.update(align="right", dx=-gap)
+                mark.update(align="right", dx=gap(-1))
             elif align == "right":
-                mark.update(align="left", dx=gap)
+                mark.update(align="left", dx=gap(1))
             else:
                 mark.update(align="center")
         elif align == "center":
             mark.update(align="center", baseline="middle")
         elif align == "left":
-            mark.update(align="right", baseline="middle", dx=-(radius + 4))
+            mark.update(align="right", baseline="middle", dx=gap(-1))
         else:
-            mark.update(align="left", baseline="middle", dx=radius + 4)
+            mark.update(align="left", baseline="middle", dx=gap(1))
     elif vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
         if stacked:

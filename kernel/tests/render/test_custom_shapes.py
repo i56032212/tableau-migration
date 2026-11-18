@@ -271,8 +271,9 @@ def button(pane_extra: str, encodings: str = "") -> str:
 
 
 def test_image_shape_without_shelves_is_drawn_in_the_middle(tmp_path: Path, db: Path) -> None:
-    """欄列架上都沒有欄位、也沒有標籤的形狀標記：畫出圖片（在檢視的中間），不是文字的「Abc」；看不見的點
-    與圖片一樣大（大小 4 的透明圖片是 120 像素的點選範圍）。有標籤時照舊以文字呈現標籤。"""
+    """欄列架上都沒有欄位、也沒有標籤的形狀標記：畫出圖片（在檢視的中間），不是文字的「Abc」；圖片的
+    大小相對於儲存格（這裡是整個檢視）較短的一邊——大小 s 時為 s / 2、最多填滿，所以大小 4 的透明圖片
+    填滿檢視；看不見的點與圖片一樣大（點選的範圍）。有標籤時照舊以文字呈現標籤。"""
     style = mark_rule(
         "<format attr='shape' value='Clear/blank.png' />", "<format attr='size' value='4' />"
     )
@@ -281,8 +282,9 @@ def test_image_shape_without_shelves_is_drawn_in_the_middle(tmp_path: Path, db: 
     spec = render(ir, db).spec
     point, image = layers(spec)
     assert "text" not in json.dumps(spec["layer"][0].get("mark"))
-    assert (image["mark"]["width"], image["mark"]["height"]) == (120, 120)
-    assert point["mark"]["size"] == 120**2
+    side = "min(width, height) * 1.0"
+    assert image["mark"]["width"] == image["mark"]["height"] == {"expr": side}
+    assert point["mark"]["size"] == {"expr": f"pow({side}, 2)"}
     # 沒有欄、列：圖片與點一樣在檢視的中間
     assert image["encoding"]["x"] == {"value": {"expr": "width / 2"}}
     assert image["encoding"]["y"] == {"value": {"expr": "height / 2"}}
@@ -297,7 +299,7 @@ def test_image_shape_without_shelves_is_drawn_in_the_middle(tmp_path: Path, db: 
 
 def test_multiline_label_above_an_image_shape(tmp_path: Path, db: Path) -> None:
     """圖片形狀上方的多行標籤（自訂的標籤文字中有換行）：整段往上移，最後一行在圖片的上緣之上；
-    偏移依圖片的大小（30 像素乘上標記卡的大小）。"""
+    偏移依圖片的大小（相對於儲存格：欄上有維度時是每一格的寬與檢視的高較短的一邊）。"""
     label = (
         "<customized-label><formatted-text><run fontsize='5'> </run><run>\n</run>"
         f"<run fontsize='15'>&lt;{ref('sum:Sales:qk')}&gt;</run></formatted-text></customized-label>"
@@ -326,11 +328,12 @@ def test_multiline_label_above_an_image_shape(tmp_path: Path, db: Path) -> None:
         layer for layer in spec["layer"] if str(layer.get("name", "")).startswith("__label_")
     )
     font = text["mark"]["fontSize"]
-    # 圖片的半徑 30 + 間隔 4，再往上一行（Vega 的行高是字級 + 2）
+    # 圖片的半徑 + 間隔 4，再往上一行（Vega 的行高是字級 + 2）；大小 2 的圖片填滿儲存格較短的一邊
+    side = "min(bandwidth('x'), height) * 1.0"
     assert text["mark"]["baseline"] == "bottom" and text["mark"]["align"] == "center"
-    assert text["mark"]["dy"] == pytest.approx(-(30 + 4) - (font + 2))
+    assert text["mark"]["dy"] == {"expr": f"-1 * ((({side}) / 2) + {4 + font + 2})"}
     image = next(layer for layer in spec["layer"] if layer["mark"]["type"] == "image")
-    assert image["mark"]["width"] == 60
+    assert image["mark"]["width"] == {"expr": side}
     # 只有欄的標題：圖片在這一格的中間（沒有列）
     assert image["encoding"]["y"] == {"value": {"expr": "height / 2"}}
     assert "x" not in image["encoding"]

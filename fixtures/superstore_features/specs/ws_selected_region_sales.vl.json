@@ -120,6 +120,12 @@
           },
           "value": 1
         }
+      },
+      "scale": {
+        "domainMax": {
+          "expr": "264973.981 * width / max(width - 65.4, width / 2)"
+        },
+        "nice": false
       }
     },
     "y": {

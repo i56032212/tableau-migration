@@ -256,10 +256,10 @@
       "mark": {
         "type": "text",
         "color": "#555555",
+        "baseline": "bottom",
+        "dy": -3,
         "align": "left",
-        "baseline": "top",
-        "dx": 3,
-        "dy": 0
+        "dx": 3
       },
       "encoding": {
         "x": {
@@ -269,7 +269,7 @@
           "aggregate": "max"
         },
         "y": {
-          "value": 0
+          "value": "height"
         },
         "text": {
           "value": "目標 100,000"

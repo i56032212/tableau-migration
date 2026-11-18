@@ -1784,6 +1784,21 @@ class ReferenceLine(IRModel):
     fill_color: HexColor | None = Field(
         default=None, description="參考區間與分布的底色（refband 的 fill-color）；None 依預設的灰色"
     )
+    label_align: Literal["left", "center", "right"] | None = Field(
+        default=None,
+        description="標籤的水平對齊（refline 的 text-align）：縱向的線是標籤在線的左側、線上或右側，"
+        "橫向的線是窗格的左、中、右；None 為自動",
+    )
+    label_valign: Literal["top", "center", "bottom"] | None = Field(
+        default=None,
+        description="標籤的垂直對齊（refline 的 vertical-align）：縱向的線是窗格的上、中、下，"
+        "橫向的線是線的上方、線上或下方；None 為自動",
+    )
+    label_size: float | None = Field(
+        default=None,
+        gt=0,
+        description="標籤的字級（點；refline 的 font-size）；None 依工作表的字型",
+    )
     above_color: HexColor | None = Field(default=None, description="fill-above 的顏色")
     below_color: HexColor | None = Field(default=None, description="fill-below 的顏色")
     whiskers: Literal["standard", "minmax"] = Field(
@@ -1875,7 +1890,8 @@ class Banding(IRModel):
     level: int | None = Field(
         default=None,
         ge=1,
-        description="以前幾層標題的組為單位上色（band-level）；None 或大於層數時為每一列（欄）",
+        description="色帶的層級（Tableau 的 band-level）：1 為每一列（欄），每加 1 往外一層標題，"
+        "等於或大於標題的層數時以最外層標題的組為單位；None 為每一列（欄）",
     )
 
 
@@ -2569,7 +2585,7 @@ class Zone(IRModel):
         "沒有固定大小的子區塊沿排列方向等分",
     )
     hidden: bool = Field(default=False, description="使用者隱藏的區塊（例如以按鈕切換顯示的容器）")
-    show_title: bool = Field(default=True, description="工作表區塊是否顯示標題")
+    show_title: bool = Field(default=True, description="工作表、篩選與參數控制項的區塊是否顯示標題")
     show_caption: bool = Field(
         default=False, description="工作表區塊是否顯示說明（Caption）；與工作表本身的設定無關"
     )
@@ -2643,6 +2659,14 @@ class Dashboard(IRModel):
     max_size: Size | None = None
     background: HexColor | None = Field(
         default=None, description="dashboard 的背景顏色；None 為白色"
+    )
+    text_font: str | None = Field(
+        default=None,
+        description="文字物件與標題沒有指定字型時的字型（活頁簿格式的「全部」字型）；None 為 Tableau 的預設",
+    )
+    text_color: HexColor | None = Field(
+        default=None,
+        description="文字物件與標題沒有指定顏色時的文字顏色（活頁簿格式的「全部」字型）；None 為預設",
     )
     zones: list[Zone] = Field(default_factory=list)
     layouts: list[DeviceLayout] = Field(

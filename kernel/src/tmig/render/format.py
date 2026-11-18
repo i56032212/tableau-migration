@@ -149,9 +149,17 @@ def _apply(number: float, fmt: NumberFormat, signed: bool) -> str:
 
 
 def format_number(
-    value: float | int | Decimal, fmt: NumberFormat | None, integer: bool = False
+    value: float | int | Decimal,
+    fmt: NumberFormat | None,
+    integer: bool = False,
+    fixed: bool = False,
 ) -> str:
+    """fixed：自動格式時小數位數固定（這一欄有不是整數的值；與 Tableau 相同，同一欄的小數位數一致，
+    例如 0.00 與 14.10），不去掉結尾的 0。"""
     number = float(value)
+    if fmt is None and fixed and not integer and abs(number) < 1000:
+        rounded = _round(number, 2)
+        return f"{'-' if rounded < 0 else ''}{_digits(rounded, 2, True)}"
     if fmt is None:
         if integer or number.is_integer():
             rounded = _round(number, 0)
@@ -287,15 +295,19 @@ DATE_LABELS = {
 
 
 def format_value(
-    value: Any, datatype: str, fmt: str | None = None, trunc: str | None = None
+    value: Any,
+    datatype: str,
+    fmt: str | None = None,
+    trunc: str | None = None,
+    fixed: bool = False,
 ) -> str:
-    """給標籤與工具提示用的顯示文字。"""
+    """給標籤與工具提示用的顯示文字。fixed 見 format_number。"""
     if value is None:
         return "Null"
     if isinstance(value, bool):
         return "True" if value else "False"
     if datatype in ("integer", "real") and isinstance(value, (int, float, Decimal)):
-        return format_number(value, parse_format(fmt), integer=datatype == "integer")
+        return format_number(value, parse_format(fmt), integer=datatype == "integer", fixed=fixed)
     if isinstance(value, dt.date) and fmt:
         text = format_date(value, fmt)
         if text is not None:

@@ -485,7 +485,8 @@ function ZoneContent({
         />
       );
     case "filter":
-      return (
+      return untitled(
+        zone,
         <FilterControl
           ir={ir}
           workbook={workbook}
@@ -493,19 +494,20 @@ function ZoneContent({
           state={view.sheetFilters[zone.worksheet!]}
           onChange={(key, value) => setFilter(zone.worksheet!, key, value)}
           query={zone.relevant || zone.options?.context_values ? stateFor(ir, zone.worksheet!, view) : undefined}
-        />
+        />,
       );
     case "parameter": {
       const parameter = ir.parameters.find((p) => p.id === zone.parameter);
       if (!parameter) return <div className="placeholder unsupported">找不到參數 {zone.parameter}</div>;
       const value = zone.parameter! in view.parameters ? view.parameters[zone.parameter!] : parameter.value;
-      return (
+      return untitled(
+        zone,
         <ParameterControl
           parameter={parameter}
           control={zone.control}
           value={value}
           onChange={(v) => setParameter(parameter.id, v)}
-        />
+        />,
       );
     }
     case "legend":
@@ -542,7 +544,7 @@ function ZoneContent({
       );
     case "title":
       return (
-        <div className="title" style={richAlign(zone.content)}>
+        <div className="title" style={{ ...defaultText(dashboard), ...richAlign(zone.content) }}>
           {zone.content?.length ? (
             <RichText runs={zone.content} ir={ir} values={view.parameters} />
           ) : (
@@ -553,7 +555,7 @@ function ZoneContent({
     case "text":
       return (
         // 文字在區塊中垂直置中（與 Tableau 的文字物件相同；文字比區塊高時從上面開始，不切掉開頭）
-        <div className="text" style={richAlign(zone.content)}>
+        <div className="text" style={{ ...defaultText(dashboard), ...richAlign(zone.content) }}>
           <div className="text-body">{zone.content?.length ? <RichText runs={zone.content} ir={ir} values={view.parameters} /> : zone.text}</div>
         </div>
       );
@@ -695,6 +697,19 @@ const TABLEAU_WEIGHTS: Record<string, number> = {
   Semibold: 600,
   Bold: 700,
 };
+
+/** 文字物件與標題預設的字型與顏色：活頁簿格式的「全部」字型（各段自己的格式優先）。 */
+function defaultText(dashboard: Dashboard): React.CSSProperties {
+  const css: React.CSSProperties = {};
+  if (dashboard.text_font) css.fontFamily = `"${dashboard.text_font}", var(--tableau-font)`;
+  if (dashboard.text_color) css.color = dashboard.text_color;
+  return css;
+}
+
+/** 控制項的區塊關掉了標題（show-title='false'）時不顯示標題。 */
+function untitled(zone: Zone, control: React.ReactElement): React.ReactElement {
+  return zone.show_title === false ? <div className="control-untitled">{control}</div> : control;
+}
 
 function runStyle(style: TextStyle | null | undefined): React.CSSProperties | undefined {
   if (!style) return undefined;

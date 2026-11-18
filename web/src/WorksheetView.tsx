@@ -634,8 +634,17 @@ function sizeFacets(spec: Record<string, any>, width: number, height: number) {
   const HEADER = 24; // 分面標題的高度
   const GAP = 16;
   const target = spec.facet && spec.spec ? spec.spec : spec;
-  target.width = Math.max(Math.floor((width - 16) / count(column)) - GAP, 40);
-  target.height = Math.max(Math.floor((height - HEADER) / count(row)) - HEADER - GAP, 40);
+  // 標題隱藏的分面（例如每一列一個甜甜圈）與 Tableau 的儲存格相同：各格相連、平分區塊，
+  // 圓餅相對於儲存格的大小才與 Tableau 一致
+  const flushColumns = column !== undefined && facet.column?.header?.labels === false;
+  const flushRows = row !== undefined && facet.row?.header?.labels === false;
+  target.width = flushColumns
+    ? Math.max(Math.floor(width / count(column)), 20)
+    : Math.max(Math.floor((width - 16) / count(column)) - GAP, 40);
+  target.height = flushRows
+    ? Math.max(Math.floor((height - (column && !flushColumns ? HEADER : 0)) / count(row)), 20)
+    : Math.max(Math.floor((height - HEADER) / count(row)) - HEADER - GAP, 40);
+  if (flushColumns || flushRows) spec.spacing = { row: flushRows ? 0 : 20, column: flushColumns ? 0 : 20 };
   spec.autosize = { type: "pad" };
   // 甜甜圈的洞以整張圖的寬高計算時（舊的規格），分面的小圖中改用固定的大小；以每一格的寬高
   // （child_width、child_height）計算的不變

@@ -834,7 +834,7 @@
             }
           ],
           "default": null,
-          "description": "以前幾層標題的組為單位上色（band-level）；None 或大於層數時為每一列（欄）",
+          "description": "色帶的層級（Tableau 的 band-level）：1 為每一列（欄），每加 1 往外一層標題，等於或大於標題的層數時以最外層標題的組為單位；None 為每一列（欄）",
           "title": "Level"
         }
       },
@@ -1647,6 +1647,33 @@
           "default": null,
           "description": "dashboard 的背景顏色；None 為白色",
           "title": "Background"
+        },
+        "text_font": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字物件與標題沒有指定字型時的字型（活頁簿格式的「全部」字型）；None 為 Tableau 的預設",
+          "title": "Text Font"
+        },
+        "text_color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-f]{6}([0-9a-f]{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "文字物件與標題沒有指定顏色時的文字顏色（活頁簿格式的「全部」字型）；None 為預設",
+          "title": "Text Color"
         },
         "zones": {
           "items": {
@@ -5765,6 +5792,56 @@
           "description": "參考區間與分布的底色（refband 的 fill-color）；None 依預設的灰色",
           "title": "Fill Color"
         },
+        "label_align": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標籤的水平對齊（refline 的 text-align）：縱向的線是標籤在線的左側、線上或右側，橫向的線是窗格的左、中、右；None 為自動",
+          "title": "Label Align"
+        },
+        "label_valign": {
+          "anyOf": [
+            {
+              "enum": [
+                "top",
+                "center",
+                "bottom"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標籤的垂直對齊（refline 的 vertical-align）：縱向的線是窗格的上、中、下，橫向的線是線的上方、線上或下方；None 為自動",
+          "title": "Label Valign"
+        },
+        "label_size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "標籤的字級（點；refline 的 font-size）；None 依工作表的字型",
+          "title": "Label Size"
+        },
         "above_color": {
           "anyOf": [
             {
@@ -9507,7 +9584,7 @@
         },
         "show_title": {
           "default": true,
-          "description": "工作表區塊是否顯示標題",
+          "description": "工作表、篩選與參數控制項的區塊是否顯示標題",
           "title": "Show Title",
           "type": "boolean"
         },

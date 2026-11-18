@@ -343,6 +343,9 @@ export interface Dashboard {
   max_size?: Size | null;
   /** dashboard 的背景顏色；沒有時為白色 */
   background?: string | null;
+  /** 文字物件與標題沒有指定字型、顏色時用的字型與顏色（活頁簿格式的「全部」字型） */
+  text_font?: string | null;
+  text_color?: string | null;
   zones: Zone[];
   layouts?: DeviceLayout[];
 }
