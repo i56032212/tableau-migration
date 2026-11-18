@@ -1,0 +1,42 @@
+/*
+ * 隨檢視器提供的字型：報表指定這些字型、而檢視的電腦上沒有安裝時用這一份，文字的寬度與行高才與作者在 Tableau
+ * 看到的相同（改用後備字型時寬度不同，放得剛好的文字會被切掉）。
+ *
+ * Roboto：Copyright 2011 The Roboto Project Authors，SIL Open Font License 1.1（見根目錄的 NOTICE.md）。
+ * 只帶拉丁字母的子集（含 € 與 °），字重 400、500、700 與斜體 400、700；檔案取自 npm 套件 @fontsource/roboto。
+ */
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../node_modules/@fontsource/roboto/files/roboto-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Roboto";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../node_modules/@fontsource/roboto/files/roboto-latin-400-italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../node_modules/@fontsource/roboto/files/roboto-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../node_modules/@fontsource/roboto/files/roboto-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Roboto";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../node_modules/@fontsource/roboto/files/roboto-latin-700-italic.woff2") format("woff2");
+}

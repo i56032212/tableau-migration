@@ -3539,3 +3539,74 @@ def test_cell_and_pane_borders(engine: str) -> None:
         assert spec()["config"]["view"] == {"stroke": None}
         assert errors == []
         browser.close()
+
+
+def test_text_segments_and_bundled_font(engine: str) -> None:
+    """同一行內格式不同的文字（24pt 的數字接著 16pt 的單位）：兩段緊接著畫在同一條基線上，小的單位不會用
+    大的字級畫；隨檢視器提供的 Roboto 字型在報表指定它時載入。"""
+    from playwright.sync_api import sync_playwright
+
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "KPI"})["worksheet"]
+    sales = {
+        "field": "f_sales",
+        "agg": "sum",
+        "date": None,
+        "continuous": True,
+        "table_calc": None,
+    }
+    body = {
+        **created,
+        "fonts": {"worksheet": {"family": "Roboto"}},
+        "marks": {
+            **created["marks"],
+            "type": "text",
+            "label": [sales],
+            "label_text": [
+                {"use": sales, "style": {"bold": True, "size": 24.0}},
+                {"text": "CM", "style": {"bold": True, "size": 16.0}},
+            ],
+        },
+    }
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/{created['id']}",
+        data=json.dumps({"worksheet": body}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    urllib.request.urlopen(request, timeout=60).close()
+    script = """() => {
+        const svg = document.querySelector('.single-sheet .worksheet .frozen-host > svg')
+          ?? document.querySelector('.single-sheet .worksheet svg');
+        const texts = [...svg.querySelectorAll('text')].filter((t) => t.textContent.trim());
+        const roboto = [...document.fonts].filter((f) => f.family.replace(/["']/g, '') === 'Roboto');
+        return {
+          texts: texts.map((t) => {
+            const r = t.getBoundingClientRect();
+            return { text: t.textContent, left: r.left, right: r.right, size: t.getAttribute('font-size'),
+                     y: (t.getAttribute('transform') || '').split(',')[1],
+                     family: getComputedStyle(t).fontFamily };
+          }),
+          faces: roboto.length,
+          loaded: roboto.filter((f) => f.status === 'loaded').map((f) => f.weight),
+        };
+    }"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1000, "height": 700})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/s/{created['id']}")
+        page.wait_for_selector('.single-sheet .worksheet [data-drawn="true"]', timeout=30000)
+        found = page.evaluate(script)
+        number, unit = found["texts"]
+        assert unit["text"] == "CM" and number["text"].replace(",", "").replace(".", "").isdigit()
+        assert (number["size"], unit["size"]) == ("32px", "21.33px")
+        # 單位緊接在數字的右邊（差不到 1 像素）、同一條基線
+        assert abs(unit["left"] - number["right"]) < 1.0, found
+        assert number["y"] == unit["y"]
+        # 隨附的 Roboto：五個字重／樣式都有，用到的粗體已經載入
+        assert found["faces"] == 5 and "700" in found["loaded"], found
+        assert number["family"].startswith("Roboto")
+        assert errors == []
+        browser.close()

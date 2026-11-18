@@ -350,6 +350,12 @@ class _Builder:
         self.text_styles: dict[int, TextStyle] = {}
         """自訂標籤文字的格式（標記卡的 id → 各行相同的格式，或第一行的格式）。"""
         self.text_lines: dict[int, list[tuple[str, TextStyle | None]]] = {}
+        self.text_segments: dict[int, dict[int, list[tuple[str, TextStyle | None]]]] = {}
+        """自訂文字中，同一行內格式不同的各段（標記卡 → 行號 → 各段的欄位與格式）：例如 24pt 的數字接著
+        16pt 的單位。每一段一個文字圖層，水平的位置由檢視器量出各段的寬度後填入（見 segment_meta）。"""
+        self.segment_meta: list[dict[str, Any]] = []
+        """寫進 usermeta.text_segments：各行的對齊（left、center、right）與各段的文字欄位、位移欄位、字型
+        （畫布的 font 字串）。檢視器在畫圖之前量各段的寬度，把每一段相對於這一行定位點的位移寫進位移欄位。"""
         """各行格式不同的自訂標籤文字（例如 KPI 的小標題與大數字）：每一行的資料欄與格式。"""
         self.culled = False
         """有重疊時隱藏的標記標籤（規格加上 __label_hidden 參數與標籤 id）。"""
@@ -1203,7 +1209,48 @@ class _Builder:
         heights = [font.size * 1.2 for font in fonts]
         offset = -sum(heights) / 2
         layers: list[dict[str, Any]] = []
-        for (field_name, style), font, height in zip(lines, fonts, heights, strict=True):
+        segments = self.text_segments.get(id(marks), {})
+        for index, ((field_name, style), font, height) in enumerate(
+            zip(lines, fonts, heights, strict=True)
+        ):
+            parts = segments.get(index)
+            if parts:
+                # 這一行有格式不同的各段：每一段一個圖層，靠左畫在檢視器算出的位移上，共用同一條基線
+                # （基線的位置讓這一行最大的字與整行同一個格式時在同樣的地方）
+                meta: dict[str, Any] = {"align": vl_mark.get("align", "center"), "segments": []}
+                for part_field, part_style in parts:
+                    part_font = self.text_font(marks, part_style or TextStyle())
+                    shift = json.dumps(f"{part_field}_dx")
+                    part_mark = {
+                        **vl_mark,
+                        **part_font.mark(),
+                        "baseline": "alphabetic",
+                        "align": "left",
+                        "dy": round(offset + height / 2 + 0.3 * font.size, 2),
+                        "dx": {"expr": f"{vl_mark.get('dx', 0)} + (datum[{shift}] || 0)"},
+                    }
+                    part_mark.pop("lineBreak", None)
+                    if "color" in vl_mark:
+                        part_mark["color"] = self.text_fill(
+                            marks, vl_mark["color"], part_style or TextStyle()
+                        )
+                    layers.append(
+                        {
+                            "mark": part_mark,
+                            "encoding": {"text": {"field": part_field, "type": "nominal"}},
+                        }
+                    )
+                    meta["segments"].append(
+                        {
+                            "field": part_field,
+                            "dx": f"{part_field}_dx",
+                            "font": ("italic " if part_font.italic else "")
+                            + f"{part_font.weight} {part_font.size}px {part_font.family}",
+                        }
+                    )
+                self.segment_meta.append(meta)
+                offset += height
+                continue
             mark = {
                 **vl_mark,
                 **font.mark(),
@@ -2407,11 +2454,18 @@ def build_spec(
         first = next((style for style in styles if style is not None), None)
         if first is not None:
             builder.text_styles[id(marks)] = first
-        if len(lines) > 1 and any(style != styles[0] for style in styles):
+        # 同一行內格式不同的各段（例如 24pt 的數字接著 16pt 的單位）：各段另外組成一欄，分段畫出
+        parts = {i: found for i, (runs, _) in enumerate(lines) if len(found := _segments(runs)) > 1}
+        if (len(lines) > 1 and any(style != styles[0] for style in styles)) or parts:
             # 各行的格式不同（例如 KPI 的小標題與大數字）：每一行另外組成一欄，分行畫出
             builder.text_lines[id(marks)] = [
                 (f"{name}_{i}", style) for i, (_, style) in enumerate(lines)
             ]
+            if parts:
+                builder.text_segments[id(marks)] = {
+                    i: [(f"{name}_{i}_{j}", style) for j, (_, style) in enumerate(found)]
+                    for i, found in parts.items()
+                }
         targets = [values]
         if index is not None and index in pane_values:
             targets = [pane_values[index]]
@@ -2422,6 +2476,11 @@ def build_spec(
                     if id(marks) in builder.text_lines:
                         for i, (runs, _) in enumerate(lines):
                             record[f"{name}_{i}"] = compose_text(runs, ir, params, channels, record)
+                        for i, found in parts.items():
+                            for j, (runs, _) in enumerate(found):
+                                record[f"{name}_{i}_{j}"] = compose_text(
+                                    runs, ir, params, channels, record
+                                )
                 else:
                     # 沒有自訂的標籤文字：標籤上的欄位各占一行（與 Tableau 的預設相同）
                     record[name] = "\n".join(
@@ -2627,6 +2686,8 @@ def build_spec(
         spec["usermeta"]["trends"] = builder.trend_models
     if builder.shape_fields:
         spec["usermeta"]["shape_images"] = builder.shape_fields
+    if builder.segment_meta:
+        spec["usermeta"]["text_segments"] = builder.segment_meta
     if builder.shape_legend is not None:
         spec["usermeta"]["shape_legend"] = builder.shape_legend
     title_color = next((r.style.color for r in ws.title if r.style and r.style.color), None)
@@ -3699,6 +3760,25 @@ def _text_lines(
             style = style.model_copy(update={"size": max(sizes)})
         result.append((line, style))
     return result
+
+
+def _segments(runs: list[TextRun]) -> list[tuple[list[TextRun], TextStyle | None]]:
+    """一行文字中格式不同的各段：相鄰而格式（字級、粗體、斜體、顏色、字型）相同的併成一段，只有空白的
+    併入前一段。只有一段時這一行不必分段。"""
+
+    def signature(style: TextStyle | None) -> tuple[Any, ...] | None:
+        if style is None:
+            return None
+        return (style.size, bool(style.bold), bool(style.italic), style.color, style.font)
+
+    groups: list[tuple[list[TextRun], TextStyle | None]] = []
+    for run in runs:
+        blank = run.text is not None and not run.text.strip()
+        if groups and (blank or signature(run.style) == signature(groups[-1][1])):
+            groups[-1][0].append(run)
+        else:
+            groups.append(([run], run.style))
+    return groups
 
 
 def _tooltip_template(

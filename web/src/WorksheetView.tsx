@@ -6,7 +6,9 @@ import { api, fileUrl } from "./api";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
 import { prepareShapeImages, shapeImage, type ShapeLegend } from "./shapeImages";
 import { nextSelection, sameMark } from "./state";
+import { bundledFontsReady } from "./fonts";
 import { summarize } from "./summaryStats";
+import { layoutTextSegments } from "./textSegments";
 import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TextStyle, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
@@ -980,6 +982,10 @@ export function WorksheetView({
     // 自訂的圖片形狀：先載入圖片（並套用顏色）填進資料列，再畫圖
     prepareShapeImages(spec, workbook)
       .catch(() => undefined)
+      // 隨檢視器提供的字型（例如 Roboto）先載入：Vega 量文字的寬度時才是真正的字型
+      .then(() => bundledFontsReady(JSON.stringify([spec.config, spec.usermeta?.title_font, spec.usermeta?.text_segments])))
+      // 同一行內格式不同的文字：量各段的寬度、決定各段的位置
+      .then(() => layoutTextSegments(spec))
       .then(() => embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom || pinnable ? { tooltip } : {}) }))
       .then(async (result) => {
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）

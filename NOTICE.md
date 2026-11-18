@@ -16,6 +16,14 @@
 
 GeoNames 的資料以 CC BY 4.0 授權：使用平台的地圖時，城市的位置來自 GeoNames（© GeoNames contributors）。
 
+## 字型
+
+檢視器隨附下列字型（`web/dist/assets/*.woff2`，檢視器、查詢服務與桌面版都會帶上）：報表指定這些字型、而檢視的
+電腦上沒有安裝時使用，文字的寬度才與作者在 Tableau 看到的相同。轉散布時請一併保留本檔。
+
+| 字型 | 內容 | 來源 | 授權 |
+| --- | --- | --- | --- |
+| Roboto | 拉丁字母的子集，字重 400、500、700 與斜體 400、700 | npm 套件 [@fontsource/roboto](https://www.npmjs.com/package/@fontsource/roboto) 5.3.0（字型出自 [googlefonts/roboto-classic](https://github.com/googlefonts/roboto-classic)） | [SIL Open Font License 1.1](https://openfontlicense.org/)：Copyright 2011 The Roboto Project Authors |
 ## 程式庫
 
 | 程式庫 | 用途 | 授權 |
