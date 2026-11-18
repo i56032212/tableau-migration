@@ -50,6 +50,7 @@ import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
 import { DashboardEditor } from "./editor/DashboardEditor";
 import { Editor } from "./editor/Editor";
 import { StoryEditor } from "./editor/StoryEditor";
+import { DatasourceFrame, type TabKind, WorkspaceContext, type WorkspaceInfo } from "./editor/Workspace";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { PageControl, pagesOf } from "./PageControl";
@@ -591,8 +592,34 @@ function WorkbookPage({
     navigate(next.path + window.location.search);
   };
 
+  // 編輯器的工作區外框（功能表列、分頁列）用到的報表資訊與導覽
+  const EDIT_PATHS = { worksheet: "edit", dashboard: "edit-d", story: "edit-story", datasource: "edit-ds" } as const;
+  const VIEW_PATHS = { worksheet: "s", dashboard: "d", story: "story", datasource: "ds" } as const;
+  const workspace: WorkspaceInfo = {
+    workbook,
+    name: ir.workbook.name,
+    datasources: datasources.map((d) => ({ id: d.id, caption: d.caption })),
+    sheets: [
+      ...ir.worksheets.map((w) => ({ kind: "worksheet" as const, id: w.id, name: w.name, hidden: w.hidden === true, color: w.tab_color ?? null })),
+      ...ir.dashboards.map((d) => ({ kind: "dashboard" as const, id: d.id, name: d.name })),
+      ...stories.map((st) => ({ kind: "story" as const, id: st.id, name: st.name })),
+    ],
+    unsupported: ir.unsupported.length,
+    account: <UserBar me={me} />,
+    open: (kind: TabKind, id: string) => navigate(viewPath(workbook, EDIT_PATHS[kind], id)),
+    view: (kind: TabKind, id: string | null) => {
+      setVersion((v) => v + 1);
+      navigate(id ? viewPath(workbook, VIEW_PATHS[kind], id) : `/w/${encodeURIComponent(workbook)}`);
+    },
+    navigate,
+    changed: () => setVersion((v) => v + 1),
+  };
+  // 編輯器有自己的工作區外框：不顯示檢視器的工具列（功能表列、分頁列取代它）
+  const framed = Boolean(editing || editingDashboard || editingStory || editingDatasource);
+
   return (
-    <div className={presenting ? "page presenting" : "page"} data-presenting={presenting ? "true" : "false"}>
+    <WorkspaceContext.Provider value={workspace}>
+    <div className={presenting ? "page presenting" : framed ? "page editing" : "page"} data-presenting={presenting ? "true" : "false"}>
       {presenting && (
         <nav className="presentation-bar" aria-label="簡報模式">
           <button type="button" aria-label="上一張" title="上一張" onClick={() => present(-1)}>
@@ -609,6 +636,7 @@ function WorkbookPage({
           </button>
         </nav>
       )}
+      {!framed && (
       <header className="toolbar">
         <Link to="/">報表</Link>
         <span className="sep">/</span>
@@ -841,6 +869,7 @@ function WorkbookPage({
         {notice && <span className="success">{notice}</span>}
         <UserBar me={me} />
       </header>
+      )}
       {dialog === "print" && (
         <PageSetupDialog
           target={() => document.querySelector<HTMLElement>(".page .dashboard, .page .single-sheet, .page .story")}
@@ -976,16 +1005,18 @@ function WorkbookPage({
       )}
       {datasource && <DatasourceView workbook={workbook} datasource={datasource} />}
       {editingDatasource && (
-        <DatasourceEditor
-          key={editingDatasource}
-          workbook={workbook}
-          datasource={editingDatasource}
-          onChanged={() => setVersion((v) => v + 1)}
-          onOpenSheet={() => {
-            const sheet = ir.worksheets.find((w) => w.datasource === editingDatasource) ?? ir.worksheets[0];
-            if (sheet) navigate(viewPath(workbook, "edit", sheet.id));
-          }}
-        />
+        <DatasourceFrame datasource={editingDatasource}>
+          <DatasourceEditor
+            key={editingDatasource}
+            workbook={workbook}
+            datasource={editingDatasource}
+            onChanged={() => setVersion((v) => v + 1)}
+            onOpenSheet={() => {
+              const sheet = ir.worksheets.find((w) => w.datasource === editingDatasource) ?? ir.worksheets[0];
+              if (sheet) navigate(viewPath(workbook, "edit", sheet.id));
+            }}
+          />
+        </DatasourceFrame>
       )}
       {route.page === "datasource" && !datasource && (datasources.length > 0 || datasourceError) && (
         <main className="error">{datasourceError ? `無法開啟資料源：${datasourceError}` : "找不到這個資料源"}</main>
@@ -999,5 +1030,6 @@ function WorkbookPage({
         !editingDatasource &&
         route.page !== "datasource" && <main className="error">找不到這個 dashboard、工作表或 Story</main>}
     </div>
+    </WorkspaceContext.Provider>
   );
 }

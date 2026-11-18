@@ -155,7 +155,7 @@ def test_double_click_geometry_builds_map(engine: str) -> None:
         assert saved["marks"]["geometry"]["agg"] == "collect"
         assert saved["marks"]["detail"] == []
         # 標記卡的「空間」格顯示 COLLECT(Geometry)
-        pill = page.locator('[data-drop="marks.geometry"] .pill-text')
+        pill = page.locator('.mark-pills [data-slot="geometry"] .pill-text')
         assert "COLLECT(Geometry)" in pill.inner_text()
         page.locator('.data-pane li[data-field="f_name"]').drag_to(
             page.locator('[data-drop="marks.detail"]')

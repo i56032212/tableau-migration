@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ControlOptions, FieldUse } from "../types";
 import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor, type DragItem } from "./context";
+import { Icon, type IconName } from "./Icons";
 import {
   AGGREGATIONS,
   DATE_PARTS,
@@ -651,7 +652,18 @@ function useAdHoc(shelf: ShelfName, card: Card) {
 
 // ---------------------------------------------------------------- 架
 
-export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: ShelfName; card?: Card }) {
+export function Shelf({
+  label,
+  shelf,
+  card = "all",
+  variant = "row",
+}: {
+  label: string;
+  shelf: ShelfName;
+  card?: Card;
+  /** row：檢視上方的一列（欄、列）；card：卡片欄中的一張卡（頁面） */
+  variant?: "row" | "card";
+}) {
   const editor = useEditor();
   const menu = usePillMenu();
   const { over, handlers, dropAt } = useDropTarget(shelf, card, (use) => editor.openFilter({ use, index: null }));
@@ -659,10 +671,17 @@ export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: Sh
   const adHoc = useAdHoc(shelf, card);
   const typed = shelf === "rows" || shelf === "columns";
   return (
-    <div className="shelf" data-shelf={shelf}>
-      <span className="shelf-label">{label}</span>
+    <div className={variant === "card" ? "card shelf-card" : "shelf"} data-shelf={shelf}>
+      {variant === "card" ? (
+        <div className="card-title">{label}</div>
+      ) : (
+        <span className="shelf-label">
+          {(shelf === "rows" || shelf === "columns") && <Icon name={shelf} size={14} />}
+          {label}
+        </span>
+      )}
       <div
-        className={`shelf-drop${over ? " over" : ""}`}
+        className={`${variant === "card" ? "card-drop" : "shelf-drop"}${over ? " over" : ""}`}
         {...handlers}
         data-drop={shelf}
         onDoubleClick={typed ? adHoc.onDoubleClick : undefined}
@@ -681,7 +700,7 @@ export function Shelf({ label, shelf, card = "all" }: { label: string; shelf: Sh
           ),
         )}
         {adHoc.editing?.index === null && adHoc.input}
-        {uses.length === 0 && !adHoc.editing && <span className="shelf-hint">將欄位拖曳到這裡</span>}
+        {uses.length === 0 && !adHoc.editing && variant === "row" && <span className="shelf-hint">將欄位拖曳到這裡</span>}
       </div>
     </div>
   );
@@ -806,7 +825,6 @@ export function FiltersShelf() {
             />
           );
         })}
-        {sheet.filters.length === 0 && <span className="shelf-hint">將欄位拖曳到這裡篩選</span>}
       </div>
     </div>
   );
@@ -846,15 +864,63 @@ const SLOTS: [MarkSlot, string][] = [
   ["geometry", "空間"],
 ];
 
-function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; card: Card }) {
+const SLOT_ICONS: Record<MarkSlot, IconName> = {
+  color: "color",
+  size: "size",
+  label: "label",
+  detail: "detail",
+  tooltip: "tooltip",
+  shape: "shape",
+  angle: "angle",
+  path: "path",
+  geometry: "geometry",
+};
+
+/** 標記卡上的屬性按鈕（Tableau 標記卡的色彩、大小、標籤…）：把欄位拖曳到按鈕上即指定到這個屬性，
+ * 按一下開啟這個屬性的設定。name 是按鈕的名稱（開啟對話框的以「…」結尾）。 */
+function MarkButton({
+  slot,
+  label,
+  name,
+  title,
+  card,
+  pressed,
+  onClick,
+}: {
+  slot: MarkSlot;
+  label: string;
+  name: string;
+  title: string;
+  card: Card;
+  pressed?: boolean;
+  onClick?: () => void;
+}) {
+  const shelf = `marks.${slot}` as ShelfName;
+  const { over, handlers } = useDropTarget(shelf, card);
+  return (
+    <button
+      type="button"
+      className={`mark-button${over ? " over" : ""}${pressed ? " active" : ""}`}
+      {...handlers}
+      data-drop={shelf}
+      aria-label={name}
+      aria-pressed={pressed}
+      title={title}
+      onClick={onClick}
+    >
+      <Icon name={SLOT_ICONS[slot]} />
+      <span className="mark-button-label">{label}</span>
+    </button>
+  );
+}
+
+/** 標記卡上一個屬性的膠囊：前面的小圖示是所在的屬性。 */
+function MarkSlotPills({ slot, label, card, adHoc }: { slot: MarkSlot; label: string; card: Card; adHoc?: ReturnType<typeof useAdHoc> }) {
   const editor = useEditor();
   const menu = usePillMenu();
   const shelf = `marks.${slot}` as ShelfName;
-  const { over, handlers, dropAt } = useDropTarget(shelf, card);
-  const uses = usesOn(editor.sheet, shelf, card).filter((u) => slot !== "geometry" || u.field !== GEOMETRY_GENERATED);
-  // 臨時計算：連按兩下「詳細資料」的空白處輸入公式（與 Tableau 標記卡相同，加到詳細資料）
-  const adHoc = useAdHoc(shelf, card);
-  const typed = slot === "detail";
+  const { handlers, dropAt } = useDropTarget(shelf, card);
+  const uses = usesOn(editor.sheet, shelf, card);
   // 色彩上的多個欄位（Tableau 以欄位值的組合著色）：詳細資料上的維度可以「也用於色彩」
   const marks = cardMarks(editor.sheet, card);
   const discreteColor = marks.color !== null && !marks.color.continuous && marks.color.agg === null;
@@ -865,27 +931,31 @@ function MarkSlotRow({ slot, label, card }: { slot: MarkSlot; label: string; car
     return [...items.slice(0, -2), toggle, ...items.slice(-2)];
   };
   return (
-    <div
-      className={`mark-slot${over ? " over" : ""}`}
-      {...handlers}
-      data-drop={shelf}
-      onDoubleClick={typed ? adHoc.onDoubleClick : undefined}
-      title={typed ? "連按兩下輸入公式" : undefined}
-    >
-      <span className="mark-slot-label">{label}</span>
-      <span className="mark-slot-pills">
-        {uses.map((use, i) => (
-          <span key={`${i}:${use.field}`} className={`pill-slot${alsoColor(use) ? " also-color" : ""}`} onDrop={(e) => dropAt(e, i)} onDragOver={handlers.onDragOver} title={alsoColor(use) ? "也用於色彩（與色彩上的欄位組合著色）" : undefined}>
+    <>
+      {uses.map((use, i) =>
+        // Geometry (generated) 不顯示
+        slot === "geometry" && use.field === GEOMETRY_GENERATED ? null : (
+          <span
+            key={`${slot}:${i}:${use.field}`}
+            className={`pill-slot mark-pill${alsoColor(use) ? " also-color" : ""}`}
+            data-slot={slot}
+            onDrop={(e) => dropAt(e, i)}
+            onDragOver={handlers.onDragOver}
+            title={alsoColor(use) ? "也用於色彩（與色彩上的欄位組合著色）" : undefined}
+          >
+            <span className="mark-pill-icon" title={label}>
+              <Icon name={SLOT_ICONS[slot]} size={14} />
+            </span>
             <Pill use={use} shelf={shelf} index={i} card={card} menu={() => withColor(menu(shelf, i, card), use)} />
           </span>
-        ))}
-        {typed && adHoc.input}
-      </span>
-    </div>
+        ),
+      )}
+      {adHoc?.input}
+    </>
   );
 }
 
-export function MarksCard() {
+export function MarksCard({ resolved }: { resolved?: string | null }) {
   const editor = useEditor();
   const { sheet, card, setCard, fields, apply } = editor;
   const marks = cardMarks(sheet, card);
@@ -894,6 +964,16 @@ export function MarksCard() {
   const layered = tabs && isMapSheet(sheet);
   // 空間資料的形狀：資料源有空間欄位時才顯示這一格（Geometry (generated) 不顯示）
   const spatialShown = [...fields.values()].some((f) => f.datatype === "spatial");
+  // 形狀、路徑、角度的按鈕依標記類型出現（與 Tableau 相同）；自動時依實際畫出的標記，已經有欄位的也顯示
+  const type = marks.type === "automatic" ? (resolved ?? "automatic") : marks.type;
+  const shapeShown = Boolean(marks.shape || type === "shape" || marks.mark_shape);
+  const pathShown = Boolean(marks.path || type === "line" || type === "polygon");
+  const angleShown = Boolean(marks.angle || type === "pie");
+  // 按下「大小」「路徑」時在按鈕下方展開的設定
+  const [panel, setPanel] = useState<"size" | "path" | null>(null);
+  // 卡片的空白處：放下欄位加到詳細資料，連按兩下輸入公式（臨時計算，與 Tableau 相同加到詳細資料）
+  const detailDrop = useDropTarget("marks.detail", card);
+  const adHoc = useAdHoc("marks.detail", card);
   return (
     <div className="card marks-card" data-shelf="marks">
       <div className="card-title">標記</div>
@@ -945,29 +1025,59 @@ export function MarksCard() {
         ))}
       </select>
       <div className="mark-buttons">
-        <button type="button" onClick={() => editor.openDialog({ kind: "colors", card })}>
-          色彩…
-        </button>
-        {(marks.shape || marks.type === "shape" || marks.mark_shape) && (
-          <button
-            type="button"
-            title="各成員的形狀，形狀上沒有欄位時是所有標記的形狀；可以用自訂的圖片（Tableau 的「編輯形狀」）"
-            onClick={() => editor.openDialog({ kind: "shapes", card })}
-          >
-            形狀…
-          </button>
-        )}
-        <button type="button" title="標記標籤：顯示與否、自訂文字、要標示的標記" onClick={() => editor.openDialog({ kind: "labels", card })}>
-          標籤…
-        </button>
-        <button
-          type="button"
-          title="工具提示的文字與格式、工具提示中的工作表（Viz in Tooltip）"
+        <MarkButton slot="color" label="色彩" name="色彩…" title="色彩：把欄位拖曳到這裡；按一下設定調色盤、不透明度與框線" card={card} onClick={() => editor.openDialog({ kind: "colors", card })} />
+        <MarkButton
+          slot="size"
+          label="大小"
+          name="大小"
+          title="大小：把欄位拖曳到這裡；按一下調整標記的大小"
+          card={card}
+          pressed={panel === "size"}
+          onClick={() => setPanel(panel === "size" ? null : "size")}
+        />
+        <MarkButton
+          slot="label"
+          label={marks.type === "text" ? "文字" : "標籤"}
+          name="標籤…"
+          title="標記標籤：把欄位拖曳到這裡；按一下設定顯示與否、自訂文字、要標示的標記"
+          card={card}
+          onClick={() => editor.openDialog({ kind: "labels", card })}
+        />
+        <MarkButton slot="detail" label="詳細資料" name="詳細資料" title="詳細資料：把欄位拖曳到這裡，標記依這個欄位分開" card={card} />
+        <MarkButton
+          slot="tooltip"
+          label="工具提示"
+          name="工具提示…"
+          title="工具提示：把欄位拖曳到這裡；按一下設定文字與格式、工具提示中的工作表（Viz in Tooltip）"
+          card={card}
           onClick={() => editor.openDialog({ kind: "tooltip", card })}
-        >
-          工具提示…
-        </button>
-        <label className="mark-size" title="標記的大小">
+        />
+        {shapeShown && (
+          <MarkButton
+            slot="shape"
+            label="形狀"
+            name="形狀…"
+            title="各成員的形狀，形狀上沒有欄位時是所有標記的形狀；可以用自訂的圖片（Tableau 的「編輯形狀」）"
+            card={card}
+            onClick={() => editor.openDialog({ kind: "shapes", card })}
+          />
+        )}
+        {pathShown && (
+          <MarkButton
+            slot="path"
+            label="路徑"
+            name="路徑…"
+            title="路徑：把欄位拖曳到這裡決定連線的順序；線的標記按一下選擇線條類型"
+            card={card}
+            pressed={panel === "path"}
+            onClick={marks.type === "line" ? () => setPanel(panel === "path" ? null : "path") : undefined}
+          />
+        )}
+        {angleShown && <MarkButton slot="angle" label="角度" name="角度" title="角度：把量值拖曳到這裡決定圓餅各片的角度" card={card} />}
+        {spatialShown && <MarkButton slot="geometry" label="空間" name="空間" title="空間：地圖上標記的形狀（空間欄位）" card={card} />}
+      </div>
+      {panel === "size" && (
+        <label className="mark-size mark-panel" title="標記的大小">
           大小
           <input
             type="range"
@@ -981,9 +1091,9 @@ export function MarksCard() {
             }}
           />
         </label>
-      </div>
-      {marks.type === "line" && (
-        <label className="inline line-type" title="線條類型（Tableau 標記卡「路徑」的線條類型）">
+      )}
+      {panel === "path" && marks.type === "line" && (
+        <label className="inline line-type mark-panel" title="線條類型（Tableau 標記卡「路徑」的線條類型）">
           線條類型
           <select
             aria-label="線條類型"
@@ -999,9 +1109,16 @@ export function MarksCard() {
           </select>
         </label>
       )}
-      {SLOTS.filter(([slot]) => slot !== "geometry" || spatialShown).map(([slot, label]) => (
-        <MarkSlotRow key={slot} slot={slot} label={label} card={card} />
-      ))}
+      <div
+        className={`mark-pills${detailDrop.over ? " over" : ""}`}
+        {...detailDrop.handlers}
+        onDoubleClick={adHoc.onDoubleClick}
+        title="把欄位拖曳到這裡加到詳細資料，或連按兩下輸入公式"
+      >
+        {SLOTS.map(([slot, label]) => (
+          <MarkSlotPills key={slot} slot={slot} label={label} card={card} adHoc={slot === "detail" ? adHoc : undefined} />
+        ))}
+      </div>
     </div>
   );
 }

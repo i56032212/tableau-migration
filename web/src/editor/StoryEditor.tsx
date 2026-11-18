@@ -1,7 +1,9 @@
 // 桌面版的 Story 編輯器：故事點的新增、排序、說明文字與顯示的 dashboard 或工作表，Story 的標題、大小與導覽。
+// 上下是與其他編輯器共用的功能表列、工具列與分頁列；Story 的名稱在分頁上改（連按兩下分頁）。
 
 import type React from "react";
 import { useCallback, useRef, useState } from "react";
+import { addDatasource, saveDocument } from "../desktop";
 import { Modal } from "../Server";
 import type { ViewState } from "../state";
 import type { IR, Story, StoryFormat, StoryNote, StoryPoint } from "../types";
@@ -9,6 +11,20 @@ import { capturePoint, StoryView } from "../Story";
 import { editApi } from "./api";
 import { useEditHistory, useNotice } from "./history";
 import { type RichRun, RichTextEditor } from "./RichText";
+import { SEPARATOR } from "./Shelves";
+import {
+  dataMenuItems,
+  fileMenu,
+  MenuBar,
+  type MenuDef,
+  serverMenu,
+  SheetTabs,
+  StatusBar,
+  ToolButton,
+  useCreateSheet,
+  useWorkspace,
+  windowMenu,
+} from "./Workspace";
 
 const EMPTY_VIEW: ViewState = { sheetFilters: {}, parameters: {}, actions: {}, selections: {} };
 
@@ -26,17 +42,19 @@ export function StoryEditor({
   story: id,
   ir,
   onChanged,
-  onOpen,
   onClose,
 }: {
   workbook: string;
   story: string;
   ir: IR;
   onChanged: () => void;
-  onOpen: (story: string) => void;
+  /** 開啟另一個 Story（新增的 Story 由工作區的外框開啟） */
+  onOpen?: (story: string) => void;
   onClose: (story: string | null) => void;
 }) {
   const [notice, notify] = useNotice();
+  const ws = useWorkspace();
+  const create = useCreateSheet((text) => notify(text, "error"));
   const history = useEditHistory<Story>(
     `${workbook}/${id}`,
     () => editApi.story(workbook, id),
@@ -127,29 +145,51 @@ export function StoryEditor({
     return { dashboard: kind === "d" ? target : null, worksheet: kind === "s" ? target : null };
   };
 
+  const tab = { kind: "story" as const, id: story.id };
+  const done = () => onClose(story.id);
+  const removeStory = () => {
+    if (!window.confirm(`刪除 Story「${story.name}」？`)) return;
+    void editApi
+      .removeStory(workbook, story.id)
+      .then(() => {
+        onChanged();
+        onClose(null);
+      })
+      .catch((e: Error) => notify(e.message, "error"));
+  };
+  const menus: MenuDef[] = [
+    fileMenu(ws),
+    { label: "資料", items: dataMenuItems(ws) },
+    { label: "工作表", items: [{ label: "新增工作表", action: () => create("worksheet") }] },
+    { label: "dashboard", items: [{ label: "新增 dashboard", action: () => create("dashboard") }] },
+    {
+      label: "Story",
+      items: [
+        { label: "新增 Story", action: () => create("story") },
+        // Story 的底色、標題、導覽與文字物件的樣式（Tableau 的「Story＞格式」）
+        { label: "格式…", action: () => setFormatOpen(true) },
+        SEPARATOR,
+        { label: "刪除 Story", action: removeStory },
+      ],
+    },
+    serverMenu(ws),
+    windowMenu(ws, tab, done),
+  ];
+
   return (
-    <div className="story-editor" data-story-editor={story.id} data-saving={history.pending > 0 ? "true" : "false"}>
-      <div className="editor-toolbar" role="toolbar" aria-label="Story 編輯">
-        <button type="button" onClick={history.undo} disabled={!history.canUndo}>
-          ↶ 復原
-        </button>
-        <button type="button" onClick={history.redo} disabled={!history.canRedo}>
-          ↷ 重做
-        </button>
+    <div className="story-editor workspace" data-story-editor={story.id} data-saving={history.pending > 0 ? "true" : "false"}>
+      <MenuBar menus={menus} saving={history.pending > 0} onDone={done} />
+      <div className="ws-toolbar" role="toolbar" aria-label="Story 編輯">
+        <ToolButton icon="undo" label="復原" title="復原（Ctrl+Z）" disabled={!history.canUndo} onClick={history.undo} />
+        <ToolButton icon="redo" label="重做" title="重做（Ctrl+Y）" disabled={!history.canRedo} onClick={history.redo} />
         <span className="sep" />
-        <label className="inline">
-          Story
-          <input
-            key={`${story.id}:${story.name}`}
-            aria-label="Story 名稱"
-            defaultValue={story.name}
-            onBlur={(e) => {
-              const name = e.target.value.trim();
-              if (name && name !== story.name) apply((s) => ({ ...s, name }));
-              else e.target.value = story.name;
-            }}
-          />
-        </label>
+        <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(workbook, false)} />
+        <span className="sep" />
+        <ToolButton icon="datasource-add" label="新增資料源…" onClick={() => void addDatasource(workbook, ws.navigate)} />
+        <span className="sep" />
+        <ToolButton icon="story-add" label="新增 Story" onClick={() => create("story")} />
+      </div>
+      <div className="editor-toolbar story-options" role="group" aria-label="Story 的設定">
         <label className="inline">
           <input type="checkbox" checked={story.title !== null} onChange={(e) => apply((s) => ({ ...s, title: e.target.checked ? s.name : null }))} /> 標題
           <input
@@ -205,43 +245,8 @@ export function StoryEditor({
         <button type="button" title="Story 的底色、標題、導覽與文字物件的樣式（Tableau 的「Story＞格式」）" onClick={() => setFormatOpen(true)}>
           格式…
         </button>
-        <span className="sep" />
-        <button
-          type="button"
-          onClick={() =>
-            void editApi
-              .addStory(workbook)
-              .then((created) => {
-                onChanged();
-                onOpen(created.id);
-              })
-              .catch((e: Error) => notify(e.message, "error"))
-          }
-        >
-          新增 Story
-        </button>
-        <button
-          type="button"
-          className="danger"
-          onClick={() => {
-            if (!window.confirm(`刪除 Story「${story.name}」？`)) return;
-            void editApi
-              .removeStory(workbook, story.id)
-              .then(() => {
-                onChanged();
-                onClose(null);
-              })
-              .catch((e: Error) => notify(e.message, "error"));
-          }}
-        >
-          刪除
-        </button>
-        <span className="spacer" />
-        {history.pending > 0 && <span className="hint">儲存中…</span>}
-        <button type="button" className="primary" onClick={() => onClose(story.id)}>
-          完成
-        </button>
       </div>
+      <div className="ws-body">
       <aside className="story-point-list" aria-label="故事點">
         <div className="pane-section">故事點</div>
         <ol>
@@ -386,6 +391,18 @@ export function StoryEditor({
           />
         )}
       </div>
+      </div>
+      <SheetTabs
+        current={tab}
+        live={{ name: story.name }}
+        apply={(change) => apply((value) => change(value as unknown as Record<string, unknown>) as unknown as Story)}
+        onError={(text) => notify(text, "error")}
+      />
+      <StatusBar>
+        <span>
+          {story.points.length} 個故事點　{story.size.width} × {story.size.height}
+        </span>
+      </StatusBar>
       {current && noteEditing !== null && (current.notes ?? [])[noteEditing] && (
         <NoteDialog
           key={`${current.id}:${noteEditing}`}

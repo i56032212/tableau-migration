@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 import uvicorn
+from editor_ui import pane_menu
 
 from tmig_service.background import free_port
 from tmig_service.desktop import TOKEN_HEADER, create_desktop_app
@@ -164,7 +165,7 @@ def test_folders_combined_and_fiscal_year(engine: str, tmp_path: Path) -> None:
         assert field["combined"] == [ids["Region"], ids["Product"]]
         assert render({"field": field["id"]})["West, Lamp"] == "8"
         # 日期屬性：會計年度從四月開始
-        pane.get_by_role("button", name="日期屬性…").click()
+        pane_menu(page, "日期屬性…")
         dialog = page.get_by_role("dialog", name=re.compile("^日期屬性"))
         dialog.get_by_label("會計年度的起始月").select_option("4")
         dialog.get_by_role("button", name="確定").click()

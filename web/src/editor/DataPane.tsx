@@ -6,7 +6,8 @@ import { editApi } from "./api";
 import { currentDrag, endDrag, startDrag, useEditor } from "./context";
 import { hierarchyCandidates } from "./Dialogs";
 import { fieldMenu } from "./FieldDialogs";
-import { PopupMenu, type SheetControlIR } from "./Shelves";
+import { Icon } from "./Icons";
+import { type MenuItem, PopupMenu, SEPARATOR, type SheetControlIR } from "./Shelves";
 import {
   blendSources,
   buildMap,
@@ -393,10 +394,13 @@ function SpecialRow({ id, label, measure, geo = false }: { id: string; label: st
 export function DataPane({
   onDatasource,
   onEditDatasource,
+  hidden = false,
 }: {
   onDatasource: (id: string) => void;
   /** 開啟資料源分頁的編輯（桌面版） */
   onEditDatasource?: (id: string) => void;
+  /** 側欄切到另一個分頁時隱藏（搜尋的文字與瀏覽的資料源保留） */
+  hidden?: boolean;
 }) {
   const editor = useEditor();
   const parameterShown = (id: string) =>
@@ -404,6 +408,8 @@ export function DataPane({
   const { catalog, sheet } = editor;
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  // 搜尋框旁邊的選單（Tableau 資料窗格的下拉選單）：建立計算欄位、參數、資料夾，顯示隱藏的欄位
+  const [paneMenu, setPaneMenu] = useState<DOMRect | null>(null);
   // 膠囊拖回資料窗格＝從架上移除
   const { over, handlers } = useRemoveTarget();
   // 資料窗格瀏覽的資料源：預設為工作表的（主要）資料源；其他資料源的量值放到檢視上即為 Data Blending
@@ -432,9 +438,21 @@ export function DataPane({
   const dimensionFolders = sectionFolders(folders, "dimension", dimensions.filter((f) => !inHierarchy.has(f.id)), !!term);
   const measureFolders = sectionFolders(folders, "measure", measures, !!term);
   const foldered = new Set([...dimensionFolders, ...measureFolders].flatMap((g) => g.fields.map((f) => f.id)));
+  const paneItems: MenuItem[] = [
+    { label: "建立計算欄位…", action: () => editor.openCalc(null, shown) },
+    { label: "建立參數…", action: () => editor.openDialog({ kind: "parameter", parameter: null }) },
+    // 把欄位拖曳到資料夾的名稱上即移進去
+    { label: "新資料夾…", action: () => editor.openDialog({ kind: "folder", datasource: shown, fields: [], folder: null }) },
+    SEPARATOR,
+    // 資料源分頁：加入資料表、關聯、join、聯集、樞紐與欄位的設定
+    ...(onEditDatasource ? [{ label: "編輯資料源…", action: () => onEditDatasource(shown) }] : []),
+    // 週的起始日與會計年度的起始月（Tableau 的「日期屬性」）
+    { label: "日期屬性…", action: () => editor.openDialog({ kind: "date-properties", datasource: shown }) },
+    SEPARATOR,
+    { label: "顯示隱藏的欄位", checked: showHidden, action: () => setShowHidden(!showHidden) },
+  ];
   return (
-    <aside className={`data-pane${over ? " over" : ""}`} {...handlers} aria-label="資料">
-      <div className="pane-title">資料</div>
+    <aside className={`data-pane${over ? " over" : ""}`} {...handlers} aria-label="資料" hidden={hidden}>
       <select
         aria-label="資料源"
         value={shown}
@@ -448,34 +466,6 @@ export function DataPane({
           </option>
         ))}
       </select>
-      <div className="ds-links">
-        {onEditDatasource && (
-          <button
-            type="button"
-            className="link ds-edit-link"
-            title="開啟資料源分頁：加入資料表、關聯、join、聯集、樞紐與欄位的設定"
-            onClick={() => onEditDatasource(shown)}
-          >
-            編輯資料源…
-          </button>
-        )}
-        <button
-          type="button"
-          className="link ds-edit-link"
-          title="週的起始日與會計年度的起始月（Tableau 的「日期屬性」）"
-          onClick={() => editor.openDialog({ kind: "date-properties", datasource: shown })}
-        >
-          日期屬性…
-        </button>
-        <button
-          type="button"
-          className="link ds-edit-link"
-          title="建立資料夾（把欄位拖曳到資料夾的名稱上即移進去）"
-          onClick={() => editor.openDialog({ kind: "folder", datasource: shown, fields: [], folder: null })}
-        >
-          新資料夾…
-        </button>
-      </div>
       {secondary.size > 0 && (
         <div className="pane-actions">
           <button type="button" title="Data Blending 的連結欄位（Tableau 的「編輯混合關係」）" onClick={() => editor.openDialog({ kind: "blends" })}>
@@ -498,20 +488,25 @@ export function DataPane({
           </button>
         </div>
       )}
-      <input
-        type="search"
-        placeholder="搜尋欄位"
-        aria-label="搜尋欄位"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <div className="pane-actions">
-        <button type="button" onClick={() => editor.openCalc(null, shown)}>
-          建立計算欄位…
+      <div className="pane-search">
+        <input
+          type="search"
+          placeholder="搜尋欄位"
+          aria-label="搜尋欄位"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <button
+          type="button"
+          className="pane-menu-button"
+          aria-label="資料窗格的選單"
+          aria-haspopup="menu"
+          title="建立計算欄位、參數、資料夾，編輯資料源，顯示隱藏的欄位"
+          onClick={(e) => setPaneMenu(e.currentTarget.getBoundingClientRect())}
+        >
+          <Icon name="caret" size={12} />
         </button>
-        <label className="hint">
-          <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> 顯示隱藏的欄位
-        </label>
+        {paneMenu && <PopupMenu anchor={paneMenu} items={paneItems} onClose={() => setPaneMenu(null)} />}
       </div>
       <div className="pane-section">維度</div>
       <ul className="fields">
@@ -532,16 +527,6 @@ export function DataPane({
           ))}
         {!term && <SpecialRow id={MEASURE_NAMES} label="Measure Names" measure={false} />}
       </ul>
-      {sets.length > 0 && (
-        <>
-          <div className="pane-section">集合</div>
-          <ul className="fields">
-            {sets.map((f) => (
-              <FieldRow key={f.id} field={f} datasource={shown} />
-            ))}
-          </ul>
-        </>
-      )}
       <div className="pane-section">量值</div>
       <ul className="fields">
         {measureFolders.map(({ folder, fields }) => (
@@ -564,6 +549,16 @@ export function DataPane({
         )}
         {!term && <SpecialRow id={MEASURE_VALUES} label="Measure Values" measure />}
       </ul>
+      {sets.length > 0 && (
+        <>
+          <div className="pane-section">集合</div>
+          <ul className="fields">
+            {sets.map((f) => (
+              <FieldRow key={f.id} field={f} datasource={shown} />
+            ))}
+          </ul>
+        </>
+      )}
       <div className="pane-section">
         參數
         <button type="button" className="link" title="建立參數" onClick={() => editor.openDialog({ kind: "parameter", parameter: null })}>

@@ -1,11 +1,14 @@
 // 桌面版的 dashboard 編輯器（Tableau Desktop 的儀表板）：工作表與物件的加入（並排或浮動）、版面配置、
 // 區塊的格式與大小、dashboard 的大小與背景、動作。畫面上直接以檢視器繪製，選取的區塊加上外框。
+// 排列與 Tableau Desktop 相同：左側的側欄有「dashboard」（裝置版面、大小、工作表、物件）與
+// 「版面配置」（選取項目的屬性、項目階層）兩個分頁，其餘是畫面；上下是共用的功能表列、工具列與分頁列。
 
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { caseState, DashboardView } from "../Dashboard";
 import type { Button, Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
 import { ActionsDialog } from "./ActionsDialog";
+import { addDatasource, saveDocument } from "../desktop";
 import { Modal } from "../Server";
 import { type RichRun, RichTextEditor, type RichToken, plainText } from "./RichText";
 import { editApi, type Outline } from "./api";
@@ -31,7 +34,20 @@ import {
   zoneLabel,
 } from "./dashboardModel";
 import { useEditHistory, useNotice } from "./history";
-import { CONTROL_OPTIONS } from "./Shelves";
+import { CONTROL_OPTIONS, SEPARATOR } from "./Shelves";
+import {
+  dataMenuItems,
+  fileMenu,
+  MenuBar,
+  type MenuDef,
+  serverMenu,
+  SheetTabs,
+  StatusBar,
+  ToolButton,
+  useCreateSheet,
+  useWorkspace,
+  windowMenu,
+} from "./Workspace";
 
 type Base = Omit<NewZone, "kind">;
 const EMPTY: Base = {
@@ -151,6 +167,10 @@ export function DashboardEditor({
   onClose: (dashboard: string | null) => void;
 }) {
   const [notice, notify] = useNotice();
+  const ws = useWorkspace();
+  const create = useCreateSheet((text) => notify(text, "error"));
+  // 左側的分頁：dashboard（加入工作表與物件）或版面配置（選取項目的屬性與項目階層）
+  const [sideTab, setSideTab] = useState<"dashboard" | "layout">("dashboard");
   const [outline, setOutline] = useState<Outline | null>(null);
   const history = useEditHistory<Dashboard>(
     `${workbook}/${id}`,
@@ -767,8 +787,7 @@ export function DashboardEditor({
   }
 
   const dashboardProps = (
-    <div className="zone-props">
-      <div className="prop-title">{layout ? `${DEVICE_NAMES[layout.device]}版面` : "dashboard"}</div>
+    <div className="zone-props dashboard-size">
       {layout ? (
         <label className="inline">
           大小
@@ -860,39 +879,78 @@ export function DashboardEditor({
           }}
         />
       </label>
-      <p className="hint">點選畫面上的區塊或版面配置中的項目以編輯它。</p>
     </div>
   );
 
+  const current = { kind: "dashboard" as const, id: dashboard.id };
+  const done = () => onClose(dashboard.id);
+  const duplicate = () =>
+    void editApi
+      .duplicateDashboard(workbook, dashboard.id)
+      .then((created) => {
+        onChanged();
+        onOpen(created.id);
+      })
+      .catch((e: Error) => notify(e.message, "error"));
+  const showLayout = (kind: Device | "default") => {
+    setDevice(kind);
+    setSelected(null);
+  };
+  const addLayout = (kind: Device) => {
+    history.apply((d) => ({ ...d, layouts: [...(d.layouts ?? []), newDeviceLayout(d, kind)] }));
+    showLayout(kind);
+  };
+  const removeLayout = () => {
+    if (!layout || !window.confirm(`刪除${DEVICE_NAMES[layout.device]}版面？`)) return;
+    const removed = layout.device;
+    showLayout("default");
+    history.apply((d) => ({ ...d, layouts: (d.layouts ?? []).filter((l) => l.device !== removed) }));
+  };
+  const missingLayouts = (["desktop", "tablet", "phone"] as Device[]).filter((kind) => !(full?.layouts ?? []).some((l) => l.device === kind));
+  const menus: MenuDef[] = [
+    fileMenu(ws),
+    { label: "資料", items: dataMenuItems(ws) },
+    { label: "工作表", items: [{ label: "新增工作表", action: () => create("worksheet") }] },
+    {
+      label: "dashboard",
+      items: [
+        { label: "新增 dashboard", action: () => create("dashboard", { size: dashboard.size }) },
+        { label: "複製", action: duplicate },
+        SEPARATOR,
+        { label: "動作…", action: () => setActionsOpen(true) },
+        // 對齊用的格線；顯示時拖曳浮動區塊會貼齊格線（Tableau 的「dashboard＞顯示格線」）
+        { label: "顯示格線", checked: grid.shown, action: () => setGrid({ ...grid, shown: !grid.shown }) },
+        {
+          label: "裝置版面",
+          children: [
+            { label: "預設", checked: !layout, action: () => showLayout("default") },
+            ...(full?.layouts ?? []).map((l) => ({ label: DEVICE_NAMES[l.device], checked: layout?.device === l.device, action: () => showLayout(l.device) })),
+            ...(missingLayouts.length > 0 || layout ? [SEPARATOR] : []),
+            ...missingLayouts.map((kind) => ({ label: `新增${DEVICE_NAMES[kind]}版面`, action: () => addLayout(kind) })),
+            ...(layout ? [{ label: `刪除${DEVICE_NAMES[layout.device]}版面`, action: removeLayout }] : []),
+          ],
+        },
+      ],
+    },
+    { label: "Story", items: [{ label: "新增 Story", action: () => create("story") }] },
+    serverMenu(ws),
+    windowMenu(ws, current, done),
+  ];
+
   return (
-    <div className="dash-editor" data-dashboard-editor={dashboard.id} data-saving={history.pending > 0 ? "true" : "false"}>
-      <div className="editor-toolbar" role="toolbar" aria-label="dashboard 編輯">
-        <button type="button" onClick={history.undo} disabled={!history.canUndo} title="復原（Ctrl+Z）">
-          ↶ 復原
-        </button>
-        <button type="button" onClick={history.redo} disabled={!history.canRedo} title="重做（Ctrl+Y）">
-          ↷ 重做
-        </button>
+    <div className="dash-editor workspace" data-dashboard-editor={dashboard.id} data-saving={history.pending > 0 ? "true" : "false"}>
+      <MenuBar menus={menus} saving={history.pending > 0} onDone={done} />
+      <div className="ws-toolbar" role="toolbar" aria-label="dashboard 編輯">
+        <ToolButton icon="undo" label="復原" title="復原（Ctrl+Z）" disabled={!history.canUndo} onClick={history.undo} />
+        <ToolButton icon="redo" label="重做" title="重做（Ctrl+Y）" disabled={!history.canRedo} onClick={history.redo} />
         <span className="sep" />
-        <label className="inline">
-          dashboard
-          <input
-            key={`${dashboard.id}:${dashboard.name}`}
-            aria-label="dashboard 名稱"
-            defaultValue={dashboard.name}
-            onBlur={(e) => {
-              const name = e.target.value.trim();
-              if (name && name !== dashboard.name) apply((d) => ({ ...d, name }));
-              else e.target.value = dashboard.name;
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-          />
-        </label>
-        <button type="button" onClick={() => setActionsOpen(true)}>
-          動作…
-        </button>
+        <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(workbook, false)} />
+        <span className="sep" />
+        <ToolButton icon="datasource-add" label="新增資料源…" onClick={() => void addDatasource(workbook, ws.navigate)} />
+        <span className="sep" />
+        <ToolButton icon="dashboard-add" label="新增 dashboard" onClick={() => create("dashboard", { size: dashboard.size })} />
+        <ToolButton icon="duplicate" label="複製" title="複製這個 dashboard" onClick={duplicate} />
+        <span className="sep" />
         <label className="inline">
           縮放
           <select aria-label="縮放" value={String(zoom)} onChange={(e) => setZoom(e.target.value === "fit" ? "fit" : Number(e.target.value))}>
@@ -902,33 +960,22 @@ export function DashboardEditor({
             <option value="1">100%</option>
           </select>
         </label>
-        <label className="inline" title="顯示對齊用的格線；顯示時拖曳浮動區塊會貼齊格線（Tableau 的「dashboard＞顯示格線」）">
-          <input type="checkbox" aria-label="顯示格線" checked={grid.shown} onChange={(e) => setGrid({ ...grid, shown: e.target.checked })} /> 格線
-        </label>
-        {grid.shown && (
-          <label className="inline" title="格線的間距（像素，Tableau 的「格線選項」）">
-            <input
-              type="number"
-              min={4}
-              max={200}
-              aria-label="格線大小"
-              className="narrow-number"
-              value={grid.size}
-              onChange={(e) => setGrid({ ...grid, size: Math.max(4, Math.min(200, Math.round(Number(e.target.value)) || 10)) })}
-            />{" "}
-            px
-          </label>
-        )}
-        <label className="inline">
-          版面
-          <select
-            aria-label="裝置版面"
-            value={layout ? device : "default"}
-            onChange={(e) => {
-              setDevice(e.target.value as Device | "default");
-              setSelected(null);
-            }}
-          >
+      </div>
+      <div className="ws-body">
+      <aside className="dash-side side-pane" aria-label="dashboard 的物件">
+        <div className="side-tabs" role="tablist" aria-label="側欄">
+          <button type="button" role="tab" aria-selected={sideTab === "dashboard"} className={sideTab === "dashboard" ? "active" : undefined} onClick={() => setSideTab("dashboard")}>
+            dashboard
+          </button>
+          <button type="button" role="tab" aria-selected={sideTab === "layout"} className={sideTab === "layout" ? "active" : undefined} onClick={() => setSideTab("layout")}>
+            版面配置
+          </button>
+        </div>
+        {sideTab === "dashboard" && (
+        <div className="side-body" role="tabpanel" aria-label="dashboard">
+        <div className="pane-section">裝置版面</div>
+        <div className="device-layouts">
+          <select aria-label="裝置版面" value={layout ? device : "default"} onChange={(e) => showLayout(e.target.value as Device | "default")}>
             <option value="default">預設</option>
             {(full?.layouts ?? []).map((l) => (
               <option key={l.device} value={l.device}>
@@ -936,95 +983,30 @@ export function DashboardEditor({
               </option>
             ))}
           </select>
-        </label>
-        {layout ? (
-          <button
-            type="button"
-            className="danger"
-            onClick={() => {
-              if (!window.confirm(`刪除${DEVICE_NAMES[layout.device]}版面？`)) return;
-              const removed = layout.device;
-              setDevice("default");
-              setSelected(null);
-              history.apply((d) => ({ ...d, layouts: (d.layouts ?? []).filter((l) => l.device !== removed) }));
-            }}
-          >
-            刪除{DEVICE_NAMES[layout.device]}版面
-          </button>
-        ) : (
-          <select
-            aria-label="新增裝置版面"
-            value=""
-            onChange={(e) => {
-              const kind = e.target.value as Device;
-              if (!kind) return;
-              history.apply((d) => ({ ...d, layouts: [...(d.layouts ?? []), newDeviceLayout(d, kind)] }));
-              setDevice(kind);
-              setSelected(null);
-            }}
-          >
-            <option value="">新增裝置版面…</option>
-            {(["desktop", "tablet", "phone"] as Device[])
-              .filter((kind) => !(full?.layouts ?? []).some((l) => l.device === kind))
-              .map((kind) => (
+          {layout ? (
+            <button type="button" className="danger" onClick={removeLayout}>
+              刪除{DEVICE_NAMES[layout.device]}版面
+            </button>
+          ) : (
+            <select
+              aria-label="新增裝置版面"
+              value=""
+              onChange={(e) => {
+                const kind = e.target.value as Device;
+                if (kind) addLayout(kind);
+              }}
+            >
+              <option value="">新增裝置版面…</option>
+              {missingLayouts.map((kind) => (
                 <option key={kind} value={kind}>
                   {DEVICE_NAMES[kind]}
                 </option>
               ))}
-          </select>
-        )}
-        <span className="sep" />
-        <button
-          type="button"
-          onClick={() =>
-            void editApi
-              .addDashboard(workbook, undefined, dashboard.size.width, dashboard.size.height)
-              .then((created) => {
-                onChanged();
-                onOpen(created.id);
-              })
-              .catch((e: Error) => notify(e.message, "error"))
-          }
-        >
-          新增 dashboard
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            void editApi
-              .duplicateDashboard(workbook, dashboard.id)
-              .then((created) => {
-                onChanged();
-                onOpen(created.id);
-              })
-              .catch((e: Error) => notify(e.message, "error"))
-          }
-        >
-          複製
-        </button>
-        <button
-          type="button"
-          className="danger"
-          onClick={() => {
-            if (!window.confirm(`刪除 dashboard「${dashboard.name}」？`)) return;
-            void editApi
-              .removeDashboard(workbook, dashboard.id)
-              .then(() => {
-                onChanged();
-                onClose(null);
-              })
-              .catch((e: Error) => notify(e.message, "error"));
-          }}
-        >
-          刪除
-        </button>
-        <span className="spacer" />
-        {history.pending > 0 && <span className="hint">儲存中…</span>}
-        <button type="button" className="primary" onClick={() => onClose(dashboard.id)}>
-          完成
-        </button>
-      </div>
-      <aside className="dash-side" aria-label="dashboard 的物件">
+            </select>
+          )}
+        </div>
+        <div className="pane-section">大小</div>
+        {dashboardProps}
         <div className="pane-section">工作表</div>
         <ul className="fields">
           {outline.worksheets.map((w) => (
@@ -1134,9 +1116,14 @@ export function DashboardEditor({
             匯出按鈕
           </button>
         </div>
-        <label className="inline hint">
-          <input type="checkbox" checked={floating} onChange={(e) => setFloating(e.target.checked)} /> 以浮動方式加入
-        </label>
+        <div className="placement" role="group" aria-label="新物件的放置方式">
+          <button type="button" aria-pressed={!floating} className={floating ? undefined : "active"} title="新的工作表與物件放進並排的容器" onClick={() => setFloating(false)}>
+            並排
+          </button>
+          <button type="button" aria-pressed={floating} className={floating ? "active" : undefined} title="新的工作表與物件以浮動方式加入" onClick={() => setFloating(true)}>
+            浮動
+          </button>
+        </div>
         <div className="pane-section">篩選、參數與圖例</div>
         <select aria-label="控制項的工作表" value={controlTarget?.id ?? ""} onChange={(e) => setControlSheet(e.target.value)}>
           {outline.worksheets.map((w) => (
@@ -1204,7 +1191,12 @@ export function DashboardEditor({
           ))}
         </div>
         {controlTarget && controlTarget.filters.length === 0 && <p className="hint">這張工作表沒有篩選；先在工作表上加入篩選。</p>}
-        <div className="pane-section">版面配置</div>
+        </div>
+        )}
+        {sideTab === "layout" && (
+        <div className="side-body" role="tabpanel" aria-label="版面配置">
+        <div className="dash-props">{zoneProps ?? <p className="hint">點選畫面上的區塊或下面的項目以編輯它。</p>}</div>
+        <div className="pane-section">項目階層</div>
         <ul className="layout-tree" aria-label="版面配置">
           {(() => {
             const items: React.ReactNode[] = [];
@@ -1225,6 +1217,28 @@ export function DashboardEditor({
             return items;
           })()}
         </ul>
+        <div className="pane-section">格線</div>
+        <div className="grid-options">
+          <label className="inline" title="顯示對齊用的格線；顯示時拖曳浮動區塊會貼齊格線（Tableau 的「dashboard＞顯示格線」）">
+            <input type="checkbox" aria-label="顯示格線" checked={grid.shown} onChange={(e) => setGrid({ ...grid, shown: e.target.checked })} /> 顯示格線
+          </label>
+          {grid.shown && (
+            <label className="inline" title="格線的間距（像素，Tableau 的「格線選項」）">
+              <input
+                type="number"
+                min={4}
+                max={200}
+                aria-label="格線大小"
+                className="narrow-number"
+                value={grid.size}
+                onChange={(e) => setGrid({ ...grid, size: Math.max(4, Math.min(200, Math.round(Number(e.target.value)) || 10)) })}
+              />{" "}
+              px
+            </label>
+          )}
+        </div>
+        </div>
+        )}
       </aside>
       <div className="dash-canvas" ref={canvasRef} onClick={() => setSelected(null)}>
         <div className="dash-scaler" style={{ width: dashboard.size.width * scale, height: dashboard.size.height * scale }}>
@@ -1294,9 +1308,21 @@ export function DashboardEditor({
           </div>
         </div>
       </div>
-      <aside className="dash-props" aria-label="屬性">
-        {zoneProps ?? dashboardProps}
-      </aside>
+      </div>
+      <SheetTabs
+        current={current}
+        live={{ name: full?.name ?? dashboard.name }}
+        apply={(change) => apply((d) => change(d as unknown as Record<string, unknown>) as unknown as Dashboard)}
+        dashboardSize={dashboard.size}
+        onError={(text) => notify(text, "error")}
+      />
+      <StatusBar>
+        <span>
+          {layout ? `${DEVICE_NAMES[layout.device]}版面　` : ""}
+          {dashboard.size.width} × {dashboard.size.height}
+        </span>
+        <span>縮放 {Math.round(scale * 100)}%</span>
+      </StatusBar>
       <datalist id="dash-images">
         {outline.images.map((image) => (
           <option key={image} value={image} />

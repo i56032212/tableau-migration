@@ -17,6 +17,16 @@ from typing import Any
 
 import pytest
 import uvicorn
+from editor_ui import (
+    current_tab,
+    menu_item,
+    menubar,
+    pane_menu,
+    sheet_tab,
+    side_tab,
+    tab_menu,
+    tool,
+)
 
 from tmig_service.background import free_port
 from tmig_service.desktop import TOKEN_HEADER, create_desktop_app
@@ -141,12 +151,12 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         assert any(k.startswith("avg(f_sales)#tc_") for k in table("ws_sales_by_region")["keys"])
 
         # 復原兩次、重做一次
-        page.get_by_role("button", name="↶ 復原").click()
+        tool(page, "復原").click()
         settle(page)
-        page.get_by_role("button", name="↶ 復原").click()
+        tool(page, "復原").click()
         settle(page)
         assert pills(page, "columns") == ["SUM(Sales)"]
-        page.get_by_role("button", name="↷ 重做").click()
+        tool(page, "重做").click()
         settle(page)
         assert pills(page, "columns") == ["AVG(Sales)"]
         assert "avg(f_sales)" in table("ws_sales_by_region")["keys"]
@@ -167,7 +177,7 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         assert {row[segment] for row in data["raw"]} == {"Consumer", "Home Office"}
 
         # 計算欄位：建立後放到色彩
-        page.get_by_role("button", name="建立計算欄位…").click()
+        pane_menu(page, "建立計算欄位…")
         page.get_by_label("計算欄位名稱").fill("Profit Ratio")
         page.get_by_label("公式").fill("SUM([Profit]) / SUM([Sales])")
         expect(page.locator(".calc-status")).to_contain_text("計算有效")
@@ -179,7 +189,7 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         assert pills(page, "marks")[0] == "Profit Ratio"
 
         # 新增工作表：連按兩下加入欄位、改名
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         page.locator('.data-pane [data-field="f_category"]').dblclick()
@@ -188,11 +198,12 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         settle(page)
         assert (pills(page, "rows"), pills(page, "columns")) == (["Category"], ["SUM(Sales)"])
         assert len(table("ws_1")["rows"]) == 3
+        current_tab(page).dblclick()
         name = page.get_by_label("工作表名稱")
         name.fill("類別銷售")
         name.press("Enter")
         settle(page)
-        expect(page.locator(".toolbar select")).to_contain_text("工作表：類別銷售")
+        expect(sheet_tab(page, "類別銷售")).to_have_attribute("aria-selected", "true")
 
         # 雙軸：Profit 與 Sales 重疊，Measure Names 放到色彩
         page.locator('.data-pane [data-field="f_profit"]').drag_to(
@@ -208,7 +219,7 @@ def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
         assert sheet["marks"]["color"]["field"] == "measure_names"
 
         # 工作表的格式：列的格線、背景
-        page.get_by_role("button", name="格式…").click()
+        menubar(page, "格式", "格式…")
         page.locator(".format-dialog fieldset", has_text="列").get_by_label(
             "格線", exact=True
         ).uncheck()
@@ -271,7 +282,7 @@ def test_sort_table_calc_wildcard_and_annotations(engine: str) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         page.locator('.data-pane [data-field="f_region"]').dblclick()
@@ -506,7 +517,7 @@ def test_rich_text_title_tooltip_and_labels(engine: str) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         page.locator('.data-pane [data-field="f_region"]').dblclick()
@@ -529,7 +540,7 @@ def test_rich_text_title_tooltip_and_labels(engine: str) -> None:
         }
 
         # 標題：粗體的文字，後面插入 SUM(Sales) 的值
-        page.get_by_role("button", name="標題…").click()
+        menubar(page, "工作表", "標題…")
         title = page.get_by_role("textbox", name="標題", exact=True)
         title.click()
         page.keyboard.type("各區業績：")
@@ -599,9 +610,11 @@ def test_rich_text_title_tooltip_and_labels(engine: str) -> None:
         # dashboard 的文字物件：粗體、16pt，後面插入參數的值
         page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
         page.wait_for_selector(".dash-editor .dashboard [data-zone] svg", timeout=30000)
-        page.get_by_label("以浮動方式加入").check()
+        side_tab(page, "dashboard")
+        page.get_by_role("button", name="浮動", exact=True).click()
         page.locator(".object-buttons").get_by_role("button", name="文字").click()
         page.wait_for_selector('[data-saving="false"]')
+        side_tab(page, "版面配置")
         page.locator(".dash-props").get_by_role("button", name="編輯文字…").click()
         body = page.get_by_role("textbox", name="文字物件的內容")
         tools = page.get_by_role("toolbar", name="文字物件的內容的格式")
@@ -691,13 +704,13 @@ def test_edit_blend_relationships(engine: str, tmp_path: Path) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         page.locator('.data-pane [data-field="f_region"]').dblclick()
         settle(page)
         # 資料窗格切到 Targets，把 Target 放到欄：混合（以同名的 Region 連結）
-        page.get_by_label("資料源").select_option(secondary)
+        page.get_by_label("資料源", exact=True).select_option(secondary)
         page.locator(f'.data-pane [data-field="{fields["Target"]}"]').dblclick()
         settle(page)
         (blend,) = sheet()["blends"]
@@ -764,12 +777,14 @@ def test_edit_dashboard_and_story(engine: str) -> None:
                     continue
             raise KeyError(zone_id)
 
+        side_tab(page, "版面配置")
         page.locator('[data-tree-zone="z12"]').click()
         relevant = page.locator(".dash-props").get_by_label("只顯示相關的值")
         relevant.click()
         expect(relevant).to_be_checked()
         settle(page)
         assert find(board()["zones"], "z12")["relevant"] is True
+        side_tab(page, "版面配置")
         page.locator('[data-tree-zone="z11"]').click()
         evenly = page.locator(".dash-props").get_by_label("平均分配內容")
         evenly.click()
@@ -781,6 +796,7 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         assert max(heights) - min(heights) <= 1 and heights[0] > 96, heights
 
         # 工作表區塊的「顯示說明」：自動產生的說明顯示在工作表的下方
+        side_tab(page, "版面配置")
         page.locator('[data-tree-zone="z9"]').click()
         shown = page.locator(".dash-props").get_by_label("顯示說明")
         shown.click()
@@ -803,6 +819,7 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         expect(page.locator(".dash-overlay.with-grid")).to_have_count(0)
 
         # 選取工作表區塊後移除（版面配置與畫面都選得到）
+        side_tab(page, "版面配置")
         page.locator('[data-tree-zone="z10"]').click()
         expect(page.locator('[data-zone-props="z10"]')).to_be_visible()
         page.locator(".dash-props").get_by_role("button", name="移除").click()
@@ -810,11 +827,13 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         assert "z10" not in zone_ids(board()["zones"])
 
         # 以浮動方式加入文字，拖曳移動
-        page.get_by_label("以浮動方式加入").check()
+        side_tab(page, "dashboard")
+        page.get_by_role("button", name="浮動", exact=True).click()
         page.locator(".object-buttons").get_by_role("button", name="文字").click()
         settle(page)
         floating = board()["zones"][1]
         assert floating["kind"] == "text"
+        side_tab(page, "版面配置")
         page.get_by_label("文字", exact=True).fill("說明")
         page.locator(".dash-props .prop-title").click()
         settle(page)
@@ -830,7 +849,8 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         assert moved["text"] == "說明" and moved["x"] > floating["x"] and moved["y"] > floating["y"]
 
         # 工作表拖到區塊上：並排加入（分割那個區塊）
-        page.get_by_label("以浮動方式加入").uncheck()
+        side_tab(page, "dashboard")
+        page.get_by_role("button", name="並排", exact=True).click()
         page.locator('.dash-side [data-sheet="ws_sub_category_profit"]').drag_to(
             page.locator('[data-overlay="z9"]')
         )
@@ -840,15 +860,15 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(4)
 
         # 復原（加入的工作表）再重做
-        page.get_by_role("button", name="↶ 復原").click()
+        tool(page, "復原").click()
         settle(page)
         expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(3)
-        page.get_by_role("button", name="↷ 重做").click()
+        tool(page, "重做").click()
         settle(page)
         expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(4)
 
         # 動作：點選 Sales by Region 的標記篩選 Region Share by Year
-        page.get_by_role("button", name="動作…").click()
+        menubar(page, "dashboard", "動作…")
         page.get_by_role("button", name="新增動作").click()
         page.get_by_label("動作名稱").fill("依區域篩選")
         page.locator('[aria-label="來源工作表"] label', has_text="Sales by Region").locator(
@@ -862,6 +882,7 @@ def test_edit_dashboard_and_story(engine: str) -> None:
         page.locator(".modal .dialog-actions").get_by_role("button", name="關閉").click()
 
         # dashboard 的大小
+        side_tab(page, "dashboard")
         width = page.get_by_label("dashboard 的寬度")
         page.locator(".dash-canvas").click(position={"x": 5, "y": 5})
         width.fill("1300")
@@ -1035,6 +1056,7 @@ def test_url_action_loads_the_web_object(engine: str) -> None:
         source = next(
             z for z in zones(board()["zones"]) if z.get("worksheet") == "ws_sales_by_region"
         )
+        side_tab(page, "版面配置")
         page.locator(f'[data-tree-zone="{source["id"]}"]').click()
         # （勾選的狀態依伺服器上的動作：建立之後才變成勾選）
         page.get_by_label("當作篩選器使用").click()
@@ -1052,7 +1074,8 @@ def test_url_action_loads_the_web_object(engine: str) -> None:
         assert call(engine, "/api/edit/demo/outline")["actions"] == []
 
         # 匯出按鈕（Tableau 的「下載」物件）：格式改成 PowerPoint，再改成顯示／隱藏區塊，最後移除
-        page.get_by_label("以浮動方式加入").check()
+        side_tab(page, "dashboard")
+        page.get_by_role("button", name="浮動", exact=True).click()
         page.locator(".object-buttons").get_by_role("button", name="匯出按鈕").click()
         settle(page)
 
@@ -1060,6 +1083,7 @@ def test_url_action_loads_the_web_object(engine: str) -> None:
             return next(z for z in board()["zones"] if z["kind"] == "button")["button"]
 
         assert (button()["action"], button()["export"]) == ("export", "pdf")
+        side_tab(page, "版面配置")
         page.get_by_label("匯出的格式").select_option("powerpoint")
         settle(page)
         assert button()["export"] == "powerpoint"
@@ -1072,8 +1096,10 @@ def test_url_action_loads_the_web_object(engine: str) -> None:
         assert not any(z["kind"] == "button" for z in board()["zones"])
 
         # 以浮動方式加入網頁物件，網址留空白（由網址動作載入）
+        side_tab(page, "dashboard")
         page.locator(".object-buttons").get_by_role("button", name="網頁").click()
         settle(page)
+        side_tab(page, "版面配置")
         url = page.locator(".dash-props").get_by_label("網址")
         url.fill("")
         page.locator(".dash-props .prop-title").click()
@@ -1099,7 +1125,7 @@ def test_url_action_loads_the_web_object(engine: str) -> None:
         assert web["x"] > size["width"] / 2 and web["y"] > size["height"] / 3
 
         # 網址動作：選取 Sales by Region 的標記時，把區域代入網址，載入這個網頁物件
-        page.get_by_role("button", name="動作…").click()
+        menubar(page, "dashboard", "動作…")
         page.locator("#new-action-kind").select_option("url")
         page.get_by_role("button", name="新增動作").click()
         page.get_by_label("動作名稱").fill("開啟區域頁")
@@ -1238,6 +1264,7 @@ def test_pages_and_disaggregation(engine: str) -> None:
         assert str(sheet()["page"]) == years[1]
 
         # 彙總量值關閉：SUM(Sales) 變成不彙總的 Sales
+        side_tab(page, "分析")
         page.get_by_label("彙總量值").uncheck()
         settle(page)
         saved = sheet()
@@ -1246,6 +1273,7 @@ def test_pages_and_disaggregation(engine: str) -> None:
         page.get_by_label("彙總量值").check()
         settle(page)
         assert sheet()["columns"][0]["agg"] == "sum"
+        side_tab(page, "資料")
 
         # 檢視器：頁面控制項切換頁
         page.goto(f"{engine}/w/demo/s/ws_sales_by_region")
@@ -1288,6 +1316,7 @@ def test_forecast_and_clusters_in_editor(engine: str) -> None:
         before = render("ws_monthly_profit")["rows"]
         page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
         settle(page)
+        side_tab(page, "分析")
         page.get_by_role("button", name="＋ 預測…").click()
         dialog = page.locator(".forecast-dialog")
         dialog.get_by_label("正好").check()
@@ -1315,6 +1344,7 @@ def test_forecast_and_clusters_in_editor(engine: str) -> None:
         # 叢集：Sub-Category 依檢視中的量值（SUM(Profit) 等）分成 3 群
         page.goto(f"{engine}/w/demo/edit/ws_sub_category_profit")
         settle(page)
+        side_tab(page, "分析")
         page.get_by_role("button", name="＋ 叢集…").click()
         dialog = page.locator(".cluster-dialog")
         dialog.get_by_label("自動決定叢集數").uncheck()
@@ -1621,6 +1651,7 @@ def test_device_layouts_in_dashboard_editor(engine: str) -> None:
         first = next(
             z for z in phone["zones"][0]["children"][0]["children"] if z["kind"] == "worksheet"
         )
+        side_tab(page, "版面配置")
         page.locator(f'[data-tree-zone="{first["id"]}"]').click()
         expect(page.locator(f'[data-zone-props="{first["id"]}"]')).to_be_visible()
         page.locator(".dash-props").get_by_role("button", name="移除").click()
@@ -1638,6 +1669,7 @@ def test_device_layouts_in_dashboard_editor(engine: str) -> None:
         )
         phone_page.close()
 
+        side_tab(page, "dashboard")
         page.get_by_role("button", name="刪除手機版面").click()
         settle(page)
         assert board()["layouts"] == []
@@ -1918,7 +1950,7 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         page.locator('.data-pane [data-field="f_region"]').dblclick()
@@ -1927,7 +1959,7 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         settle(page)
 
         # 總計：欄總計放在上方，Sales 的總計改為各標記的平均
-        page.get_by_role("button", name="總計…").click()
+        menubar(page, "分析", "總計", "總計…")
         dialog = page.locator(".totals-dialog")
         dialog.get_by_label("顯示欄總計").check()
         dialog.get_by_label("欄總計移至頂端").check()
@@ -1948,9 +1980,10 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         assert rows[0]["c1"] == pytest.approx(sum(marks) / len(marks))
 
         # 百分比：占整個表的比例（總計使用改回自動：總計是 100%）
-        page.get_by_role("button", name="總計…").click()
+        menubar(page, "分析", "總計", "總計…")
         page.locator(".totals-dialog").get_by_label("SUM(Sales)的總計使用").select_option("")
         confirm(page, ".totals-dialog")
+        side_tab(page, "分析")
         page.get_by_label("百分比", exact=True).select_option("table")
         settle(page)
         assert sheet()["percentages"] == "table"
@@ -1972,6 +2005,7 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         page.get_by_label("下拉線", exact=True).select_option("")
         settle(page)
         assert sheet()["drop_lines"] is None
+        side_tab(page, "資料")
 
         # 個別成員的顏色：Region 放到色彩，East 指定紅色
         page.locator('.data-pane [data-field="f_region"]').drag_to(
@@ -2011,6 +2045,7 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         # 線條類型：線、階梯
         page.get_by_label("標記類型").select_option("line")
         settle(page)
+        page.locator(".mark-buttons").get_by_role("button", name="路徑…").click()
         page.get_by_label("線條類型").select_option("step")
         settle(page)
         assert sheet()["marks"]["line_type"] == "step"
@@ -2067,14 +2102,14 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         assert [u["field"] for u in sheet()["rows"]] == ["f_region"]
 
         # 說明：顯示說明（自動產生的文字），再改成自訂的文字
-        page.get_by_role("button", name="說明…").click()
+        menubar(page, "工作表", "說明…")
         page.locator(".caption-dialog").get_by_label("顯示說明").check()
         confirm(page, ".caption-dialog")
         assert sheet()["caption_shown"] is True and sheet()["caption"] == []
         note = page.locator(".editor .worksheet-caption")
         expect(note).to_contain_text("每個 Region 的 Sales")
         expect(note).to_contain_text("檢視依 Category 篩選")
-        page.get_by_role("button", name="說明…").click()
+        menubar(page, "工作表", "說明…")
         page.get_by_role("textbox", name="說明的文字").click()
         page.keyboard.type("各區的業績（家具）")
         confirm(page, ".caption-dialog")
@@ -2092,11 +2127,11 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         urllib.request.urlopen(request, timeout=60).close()
         page.reload()
         settle(page)
-        page.get_by_role("button", name="複製格式").click()
+        menubar(page, "格式", "複製格式")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
         before = call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
-        page.get_by_role("button", name="貼上格式").click()
+        menubar(page, "格式", "貼上格式")
         page.wait_for_timeout(300)
         settle(page)
         after = call(engine, "/api/edit/demo/worksheets/ws_sales_by_region")["worksheet"]
@@ -2128,7 +2163,7 @@ def test_totals_percentages_line_type_colors_and_sheet_controls(engine: str) -> 
         assert sum(shares) == pytest.approx(1.0)
 
         # 格式：儲存格大小、對齊，並套用到所有工作表（整份報表一致）
-        page.get_by_role("button", name="格式…").click()
+        menubar(page, "格式", "格式…")
         page.get_by_label("列的儲存格大小").fill("28")
         page.get_by_label("儲存格的水平對齊").select_option("center")
         page.get_by_label("標題的垂直對齊").select_option("center")
@@ -2397,7 +2432,7 @@ def test_stack_color_effects_labels_axis_and_custom_format(engine: str) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         for field in ("f_category", "f_sales"):
@@ -2411,6 +2446,7 @@ def test_stack_color_effects_labels_axis_and_custom_format(engine: str) -> None:
         # 堆疊標記：關閉後長條不堆疊（stack: null）
         measure = "x" if spec()["encoding"]["x"].get("type") == "quantitative" else "y"
         assert "stack" not in spec()["encoding"][measure]
+        side_tab(page, "分析")
         page.get_by_label("堆疊標記", exact=True).select_option("off")
         settle(page)
         assert sheet()["stack"] == "off"
@@ -2418,22 +2454,25 @@ def test_stack_color_effects_labels_axis_and_custom_format(engine: str) -> None:
         page.get_by_label("堆疊標記", exact=True).select_option("")
         settle(page)
         assert sheet()["stack"] is None
+        side_tab(page, "資料")
 
         # 色彩上的多個欄位：Segment 放到詳細資料，再從膠囊選單「也用於色彩」
         page.locator('.data-pane [data-field="f_segment"]').drag_to(
             page.locator('[data-drop="marks.detail"]')
         )
         settle(page)
-        page.locator('[data-drop="marks.detail"] .pill').click()
+        page.locator('.mark-pills [data-slot="detail"] .pill').click()
         menu(page, "也用於色彩（組合著色）")
         settle(page)
         assert [u["field"] for u in sheet()["marks"]["color_more"]] == ["f_segment"]
-        expect(page.locator('[data-drop="marks.detail"] .pill-slot.also-color')).to_have_count(1)
+        expect(page.locator('.mark-pills .pill-slot.also-color[data-slot="detail"]')).to_have_count(
+            1
+        )
         color = spec()["encoding"]["color"]
         assert color["field"] == "__color1" and color["title"] == "Region, Segment"
         assert all(", " in member for member in color["scale"]["domain"])
         # 再選一次即拿掉
-        page.locator('[data-drop="marks.detail"] .pill').click()
+        page.locator('.mark-pills [data-slot="detail"] .pill').click()
         menu(page, "也用於色彩（組合著色）")
         settle(page)
         assert sheet()["marks"]["color_more"] == []
@@ -2551,7 +2590,7 @@ def test_filter_tabs_control_options_missing_values_and_view_data(engine: str) -
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         for field in ("f_region", "f_sales"):
@@ -2573,7 +2612,7 @@ def test_filter_tabs_control_options_missing_values_and_view_data(engine: str) -
         assert 0 < len(kept) < 4
 
         # 格式：顯示空的列與 Null 值的文字——被濾掉的地區仍有標題，儲存格顯示「—」
-        page.get_by_role("button", name="格式…").click()
+        menubar(page, "格式", "格式…")
         dialog = page.locator(".format-dialog")
         dialog.get_by_label("顯示空的列").check()
         dialog.get_by_label("Null 值的文字").fill("—")
@@ -2592,7 +2631,7 @@ def test_filter_tabs_control_options_missing_values_and_view_data(engine: str) -
         )
 
         # 檢視資料：摘要是每個標記一列，完整資料是基礎資料列
-        page.get_by_role("button", name="檢視資料…").click()
+        menubar(page, "分析", "檢視資料…")
         dialog = page.get_by_role("dialog")
         dialog.locator(".data-preview tbody tr").nth(3).wait_for()
         assert dialog.locator(".data-preview tbody tr").count() == 4
@@ -2715,7 +2754,7 @@ def test_toolbar_sort_manual_drag_hidden_sheet_and_crosstab(engine: str) -> None
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         for field in ("f_region", "f_sales"):
@@ -2725,16 +2764,16 @@ def test_toolbar_sort_manual_drag_hidden_sheet_and_crosstab(engine: str) -> None
         assert natural == sorted(natural)
 
         # 工具列的排序：Region 依 SUM(Sales) 由大到小、由小到大，再清除
-        page.get_by_role("button", name="遞減排序").click()
+        tool(page, "遞減排序").click()
         settle(page)
         sort = sheet()["sorts"][0]
         assert (sort["field"], sort["kind"], sort["order"]) == ("f_region", "by_field", "desc")
         assert sort["by"]["field"] == "f_sales" and sort["nested"] is False
         descending = regions()
-        page.get_by_role("button", name="遞增排序").click()
+        tool(page, "遞增排序").click()
         settle(page)
         assert regions() == descending[::-1]
-        page.get_by_role("button", name="清除排序").click()
+        menubar(page, "工作表", "清除", "排序")
         settle(page)
         assert sheet()["sorts"] == [] and regions() == natural
 
@@ -2754,19 +2793,22 @@ def test_toolbar_sort_manual_drag_hidden_sheet_and_crosstab(engine: str) -> None
         assert sheet()["sorts"][0]["manual_values"] == expected and regions() == expected
 
         # 隱藏工作表與分頁顏色
-        page.get_by_label("隱藏工作表").check()
+        tab_menu(page, current_tab(page), "隱藏工作表")
         settle(page)
-        page.get_by_label("分頁顏色").fill("#ff8800")
+        tab_menu(page, current_tab(page), "分頁顏色…")
+        color = page.get_by_role("dialog", name="分頁顏色")
+        color.get_by_label("分頁顏色").fill("#ff8800")
+        color.get_by_role("button", name="確定").click()
         settle(page)
         page.wait_for_timeout(700)
         saved = sheet()
         assert (saved["hidden"], saved["tab_color"]) == (True, "#ff8800")
-        option = page.locator("select.view-select option", has_text="工作表 1")
-        if option.count():
-            assert "（隱藏）" in (option.first.text_content() or "")
+        # 分頁列：隱藏的工作表以斜體標示，提示文字註明（隱藏）
+        expect(current_tab(page)).to_have_class(re.compile(r"\bhidden-sheet\b"))
+        assert "（隱藏）" in (current_tab(page).get_attribute("title") or "")
 
         # 複製成交叉資料表：開啟新的工作表（文字表）
-        page.get_by_role("button", name="複製成交叉資料表").click()
+        menubar(page, "工作表", "複製成交叉資料表")
         page.wait_for_url(re.compile(r"/w/demo/edit/ws_1_"))
         settle(page)
         copy_id = page.url.rsplit("/", 1)[-1].split("?")[0]
@@ -2839,7 +2881,7 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
         settle(page)
-        page.get_by_role("button", name="新增工作表").click()
+        tool(page, "新增工作表").click()
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         page.wait_for_selector(".editor-canvas .placeholder")
         # 散佈圖：業績對利潤、每個子類別一個圓點，有趨勢線與一個點的註解
@@ -2876,6 +2918,7 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         assert render()["spec"]["usermeta"]["tooltip"]["mode"] == "hover"
 
         # 描述趨勢模型：公式、R 平方與 P 值
+        side_tab(page, "分析")
         page.get_by_role("button", name="描述趨勢模型…").click()
         described = page.locator('.describe-dialog[data-describe="trend"]')
         expect(described.locator("table.describe-table[data-trend]")).to_have_count(1)
@@ -2940,11 +2983,13 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         settle(page)
         assert sheet()["drop_lines"]["labels"] is True
         assert any(name.startswith("__deco_drop") and name.endswith("_label") for name in layers())
+        side_tab(page, "資料")
 
         # 摘要卡：各量值的總和、平均等
-        page.get_by_label("顯示摘要").click()  # 存檔之後才勾選
-        expect(page.get_by_label("顯示摘要")).to_be_checked()
+        menubar(page, "工作表", "顯示摘要")  # 存檔之後才勾選
         settle(page)
+        expect(menu_item(page, "工作表", "顯示摘要")).to_have_attribute("aria-checked", "true")
+        page.keyboard.press("Escape")
         assert sheet()["summary_shown"] is True
         card = page.locator(".editor .summary-card")
         expect(card.locator("tbody tr")).to_have_count(2)
@@ -2986,7 +3031,7 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
         expect(card.locator("[data-stat]")).to_have_count(0)
 
         # 格式：分隔線的細部；清除格式後回到預設
-        page.get_by_role("button", name="格式…", exact=True).click()
+        menubar(page, "格式", "格式…")
         page.get_by_label("列分隔線的線寬").fill("3")
         page.get_by_label("列分隔線的層級").fill("2")
         # 線的樣式：分隔線的虛線，格線與座標軸線的線寬與樣式
@@ -3038,7 +3083,7 @@ def test_tooltip_options_describe_models_annotations_format_and_page_history(eng
                  .map((line) => line.getAttribute('stroke-dasharray') || '')"""
         )
         assert "2,1" in dashes
-        page.get_by_role("button", name="清除格式").click()
+        menubar(page, "格式", "清除格式")
         page.wait_for_timeout(300)
         settle(page)
         divider = sheet()["row_style"]["divider"]
@@ -3115,7 +3160,7 @@ def test_import_worksheets_dialog(engine: str, tmp_path: Path) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
         settle(page)
-        page.get_by_role("button", name="匯入工作表…").click()
+        menubar(page, "檔案", "匯入工作表…")
         dialog = page.locator(".import-dialog")
         dialog.get_by_label("來源報表").select_option(source)
         submit = dialog.get_by_role("button", name="匯入", exact=True)
@@ -3318,7 +3363,7 @@ def test_custom_image_shapes_in_editor_and_viewer(engine: str, tmp_path: Path) -
         # 形狀上沒有欄位：所有標記的形狀（圖片），再改成內建的叉號
         page.goto(f"{engine}/w/demo/edit/{ws}")
         settle(page)
-        page.locator('[data-drop="marks.shape"] .pill').first.click()
+        page.locator('.mark-pills [data-slot="shape"] .pill').first.click()
         page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text="移除").first.click()
         settle(page)
         assert sheet()["marks"]["shape"] is None
@@ -3415,7 +3460,7 @@ def test_null_indicator(engine: str) -> None:
         expect(page.locator(".editor .null-indicator")).to_have_count(0)
         assert "nulls" not in render()["spec"]["usermeta"]
         # 格式對話框改回隱藏：指示器回來；再從指示器的選單隱藏它
-        page.get_by_role("button", name="格式…", exact=True).click()
+        menubar(page, "格式", "格式…")
         page.get_by_label("Null 值的標記").select_option("")
         expect(page.get_by_label("Null 值的指示器")).to_be_checked()
         page.get_by_role("dialog").get_by_role("button", name="確定").click()
@@ -3480,7 +3525,7 @@ def test_cell_and_pane_borders(engine: str) -> None:
         page.goto(f"{engine}/?token={TOKEN}")
         page.goto(f"{engine}/w/demo/edit/{created['id']}")
         settle(page)
-        page.get_by_role("button", name="格式…", exact=True).click()
+        menubar(page, "格式", "格式…")
         dialog = page.locator(".format-dialog")
         expect(dialog.get_by_label("儲存格框線的樣式")).to_have_count(0)  # 沒有勾選時不顯示細部
         dialog.get_by_label("儲存格的框線").check()
@@ -3532,7 +3577,7 @@ def test_cell_and_pane_borders(engine: str) -> None:
         assert len(drawn["lines"]) - len(visible) == 2, drawn
         assert drawn["frames"] == [["#0000ff", "2"]], drawn
         # 清除格式：回到沒有框線
-        page.get_by_role("button", name="清除格式").click()
+        menubar(page, "格式", "清除格式")
         page.wait_for_timeout(300)
         settle(page)
         assert (current()["cell_border"], current()["pane_border"]) == (None, None)

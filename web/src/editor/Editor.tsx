@@ -1,8 +1,10 @@
-// 桌面版的工作表編輯器（Tableau Desktop 的工作表）：資料窗格、篩選與標記卡、欄列架與即時的檢視。
+// 桌面版的工作表編輯器（Tableau Desktop 的工作表）：功能表列與工具列、左側的「資料」「分析」分頁、
+// 頁面／篩選／標記卡、欄列架與即時的檢視，下方是分頁列與狀態列。
 // 每次變更整理後把整張工作表存回（PUT），檢視重新查詢；復原與重做在這裡記錄。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { addDatasource, saveDocument } from "../desktop";
 import { Modal } from "../Server";
 import type { FieldUse, IR, Mark, Scalar } from "../types";
 import type { ViewerAccess } from "../viewerApi";
@@ -13,6 +15,7 @@ import { type EditorContextValue, type EditorDialog, EditorContext, type FilterT
 import { ImportSheetsDialog } from "./ImportDialog";
 import { DescribeModelDialog } from "./DescribeDialogs";
 import { DataPane } from "./DataPane";
+import { Icon } from "./Icons";
 import {
   AliasDialog,
   BinDialog,
@@ -53,6 +56,7 @@ import {
   cardMarks,
   fieldIndex,
   addMapLayer,
+  blendSources,
   isMapSheet,
   isMeasure,
   isSpecial,
@@ -68,7 +72,21 @@ import {
   swapAxes,
   tidySheet,
 } from "./model";
-import { FiltersShelf, MarksCard, MeasureValuesCard, Shelf } from "./Shelves";
+import { FiltersShelf, MarksCard, type MenuItem, MeasureValuesCard, SEPARATOR, Shelf } from "./Shelves";
+import {
+  dataMenuItems,
+  fileMenu,
+  MenuBar,
+  type MenuDef,
+  serverMenu,
+  SheetTabs,
+  StatusBar,
+  ToolButton,
+  ToolMenuButton,
+  useCreateSheet,
+  useWorkspace,
+  windowMenu,
+} from "./Workspace";
 import { ShowMePanel } from "./ShowMe";
 import { PageControl } from "../PageControl";
 
@@ -141,16 +159,21 @@ const MAP_LAYERS: [string, string, boolean][] = [
   ["cities", "城市名稱", false],
 ];
 
-function MapCard() {
-  const editor = useEditor();
-  const options: MapOptionsIR = {
+/** 工作表的地圖設定（沒有設定過的用預設值）。 */
+function mapOptionsOf(sheet: SheetIR): MapOptionsIR {
+  return {
     style: "light",
     washout: 0,
     layers: {},
     viewport: null,
     hide_unknown: false,
-    ...((editor.sheet.map as Partial<MapOptionsIR> | null | undefined) ?? {}),
+    ...((sheet.map as Partial<MapOptionsIR> | null | undefined) ?? {}),
   };
+}
+
+function MapCard() {
+  const editor = useEditor();
+  const options = mapOptionsOf(editor.sheet);
   const change = (update: Partial<MapOptionsIR>) =>
     editor.apply((s) => ({ ...s, map: { ...options, ...update } }));
   return (
@@ -218,11 +241,41 @@ function MapCard() {
   );
 }
 
-function AnalyticsCard() {
+/** 堆疊標記、下拉線、百分比的選項（側欄的「分析」分頁與「分析」功能表共用）。 */
+const STACK_OPTIONS: [string, string][] = [
+  ["", "自動"],
+  ["on", "開啟"],
+  ["off", "關閉"],
+];
+const DROP_LINE_OPTIONS: [string, string][] = [
+  ["", "無"],
+  ["selected", "選取標記時"],
+  ["always", "一律顯示"],
+];
+const PERCENT_OPTIONS: [string, string][] = [
+  ["", "無"],
+  ["table", "表"],
+  ["column", "欄"],
+  ["row", "列"],
+  ["pane", "窗格"],
+  ["row_in_pane", "窗格中的列"],
+  ["column_in_pane", "窗格中的欄"],
+  ["cell", "儲存格"],
+];
+
+function setDropLines(sheet: SheetIR, when: string): SheetIR {
+  return { ...sheet, drop_lines: when ? { x: true, y: true, labels: false, ...((sheet.drop_lines as object | null) ?? {}), when } : null };
+}
+
+/** 側欄的「分析」分頁（Tableau 的分析窗格）：摘要、模型、自訂三組工具，以及檢視的分析選項。 */
+function AnalyticsPane() {
   const editor = useEditor();
   const { sheet, fields, card } = editor;
   const lines = (sheet.reference_lines as { formula: string; kind: string; axis: FieldUse; paired?: string | null }[] | undefined) ?? [];
   const trend = cardMarks(sheet, card).trend;
+  const totals = new Set(sheet.totals);
+  const toggleTotal = (which: "rows" | "columns") =>
+    editor.apply((s) => ({ ...s, totals: s.totals.includes(which) ? s.totals.filter((t) => t !== which) : [...s.totals, which] }));
   const names: Record<string, string> = {
     average: "平均",
     median: "中位數",
@@ -238,139 +291,160 @@ function AnalyticsCard() {
     median_confidence: "中位數信賴區間",
   };
   return (
-    <div className="card analytics-card" data-shelf="analytics">
-      <div className="card-title">分析</div>
-      <div className="analytics-actions">
-        <button type="button" onClick={() => editor.openDialog({ kind: "reference", index: null, axis: null })}>
-          ＋ 參考線…
+    <div className="analytics-pane" data-shelf="analytics" role="tabpanel" aria-label="分析">
+      <div className="pane-section">摘要</div>
+      <div className="analytics-items">
+        <label className="inline" title="每一欄的合計（下方的總計列）">
+          <input type="checkbox" checked={totals.has("rows")} onChange={() => toggleTotal("rows")} /> 顯示欄總計
+        </label>
+        <label className="inline" title="每一列的合計（右側的總計欄）">
+          <input type="checkbox" checked={totals.has("columns")} onChange={() => toggleTotal("columns")} /> 顯示列總計
+        </label>
+        <button type="button" title="總計的位置、色彩與「總計使用」" onClick={() => editor.openDialog({ kind: "totals" })}>
+          總計…
         </button>
+      </div>
+      <div className="pane-section">模型</div>
+      <div className="analytics-items">
         <button type="button" onClick={() => editor.openDialog({ kind: "trend", card })}>
           {trend ? "趨勢線 ✓" : "＋ 趨勢線…"}
-        </button>
-        <button type="button" onClick={() => editor.openDialog({ kind: "forecast" })}>
-          {sheet.forecast ? "預測 ✓" : "＋ 預測…"}
-        </button>
-        <button type="button" onClick={() => editor.openDialog({ kind: "cluster" })}>
-          {sheet.cluster ? "叢集 ✓" : "＋ 叢集…"}
         </button>
         {Boolean(trend) && (
           <button type="button" className="link" title="趨勢線的公式、R 平方、P 值與標準誤" onClick={() => editor.openDialog({ kind: "describe-model", model: "trend" })}>
             描述趨勢模型…
           </button>
         )}
+        <button type="button" onClick={() => editor.openDialog({ kind: "forecast" })}>
+          {sheet.forecast ? "預測 ✓" : "＋ 預測…"}
+        </button>
         {Boolean(sheet.forecast) && (
           <button type="button" className="link" title="預測的選項與模型（趨勢、季節、平滑係數與品質）" onClick={() => editor.openDialog({ kind: "describe-model", model: "forecast" })}>
             描述預測…
           </button>
         )}
+        <button type="button" onClick={() => editor.openDialog({ kind: "cluster" })}>
+          {sheet.cluster ? "叢集 ✓" : "＋ 叢集…"}
+        </button>
         {Boolean(sheet.cluster) && (
           <button type="button" className="link" title="叢集的摘要、各叢集的中心與變異數分析；可以存成群組" onClick={() => editor.openDialog({ kind: "describe-model", model: "cluster" })}>
             描述叢集…
           </button>
         )}
+      </div>
+      <div className="pane-section">自訂</div>
+      <div className="analytics-items">
+        <button type="button" title="參考線、參考區間、分布區間與盒鬚圖" onClick={() => editor.openDialog({ kind: "reference", index: null, axis: null })}>
+          ＋ 參考線…
+        </button>
         <button type="button" title="點與區域的註解；標記的註解先在檢視上選取標記" onClick={() => editor.openDialog({ kind: "annotations", mark: null })}>
           {(sheet.annotations as unknown[] | undefined)?.length ? `註解（${(sheet.annotations as unknown[]).length}）` : "＋ 註解…"}
         </button>
       </div>
-      <label className="hint aggregate-toggle" title="關閉時量值不彙總，每一列資料是一個標記（Tableau 的「分析＞彙總量值」）">
-        <input
-          type="checkbox"
-          aria-label="彙總量值"
-          checked={!sheet.disaggregated}
-          onChange={(e) => {
-            const aggregated = e.target.checked;
-            editor.apply((s) => setAggregated(s, aggregated, fields));
-          }}
-        />{" "}
-        彙總量值
-      </label>
-      <label className="hint stack-marks" title="長條與區域預設依標記卡上的維度堆疊（Tableau 的「分析＞堆疊標記」）：關閉時從 0 畫起、互相重疊，開啟時折線與圓點也堆疊">
-        堆疊標記{" "}
-        <select
-          aria-label="堆疊標記"
-          value={(sheet.stack as string | null | undefined) ?? ""}
-          onChange={(e) => {
-            const stack = e.target.value || null;
-            editor.apply((s) => ({ ...s, stack }));
-          }}
-        >
-          <option value="">自動</option>
-          <option value="on">開啟</option>
-          <option value="off">關閉</option>
-        </select>
-      </label>
-      <label className="hint drop-lines" title="從標記畫到座標軸的虛線（Tableau 的「分析＞下拉線」）；連續的座標軸才有">
-        下拉線{" "}
-        <select
-          aria-label="下拉線"
-          value={(sheet.drop_lines as { when?: string } | null | undefined)?.when ?? ""}
-          onChange={(e) => {
-            const when = e.target.value;
-            editor.apply((s) => ({ ...s, drop_lines: when ? { x: true, y: true, labels: false, ...((s.drop_lines as object | null) ?? {}), when } : null }));
-          }}
-        >
-          <option value="">無</option>
-          <option value="selected">選取標記時</option>
-          <option value="always">一律顯示</option>
-        </select>
-      </label>
-      {Boolean(sheet.drop_lines) && (
-        <label className="hint drop-labels" title="下拉線碰到座標軸的地方寫上標記的值（Tableau 下拉線的「顯示標籤」）">
+      {lines.length > 0 && (
+        <ul className="analytics-list">
+          {lines.map((line, i) => (
+            <li key={i}>
+              <span>
+                {line.kind === "boxplot" ? "盒鬚圖" : line.kind === "distribution" ? `分布（${names[line.formula] ?? line.formula}）` : `${names[line.formula] ?? line.formula}${line.paired ? "（區間）" : ""}`}
+                ：{pillLabel(line.axis, fields, sheet.table_calcs)}
+              </span>
+              <span>
+                <button type="button" className="link" title="編輯" onClick={() => editor.openDialog({ kind: "reference", index: i, axis: line.axis })}>
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  className="link"
+                  title="移除"
+                  onClick={() => editor.apply((s) => ({ ...s, reference_lines: ((s.reference_lines as unknown[]) ?? []).filter((_, j) => j !== i) }))}
+                >
+                  ✕
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="pane-section">選項</div>
+      <div className="analytics-options">
+        <label className="aggregate-toggle" title="關閉時量值不彙總，每一列資料是一個標記（Tableau 的「分析＞彙總量值」）">
           <input
             type="checkbox"
-            aria-label="下拉線的值標籤"
-            checked={(sheet.drop_lines as { labels?: boolean } | null)?.labels === true}
+            aria-label="彙總量值"
+            checked={!sheet.disaggregated}
             onChange={(e) => {
-              const labels = e.target.checked;
-              editor.apply((s) => ({ ...s, drop_lines: s.drop_lines ? { ...(s.drop_lines as object), labels } : null }));
+              const aggregated = e.target.checked;
+              editor.apply((s) => setAggregated(s, aggregated, fields));
             }}
           />{" "}
-          下拉線的值標籤
+          彙總量值
         </label>
-      )}
-      <label className="hint percent-of" title="量值顯示成占範圍合計的比例（Tableau 的「分析＞百分比」）">
-        百分比{" "}
-        <select
-          aria-label="百分比"
-          value={(sheet.percentages as string | null | undefined) ?? ""}
-          onChange={(e) => {
-            const percentages = e.target.value || null;
-            editor.apply((s) => ({ ...s, percentages }));
-          }}
-        >
-          <option value="">無</option>
-          <option value="table">表</option>
-          <option value="column">欄</option>
-          <option value="row">列</option>
-          <option value="pane">窗格</option>
-          <option value="row_in_pane">窗格中的列</option>
-          <option value="column_in_pane">窗格中的欄</option>
-          <option value="cell">儲存格</option>
-        </select>
-      </label>
-      <ul className="analytics-list">
-        {lines.map((line, i) => (
-          <li key={i}>
-            <span>
-              {line.kind === "boxplot" ? "盒鬚圖" : line.kind === "distribution" ? `分布（${names[line.formula] ?? line.formula}）` : `${names[line.formula] ?? line.formula}${line.paired ? "（區間）" : ""}`}
-              ：{pillLabel(line.axis, fields, sheet.table_calcs)}
-            </span>
-            <span>
-              <button type="button" className="link" title="編輯" onClick={() => editor.openDialog({ kind: "reference", index: i, axis: line.axis })}>
-                ✎
-              </button>
-              <button
-                type="button"
-                className="link"
-                title="移除"
-                onClick={() => editor.apply((s) => ({ ...s, reference_lines: ((s.reference_lines as unknown[]) ?? []).filter((_, j) => j !== i) }))}
-              >
-                ✕
-              </button>
-            </span>
-          </li>
-        ))}
-      </ul>
+        <label className="stack-marks" title="長條與區域預設依標記卡上的維度堆疊（Tableau 的「分析＞堆疊標記」）：關閉時從 0 畫起、互相重疊，開啟時折線與圓點也堆疊">
+          堆疊標記
+          <select
+            aria-label="堆疊標記"
+            value={(sheet.stack as string | null | undefined) ?? ""}
+            onChange={(e) => {
+              const stack = e.target.value || null;
+              editor.apply((s) => ({ ...s, stack }));
+            }}
+          >
+            {STACK_OPTIONS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="drop-lines" title="從標記畫到座標軸的虛線（Tableau 的「分析＞下拉線」）；連續的座標軸才有">
+          下拉線
+          <select
+            aria-label="下拉線"
+            value={(sheet.drop_lines as { when?: string } | null | undefined)?.when ?? ""}
+            onChange={(e) => {
+              const when = e.target.value;
+              editor.apply((s) => setDropLines(s, when));
+            }}
+          >
+            {DROP_LINE_OPTIONS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {Boolean(sheet.drop_lines) && (
+          <label className="drop-labels" title="下拉線碰到座標軸的地方寫上標記的值（Tableau 下拉線的「顯示標籤」）">
+            <input
+              type="checkbox"
+              aria-label="下拉線的值標籤"
+              checked={(sheet.drop_lines as { labels?: boolean } | null)?.labels === true}
+              onChange={(e) => {
+                const labels = e.target.checked;
+                editor.apply((s) => ({ ...s, drop_lines: s.drop_lines ? { ...(s.drop_lines as object), labels } : null }));
+              }}
+            />{" "}
+            下拉線的值標籤
+          </label>
+        )}
+        <label className="percent-of" title="量值顯示成占範圍合計的比例（Tableau 的「分析＞百分比」）">
+          百分比
+          <select
+            aria-label="百分比"
+            value={(sheet.percentages as string | null | undefined) ?? ""}
+            onChange={(e) => {
+              const percentages = e.target.value || null;
+              editor.apply((s) => ({ ...s, percentages }));
+            }}
+          >
+            {PERCENT_OPTIONS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
     </div>
   );
 }
@@ -401,6 +475,11 @@ export function Editor({
   // 檢視上選取的標記（只保留、排除、群組與集合）；工作表或它的定義改變時清除
   const [selected, setSelected] = useState<Mark[]>([]);
   const [showMe, setShowMe] = useState(false);
+  const ws = useWorkspace();
+  // 左側的分頁：資料或分析
+  const [sideTab, setSideTab] = useState<"data" | "analytics">("data");
+  // 檢視最近一次畫出的結果：狀態列的列數、「自動」實際畫出的標記類型
+  const [rendered, setRendered] = useState<{ rows: number; mark: string | null } | null>(null);
   const [viewData, setViewData] = useState(false);
   const [importing, setImporting] = useState(false);
   const [card, setCard] = useState<Card>("all");
@@ -550,6 +629,7 @@ export function Editor({
   }, [undo, redo]);
 
   const newId = useCallback((prefix: string, text: string) => editApi.newId(workbook, prefix, text), [workbook]);
+  const create = useCreateSheet((text) => notify(text, "error"));
 
   /** 重新讀取資料窗格並立即更新欄位索引：之後排進去的變更（apply）看得到新的欄位。 */
   const refreshCatalog = useCallback(async () => {
@@ -651,236 +731,257 @@ export function Editor({
     apply(() => replaced);
   };
 
+  const current = { kind: "worksheet" as const, id: sheet.id };
+  const done = () => onClose(sheet.id);
+  /** 新的工作表（複製、複製成交叉資料表）：重新載入報表的定義並開啟它。 */
+  const opened = (item: Promise<{ id: string }>) =>
+    void item
+      .then((created) => {
+        onChanged();
+        onOpen(created.id);
+      })
+      .catch((e: Error) => notify(e.message, "error"));
+  const duplicate = () => opened(editApi.duplicateWorksheet(workbook, sheet.id));
+  const sorted = quickSort !== null && sheet.sorts.some((s) => s.field === quickSort.use.field);
+  const clearSort = () => quickSort && apply((s) => setSort(s, quickSort.use.field, null));
+  const trend = cardMarks(sheet, context.card).trend;
+  const map = mapOptionsOf(sheet);
+  const mapSheet = isMapSheet(sheet);
+  const changeMap = (update: Partial<MapOptionsIR>) => apply((s) => ({ ...s, map: { ...mapOptionsOf(s), ...update } }));
+  const choice = (options: [string, string][], value: string, pick: (value: string) => void): MenuItem[] =>
+    options.map(([option, label]) => ({ label, checked: value === option, action: () => pick(option) }));
+  const clearItems: MenuItem[] = [
+    // 格式（背景、字型、顏色、格線與分隔線、對齊、數字格式）回到預設；可以復原
+    { label: "清除格式", action: () => apply((s) => clearFormat(s)) },
+    { label: "清除排序", disabled: !sorted, action: clearSort },
+  ];
+  const menus: MenuDef[] = [
+    // 匯入工作表：從工作區中開啟的另一份報表匯入（Tableau 的「匯入活頁簿」、在活頁簿之間複製貼上工作表）
+    fileMenu(ws, [{ label: "匯入工作表…", action: () => setImporting(true) }]),
+    {
+      label: "資料",
+      items: [
+        ...dataMenuItems(ws),
+        SEPARATOR,
+        { label: "編輯資料源…", disabled: !onEditDatasource, action: () => onEditDatasource?.(sheet.datasource) },
+        { label: "日期屬性…", action: () => setDialog({ kind: "date-properties", datasource: sheet.datasource }) },
+        { label: "混合關係…", disabled: blendSources(sheet).length === 0, action: () => setDialog({ kind: "blends" }) },
+      ],
+    },
+    {
+      label: "工作表",
+      items: [
+        { label: "新增工作表", action: () => create("worksheet", { datasource: sheet.datasource }) },
+        { label: "複製", action: duplicate },
+        // 新的工作表是這個檢視的文字表（Tableau 的「複製為交叉資料表」）
+        { label: "複製成交叉資料表", action: () => opened(editApi.duplicateAsCrosstab(workbook, sheet.id)) },
+        SEPARATOR,
+        { label: "標題…", action: () => setDialog({ kind: "title" }) },
+        // 檢視下方顯示各量值的筆數、總和、平均、最小值、最大值與中位數（Tableau 的「工作表＞顯示摘要」）
+        {
+          label: "顯示摘要",
+          checked: sheet.summary_shown === true,
+          action: () => {
+            const summary_shown = sheet.summary_shown !== true;
+            apply((s) => ({ ...s, summary_shown }));
+          },
+        },
+        // 檢視下方的說明（Tableau 的「工作表＞顯示說明」）
+        { label: "說明…", action: () => setDialog({ kind: "caption" }) },
+        SEPARATOR,
+        {
+          label: "清除",
+          children: [
+            { label: "格式", action: () => apply((s) => clearFormat(s)) },
+            { label: "排序", disabled: !sorted, action: clearSort },
+          ],
+        },
+      ],
+    },
+    { label: "dashboard", items: [{ label: "新增 dashboard", action: () => create("dashboard") }] },
+    { label: "Story", items: [{ label: "新增 Story", action: () => create("story") }] },
+    {
+      label: "分析",
+      items: [
+        {
+          label: "彙總量值",
+          checked: !sheet.disaggregated,
+          action: () => {
+            const aggregated = Boolean(sheet.disaggregated);
+            apply((s) => setAggregated(s, aggregated, fields));
+          },
+        },
+        {
+          label: "堆疊標記",
+          children: choice(STACK_OPTIONS, (sheet.stack as string | null | undefined) ?? "", (stack) => apply((s) => ({ ...s, stack: stack || null }))),
+        },
+        // 摘要資料（每個標記一列）與完整資料（基礎資料列），可以下載 CSV（Tableau 的「檢視資料」）
+        { label: "檢視資料…", action: () => setViewData(true) },
+        SEPARATOR,
+        {
+          label: "百分比",
+          children: choice(PERCENT_OPTIONS, (sheet.percentages as string | null | undefined) ?? "", (percentages) => apply((s) => ({ ...s, percentages: percentages || null }))),
+        },
+        {
+          label: "總計",
+          children: [
+            { label: "顯示列總計", checked: totals.has("columns"), action: () => toggleTotal("columns") },
+            { label: "顯示欄總計", checked: totals.has("rows"), action: () => toggleTotal("rows") },
+            SEPARATOR,
+            { label: "總計…", action: () => setDialog({ kind: "totals" }) },
+          ],
+        },
+        {
+          label: "下拉線",
+          children: choice(DROP_LINE_OPTIONS, (sheet.drop_lines as { when?: string } | null | undefined)?.when ?? "", (when) => apply((s) => setDropLines(s, when))),
+        },
+        SEPARATOR,
+        { label: "參考線…", action: () => setDialog({ kind: "reference", index: null, axis: null }) },
+        { label: "趨勢線…", checked: Boolean(trend), action: () => setDialog({ kind: "trend", card: context.card }) },
+        { label: "預測…", checked: Boolean(sheet.forecast), action: () => setDialog({ kind: "forecast" }) },
+        { label: "叢集…", checked: Boolean(sheet.cluster), action: () => setDialog({ kind: "cluster" }) },
+        { label: "註解…", action: () => setDialog({ kind: "annotations", mark: null }) },
+        SEPARATOR,
+        { label: "建立計算欄位…", action: () => setCalc({ field: null, datasource: sheet.datasource }) },
+        { label: "交換欄與列", action: () => apply(swapAxes) },
+      ],
+    },
+    {
+      label: "地圖",
+      items: [
+        {
+          label: "背景地圖",
+          disabled: !mapSheet,
+          children: mapSheet ? choice(MAP_STYLES, map.style, (style) => changeMap({ style })) : undefined,
+        },
+        {
+          label: "地圖圖層",
+          disabled: !mapSheet,
+          children: mapSheet
+            ? MAP_LAYERS.map(([key, label, preset]) => ({
+                label,
+                checked: map.layers[key] ?? preset,
+                action: () => {
+                  const layers = { ...map.layers, [key]: !(map.layers[key] ?? preset) };
+                  if (layers[key] === preset) delete layers[key];
+                  changeMap({ layers });
+                },
+              }))
+            : undefined,
+        },
+        SEPARATOR,
+        {
+          label: "新增標記圖層",
+          disabled: !mapSheet,
+          action: () => {
+            const index = Math.max(sheet.panes.length, 1);
+            apply((s) => addMapLayer(s));
+            setCard(index);
+          },
+        },
+        { label: "篩選掉未知的位置", disabled: !mapSheet, checked: map.hide_unknown, action: () => changeMap({ hide_unknown: !map.hide_unknown }) },
+        { label: "重設地圖（自動縮放）", disabled: !mapSheet || !map.viewport, action: () => changeMap({ viewport: null }) },
+      ],
+    },
+    {
+      label: "格式",
+      items: [
+        { label: "格式…", action: () => setDialog({ kind: "sheet-format" }) },
+        SEPARATOR,
+        {
+          label: "複製格式",
+          action: () => {
+            copyFormat(sheet);
+            setCopied(true);
+            notify("已複製格式；到其他工作表按「貼上格式」", "info");
+          },
+        },
+        // 套用複製的格式（背景、字型、文字顏色、格線與分隔線、對齊；欄位、篩選與資料不變）
+        { label: "貼上格式", disabled: !copied && !hasCopiedFormat(), action: () => apply((s) => pasteFormat(s)) },
+        { label: "清除格式", action: () => apply((s) => clearFormat(s)) },
+      ],
+    },
+    serverMenu(ws),
+    windowMenu(ws, current, done),
+  ];
+
   return (
     <EditorContext.Provider value={context}>
-      <div className="editor" data-editor={sheet.id} data-saving={pending > 0 ? "true" : "false"}>
-        <div className="editor-toolbar" role="toolbar" aria-label="工作表編輯">
-          <button type="button" onClick={undo} disabled={history.index === 0} title="復原（Ctrl+Z）">
-            ↶ 復原
-          </button>
-          <button type="button" onClick={redo} disabled={history.index >= history.entries.length - 1} title="重做（Ctrl+Y）">
-            ↷ 重做
-          </button>
+      <div className="editor workspace" data-editor={sheet.id} data-saving={pending > 0 ? "true" : "false"}>
+        <MenuBar menus={menus} saving={pending > 0} onDone={done} />
+        <div className="ws-toolbar" role="toolbar" aria-label="工作表編輯">
+          <ToolButton icon="undo" label="復原" title="復原（Ctrl+Z）" disabled={history.index === 0} onClick={undo} />
+          <ToolButton icon="redo" label="重做" title="重做（Ctrl+Y）" disabled={history.index >= history.entries.length - 1} onClick={redo} />
           <span className="sep" />
-          <button type="button" onClick={() => apply(swapAxes)} title="交換欄與列">
-            ⇄ 交換
-          </button>
-          <label className="inline">
-            顯示大小
-            <select
-              aria-label="顯示大小"
-              value={sheet.fit}
-              onChange={(e) => {
-                const fit = e.target.value;
-                apply((s) => ({ ...s, fit }));
-              }}
-            >
-              <option value="standard">標準</option>
-              <option value="fit_width">符合寬度</option>
-              <option value="fit_height">符合高度</option>
-              <option value="entire_view">整個檢視</option>
-            </select>
-          </label>
-          <label className="inline" title="每一欄的合計（下方的總計列）">
-            <input type="checkbox" checked={totals.has("rows")} onChange={() => toggleTotal("rows")} /> 顯示欄總計
-          </label>
-          <label className="inline" title="每一列的合計（右側的總計欄）">
-            <input type="checkbox" checked={totals.has("columns")} onChange={() => toggleTotal("columns")} /> 顯示列總計
-          </label>
-          <button type="button" title="總計的位置、色彩與「總計使用」" onClick={() => setDialog({ kind: "totals" })}>
-            總計…
-          </button>
-          <button type="button" onClick={() => setDialog({ kind: "title" })}>
-            標題…
-          </button>
-          <label className="inline" title="檢視下方顯示各量值的筆數、總和、平均、最小值、最大值與中位數；選取標記時只算選取的標記（Tableau 的「工作表＞顯示摘要」）">
-            <input
-              type="checkbox"
-              aria-label="顯示摘要"
-              checked={sheet.summary_shown === true}
-              onChange={(e) => {
-                const summary_shown = e.target.checked; // 先取值：存檔是非同步的，之後核取方塊已還原
-                apply((s) => ({ ...s, summary_shown }));
-              }}
-            />{" "}
-            摘要
-          </label>
-          <button type="button" title="檢視下方的說明（Tableau 的「工作表＞顯示說明」）" onClick={() => setDialog({ kind: "caption" })}>
-            說明…
-          </button>
-          <button type="button" onClick={() => setDialog({ kind: "sheet-format" })}>
-            格式…
-          </button>
-          <button type="button" title="這張工作表的摘要資料（每個標記一列）與完整資料（基礎資料列），可以下載 CSV（Tableau 的「檢視資料」）" onClick={() => setViewData(true)}>
-            檢視資料…
-          </button>
-          <button
-            type="button"
-            title="複製這張工作表的格式（Tableau 的「格式＞複製格式」）"
-            onClick={() => {
-              copyFormat(sheet);
-              setCopied(true);
-              notify("已複製格式；到其他工作表按「貼上格式」", "info");
+          <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(workbook, false)} />
+          <span className="sep" />
+          <ToolButton icon="datasource-add" label="新增資料源…" onClick={() => void addDatasource(workbook, ws.navigate)} />
+          <span className="sep" />
+          <ToolButton icon="worksheet-add" label="新增工作表" onClick={() => create("worksheet", { datasource: sheet.datasource })} />
+          <ToolButton icon="duplicate" label="複製" title="複製這張工作表" onClick={duplicate} />
+          <ToolMenuButton icon="clear" label="清除" title="清除格式、清除排序" items={clearItems} />
+          <span className="sep" />
+          <ToolButton icon="swap" label="交換" title="交換欄與列" onClick={() => apply(swapAxes)} />
+          <ToolButton
+            icon="sort-asc"
+            label="遞增排序"
+            title={quickSort ? `依 ${quickSort.by ? "量值" : "名稱"}由小到大排序「${quickSort.caption}」（Tableau 工具列的排序）` : "遞增排序"}
+            disabled={!quickSort}
+            onClick={() => sortBy("asc")}
+          />
+          <ToolButton
+            icon="sort-desc"
+            label="遞減排序"
+            title={quickSort ? `依 ${quickSort.by ? "量值" : "名稱"}由大到小排序「${quickSort.caption}」` : "遞減排序"}
+            disabled={!quickSort}
+            onClick={() => sortBy("desc")}
+          />
+          <span className="sep" />
+          <select
+            aria-label="顯示大小"
+            title="顯示大小"
+            value={sheet.fit}
+            onChange={(e) => {
+              const fit = e.target.value;
+              apply((s) => ({ ...s, fit }));
             }}
           >
-            複製格式
-          </button>
+            <option value="standard">標準</option>
+            <option value="fit_width">符合寬度</option>
+            <option value="fit_height">符合高度</option>
+            <option value="entire_view">整個檢視</option>
+          </select>
+          <span className="spacer" />
           <button
             type="button"
-            disabled={!copied && !hasCopiedFormat()}
-            title="套用複製的格式（背景、字型、文字顏色、格線與分隔線、對齊；欄位、篩選與資料不變）"
-            onClick={() => apply((s) => pasteFormat(s))}
-          >
-            貼上格式
-          </button>
-          <button
-            type="button"
-            title="這張工作表的格式（背景、字型、顏色、格線與分隔線、對齊、數字格式）回到預設（Tableau 的「工作表＞清除＞格式」）；可以復原"
-            onClick={() => apply((s) => clearFormat(s))}
-          >
-            清除格式
-          </button>
-          {quickSort && (
-            <>
-              <button type="button" aria-label="遞增排序" title={`依 ${quickSort.by ? "量值" : "名稱"}由小到大排序「${quickSort.caption}」（Tableau 工具列的排序）`} onClick={() => sortBy("asc")}>
-                ↑ 排序
-              </button>
-              <button type="button" aria-label="遞減排序" title={`依 ${quickSort.by ? "量值" : "名稱"}由大到小排序「${quickSort.caption}」`} onClick={() => sortBy("desc")}>
-                ↓ 排序
-              </button>
-              <button type="button" aria-label="清除排序" disabled={!sheet.sorts.some((s) => s.field === quickSort.use.field)} onClick={() => apply((s) => setSort(s, quickSort.use.field, null))}>
-                清除排序
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            className={showMe ? "active" : undefined}
+            className={`show-me-button${showMe ? " active" : ""}`}
             aria-pressed={showMe}
             title="依檢視中的欄位建議圖表類型（Tableau 的 Show Me）"
             onClick={() => setShowMe((v) => !v)}
           >
+            <Icon name="show-me" />
             智慧顯示
           </button>
-          <span className="sep" />
-          <label className="inline">
-            工作表
-            <input
-              key={`${sheet.id}:${sheet.name}`}
-              aria-label="工作表名稱"
-              defaultValue={sheet.name}
-              onBlur={(e) => {
-                const name = e.target.value.trim();
-                if (name && name !== sheet.name) apply((s) => ({ ...s, name }));
-                else e.target.value = sheet.name;
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() =>
-              void editApi
-                .addWorksheet(workbook, undefined, sheet.datasource)
-                .then((created) => {
-                  onChanged();
-                  onOpen(created.id);
-                })
-                .catch((e: Error) => notify(e.message, "error"))
-            }
-          >
-            新增工作表
-          </button>
-          <button type="button" title="從工作區中開啟的另一份報表匯入工作表，或整份匯入（Tableau 的「匯入活頁簿」、書籤與在活頁簿之間複製貼上工作表）" onClick={() => setImporting(true)}>
-            匯入工作表…
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              void editApi
-                .duplicateWorksheet(workbook, sheet.id)
-                .then((created) => {
-                  onChanged();
-                  onOpen(created.id);
-                })
-                .catch((e: Error) => notify(e.message, "error"))
-            }
-          >
-            複製
-          </button>
-          <button
-            type="button"
-            title="新的工作表是這個檢視的文字表（Tableau 的「複製為交叉資料表」）"
-            onClick={() =>
-              void editApi
-                .duplicateAsCrosstab(workbook, sheet.id)
-                .then((created) => {
-                  onChanged();
-                  onOpen(created.id);
-                })
-                .catch((e: Error) => notify(e.message, "error"))
-            }
-          >
-            複製成交叉資料表
-          </button>
-          <label className="inline" title="隱藏的工作表只在 dashboard 與 Story 中使用，檢視器的工作表清單不列出（Tableau 的「隱藏工作表」）">
-            <input
-              type="checkbox"
-              aria-label="隱藏工作表"
-              checked={sheet.hidden === true}
-              onChange={(e) => {
-                const hidden = e.target.checked;
-                apply((s) => ({ ...s, hidden }));
-                window.setTimeout(onChanged, 600);
-              }}
-            />{" "}
-            隱藏
-          </label>
-          <label className="inline" title="工作表分頁的顏色（清單中以色塊標示）">
-            分頁顏色
-            <input
-              type="color"
-              aria-label="分頁顏色"
-              value={(sheet.tab_color as string | null | undefined) ?? "#ffffff"}
-              onChange={(e) => {
-                const color = e.target.value.toLowerCase();
-                apply((s) => ({ ...s, tab_color: color === "#ffffff" ? null : color }));
-                window.setTimeout(onChanged, 600);
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            className="danger"
-            onClick={() => {
-              if (!window.confirm(`刪除工作表「${sheet.name}」？`)) return;
-              void editApi
-                .removeWorksheet(workbook, sheet.id)
-                .then(() => {
-                  onChanged();
-                  onClose(null);
-                })
-                .catch((e: Error) => notify(e.message, "error"));
-            }}
-          >
-            刪除
-          </button>
-          <span className="spacer" />
-          {pending > 0 && <span className="hint">儲存中…</span>}
-          <button type="button" className="primary" onClick={() => onClose(sheet.id)}>
-            完成
-          </button>
         </div>
-        <DataPane onDatasource={changeDatasource} onEditDatasource={onEditDatasource} />
+        <div className="ws-body">
+        <div className="side-pane">
+          <div className="side-tabs" role="tablist" aria-label="側欄">
+            <button type="button" role="tab" aria-selected={sideTab === "data"} className={sideTab === "data" ? "active" : undefined} onClick={() => setSideTab("data")}>
+              資料
+            </button>
+            <button type="button" role="tab" aria-selected={sideTab === "analytics"} className={sideTab === "analytics" ? "active" : undefined} onClick={() => setSideTab("analytics")}>
+              分析
+            </button>
+          </div>
+          <DataPane onDatasource={changeDatasource} onEditDatasource={onEditDatasource} hidden={sideTab !== "data"} />
+          {sideTab === "analytics" && <AnalyticsPane />}
+        </div>
         <div className="cards-pane">
-          <Shelf label="頁面" shelf="pages" />
+          <Shelf label="頁面" shelf="pages" variant="card" />
           <FiltersShelf />
           {measureValuesUsed && <MeasureValuesCard />}
-          <MarksCard />
-          {isMapSheet(sheet) && <MapCard />}
-          <AnalyticsCard />
+          <MarksCard resolved={rendered?.mark} />
+          {mapSheet && <MapCard />}
         </div>
         <div className="view-pane">
           <Shelf label="欄" shelf="columns" />
@@ -966,6 +1067,10 @@ export function Editor({
                   worksheet={sheet.id}
                   state={EMPTY_STATE}
                   revision={revision}
+                  onRendered={(response) => {
+                    const mark = response.mark ?? null;
+                    setRendered((last) => (last && last.rows === response.rows && last.mark === mark ? last : { rows: response.rows, mark }));
+                  }}
                   nullActions={[
                     { label: "在預設位置顯示資料", run: () => apply((s) => ({ ...s, null_marks: "zero" })) },
                     { label: "隱藏指示器", run: () => apply((s) => ({ ...s, null_indicator: false })) },
@@ -1018,6 +1123,15 @@ export function Editor({
             )}
           </div>
         </div>
+        </div>
+        <SheetTabs
+          current={current}
+          live={{ name: sheet.name, hidden: sheet.hidden === true, color: (sheet.tab_color as string | null | undefined) ?? null }}
+          apply={(change) => apply((s) => change(s as unknown as Record<string, unknown>) as unknown as SheetIR)}
+          datasource={sheet.datasource}
+          onError={(text) => notify(text, "error")}
+        />
+        <StatusBar>{!empty && rendered ? <span>摘要資料 {rendered.rows} 列</span> : null}</StatusBar>
         {message && (
           <div className={`toast${message.kind === "error" ? " error" : ""}`} role="status">
             {message.text}
