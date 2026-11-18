@@ -142,7 +142,7 @@
       },
       "scale": {
         "domainMax": {
-          "expr": "909369.9110000005 * width / max(width - 65.4, width / 2)"
+          "expr": "909370 * width / max(width - 65.4, width / 2)"
         },
         "nice": false
       }

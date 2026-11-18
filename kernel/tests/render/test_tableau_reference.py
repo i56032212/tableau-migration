@@ -86,10 +86,13 @@ def line(**values: object) -> ReferenceLine:
 
 
 def test_reference_label_placement() -> None:
-    """縱向的參考線（橫軸上的值）：標籤預設在窗格的下緣、線的右側，顏色是工作表的文字顏色；
-    設定了對齊與字級時依設定。橫向的參考線照舊在窗格的左側、線的上方。"""
+    """橫軸上的參考區間（兩條縱向的線配成的）：標籤預設在窗格的下緣、線的右側，顏色是工作表的文字
+    顏色；單一條縱向的線照舊在上緣；設定了對齊與字級時依設定。橫向的參考線在窗格的左側、線的上方。"""
     place = _Placement({"x": {"field": "c0", "type": "temporal"}}, "x", [], 1)
-    found = place.label("n", "f", "PEAK SEASON", line(label_size=8), "#101e47")
+    single = place.label("n", "f", "Today", line(), None)
+    assert single["encoding"]["y"] == {"value": 0}
+    assert (single["mark"]["baseline"], single["mark"]["dy"]) == ("top", 0)
+    found = place.label("n", "f", "PEAK SEASON", line(label_size=8, paired="refline1"), "#101e47")
     mark = found["mark"]
     assert found["encoding"]["y"] == {"value": "height"}
     assert (mark["baseline"], mark["align"], mark["dx"], mark["dy"]) == ("bottom", "left", 3, -3)
@@ -153,7 +156,10 @@ def test_horizontal_bar_labels_get_room(tmp_path: Path, db: Path) -> None:
     scale = spec["encoding"]["x"]["scale"]
     assert scale["nice"] is False
     top = max(v["c1"] for v in spec["data"]["values"])
-    assert scale["domainMax"]["expr"].startswith(f"{float(top)!r} * width / max(width - ")
+    # 最大值進位到六位有效數字（規格不隨彙總的浮點數尾數變動）
+    limit = float(scale["domainMax"]["expr"].split(" * width")[0])
+    assert top <= limit <= top * 1.00001
+    assert " * width / max(width - " in scale["domainMax"]["expr"]
 
 
 def test_automatic_number_format_is_consistent_per_column() -> None:

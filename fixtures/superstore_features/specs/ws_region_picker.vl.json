@@ -125,7 +125,7 @@
           },
           "scale": {
             "domainMax": {
-              "expr": "725457.8245000015 * width / max(width - 65.4, width / 2)"
+              "expr": "725458 * width / max(width - 65.4, width / 2)"
             },
             "nice": false
           }
@@ -231,7 +231,7 @@
           "title": "Sales",
           "scale": {
             "domainMax": {
-              "expr": "725457.8245000015 * width / max(width - 65.4, width / 2)"
+              "expr": "725458 * width / max(width - 65.4, width / 2)"
             },
             "nice": false
           }
@@ -281,7 +281,7 @@
           "title": "Sales",
           "scale": {
             "domainMax": {
-              "expr": "725457.8245000015 * width / max(width - 65.4, width / 2)"
+              "expr": "725458 * width / max(width - 65.4, width / 2)"
             },
             "nice": false
           }

@@ -256,8 +256,8 @@
       "mark": {
         "type": "text",
         "color": "#555555",
-        "baseline": "bottom",
-        "dy": -3,
+        "baseline": "top",
+        "dy": 0,
         "align": "left",
         "dx": 3
       },
@@ -269,7 +269,7 @@
           "aggregate": "max"
         },
         "y": {
-          "value": "height"
+          "value": 0
         },
         "text": {
           "value": "目標 100,000"

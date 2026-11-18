@@ -1492,9 +1492,11 @@ class _Builder:
         font = self.text_font(marks)
         longest = max((len(str(r.get(field_name) or "")) for r in records), default=0)
         reserve = round(longest * font.size * LABEL_CHAR_WIDTH + LABEL_ROOM, 1)
-        scale["domainMax"] = {
-            "expr": f"{max(numbers)!r} * width / max(width - {reserve}, width / 2)"
-        }
+        # 最大值進位到六位有效數字：彙總的浮點數尾數每次查詢可能不同，規格要是固定的
+        top = max(numbers)
+        unit = 10 ** (math.floor(math.log10(top)) - 5)
+        top = round(math.ceil(top / unit) * unit, 10)
+        scale["domainMax"] = {"expr": f"{top!r} * width / max(width - {reserve}, width / 2)"}
         scale["nice"] = False
         x["scale"] = scale
 
@@ -5024,21 +5026,21 @@ class _Placement:
         line: ReferenceLine | None = None,
         color: str | None = None,
     ) -> dict[str, Any]:
-        """標籤：橫向的參考線寫在窗格的左側、線的上方；縱向的參考線（橫軸上的值，例如日期軸上的區間）
-        寫在窗格的下緣、線的右側（與 Tableau 的畫面相同）。參考線設定了對齊時依設定：水平對齊是標籤
-        在線的哪一側（縱向的線）或窗格的哪一邊（橫向的線），垂直對齊是窗格的上、中、下（縱向的線）
-        或線的上方、線上、下方（橫向的線）。顏色是工作表的文字顏色。"""
+        """標籤：橫向的參考線寫在窗格的左側、線的上方；縱向的參考線（橫軸上的值）寫在線的右側、窗格的
+        上緣，參考區間（兩條線配成的，例如日期軸上的區間）的在下緣（與 Tableau 的畫面相同；單一條線
+        沒有畫面可以對照，照舊在上緣）。參考線設定了對齊時依設定：水平對齊是標籤在線的哪一側（縱向的線）
+        或窗格的哪一邊（橫向的線），垂直對齊是窗格的上、中、下（縱向的線）或線的上方、線上、下方
+        （橫向的線）。顏色是工作表的文字顏色。"""
         align = line.label_align if line is not None else None
         valign = line.label_valign if line is not None else None
         mark: dict[str, Any] = {"type": "text", "color": _css_color(color or REF_LABEL_COLOR)}
         place: dict[str, Any]
         if self.position == "x":
+            valign = valign or ("bottom" if line is not None and line.paired else "top")
             edge = {"top": 0, "center": {"expr": "height / 2"}, "bottom": "height"}
-            place = {"y": {"value": edge[valign or "bottom"]}}
-            mark["baseline"] = {"top": "top", "center": "middle", "bottom": "bottom"}[
-                valign or "bottom"
-            ]
-            mark["dy"] = {"top": 3, "center": 0, "bottom": -3}[valign or "bottom"]
+            place = {"y": {"value": edge[valign]}}
+            mark["baseline"] = {"top": "top", "center": "middle", "bottom": "bottom"}[valign]
+            mark["dy"] = {"top": 0, "center": 0, "bottom": -3}[valign]
             mark["align"] = {"left": "right", "center": "center", "right": "left"}[align or "right"]
             mark["dx"] = {"left": -3, "center": 0, "right": 3}[align or "right"]
         else:
