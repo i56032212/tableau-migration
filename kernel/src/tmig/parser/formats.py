@@ -411,7 +411,8 @@ def _valign(value: str | None) -> Literal["top", "center", "bottom"] | None:
 def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
     """窗格（table-div）與標題（header-div）的分隔線。沒有寫時與 Tableau 相同都畫（淺灰、1 像素、
     最內層以外的每一層之間）；line-visibility='off'、stroke-size='0' 或透明時不畫，div-level='0' 時
-    兩者都不畫。標題的線沒有寫顏色時與窗格相同，層數依窗格的 div-level（兩者共用）。"""
+    兩者都不畫。標題的線沒有寫顏色時與窗格相同，層數依窗格的 div-level（兩者共用）；窗格的線關掉、
+    標題沒有另外設定（沒有 header-div）時標題的線也不畫（與 Tableau 的畫面相同）。"""
     level = _int(raw.get("table-div:div-level"))
     if level is not None and level <= 0:
         return None, None
@@ -431,6 +432,8 @@ def _dividers(raw: dict[str, str]) -> tuple[Divider | None, Divider | None]:
         )
 
     pane = line("table-div", None)
+    if pane is None and not any(key.startswith("header-div:") for key in raw):
+        return None, None
     return pane, line("header-div", hex_color(raw.get("table-div:stroke-color")))
 
 

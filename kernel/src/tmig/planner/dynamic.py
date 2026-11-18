@@ -32,6 +32,7 @@ from tmig.ir.models import (
     Scalar,
     Worksheet,
 )
+from tmig.natural import natural_key
 from tmig.planner.identity import Identity
 from tmig.planner.state import QueryState, use_key
 
@@ -130,7 +131,7 @@ def _scalar(value: Any, datatype: str) -> Scalar:
 
 
 def _sort_key(value: Scalar) -> tuple[int, Any]:
-    return (0, value) if not isinstance(value, str) else (1, value)
+    return (0, value) if not isinstance(value, str) else (1, natural_key(value))
 
 
 def parameter_values(

@@ -77,6 +77,7 @@ from tmig.ir.models import (
     ZeroLine,
     Zone,
 )
+from tmig.natural import natural_key
 from tmig.planner.state import use_key
 from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
@@ -104,6 +105,7 @@ from tmig.render.format import (
     PERCENT_DEFAULT,
     PERCENT_TABLE_CALCS,
     axis_format,
+    current_locale,
     display_format,
     fiscal_label,
     format_value,
@@ -232,6 +234,15 @@ DATE_TICK_LABEL = (
 )
 """日期軸（精確日期、週、日）自動的刻度標籤：年初的刻度只寫年份（與 Tableau 相同），其他照舊。
 刻度落在 UTC 或本地時間的年初都算（依刻度的類型而定）。"""
+
+
+def date_tick_label() -> str:
+    """日期軸自動的刻度標籤（見 DATE_TICK_LABEL）；繁體中文的年份寫成「2025年」（與 Tableau 相同）。"""
+    if current_locale() == "zh-TW":
+        return DATE_TICK_LABEL.replace("'%Y'", "'%Y年'")
+    return DATE_TICK_LABEL
+
+
 LABEL_CHAR_WIDTH = 0.6
 """估計標籤寬度時每個字占字級的比例（數字與拉丁字母）。"""
 LABEL_ROOM = 15
@@ -655,7 +666,7 @@ class _Builder:
                 and "labelExpr" not in axis
             ):
                 # 自動的日期標籤：年初的刻度只寫年份（與 Tableau 相同）
-                axis["labelExpr"] = DATE_TICK_LABEL
+                axis["labelExpr"] = date_tick_label()
                 if shelf == "columns":
                     axis.setdefault("tickCount", {"expr": TICK_COUNT_DATE})
             scale = dict(encoding.get("scale") or {})
@@ -3191,7 +3202,8 @@ def _row_headers(
                         "align": "left",
                         "baseline": "bottom",
                         **builder.font("field-labels", weight=SEMIBOLD).mark(),
-                        "limit": max(width - 2 * HEADER_PADDING, 8),
+                        # 欄名只在左邊留白：Tableau 中 112 像素寬的欄放得下 105 像素的欄名，不截斷
+                        "limit": max(width - HEADER_PADDING, 8),
                         "color": _title_color(builder.ws),
                         "x": offset + HEADER_PADDING,
                         "y": -4,
@@ -5239,12 +5251,13 @@ def _hashable(value: Any) -> Any:
 
 
 def _sort_key(value: Any) -> tuple[int, Any]:
-    """依值排序（數字、日期字串）：Null 在最後，不同型別的值依文字比較。"""
+    """依值排序（數字、日期字串）：Null 在最後，不同型別的值依文字比較；文字是自然排序（與查詢的
+    預設順序相同，見 tmig.natural）。"""
     if value is None:
         return (2, "")
     if _is_number(value):
         return (0, float(value))
-    return (1, str(value))
+    return (1, natural_key(str(value)))
 
 
 def _reference_source(

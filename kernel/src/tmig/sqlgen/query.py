@@ -74,6 +74,7 @@ from tmig.ir.models import (
 )
 from tmig.ir.scope import DatasourceScope, ForeignSource
 from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
+from tmig.natural import natural_sql
 from tmig.planner.analytics import Analytics, ClusterPlan, ForecastPlan
 from tmig.planner.identity import Identity
 from tmig.planner.state import EffectiveState, QueryState, SetValue, apply_state, use_key
@@ -309,6 +310,7 @@ class _RowEnv:
         self.alias = alias
         self.week_start = query.week_start
         self.user = query.user
+        self.today = query.today
 
     def _qualify(self, name: str) -> str:
         return f"{ident(self.alias)}.{ident(name)}" if self.alias else ident(name)
@@ -368,6 +370,7 @@ class _PostEnv:
         self.calls = calls or {}
         self.week_start = query.week_start
         self.user = query.user
+        self.today = query.today
 
     def calc_column(self, target: Target) -> str | None:
         """巢狀計算中先算好的 Table Calculation 計算欄位。"""
@@ -519,6 +522,8 @@ class WorksheetQuery:
         self.ir = ir
         self.user = user
         self.query_state = state
+        self.today = state.today if state is not None else None
+        """基準日（yyyy-mm-dd）：TODAY()、NOW() 與相對日期篩選用它；None 為查詢時的今天。"""
         self.worksheet = _find_worksheet(ir, worksheet)
         self.datasource = next(ds for ds in ir.datasources if ds.id == self.worksheet.datasource)
         # Data Blending：次要資料源（公式以 [資料源].[欄位] 引用它們的欄位，見 tmig.sqlgen.blend）
@@ -2293,6 +2298,15 @@ class WorksheetQuery:
         descending = sort is not None and sort.kind == "alphabetic" and sort.order == "desc"
         if self.fields[d.use.field].set is not None and d.use.agg is None:
             descending = not descending  # 集合的 IN/OUT：In（TRUE）在前，與 Tableau 相同
+        if (
+            sort is None
+            and not descending
+            and d.use.date is None
+            and self.fields[d.use.field].datatype == "string"
+        ):
+            # 沒有設定排序的文字維度：Tableau 的「資料源順序」是自然排序（字串中的數字當成數值），
+            # 見 tmig.natural；同鍵時（例如 07 與 7）依字串
+            return f"{natural_sql(col)} ASC NULLS LAST, {col} ASC NULLS LAST"
         return f"{col} {'DESC' if descending else 'ASC'} NULLS LAST"
 
     def _window(

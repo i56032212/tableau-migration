@@ -20,6 +20,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from tmig.ir.models import ColorPalette, Scalar, ShapeAssignment, ShapeName
+from tmig.natural import natural_key
 from tmig.render.palettes import (
     AUTOMATIC_DIVERGING,
     AUTOMATIC_SEQUENTIAL,
@@ -220,8 +221,8 @@ def scale_color(scale: Any, value: Any) -> str | None:
 
 
 def member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str]:
-    """成員的排序（與 Tableau 的預設相同）：數字（含布林）由小到大、文字不分大小寫，Null 在最後；
-    集合（members_first）的 True（內）在前。"""
+    """成員的排序（與 Tableau 的預設相同）：數字（含布林）由小到大、文字不分大小寫的自然排序（字串中的
+    數字當成數值，見 tmig.natural），Null 在最後；集合（members_first）的 True（內）在前。"""
     if value is None:
         return (3, 0, "")
     if members_first and isinstance(value, bool):
@@ -229,7 +230,7 @@ def member_order(value: Any, members_first: bool = False) -> tuple[int, Any, str
     if isinstance(value, bool | int | float):
         return (0, float(value), "")
     if isinstance(value, str):
-        return (1, value.casefold(), value)
+        return (1, natural_key(value.casefold()), value)
     return (2, str(value), "")
 
 

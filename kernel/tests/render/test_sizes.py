@@ -288,7 +288,8 @@ def test_banding_and_dividers_are_parsed(tmp_path: Path) -> None:
 
 def test_default_dividers_are_parsed(tmp_path: Path) -> None:
     """沒有寫分隔線時與 Tableau 相同：窗格（table-div）與標題（header-div）都畫，淺灰、最內層以外的
-    每一層；兩者可以分開關閉，標題的線沒有寫顏色時與窗格相同，層數共用窗格的 div-level。"""
+    每一層；兩者可以分開關閉，標題的線沒有寫顏色時與窗格相同，層數共用窗格的 div-level。窗格的線關掉、
+    標題沒有另外設定時，標題的線也不畫。"""
     style = parse(tmp_path, banded()).worksheets[0].row_style
     assert (style.divider, style.header_divider) == (Divider(), Divider())
     assert Divider().level is None
@@ -309,8 +310,15 @@ def test_default_dividers_are_parsed(tmp_path: Path) -> None:
     ws = parse(tmp_path, banded(*colored)).worksheets[0]
     assert ws.row_style.divider == Divider(color="#bd8459", level=2)
     assert ws.row_style.header_divider == Divider(color="#bd8459", width=2, level=2)
-    # 欄：只關掉窗格的線
-    assert (ws.column_style.divider, ws.column_style.header_divider) == (None, Divider())
+    # 欄：關掉窗格的線、標題沒有另外設定時，標題的線也不畫（與 Tableau 的畫面相同）
+    assert (ws.column_style.divider, ws.column_style.header_divider) == (None, None)
+    # 標題另外設定了：只關掉窗格的線
+    kept = (
+        rule("table-div", fmt("line-visibility", "off", scope="cols")),
+        rule("header-div", fmt("stroke-size", "1", scope="cols")),
+    )
+    style = parse(tmp_path, banded(*kept)).worksheets[0].column_style
+    assert (style.divider, style.header_divider) == (None, Divider())
 
     zero = rule("table-div", fmt("div-level", "0", scope="rows"))
     style = parse(tmp_path, banded(zero)).worksheets[0].row_style

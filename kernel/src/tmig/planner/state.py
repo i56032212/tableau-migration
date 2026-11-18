@@ -106,7 +106,7 @@ class QueryState(BaseModel):
     )
     today: str | None = Field(
         default=None,
-        description="相對日期篩選的基準日（yyyy-mm-dd）；未指定時為查詢時的今天",
+        description="基準日（yyyy-mm-dd）：相對日期篩選與 TODAY()、NOW() 用它；未指定時為查詢時的今天",
         pattern=r"^\d{4}-\d{2}-\d{2}$",
     )
     pages: dict[str, Scalar] = Field(

@@ -38,4 +38,4 @@ WITH
 -- 第 8 段：Table Calculation 篩選與輸出
 SELECT "__k0" AS "f_region", "__k1" AS "f_category", "__m0" AS "sum(f_sales)", "__m1" AS "sum(f_sales)#tc_running_total_sales", "__sort0" AS "__sort(f_region)"
 FROM tc
-ORDER BY "__sort0" DESC NULLS LAST, "__k0" ASC NULLS LAST, "__k1" ASC NULLS LAST
+ORDER BY "__sort0" DESC NULLS LAST, "__k0" ASC NULLS LAST, regexp_replace(regexp_replace("__k1", '([0-9]+)', '00000000000000000000\1', 'g'), '[0-9]*([0-9]{20})', '\1', 'g') ASC NULLS LAST, "__k1" ASC NULLS LAST

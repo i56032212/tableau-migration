@@ -30,4 +30,4 @@ WITH
 -- 第 8 段：Table Calculation 篩選與輸出
 SELECT "__k0" AS "f_category", "__m0" AS "sum(f_sales)", "__m1" AS "sum(f_sales)#tc_percent_of_total_sales"
 FROM tc
-ORDER BY "__k0" ASC NULLS LAST
+ORDER BY regexp_replace(regexp_replace("__k0", '([0-9]+)', '00000000000000000000\1', 'g'), '[0-9]*([0-9]{20})', '\1', 'g') ASC NULLS LAST, "__k0" ASC NULLS LAST

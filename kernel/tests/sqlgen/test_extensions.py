@@ -387,6 +387,33 @@ def test_relative_date(run: Run) -> None:
     assert region_filtered(run, relative(-1, 0, "week"), wednesday) == {"West": 500.0}
 
 
+def test_today_follows_the_base_date(run: Run) -> None:
+    """TODAY() 在指定了基準日（QueryState.today，比對 Tableau 匯出的結果或重現某一天的畫面）時用它，
+    與相對日期篩選相同；沒有指定時是查詢時的今天。"""
+    calcs = b.calc("Calculation_91", "Past", "[Order Date] <= TODAY()", "boolean", "dimension")
+    past = instance("[Calculation_91]", "None", "[none:Calculation_91:nk]")
+    flt = (
+        f"<filter class='categorical' column='{ref('none:Calculation_91:nk')}'>"
+        "<groupfilter function='member' level='[none:Calculation_91:nk]' member='true' /></filter>"
+    )
+    sheet = worksheet(
+        "S",
+        [REGION, SALES, DATE, past],
+        rows=ref("none:Region:nk"),
+        cols=ref("sum:Sales:qk"),
+        view_extra=flt,
+    )
+    early = QueryState(today="2023-02-28")
+    assert by_region(run(sheet, calcs=calcs, state=early), "sum(f_sales)") == {"East": 350.0}
+    later = QueryState(today="2024-01-31")
+    assert by_region(run(sheet, calcs=calcs, state=later), "sum(f_sales)") == {
+        "East": 350.0,
+        "West": 800.0,
+    }
+    # 沒有指定：查詢時的今天（資料都在過去）
+    assert len(by_region(run(sheet, calcs=calcs), "sum(f_sales)")) == 4
+
+
 def test_top_n_within_selection(run: Run) -> None:
     inner = "".join(
         f"<groupfilter function='member' level='[none:Region:nk]' member='&quot;{r}&quot;' />"

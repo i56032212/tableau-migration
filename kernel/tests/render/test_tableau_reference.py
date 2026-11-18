@@ -3,19 +3,21 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 
 from lxml import etree
 
 from tmig.ir import FieldUse, Marks, ReferenceLine
 from tmig.parser.formats import workbook_text
-from tmig.render.format import format_number
+from tmig.render.format import accept_language, display_locale, format_number, format_value
 from tmig.render.vegalite import (
     DATE_TICK_LABEL,
     TICK_COUNT_Y,
     _cell_extent,
     _image_side,
     _Placement,
+    date_tick_label,
 )
 
 from ..parser.builder import ref, worksheet
@@ -180,3 +182,22 @@ def test_workbook_text_defaults() -> None:
     )
     assert workbook_text(style) == ("Roboto", "#101e47")
     assert workbook_text(None) == (None, None)
+
+
+def test_dates_follow_the_display_locale() -> None:
+    """日期的寫法依顯示的地區設定：繁體中文是 2026/11/18、日期軸的年份是「2025年」（與 Tableau 繁體中文
+    環境的畫面相同）；沒有設定或其他語言維持 2026-11-18、2025。"""
+    day = dt.date(2026, 1, 5)
+    assert format_value(day, "date") == "2026-01-05"
+    with display_locale("zh-TW"):
+        assert format_value(day, "date") == "2026/1/5"
+        assert format_value(dt.date(2026, 11, 18), "date") == "2026/11/18"
+        assert format_value(day, "date", "mm/dd/yyyy") == "01/05/2026"  # 設定了格式的照格式
+        assert "'%Y年'" in date_tick_label()
+    with display_locale("fr-FR"):  # 還沒有支援的語言
+        assert format_value(day, "date") == "2026-01-05"
+    assert format_value(day, "date") == "2026-01-05" and date_tick_label() == DATE_TICK_LABEL
+    assert accept_language("zh-TW,zh;q=0.9,en;q=0.8") == "zh-TW"
+    assert accept_language("zh-Hant-TW") == "zh-TW" and accept_language("zh_HK") == "zh-TW"
+    assert accept_language("en-US,en;q=0.9") is None and accept_language("zh-CN") is None
+    assert accept_language(None) is None and accept_language("") is None

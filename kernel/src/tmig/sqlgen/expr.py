@@ -577,8 +577,13 @@ class ExprCompiler:
             week = f"week({a[0]})"
             return f"CAST((CASE WHEN {week} > 52 THEN 4 ELSE ({week} - 1) // 13 + 1 END) AS BIGINT)"
         if name == "TODAY":
-            return "current_date"
+            # 指定了基準日（比對 Tableau 匯出的結果、重現某一天的畫面）時用它，否則是查詢時的今天
+            today = getattr(self.env, "today", None)
+            return literal(today, "date") if today else "current_date"
         if name == "NOW":
+            today = getattr(self.env, "today", None)
+            if today:
+                return f"CAST({literal(today, 'date')} AS TIMESTAMP)"
             return "CAST(now() AS TIMESTAMP)"
         if name in USER_FUNCTIONS:
             return self._user_function(node, a)

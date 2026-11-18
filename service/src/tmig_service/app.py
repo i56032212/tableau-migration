@@ -67,7 +67,7 @@ from tmig.planner.state import (
 )
 from tmig.render.aliases import alias_key, member_aliases
 from tmig.render.datasource import datasource_summary
-from tmig.render.format import fiscal_label
+from tmig.render.format import accept_language, display_locale, fiscal_label
 from tmig.render.format import format_value as display_value
 from tmig.render.missing import COLUMN_ORDER, pad_empty, pad_result
 from tmig.render.vegalite import (
@@ -862,6 +862,14 @@ def create_app(
         return Response(content, media_type=media, headers=headers)
 
     @app.post("/api/workbooks/{wb}/worksheets/{ws}/render")
+    def render_view(
+        wb: str, ws: str, user: User, request: Request, state: QueryState | None = None
+    ) -> dict[str, Any]:
+        """檢視器與編輯器要的圖表：日期的寫法依瀏覽器的語言（Accept-Language；與 Tableau 的活頁簿
+        地區設定是「自動」時相同，目前只有繁體中文不同，見 tmig.render.format.LOCALES）。"""
+        with display_locale(accept_language(request.headers.get("accept-language"))):
+            return render(wb, ws, user, state)
+
     def render(wb: str, ws: str, user: User, state: QueryState | None = None) -> dict[str, Any]:
         loaded, grant = granted(wb, user)
         ir = loaded.ir

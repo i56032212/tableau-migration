@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -294,6 +297,37 @@ DATE_LABELS = {
 }
 
 
+_LOCALE: ContextVar[str | None] = ContextVar("tmig_display_locale", default=None)
+
+LOCALES = frozenset({"zh-TW"})
+"""支援的顯示地區設定。Tableau 的活頁簿地區設定是「自動」時，日期的寫法跟著看報表的人的地區設定；
+這裡只做了繁體中文（依 Tableau 繁體中文環境的畫面：日期 2026/11/18、日期軸的年份 2025年），
+其他語言維持與地區無關的寫法（2026-11-18、2025）。"""
+
+
+def accept_language(header: str | None) -> str | None:
+    """HTTP 的 Accept-Language → 支援的顯示地區設定：只看第一個語言，繁體中文（zh-TW、zh-Hant、zh-HK、
+    zh-MO）為 zh-TW，其他為 None。"""
+    first = (header or "").split(",")[0].split(";")[0].strip().lower().replace("_", "-")
+    if first.startswith(("zh-tw", "zh-hant", "zh-hk", "zh-mo")):
+        return "zh-TW"
+    return None
+
+
+@contextmanager
+def display_locale(locale: str | None) -> Iterator[None]:
+    """在這段期間以這個地區設定顯示日期（不支援的視為沒有設定）。"""
+    token = _LOCALE.set(locale if locale in LOCALES else None)
+    try:
+        yield
+    finally:
+        _LOCALE.reset(token)
+
+
+def current_locale() -> str | None:
+    return _LOCALE.get()
+
+
 def format_value(
     value: Any,
     datatype: str,
@@ -321,5 +355,7 @@ def format_value(
             return f"{value.year} Q{(value.month - 1) // 3 + 1}"
         if trunc == "month":
             return f"{value.year}-{value.month:02d}"
+        if current_locale() == "zh-TW":
+            return f"{value.year}/{value.month}/{value.day}"
         return value.isoformat()
     return str(value)
