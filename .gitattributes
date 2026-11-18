@@ -5,6 +5,8 @@
 *.twbx binary
 *.hyper binary
 *.png binary
+# 檢視器隨附的字型
+*.woff2 binary
 
 # 單一 .hyper 超過 100 MB 時（GitHub 的單檔上限），改用 Git LFS：
 #   git lfs install
