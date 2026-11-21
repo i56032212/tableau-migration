@@ -5,7 +5,9 @@ from __future__ import annotations
 import datetime as dt
 import itertools
 import math
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,6 +16,7 @@ from tmig.parser.workbook import parse_workbook
 from tmig.planner.analytics import ACTUAL, ESTIMATE, HIGH, LOW
 from tmig.planner.cluster import calinski_harabasz, cluster, kmeans, scale
 from tmig.planner.forecast import Model, best_fit, forecast
+from tmig.render.notes import warnings
 from tmig.render.vegalite import build_spec
 from tmig.sqlgen.query import worksheet_sql
 
@@ -100,6 +103,8 @@ def test_cluster_by_view_measures(tmp_path: Path, db: Path) -> None:
     shown = {v for record in rendered.spec["data"]["values"] for v in record.values()}
     assert {"Cluster 1", "Cluster 2"} <= shown
     assert any("k-means" in n for n in rendered.notes)
+    # 這一則只是說明計算的方式：圖上沒有少東西，檢視器不必標示
+    assert warnings(rendered.notes) == []
 
 
 def test_cluster_needs_measures_in_view(tmp_path: Path) -> None:
@@ -246,6 +251,8 @@ def test_forecast_months(tmp_path: Path, db: Path) -> None:
     band = rendered.spec["layer"][0]
     assert band["name"].startswith("__deco_forecast") and band["mark"]["type"] == "area"
     assert any("指數平滑" in n for n in rendered.notes)
+    # 這一則只是說明計算的方式：圖上沒有少東西，檢視器不必標示
+    assert warnings(rendered.notes) == []
 
 
 def test_forecast_fills_missing_months_with_zeros(tmp_path: Path, db: Path) -> None:
@@ -314,3 +321,47 @@ def test_disabled_forecast_is_ignored(tmp_path: Path) -> None:
     ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet)))
     assert ir.unsupported == [] and ir.worksheets[0].forecast is None
     assert any("預測已關閉" in u.reason for u in ir.ignored)
+
+
+def test_forecast_that_cannot_be_estimated_says_why() -> None:
+    """估計不出來的預測要說明原因（原本資料不到兩期時什麼都不說：圖上沒有預測，也沒有任何附註）。
+    兩年的資料、預設忽略最後一期：只剩一期，估計不了。"""
+    from tmig.ir.models import FieldUse, Forecast
+    from tmig.planner.analytics import Analytics, ForecastPlan, apply
+
+    def run(
+        rows: Sequence[tuple[Any, ...]], series: bool = False, **settings: Any
+    ) -> tuple[list[tuple[Any, ...]], list[str]]:
+        plan = Analytics(
+            forecast=ForecastPlan(
+                time="year",
+                unit="year",
+                measures=["sales"],
+                series=["region"] if series else [],
+                settings=Forecast(measures=[FieldUse(field="f_sales", agg="sum")], **settings),
+            )
+        )
+        columns = ["region", "year", "sales"]
+        _, out = apply(plan, columns, list(rows))
+        return out, plan.notes
+
+    two_years = [("East", dt.date(2023, 1, 1), 10.0), ("East", dt.date(2024, 1, 1), 12.0)]
+    out, notes = run(two_years)
+    assert len(out) == 2  # 沒有估計的期
+    assert notes == ["預測：扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"]
+    # 只有一期：不必提忽略的期數
+    out, notes = run(two_years[:1])
+    assert len(out) == 1 and notes == ["預測：資料不到兩期，估計不出來"]
+    # 不忽略最後一期：兩期可以估計，沒有這一則
+    out, notes = run(two_years, ignore_last=0)
+    assert len(out) > 2 and notes == []
+    # 幾條時間序列中只有一條的資料不夠：說明有幾條，其餘照樣估計；同一個原因只說一次
+    six = [("West", dt.date(2019 + i, 1, 1), 10.0 + i) for i in range(6)]
+    short = [
+        ("East", dt.date(2023, 1, 1), 10.0),
+        ("East", dt.date(2024, 1, 1), 12.0),
+        ("South", dt.date(2024, 1, 1), 5.0),
+    ]
+    out, notes = run([*six, *short], series=True)
+    assert len(out) > len(six) + len(short)
+    assert notes == ["預測：有 2 條時間序列扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"]

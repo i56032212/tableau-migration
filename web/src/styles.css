@@ -39,6 +39,9 @@ button.primary { background: var(--accent); color: #fff; border: 1px solid var(-
 .desktop-actions button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px; cursor: pointer; }
 .toast { position: fixed; right: 16px; bottom: 16px; max-width: min(520px, calc(100vw - 32px)); z-index: 1000; background: var(--ink); color: #fff; border-radius: 6px; padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 16px rgb(0 0 0 / 20%); overflow-wrap: anywhere; }
 .toast.error { background: var(--error); }
+/* 短訊息上的按鈕（刪除分頁之後的「復原」） */
+.toast-action { margin-left: 14px; padding: 1px 10px; border: 1px solid rgb(255 255 255 / 65%); border-radius: 4px; background: none; color: #fff; font: inherit; font-size: 13px; cursor: pointer; }
+.toast-action:hover { background: rgb(255 255 255 / 16%); }
 
 /* 伺服器（D0）：桌面版的登入、發布、從伺服器開啟；伺服器的版本與桌面版的登入 */
 .server-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 4px 0 16px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
@@ -89,6 +92,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .cases { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .cases button { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 3px 10px; cursor: pointer; }
 .cases button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* 「更多」：只在手機大小的畫面上顯示（見檔案最後的手機版面） */
+.toolbar-more { display: none; }
 
 .dashboard { position: relative; background: var(--panel); border: 1px solid var(--line); }
 .zone { position: absolute; overflow: hidden; }
@@ -225,7 +230,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 訂閱與資料警示擷取畫面時（tmig_service.subscriptions 在 <html> 加上 capture）：圖片裡同樣不畫檢視器的介面 */
 .capture .worksheet-meta, .capture .worksheet-overlay, .capture .map-tools { display: none !important; }
 
-.story { display: inline-flex; flex-direction: column; gap: 8px; }
+.story { display: inline-flex; flex-direction: column; gap: 8px; min-width: var(--story-width); }
 .story-title { font-size: 20px; font-weight: 600; padding: 2px 4px; }
 .story-nav { display: flex; align-items: stretch; gap: 6px; }
 .story-points { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; overflow-x: auto; }
@@ -767,6 +772,18 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .null-indicator .null-menu button { border: 0; background: none; text-align: left; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .null-indicator .null-menu button:hover { background: #eef3fb; }
 @media print { .null-indicator { display: none; } }
+/* 畫圖的附註（沒有畫出來、算不出來的原因；編輯器另有計算方式的說明）：檢視左下角的標示，點了浮出清單 */
+.notes-indicator { position: absolute; left: 6px; bottom: 6px; z-index: 3; font-size: 11px; }
+.notes-indicator > button { border: 1px solid var(--line); border-radius: 3px; background: rgba(255, 255, 255, 0.9); padding: 1px 6px; font: inherit; color: #666; cursor: pointer; }
+.notes-indicator[data-warnings]:not([data-warnings="0"]) > button { color: var(--warn); border-color: #f0c98a; background: rgba(255, 251, 235, 0.95); }
+.notes-indicator > button:hover, .notes-indicator > button[aria-expanded="true"] { background: #fff; border-color: #999; }
+.notes-list { position: fixed; z-index: 1100; width: max-content; max-width: min(360px, calc(100vw - 8px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); padding: 6px 10px; font-size: 12px; line-height: 1.5; }
+.notes-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.notes-list li[data-kind="warning"]::before { content: "⚠ "; color: var(--warn); }
+.notes-list li[data-kind="info"] { color: var(--muted); }
+.notes-list li[data-kind="info"]::before { content: "ⓘ "; }
+@media print { .notes-indicator, .notes-list { display: none; } }
+.capture .notes-indicator { display: none !important; }
 .divider-details { display: inline-flex; gap: 8px; align-items: center; }
 .divider-details input[type="number"] { width: 56px; margin-left: 4px; }
 .describe-dialog { min-width: 460px; max-width: 860px; max-height: 70vh; overflow: auto; }
@@ -893,3 +910,32 @@ svg.shape-swatch path { fill: #5f6b7a; }
 .sheet-tab-add .tool-button { min-width: 24px; height: 22px; }
 .status-bar { flex: none; display: flex; align-items: center; gap: 16px; height: 20px; padding: 0 8px; font-size: 11px; color: var(--muted); background: var(--chrome); border-top: 1px solid var(--chrome-line); }
 .tab-color-dialog { display: flex; flex-direction: column; gap: 10px; }
+
+/* 手機大小的畫面上的檢視器（畫面較短的一邊 500 像素以下：與選用裝置版面的判斷相同，見 device.ts）。
+   桌面與平板的畫面不受影響；編輯器（.page.editing）不在此列 */
+@media (max-width: 500px), (max-height: 500px) {
+  .page:not(.editing, .presenting) { padding: 6px 8px 16px; }
+  /* 工具列收成一列：回報表清單、切換檢視與「更多」；其餘的工具（簡報模式、復原、匯出、自訂檢視、訂閱、
+     登入者…）按「更多」才展開，往下排 */
+  .toolbar { gap: 6px 8px; margin-bottom: 6px; }
+  .toolbar-more { display: inline-block; flex: none; min-width: 36px; font-weight: 600; }
+  .toolbar-more[aria-expanded="true"] { background: #e3ebf7; border-color: var(--accent); }
+  .toolbar .view-switch { flex: 1 1 0; width: 0; min-width: 0; }
+  .toolbar[data-tools="closed"] > :not(.toolbar-home, .view-switch, .toolbar-more) { display: none; }
+  /* 展開時第一列不變，報表的名稱自己一列，其餘的工具接在後面 */
+  .toolbar > * { order: 1; }
+  .toolbar > .toolbar-home, .toolbar > .view-switch, .toolbar > .toolbar-more { order: 0; }
+  .toolbar > .sep { display: none; }
+  .toolbar > .wb { flex-basis: 100%; }
+  /* 比畫面寬的 dashboard（沒有手機版面、以設計的尺寸顯示的預設版面）在自己的區塊裡左右捲動，工具列留在原位 */
+  .page:not(.editing) .dashboard-wrapper { overflow-x: auto; }
+  /* 單張工作表：高度不超過畫面；篩選與參數的控制項排在圖的下面，不擠掉圖的寬度 */
+  .single-sheet { height: min(640px, calc(100vh - 64px)); min-height: 320px; }
+  .single-sheet.with-controls { flex-direction: column; height: auto; min-height: 0; }
+  .single-sheet.with-controls .sheet-main { flex: none; height: min(520px, calc(100vh - 64px)); min-height: 320px; }
+  .single-sheet.with-controls .sheet-controls { width: 100%; }
+  /* Story：標題與故事點的導覽留在畫面的寬度之內；故事點的內容（dashboard、文字物件）比畫面寬時一起左右捲動 */
+  .page:not(.editing) .story { display: flex; min-width: 0; }
+  .page:not(.editing) .story-point { overflow-x: auto; }
+  .page:not(.editing) .story-point > .dashboard-wrapper { overflow-x: visible; }
+}

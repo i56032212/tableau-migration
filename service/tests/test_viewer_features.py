@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
+import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -1300,6 +1302,91 @@ def test_drag_selects_the_marks_in_the_rectangle(server: str) -> None:
         browser.close()
 
 
+def test_escape_clears_the_selection(server: str) -> None:
+    """按 Esc 取消選取（Tableau：Esc 取消選取的標記；原本 Esc 只收起釘住的工具提示，選取與篩選動作都還在）：
+    點選、框選的選取都清除，篩選動作跟著清除。dashboard 上兩張工作表都有選取時，一次取消最近選取的那一張。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    targets = {"ws_category_detail", "ws_segment_detail"}
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(ALL_FOUR)
+        page.wait_for_timeout(300)
+        picker = page.locator("[data-worksheet='ws_region_picker']")
+        bars = "svg path[aria-roledescription='bar']:not(.frozen *)"
+
+        # 點選一個標記（篩選動作篩選兩張目標工作表）→ Esc：選取與篩選動作都清除
+        start = len(renders.items)
+        picker.locator(f"{bars}[aria-label$='Region: East']").click()
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+        # 兩張目標工作表各有自己的篩選動作（回應的先後不一定）
+        for _, body, _ in renders.items[start:]:
+            assert list(body["actions"].values()) == [[{"f_region": "East"}]]
+        start = len(renders.items)
+        page.keyboard.press("Escape")
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_have_count(0)
+        expect(page.locator(".viz-tooltip.pinned")).to_have_count(0)
+        assert all(body.get("actions", {}) == {} for _, body, _ in renders.items[start:])
+
+        # 框選兩個標記 → Esc
+        east = picker.locator(f"{bars}[aria-label$='Region: East']").bounding_box()
+        south = picker.locator(f"{bars}[aria-label$='Region: South']").bounding_box()
+        assert east is not None and south is not None
+        start = len(renders.items)
+        page.mouse.move(east["x"] + 6, east["y"] + east["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(south["x"] + 40, south["y"] + south["height"] / 2, steps=8)
+        page.mouse.up()
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_contain_text("已選取 2 個標記")
+        start = len(renders.items)
+        page.keyboard.press("Escape")
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_have_count(0)
+        assert all(body.get("actions", {}) == {} for _, body, _ in renders.items[start:])
+        # 沒有選取時按 Esc：什麼都不做
+        start = len(renders.items)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+        assert len(renders.items) == start
+
+        # 兩張工作表都有選取（Region Picker 的選取、Category Detail 上釘住的工具提示）：
+        # 第一次 Esc 取消最近的那一張，第二次才是前一張
+        start = len(renders.items)
+        picker.locator(f"{bars}[aria-label$='Region: West']").click()
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+        page.wait_for_function(ALL_FOUR)
+        page.wait_for_timeout(300)
+        detail = page.locator("[data-worksheet='ws_category_detail']")
+        detail.locator(bars).first.click()
+        pinned = page.locator(".viz-tooltip.pinned")
+        expect(pinned).to_have_count(1)
+        expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+        start = len(renders.items)
+        page.keyboard.press("Escape")
+        expect(pinned).to_have_count(0)
+        page.wait_for_timeout(500)
+        expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+        assert len(renders.items) == start
+        page.keyboard.press("Escape")
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
 def test_loading_title_is_the_sheet_name_and_empty_view_is_blank(server: str) -> None:
     """查詢還沒回來時工作表的標題是工作表的名稱，不是內部的代號（稽核 B35：ws_region_picker）；
     沒有資料的工作表（篩選動作的目標，還沒有選取）是空白的，不畫座標軸與「0.000000」（B33）。"""
@@ -1403,4 +1490,195 @@ def test_print_and_capture_show_only_the_view(server: str) -> None:
         )
         assert background == ["rgb(255, 255, 255)", "rgb(255, 255, 255)"]
         expect(page.locator(".dashboard")).to_be_visible()
+        browser.close()
+
+
+BOX = """selector => {
+  const element = document.querySelector(selector);
+  if (!element) return null;
+  const r = element.getBoundingClientRect();
+  return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
+}"""
+
+
+def test_phone_sized_viewer_keeps_the_screen_for_the_view(server: str, tmp_path: Path) -> None:
+    """手機（390×844，稽核 I6）：原本工具列折成好幾列、占掉大半個畫面，隨畫面調整大小的 dashboard 被壓到
+    358×609、圖表只剩 59 像素寬。
+
+    - 工具列收成一列（回報表清單、切換檢視、「更多」），其餘的工具按「更多」才展開
+    - 沒有手機版面的 dashboard 以作者設計的尺寸顯示預設版面，在自己的區塊裡左右捲動（工具列不跟著捲走）；
+      有手機版面的照樣用手機版面
+    - 單張工作表的控制項排在圖的下面；Story 的標題與導覽留在畫面的寬度之內
+    - 桌面與平板大小的畫面不變：沒有「更多」，工具全部排出來，dashboard 照樣隨畫面調整大小"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    overview = next(d for d in ir.dashboards if d.name == "功能總覽")
+    assert overview.sizing == "automatic" and not overview.layouts
+    assert (overview.size.width, overview.size.height) == (1366, 768)
+    fixed = next(d for d in ir.dashboards if d.name == "圖表擴充")
+    assert fixed.sizing == "fixed" and not fixed.layouts
+    phone = next(d for d in ir.dashboards if d.name == "篩選動作")
+    assert [layout.device for layout in phone.layouts] == ["phone"]
+    story = ir.stories[0]
+    loaded = "document.querySelectorAll('.worksheet[data-loading=\"true\"]').length === 0"
+
+    # 單張工作表加上控制項的報表（示範報表的複本：Sales by Region 顯示參數的控制項）
+    demo = ROOT / "fixtures" / "superstore_demo"
+    target = tmp_path / "fixtures" / "controls"
+    target.mkdir(parents=True)
+    for name in ("superstore_demo.twbx", "cases.yaml"):
+        shutil.copy(demo / name, target / name)
+    shutil.copytree(demo / "data", target / "data")
+    report = load_ir(demo / "golden.ir.json").model_dump(mode="json")
+    sheet = next(w for w in report["worksheets"] if w["id"] == "ws_sales_by_region")
+    sheet["controls"] = [
+        {"kind": "parameter", "parameter": report["parameters"][0]["id"], "control": "type_in"}
+    ]
+    (target / "golden.ir.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+        def box(selector: str) -> dict[str, float]:
+            found = page.evaluate(BOX, selector)
+            assert found is not None, selector
+            return found
+
+        def no_page_scroll() -> None:
+            # 整頁不左右捲動：工具列留在原位
+            widths = page.evaluate(
+                "[document.documentElement.scrollWidth, document.documentElement.clientWidth,"
+                " document.querySelector('.page').scrollWidth, document.querySelector('.page').clientWidth]"
+            )
+            assert widths[0] == widths[1] == 390 and widths[2] == widths[3], widths
+
+        # 沒有手機版面、隨畫面調整大小的 dashboard：工具列一列，dashboard 是設計的尺寸
+        page.goto(f"{server}/w/superstore_features/d/{overview.id}")
+        page.wait_for_selector(".worksheet[data-loading='false']")
+        page.wait_for_function(loaded)
+        toolbar = box(".toolbar")
+        assert toolbar["height"] <= 40 and toolbar["width"] <= 390, toolbar
+        more = page.get_by_role("button", name="更多工具")
+        expect(more).to_be_visible()
+        expect(more).to_have_attribute("aria-expanded", "false")
+        expect(page.get_by_label("切換檢視")).to_be_visible()
+        expect(page.locator(".toolbar").get_by_role("link", name="報表")).to_be_visible()
+        for hidden in (".toolbar .history", ".toolbar .cases", ".toolbar .wb"):
+            expect(page.locator(hidden)).to_be_hidden()
+        assert page.locator(".dashboard").get_attribute("data-device") == "default"
+        board = box(".dashboard")
+        # 寬度是設計的 1366（不是畫面的 374），高度不小於設計的 768（畫面比它高時填滿）
+        assert board["width"] == 1366 and 768 <= board["height"] <= 844 and board["y"] <= 50, board
+        charts = page.locator(".dashboard .worksheet .chart svg").evaluate_all(
+            "nodes => nodes.filter(n => !n.closest('.frozen')).map(n => n.getBoundingClientRect().width)"
+        )
+        assert len(charts) == 3 and min(charts) > 300, charts
+        wrapper = page.locator(".dashboard-wrapper")
+        assert wrapper.evaluate("e => [e.clientWidth, e.scrollWidth]") == [374, 1366]
+        no_page_scroll()
+        wrapper.evaluate("e => { e.scrollLeft = 600; }")
+        assert wrapper.evaluate("e => e.scrollLeft") == 600
+        assert box(".toolbar")["x"] == toolbar["x"] and box(".dashboard")["x"] == board["x"] - 600
+
+        # 「更多」：展開其餘的工具（報表的名稱、復原與重做、匯出、篩選組合），再按一次收起來
+        more.click()
+        expect(more).to_have_attribute("aria-expanded", "true")
+        expect(page.locator(".toolbar .history")).to_be_visible()
+        expect(page.locator(".toolbar").get_by_label("匯出")).to_be_visible()
+        expect(page.locator(".toolbar .wb")).to_have_text("superstore_features")
+        # 第一列不變：「更多」還在切換檢視的右邊、同一列
+        assert abs(box(".toolbar-more")["y"] - box(".view-switch")["y"]) < 6
+        assert box(".toolbar-more")["x"] >= box(".view-switch")["right"]
+        assert box(".toolbar")["height"] > 60
+        more.click()
+        expect(page.locator(".toolbar .history")).to_be_hidden()
+        assert box(".toolbar")["height"] <= 40
+
+        # 展開之後切換到另一個檢視：收起來。固定大小、沒有手機版面的 dashboard 照原尺寸，在區塊裡捲動
+        more.click()
+        page.get_by_label("切換檢視").select_option(f"d:{fixed.id}")
+        page.wait_for_url(f"{server}/w/superstore_features/d/{fixed.id}")
+        page.wait_for_selector(".worksheet[data-loading='false']")
+        expect(more).to_have_attribute("aria-expanded", "false")
+        board = box(".dashboard")
+        assert (board["width"], board["height"]) == (fixed.size.width, fixed.size.height)
+        assert wrapper.evaluate("e => e.scrollWidth > e.clientWidth")
+        no_page_scroll()
+
+        # 有手機版面：用手機版面，寬度在畫面之內
+        page.goto(f"{server}/w/superstore_features/d/{phone.id}")
+        page.wait_for_function(ALL_FOUR)
+        assert page.locator(".dashboard").get_attribute("data-device") == "phone"
+        board = box(".dashboard")
+        assert board["width"] <= 390 and board["right"] <= 390, board
+        assert wrapper.evaluate("e => e.scrollWidth <= e.clientWidth")
+        no_page_scroll()
+
+        # 單張工作表：在畫面的寬度之內，圖在工具列下面
+        page.goto(f"{server}/w/superstore_features/s/ws_sales_by_segment")
+        page.wait_for_selector(".single-sheet .worksheet[data-loading='false']")
+        single = box(".single-sheet")
+        assert single["right"] <= 390 and single["y"] <= 50 and single["bottom"] <= 844, single
+        no_page_scroll()
+
+        # Story：標題與故事點的導覽在畫面的寬度之內（原本整個 Story 是 1016 寬，導覽要捲到右邊才看得到）
+        page.goto(f"{server}/w/superstore_features/story/{story.id}")
+        page.wait_for_selector(".story .worksheet[data-loading='false']")
+        page.wait_for_function(loaded)
+        assert box(".story")["width"] <= 390 and box(".story-nav")["right"] <= 390
+        assert box(".story-title")["right"] <= 390
+        next_point = page.get_by_role("button", name="下一個故事點")
+        if next_point.count():
+            assert box(".story-arrow:last-of-type")["right"] <= 390
+        no_page_scroll()
+        page.close()
+
+        # 單張工作表有控制項：控制項排在圖的下面，圖的寬度不被擠掉（原本控制項占 210 像素，圖只剩 140）
+        with running_server(tmp_path / "fixtures", DIST) as other:
+            narrow = browser.new_page(viewport={"width": 390, "height": 844})
+            narrow.on("pageerror", lambda exc: errors.append(str(exc)))
+            narrow.goto(f"{other}/w/controls/s/ws_sales_by_region")
+            narrow.wait_for_selector(".single-sheet .worksheet[data-loading='false']")
+            main = narrow.evaluate(BOX, ".single-sheet .sheet-main")
+            controls = narrow.evaluate(BOX, ".single-sheet .sheet-controls")
+            assert main["width"] >= 340 and controls["y"] >= main["bottom"], (main, controls)
+            assert controls["right"] <= 390
+            narrow.close()
+            # 桌面的寬度：控制項在圖的右邊（不變）
+            wide = browser.new_page(viewport={"width": 1440, "height": 900})
+            wide.goto(f"{other}/w/controls/s/ws_sales_by_region")
+            wide.wait_for_selector(".single-sheet .worksheet[data-loading='false']")
+            main = wide.evaluate(BOX, ".single-sheet .sheet-main")
+            controls = wide.evaluate(BOX, ".single-sheet .sheet-controls")
+            assert controls["x"] >= main["right"] and controls["width"] == 210, (main, controls)
+            wide.close()
+
+        # 桌面與平板大小的畫面不變：沒有「更多」，工具都在，dashboard 隨畫面調整大小、不捲動
+        for size in ((1440, 900), (1024, 768), (768, 1024)):
+            desktop = browser.new_page(viewport={"width": size[0], "height": size[1]})
+            desktop.on("pageerror", lambda exc: errors.append(str(exc)))
+            desktop.goto(f"{server}/w/superstore_features/d/{overview.id}")
+            desktop.wait_for_selector(".worksheet[data-loading='false']")
+            expect(desktop.get_by_role("button", name="更多工具")).to_be_hidden()
+            for shown in (".toolbar .history", ".toolbar .cases", ".toolbar .wb", ".toolbar .sep"):
+                expect(desktop.locator(shown)).to_be_visible()
+            board = desktop.evaluate(BOX, ".dashboard")
+            wrapper_width = desktop.locator(".dashboard-wrapper").evaluate("e => e.clientWidth")
+            assert board["width"] == wrapper_width == size[0] - 32, (size, board)
+            assert (
+                desktop.locator(".page").evaluate("e => getComputedStyle(e).paddingLeft") == "16px"
+            )
+            if size == (1440, 900):
+                # 工具列一列半（62 像素）、dashboard 從 86 像素開始：與修改之前相同
+                assert desktop.evaluate(BOX, ".toolbar")["height"] == 62 and board["y"] == 86
+            desktop.goto(f"{server}/w/superstore_features/story/{story.id}")
+            desktop.wait_for_selector(".story .worksheet[data-loading='false']")
+            assert desktop.evaluate(BOX, ".story")["width"] == story.size.width
+            desktop.close()
+        assert errors == []
         browser.close()

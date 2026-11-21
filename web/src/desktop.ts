@@ -24,6 +24,8 @@ export type DesktopDialog =
 export const DIALOG_EVENT = "tmig:desktop-dialog";
 /** 報表的定義在檢視器之外改變了（例如報表改用發布的資料源）：畫面重新載入報表。 */
 export const CHANGED_EVENT = "tmig:workbook-changed";
+/** 報表關閉了：這次開啟期間留在畫面這一側的紀錄（復原刪除的分頁，見 editor/structure.ts）不再有效。 */
+export const RESET_EVENT = "tmig:workbook-reset";
 
 export function openDialog(dialog: DesktopDialog): void {
   window.dispatchEvent(new CustomEvent<DesktopDialog>(DIALOG_EVENT, { detail: dialog }));
@@ -202,14 +204,35 @@ export function defaultPackagePath(doc: DesktopDocument): string {
   return `${folder}${name || doc.name}.tmigx`;
 }
 
-/** 畫面右下角的短訊息。 */
-export function toast(message: string, kind: "info" | "error" = "info"): void {
+/** 短訊息上的按鈕（例如刪除分頁之後的「復原」）。 */
+export interface ToastAction {
+  label: string;
+  title?: string;
+  run: () => void;
+}
+
+/** 畫面右下角的短訊息。action：訊息上的一個按鈕（按了之後訊息收掉），有按鈕的訊息留久一點。
+ * 回傳訊息的元素（要提早收掉時用）。 */
+export function toast(message: string, kind: "info" | "error" = "info", action?: ToastAction): HTMLElement {
   const element = document.createElement("div");
   element.className = `toast ${kind}`;
   element.setAttribute("role", kind === "error" ? "alert" : "status");
   element.textContent = message;
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-action";
+    button.textContent = action.label;
+    if (action.title) button.title = action.title;
+    button.addEventListener("click", () => {
+      element.remove();
+      action.run();
+    });
+    element.appendChild(button);
+  }
   document.body.appendChild(element);
-  window.setTimeout(() => element.remove(), kind === "error" ? 8000 : 4000);
+  window.setTimeout(() => element.remove(), action ? 10000 : kind === "error" ? 8000 : 4000);
+  return element;
 }
 
 export async function openDocument(go: Go): Promise<void> {
@@ -253,6 +276,7 @@ export async function closeDocument(workbook: string, go: Go): Promise<void> {
     // 編輯過、還沒儲存：先確認（與 Tableau 關閉活頁簿時相同）
     if (doc?.modified && !(await confirmBox(`「${doc.name}」有尚未儲存的變更，仍要關閉嗎？`))) return;
     await api.desktopClose(workbook);
+    window.dispatchEvent(new CustomEvent<string>(RESET_EVENT, { detail: workbook }));
     go("/");
   } catch (e) {
     toast(`無法關閉：${(e as Error).message}`, "error");
@@ -288,8 +312,8 @@ export function installMenuCommands(go: Go): void {
     signOut: () =>
       api
         .serverSignOut()
-        .then(() => toast("已登出伺服器"))
-        .catch((e: Error) => toast(`無法登出：${e.message}`, "error")),
+        .then(() => void toast("已登出伺服器"))
+        .catch((e: Error) => void toast(`無法登出：${e.message}`, "error")),
   };
   installShortcuts();
 }

@@ -108,10 +108,11 @@ export function navigate(to: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function Link({ to, children }: { to: string; children: React.ReactNode }) {
+function Link({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) {
   return (
     <a
       href={to}
+      className={className}
       onClick={(e) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey) return;
         e.preventDefault();
@@ -431,6 +432,9 @@ function WorkbookPage({
   const [dialog, setDialog] = useState<"crosstab" | "data" | "print" | null>(null);
   const [customName, setCustomName] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // 手機大小的畫面：工具列收成一列（回報表清單、切換檢視、「更多」），其餘的工具按「更多」才展開；
+  // 桌面與平板的畫面上「更多」不顯示、工具全部排出來（styles.css）
+  const [toolsOpen, setToolsOpen] = useState(false);
   // 簡報模式（Tableau 的「視窗＞簡報模式」）：全螢幕、只留檢視，下方的列切換前後一張；按 Esc 結束
   const [presenting, setPresenting] = useState(false);
   useEffect(() => {
@@ -517,6 +521,8 @@ function WorkbookPage({
   useEffect(() => {
     if (known && viewId) void api.visit(workbook, viewId);
   }, [workbook, viewId, known]);
+  // 換到另一個檢視：手機上展開的工具收起來，畫面留給檢視
+  useEffect(() => setToolsOpen(false), [workbook, viewId]);
 
   if (error) return <main className="error">載入失敗：{error}</main>;
   if (!ir || !view) return <main>載入中…</main>;
@@ -639,11 +645,14 @@ function WorkbookPage({
         </nav>
       )}
       {!framed && (
-      <header className="toolbar">
-        <Link to="/">報表</Link>
+      <header className="toolbar" data-tools={toolsOpen ? "open" : "closed"}>
+        <Link to="/" className="toolbar-home">
+          報表
+        </Link>
         <span className="sep">/</span>
         <span className="wb">{ir.workbook.name}</span>
         <select
+          className="view-switch"
           aria-label="切換檢視"
           value={
             dashboard
@@ -708,6 +717,16 @@ function WorkbookPage({
               </option>
             ))}
         </select>
+        <button
+          type="button"
+          className="toolbar-more"
+          aria-label="更多工具"
+          aria-expanded={toolsOpen}
+          title={toolsOpen ? "收起工具" : "更多工具：簡報模式、復原、匯出等"}
+          onClick={() => setToolsOpen(!toolsOpen)}
+        >
+          ⋯
+        </button>
         {me.mode === "desktop" && worksheet && (
           <button type="button" className="primary" onClick={() => navigate(viewPath(workbook, "edit", worksheet.id))}>
             編輯工作表

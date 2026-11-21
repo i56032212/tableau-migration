@@ -119,7 +119,12 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView
     ...(format.navigator_color ? ({ "--story-nav-color": format.navigator_color } as React.CSSProperties) : {}),
   };
   return (
-    <div className="story" data-story={story.id} style={{ minWidth: story.size.width, ...(format.background ? { background: format.background } : {}) }}>
+    // 寬度至少是 Story 的大小（--story-width，見 styles.css 的 .story）；手機大小的畫面上不撐開，內容自己捲動
+    <div
+      className="story"
+      data-story={story.id}
+      style={{ "--story-width": `${story.size.width}px`, ...(format.background ? { background: format.background } : {}) } as React.CSSProperties}
+    >
       {story.title && (
         <div
           className="story-title"

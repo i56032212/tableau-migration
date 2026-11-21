@@ -17,9 +17,10 @@
 - 座標軸：隱藏（保留格線）、自訂標題、固定範圍（超出的部分裁切）、反轉、不包含 0；雙軸同步時
   共用刻度。格線、座標軸線與刻度依列（縱軸）與欄（橫軸）的設定
 - 工作表的背景（可以透明）與文字顏色：座標軸、圖例、標籤與文字表的文字
-- 顯示大小（standard、fit_width、fit_height、entire_view）：離散的列每一列固定高度（預設 20 像素）、
-  離散的欄依內容的寬度，連續的座標軸填滿；大小寫在 usermeta.sizing，檢視器依區塊的設定再套用一次
-  （見 apply_fit）。標題與座標軸區域設定的寬度、列與欄的色帶與分隔線也照樣畫出
+- 顯示大小（standard、fit_width、fit_height、entire_view）：離散的列每一列固定高度（預設 20 像素；
+  文字表的每一格有多行文字時加高到放得下，見 _Builder.stack_text）、離散的欄依內容的寬度，連續的
+  座標軸填滿；大小寫在 usermeta.sizing，檢視器依區塊的設定再套用一次（見 apply_fit）。標題與座標軸
+  區域設定的寬度、列與欄的色帶與分隔線也照樣畫出
 - 甘特、地圖等尚未支援的標記回傳 None，由檢視器顯示「未支援」
 - 參考線（J4）：值在後端依範圍（整張表、窗格、儲存格）以標記的值計算；離散軸上以每個標記位置的
   短線（tick）連成參考線，連續軸或沒有另一軸時畫成橫跨整張圖的線；只有一條時加上標籤
@@ -206,6 +207,14 @@ TEXT_COLOR = "#1f2328"
 ROW_HEIGHT = 20
 """Tableau 標準顯示大小的列高（像素）：離散的列沒有設定大小時每一列的高度，長條與文字表相同
 （以 Tableau 的畫面量測：Logshark 報表的長條圖與文字表）。列數多時在區塊內捲動。"""
+LINE_SPACING = 2
+"""多行的文字（一個文字標記，lineBreak）的行距：Vega 的行高預設是字級加 2 像素。"""
+LINE_PITCH = 1.2
+"""各行格式不同的文字（每一行一個圖層，見 _Builder.line_layers）的行高，相對於這一行的字級。"""
+ROW_PADDING = 0.5
+"""文字表的列高在文字之外上下合計留的空白，相對於字級：預設的列（ROW_HEIGHT）中一行 12 像素的字、行高
+14 像素，留 6 像素。多行的文字依同樣的比例算出需要的列高（見 _Builder.stack_text）。推定的：Tableau 的
+文件沒有寫多行文字的列高，也還沒有與 Tableau 的畫面對過。"""
 COLUMN_WIDTH = (40, 320)
 """離散的欄依內容估計寬度時的最小與最大值（像素）。"""
 BAR_BAND = 0.75
@@ -398,6 +407,9 @@ class _Builder:
         """寫進 usermeta.text_segments：各行的對齊（left、center、right）與各段的文字欄位、位移欄位、字型
         （畫布的 font 字串）。檢視器在畫圖之前量各段的寬度，把每一段相對於這一行定位點的位移寫進位移欄位。"""
         """各行格式不同的自訂標籤文字（例如 KPI 的小標題與大數字）：每一行的資料欄與格式。"""
+        self.row_text = 0.0
+        """離散的列上多行的文字需要的列高（像素；只有一行時為 0）：見 stack_text、line_layers，列高不夠時
+        由 shelf_size 加大。"""
         self.culled = False
         """有重疊時隱藏的標記標籤（規格加上 __label_hidden 參數與標籤 id）。"""
         self.pie_extent = "min(width, height)"
@@ -547,7 +559,10 @@ class _Builder:
     ) -> dict[str, Any]:
         """一個方向的大小（usermeta.sizing）：離散的為每一列（欄）的大小 step，欄另有成員數 count
         與是否固定寬度 fixed（設定了大小；文字表在 build_spec 中也設為固定）；連續的座標軸設定了
-        大小時為 size，否則為空（填滿）。"""
+        大小時為 size，否則為空（填滿）。
+
+        列高是設定的大小（沒有設定時為 ROW_HEIGHT），但不小於多行的文字需要的高度（row_text）：文字表的
+        每一格有好幾行字時列跟著變高，設定的列高放不下時也加大（寫進附註）——上下列的文字不互相蓋住。"""
         style = self.ws.row_style if shelf == "rows" else self.ws.column_style
         if encoding is None:
             return {}
@@ -555,7 +570,14 @@ class _Builder:
             innermost = self.axis_of(dims[-1], shelf) if dims else None
             explicit = (innermost.cell if innermost is not None else None) or style.cell
             if shelf == "rows":
-                return {"step": explicit or ROW_HEIGHT}
+                step = explicit or ROW_HEIGHT
+                needed = math.ceil(self.row_text)
+                if needed > step and explicit:
+                    self.notes.append(
+                        f"設定的列高（{explicit} 像素）放不下多行的文字，列高加大到 {needed} 像素"
+                        "（Tableau 的畫法未查證）"
+                    )
+                return {"step": max(step, needed)}
             labels = list(dict.fromkeys(v.get(encoding.get("field", "")) for v in values))
             natural = explicit or _column_width([*labels, *texts])
             return {"step": natural, "count": len(labels), "fixed": explicit is not None}
@@ -1011,6 +1033,7 @@ class _Builder:
 
         self.common(encoding, marks)
         if highlight_table:
+            self.stack_text(marks, vl_mark, encoding)
             vl_mark.pop("color", None)
             text = {
                 "mark": vl_mark,
@@ -1065,6 +1088,7 @@ class _Builder:
             lines = self.line_layers(marks, vl_mark, encoding)
             if lines is not None:
                 return lines, mark
+            self.stack_text(marks, vl_mark, encoding)
         if jump is not None:
             return {"encoding": encoding, "layer": [*jump, *drops]}, mark
         if drops or image:
@@ -1293,7 +1317,12 @@ class _Builder:
         ):
             return None
         fonts = [self.text_font(marks, style) for _, style in lines]
-        heights = [font.size * 1.2 for font in fonts]
+        heights = [font.size * LINE_PITCH for font in fonts]
+        y = encoding.get("y")
+        if len(lines) > 1 and isinstance(y, dict) and y.get("type") in ("ordinal", "nominal"):
+            # 文字表的每一格有好幾行：列高要放得下各行（見 shelf_size）
+            padding = max(font.size for font in fonts) * ROW_PADDING
+            self.row_text = max(self.row_text, sum(heights) + padding)
         offset = -sum(heights) / 2
         layers: list[dict[str, Any]] = []
         segments = self.text_segments.get(id(marks), {})
@@ -1352,6 +1381,32 @@ class _Builder:
             )
             offset += height
         return {"encoding": {k: v for k, v in encoding.items() if k != "text"}, "layer": layers}
+
+    def stack_text(self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any]) -> None:
+        """離散的列上多行的文字（一個文字標記）：標籤上的多個欄位各占一行、自訂標籤文字中的換行，或值本身
+        有換行。Vega 把第一行畫在定位點（列的中線）、其餘各行往下排，列高不變時會畫到下面幾列上。這裡把
+        整段文字往上移、以列的中線為中心（與單行時相同置中；各列的行數不同時各自依行數），並記下放得下
+        最多行的那一格需要的列高（row_text，見 ROW_PADDING），由 shelf_size 加大列高。
+
+        只有一行時什麼都不改；字級依大小上的欄位而定時（行高不固定）也不改。"""
+        text, y = encoding.get("text"), encoding.get("y")
+        if not isinstance(text, dict) or "field" not in text or "size" in encoding:
+            return
+        if not isinstance(y, dict) or y.get("type") not in ("ordinal", "nominal"):
+            return
+        name = text["field"]
+        counts = {str(r.get(name) or "").count("\n") + 1 for r in self.records_of(marks)}
+        most = max(counts, default=1)
+        if most < 2:
+            return
+        size = float(vl_mark["fontSize"])
+        pitch = size + LINE_SPACING
+        if len(counts) == 1:
+            vl_mark["dy"] = -round((most - 1) * pitch / 2, 2)
+        else:
+            lines = f"length(split(datum[{json.dumps(name)}] || '', '\\n'))"
+            vl_mark["dy"] = {"expr": f"-({lines} - 1) * {round(pitch / 2, 2)}"}
+        self.row_text = max(self.row_text, most * pitch + size * ROW_PADDING)
 
     def line_breaks(self, vl_type: str, marks: Marks, dims: list[FieldUse]) -> list[FieldUse]:
         """折線與區域依沿著線的那一架上的離散維度分開各條線（與 Tableau 相同，線不跨窗格）：沒有路徑時

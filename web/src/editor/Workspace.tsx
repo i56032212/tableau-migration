@@ -17,13 +17,13 @@ import {
   signOutServer,
   toast,
 } from "../desktop";
-import { confirmBox } from "../confirm";
 import { Modal } from "../Server";
 import type { Dashboard, Story } from "../types";
 import { editApi } from "./api";
 import { Icon, type IconName } from "./Icons";
 import type { SheetIR } from "./model";
 import { type MenuItem, PopupMenu, SEPARATOR } from "./Shelves";
+import { edited, removeSheet, useUndoRedo } from "./structure";
 
 export type SheetKind = "worksheet" | "dashboard" | "story";
 export type TabKind = SheetKind | "datasource";
@@ -200,6 +200,7 @@ export function useCreateSheet(onError: (message: string) => void) {
           : editApi.addStory(ws.workbook);
     void created
       .then((item) => {
+        edited(ws.workbook);
         ws.changed();
         ws.open(kind, item.id);
       })
@@ -456,38 +457,21 @@ export function SheetTabs({
         : tab.kind === "dashboard"
           ? editApi.dashboard(ws.workbook, tab.id).then((d) => editApi.saveDashboard(ws.workbook, change(d as unknown as Record<string, unknown>) as unknown as Dashboard))
           : editApi.story(ws.workbook, tab.id).then((s) => editApi.saveStory(ws.workbook, change(s as unknown as Record<string, unknown>) as unknown as Story));
-    void saved.then(() => ws.changed()).catch((e: Error) => fail(e.message));
+    void saved
+      .then(() => {
+        edited(ws.workbook);
+        ws.changed();
+      })
+      .catch((e: Error) => fail(e.message));
   };
   const opened = (item: Promise<{ id: string }>, kind: SheetKind) =>
     void item
       .then((made) => {
+        edited(ws.workbook);
         ws.changed();
         ws.open(kind, made.id);
       })
       .catch((e: Error) => fail(e.message));
-  const remove = async (tab: SheetTab) => {
-    // 刪除不在編輯的歷程裡（歷程是每個分頁各自的定義），Ctrl+Z 救不回來：先說清楚再刪
-    if (!(await confirmBox(`刪除${tab.kind === "worksheet" ? "工作表" : ` ${KIND_NAMES[tab.kind]}`}「${tab.name}」？刪除之後不能復原。`))) return;
-    // 刪除目前的分頁之後留在編輯器：開啟左邊的分頁（它是第一個時開啟右邊的；都沒有時開啟資料來源）
-    const at = tabs.findIndex((t) => key(t) === key(tab));
-    const neighbour = at < 0 ? null : (tabs[at - 1] ?? tabs[at + 1] ?? null);
-    const removed =
-      tab.kind === "worksheet"
-        ? editApi.removeWorksheet(ws.workbook, tab.id)
-        : tab.kind === "dashboard"
-          ? editApi.removeDashboard(ws.workbook, tab.id)
-          : editApi.removeStory(ws.workbook, tab.id);
-    void removed
-      .then(() => {
-        if (isCurrent(tab)) {
-          if (neighbour) ws.open(neighbour.kind, neighbour.id);
-          else if (source) ws.open("datasource", source);
-          else ws.view(tab.kind, null);
-        }
-        ws.changed();
-      })
-      .catch((e: Error) => fail(e.message));
-  };
   const commands = (tab: SheetTab): MenuItem[] => [
     { label: "重新命名", action: () => setRenaming(key(tab)) },
     ...(tab.kind === "worksheet"
@@ -502,7 +486,9 @@ export function SheetTabs({
         ? [{ label: "複製", action: () => opened(editApi.duplicateDashboard(ws.workbook, tab.id), "dashboard") }]
         : []),
     SEPARATOR,
-    { label: "刪除", action: () => void remove(tab) },
+    // 與 Tableau 相同不先問：刪除可以復原（Ctrl+Z、工具列的復原，或刪除之後訊息上的「復原」）。刪除目前的
+    // 分頁之後留在編輯器，開啟左邊的分頁（見 structure.ts）
+    { label: "刪除", action: () => void removeSheet(ws, tab, fail) },
   ];
   const sourceMenu: MenuItem[] = ws.datasources.map((d) => ({
     label: `資料源：${d.caption}`,
@@ -638,6 +624,8 @@ export function DatasourceFrame({ datasource, children }: { datasource: string; 
   const create = useCreateSheet((message) => toast(message, "error"));
   const current = { kind: "datasource" as const, id: datasource };
   const done = () => ws.view("datasource", datasource);
+  // 資料來源分頁沒有自己的編輯歷程：復原、重做的是整份報表刪除分頁的紀錄（例如刪掉最後一張工作表之後回到這裡）
+  const undoRedo = useUndoRedo(ws, current, null, datasource);
   const menus: MenuDef[] = [
     fileMenu(ws),
     { label: "資料", items: dataMenuItems(ws, datasource) },
@@ -652,6 +640,9 @@ export function DatasourceFrame({ datasource, children }: { datasource: string; 
     <div className="workspace ds-workspace" data-datasource-workspace={datasource}>
       <MenuBar menus={menus} saving={false} onDone={done} />
       <div className="ws-toolbar" role="toolbar" aria-label="資料源編輯">
+        <ToolButton icon="undo" label="復原" title={undoRedo.undoTitle} disabled={!undoRedo.canUndo} onClick={undoRedo.undo} />
+        <ToolButton icon="redo" label="重做" title={undoRedo.redoTitle} disabled={!undoRedo.canRedo} onClick={undoRedo.redo} />
+        <span className="sep" />
         <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(ws.workbook, false)} />
         <span className="sep" />
         <ToolButton icon="datasource-add" label="新增資料源…" onClick={() => void addDatasource(ws.workbook, ws.navigate)} />

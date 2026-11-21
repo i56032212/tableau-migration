@@ -566,7 +566,10 @@ export interface RenderResponse {
   mark?: string;
   spec: Record<string, unknown> | null;
   unsupported: string | null;
+  /** 畫圖的附註：全部（編輯器列出來） */
   notes: string[];
+  /** 附註中「作者要的東西沒有畫出來、算不出來或畫得不同」的那些：檢視器在工作表上標示（其餘是單純的說明） */
+  warnings?: string[];
   applied?: string[];
   skipped?: string[];
   /** 階層的切入控制項（依存檔的工作表） */

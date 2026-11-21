@@ -19,14 +19,20 @@ export interface EditHistory<T> {
   redo: () => void;
   /** 每次存回成功後遞增 */
   revision: number;
+  /** 歷程目前在第幾步、一共幾步（還沒載入時是 0）：與整份報表刪除分頁的紀錄排先後用（structure.ts） */
+  index: number;
+  length: number;
 }
 
+/** 復原、重做的快捷鍵（Ctrl+Z、Ctrl+Y）不在這裡：編輯器把這份歷程交給 structure.ts 的 useUndoRedo，
+ * 與「復原刪除的分頁」一起處理。onEdit：使用者做了新的變更（不含復原與重做）。 */
 export function useEditHistory<T>(
   key: string,
   load: () => Promise<T>,
   save: (value: T) => Promise<T>,
   notify: (message: string, kind?: "info" | "error") => void,
   onSaved?: (value: T, previous: T) => void,
+  onEdit?: () => void,
 ): EditHistory<T> {
   const [history, setHistoryState] = useState<History<T> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,8 +44,8 @@ export function useEditHistory<T>(
     ref.current = next;
     setHistoryState(next);
   };
-  const callbacks = useRef({ load, save, notify, onSaved });
-  callbacks.current = { load, save, notify, onSaved };
+  const callbacks = useRef({ load, save, notify, onSaved, onEdit });
+  callbacks.current = { load, save, notify, onSaved, onEdit };
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +93,7 @@ export function useEditHistory<T>(
           return;
         }
         if (JSON.stringify(next) === JSON.stringify(base)) return;
+        callbacks.current.onEdit?.();
         setHistory({ entries: [...current.entries.slice(0, current.index + 1), next], index: current.index + 1 });
         const saved = await store(next);
         const latest = ref.current;
@@ -120,24 +127,6 @@ export function useEditHistory<T>(
   const undo = useCallback(() => move(-1), [move]);
   const redo = useCallback(() => move(1), [move]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      } else if (k === "y" || (k === "z" && e.shiftKey)) {
-        e.preventDefault();
-        redo();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
-
   return {
     current: history ? history.entries[history.index] : null,
     error,
@@ -148,6 +137,8 @@ export function useEditHistory<T>(
     undo,
     redo,
     revision,
+    index: history?.index ?? 0,
+    length: history?.entries.length ?? 0,
   };
 }
 

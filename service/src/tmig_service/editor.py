@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import math
 import shutil
@@ -39,15 +40,13 @@ from tmig.edit import (
     outline,
     remove_action,
     remove_calc,
-    remove_dashboard,
     remove_hierarchy,
     remove_parameter,
-    remove_story,
-    remove_worksheet,
     replace_dashboard,
     replace_references,
     replace_story,
     replace_worksheet,
+    reserving,
     set_datasource_filters,
     set_geo_defaults,
     set_geography,
@@ -95,6 +94,7 @@ from tmig.package import SOURCES, member_path, read_report_file, shape_images
 from tmig.planner.dynamic import parameter_values
 from tmig.planner.state import QueryState, use_key
 from tmig.shapes import MAX_SHAPE_BYTES, palettes
+from tmig.sheet_undo import SheetKind, remove_sheet, reserved_by, restore_sheet
 from tmig.sqlgen.query import QueryError, custom_sql_parameters, domain_sql, worksheet_sql
 from tmig.verify.cases import CasesError, load_cases
 from tmig_service.app import Workspace, current_user
@@ -426,6 +426,13 @@ class IdBody(BaseModel):
     text: str
 
 
+class RestoreBody(BaseModel):
+    """復原刪除的工作表、dashboard 或 Story：刪除時回傳的紀錄（見 tmig.sheet_undo）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    removed: dict[str, Any]
+
+
 class AliasesBody(BaseModel):
     """維度成員的別名（空白的別名表示不設定）。"""
 
@@ -561,10 +568,12 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         return request.app.state.workspace
 
     def edit(request: Request, workbook: str, change: Any) -> Any:
-        """套用變更（回傳 (新的 IR, 結果) 或新的 IR），寫回報表；內容不正確時回應 422。"""
+        """套用變更（回傳 (新的 IR, 結果) 或新的 IR），寫回報表；內容不正確時回應 422。
+        新增的實體不占用刪除之後還可以復原的工作表、dashboard、Story 的 id 與名稱（Workspace.reserved）。"""
         space = workspace(request)
         try:
-            result = change(space.get(workbook).ir)
+            with reserving(space.reserved.get(workbook, ())):
+                result = change(space.get(workbook).ir)
         except EditError as exc:
             raise HTTPException(422, str(exc)) from exc
         ir, value = result if isinstance(result, tuple) else (result, None)
@@ -572,6 +581,35 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         if on_change is not None:
             on_change(workbook)
         return value
+
+    def delete_sheet(
+        request: Request, workbook: str, kind: SheetKind, sheet: str, expect: str | None
+    ) -> dict[str, Any]:
+        """刪除工作表、dashboard 或 Story。回應中的 removed 是復原用的紀錄（交給 /restore 就放回去），
+        state 是刪除之後報表內容的指紋。expect：重做刪除時帶上復原之後的指紋——復原之後報表又改過
+        （指紋不同）就不重做，回應 409。"""
+        space = workspace(request)
+        if expect is not None and _state(space.get(workbook).ir) != expect:
+            raise HTTPException(409, "報表在復原之後又改過了，不能重做刪除")
+        removed = edit(request, workbook, lambda ir: remove_sheet(ir, kind, sheet))
+        space.reserved.setdefault(workbook, set()).update(reserved_by(removed))
+        return {
+            "ok": True,
+            "removed": removed.model_dump(mode="json"),
+            "state": _state(space.get(workbook).ir),
+        }
+
+    @router.post("/{workbook}/restore")
+    def post_restore(workbook: str, body: RestoreBody, request: Request) -> dict[str, Any]:
+        """復原刪除的工作表、dashboard 或 Story（Tableau 的 Ctrl+Z）：物件回到原本的位置，刪除時連帶移除的
+        東西（其他工作表的工具提示、dashboard 的動作與它們的篩選）一併放回。放不回去時 422，報表不變。"""
+        restored = edit(request, workbook, lambda ir: restore_sheet(ir, body.removed))
+        return {
+            "ok": True,
+            "kind": restored.kind,
+            "id": restored.id,
+            "state": _state(workspace(request).get(workbook).ir),
+        }
 
     @router.get("/{workbook}/catalog")
     def get_catalog(workbook: str, request: Request) -> dict[str, Any]:
@@ -885,7 +923,8 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         source = space.get(body.source)
         target = space.get(workbook)
         try:
-            result = import_from(target.ir, source.ir, body.worksheets)
+            with reserving(space.reserved.get(workbook, ())):
+                result = import_from(target.ir, source.ir, body.worksheets)
         except EditError as exc:
             raise HTTPException(422, str(exc)) from exc
         copies: list[tuple[Path, Path]] = []
@@ -981,9 +1020,10 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         return {"worksheet": sheet.model_dump(mode="json")}
 
     @router.delete("/{workbook}/worksheets/{worksheet}")
-    def delete_worksheet(workbook: str, worksheet: str, request: Request) -> dict[str, bool]:
-        edit(request, workbook, lambda ir: remove_worksheet(ir, worksheet))
-        return {"ok": True}
+    def delete_worksheet(
+        workbook: str, worksheet: str, request: Request, expect: str | None = None
+    ) -> dict[str, Any]:
+        return delete_sheet(request, workbook, "worksheet", worksheet, expect)
 
     @router.post("/{workbook}/formula")
     def post_formula(workbook: str, body: FormulaBody, request: Request) -> dict[str, Any]:
@@ -1276,9 +1316,10 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         return {"dashboard": board.model_dump(mode="json")}
 
     @router.delete("/{workbook}/dashboards/{dashboard}")
-    def delete_dashboard(workbook: str, dashboard: str, request: Request) -> dict[str, bool]:
-        edit(request, workbook, lambda ir: remove_dashboard(ir, dashboard))
-        return {"ok": True}
+    def delete_dashboard(
+        workbook: str, dashboard: str, request: Request, expect: str | None = None
+    ) -> dict[str, Any]:
+        return delete_sheet(request, workbook, "dashboard", dashboard, expect)
 
     @router.get("/{workbook}/stories/{story}")
     def get_story(workbook: str, story: str, request: Request) -> dict[str, Any]:
@@ -1301,9 +1342,10 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         return {"story": found.model_dump(mode="json")}
 
     @router.delete("/{workbook}/stories/{story}")
-    def delete_story(workbook: str, story: str, request: Request) -> dict[str, bool]:
-        edit(request, workbook, lambda ir: remove_story(ir, story))
-        return {"ok": True}
+    def delete_story(
+        workbook: str, story: str, request: Request, expect: str | None = None
+    ) -> dict[str, Any]:
+        return delete_sheet(request, workbook, "story", story, expect)
 
     @router.post("/{workbook}/actions")
     def post_action(workbook: str, body: ActionBody, request: Request) -> dict[str, Any]:
@@ -1317,10 +1359,17 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
 
     @router.post("/{workbook}/ids")
     def post_id(workbook: str, body: IdBody, request: Request) -> dict[str, str]:
-        """新的篩選、Table Calculation 等的 id（與報表中其他 id 不重複）。"""
-        return {"id": new_id(workspace(request).get(workbook).ir, body.prefix, body.text)}
+        """新的篩選、Table Calculation 等的 id（與報表中其他 id、還可以復原的工作表中的 id 不重複）。"""
+        space = workspace(request)
+        with reserving(space.reserved.get(workbook, ())):
+            return {"id": new_id(space.get(workbook).ir, body.prefix, body.text)}
 
     return router
+
+
+def _state(ir: IR) -> str:
+    """報表內容的指紋（重做刪除時確認復原之後報表沒有再改過）。"""
+    return hashlib.sha256(ir.model_dump_json().encode("utf-8")).hexdigest()[:16]
 
 
 def _as_of(directory: Path) -> str | None:

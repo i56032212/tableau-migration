@@ -429,6 +429,138 @@ def test_add_duplicate_delete_worksheets(client: TestClient) -> None:
     assert refused.status_code == 422 and "不能刪除" in refused.json()["detail"]
 
 
+def test_deleted_sheets_can_be_restored(client: TestClient) -> None:
+    """刪除工作表、dashboard、Story 可以復原（Tableau 的 Ctrl+Z）：DELETE 的回應帶著復原用的紀錄，交給 /restore
+    就放回去——報表的定義與刪除之前完全相同（id、名稱、定義、在分頁列的位置、其他工作表的工具提示、dashboard 的
+    動作與它們的篩選）。重做是再刪一次：帶著復原之後的指紋，報表之後又改過就不刪。"""
+
+    def ir() -> dict[str, Any]:
+        return client.get("/api/workbooks/demo/ir").json()
+
+    def post(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        response = client.post(f"/api/edit/demo/{path}", json=body)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    # 三張新的工作表；中間那張放進另外兩張工作表的工具提示
+    middle = post("worksheets", {"name": "中間"})["worksheet"]
+    post("worksheets", {"name": "後面"})
+    for host in ("ws_sales_by_region", "ws_monthly_profit"):
+        ws = sheet(client, host)
+        ws["marks"]["tooltip_sheets"] = [{"worksheet": middle["id"], "max_width": 240}]
+        saved = client.put(f"/api/edit/demo/worksheets/{host}", json={"worksheet": ws})
+        assert saved.status_code == 200, saved.text
+    # 一個有動作的 dashboard（排在另一個新的 dashboard 之前）與 Story
+    board = post("dashboards", {"name": "要刪的"})["dashboard"]
+    post("dashboards", {"name": "留著的"})
+    action = post(
+        "actions",
+        {
+            "action": {
+                "caption": "依區域",
+                "kind": "filter",
+                "activation": "select",
+                "dashboard": board["id"],
+                "sources": ["ws_sales_by_region"],
+                "targets": ["ws_region_share_by_year"],
+                "clearing": "show_all",
+                "fields": ["f_region"],
+            }
+        },
+    )["action"]
+    story = post("stories", {"name": "故事"})["story"]
+    before = ir()
+    order = [w["id"] for w in before["worksheets"]]
+    assert order.index(middle["id"]) == len(order) - 2
+
+    # 工作表：刪除時工具提示不再有它；復原之後一切照舊
+    deleted = client.delete(f"/api/edit/demo/worksheets/{middle['id']}")
+    assert deleted.status_code == 200, deleted.text
+    removed = deleted.json()["removed"]
+    assert (removed["kind"], removed["id"], removed["name"]) == ("worksheet", middle["id"], "中間")
+    gone = ir()
+    assert middle["id"] not in [w["id"] for w in gone["worksheets"]]
+    assert sheet(client, "ws_sales_by_region")["marks"]["tooltip_sheets"] == []
+    restored = client.post("/api/edit/demo/restore", json={"removed": removed})
+    assert restored.status_code == 200, restored.text
+    assert (restored.json()["kind"], restored.json()["id"]) == ("worksheet", middle["id"])
+    assert ir() == before
+    assert sheet(client, "ws_monthly_profit")["marks"]["tooltip_sheets"][0]["max_width"] == 240
+    # 已經放回去了：不能再放一次，報表不變
+    twice = client.post("/api/edit/demo/restore", json={"removed": removed})
+    assert twice.status_code == 422 and "已經在報表中" in twice.json()["detail"]
+    assert ir() == before
+
+    # 重做：帶著復原之後的指紋再刪一次，結果與第一次刪除相同
+    state = restored.json()["state"]
+    again = client.delete(f"/api/edit/demo/worksheets/{middle['id']}", params={"expect": state})
+    assert again.status_code == 200, again.text
+    assert ir() == gone
+    assert (
+        client.post("/api/edit/demo/restore", json={"removed": again.json()["removed"]}).json()[
+            "state"
+        ]
+        == state
+    )
+    # 復原之後報表又改過（另一張工作表改了名稱）：不重做，報表不變
+    other = sheet(client, "ws_sub_category_profit")
+    other["name"] = "改過的名稱"
+    client.put("/api/edit/demo/worksheets/ws_sub_category_profit", json={"worksheet": other})
+    changed = ir()
+    stale = client.delete(f"/api/edit/demo/worksheets/{middle['id']}", params={"expect": state})
+    assert stale.status_code == 409 and "又改過了" in stale.json()["detail"]
+    assert ir() == changed
+    other["name"] = "Sub-Category Profit"
+    client.put("/api/edit/demo/worksheets/ws_sub_category_profit", json={"worksheet": other})
+    assert ir() == before
+
+    # dashboard：動作與目標工作表上指向它的篩選一併移除；復原時都放回原本的位置
+    deleted = client.delete(f"/api/edit/demo/dashboards/{board['id']}")
+    assert deleted.status_code == 200, deleted.text
+    assert ir()["actions"] == []
+    target = sheet(client, "ws_region_share_by_year")
+    assert all(f.get("action") != action["id"] for f in target["filters"])
+    restored = client.post("/api/edit/demo/restore", json={"removed": deleted.json()["removed"]})
+    assert restored.status_code == 200, restored.text
+    assert ir() == before
+    assert [d["name"] for d in ir()["dashboards"]][-2:] == ["要刪的", "留著的"]
+
+    # Story
+    deleted = client.delete(f"/api/edit/demo/stories/{story['id']}")
+    assert deleted.status_code == 200 and ir()["stories"] == []
+    assert (
+        client.post(
+            "/api/edit/demo/restore", json={"removed": deleted.json()["removed"]}
+        ).status_code
+        == 200
+    )
+    assert ir() == before
+
+    # 送回來的紀錄只能放回工作表、dashboard、Story 與動作；不正確的紀錄 422，報表不變
+    deleted = client.delete(f"/api/edit/demo/stories/{story['id']}").json()["removed"]
+    bad = {
+        **deleted,
+        "changes": [*deleted["changes"], {"op": "set", "path": ["workbook", "name"], "value": "x"}],
+    }
+    refused = client.post("/api/edit/demo/restore", json={"removed": bad})
+    assert refused.status_code == 422 and "只能放回" in refused.json()["detail"]
+    assert client.post("/api/edit/demo/restore", json={"removed": {}}).status_code == 422
+    assert ir()["workbook"] == before["workbook"] and ir()["stories"] == []
+    # 復原也算報表的變更（還沒儲存）
+    assert client.get("/api/desktop/documents").json()[0]["modified"] is True
+
+    # 還可以復原的期間，新增的東西不占用它的名稱與 id（「工作表 1」刪除後再新增是「工作表 2」，不是又一張
+    # 「工作表 1」）：之後才放得回去
+    first = post("worksheets", {})["worksheet"]
+    assert (first["name"], first["id"]) == ("工作表 1", "ws_1")
+    removed = client.delete("/api/edit/demo/worksheets/ws_1").json()["removed"]
+    second = post("worksheets", {})["worksheet"]
+    assert (second["name"], second["id"]) == ("工作表 2", "ws_2")
+    assert post("ids", {"prefix": "ws", "text": "1"})["id"] == "ws_1_2"
+    assert client.post("/api/edit/demo/restore", json={"removed": removed}).status_code == 200
+    assert [w["name"] for w in ir()["worksheets"]][-2:] == ["工作表 1", "工作表 2"]
+
+
 def test_calculated_fields(client: TestClient) -> None:
     ok = client.post(
         "/api/edit/demo/formula",
@@ -531,6 +663,33 @@ def test_describe_forecast(client: TestClient) -> None:
         "good" if model["mase"] < 0.5 else "ok" if model["mase"] < 1 else "poor"
     )
     assert str(model["first"]) < str(model["last"]) < str(model["until"])
+
+
+def test_render_separates_warnings_from_informational_notes(client: TestClient) -> None:
+    """render 的附註分兩種：notes 是全部，warnings 是其中「作者要的東西沒有畫出來、算不出來」的那些（檢視器
+    只標示這一種）。預測估計不出來時要有原因——原本只有兩年的資料（預設忽略最後一期）時什麼都沒有說。"""
+    caveat = "預測的估計值以平台的指數平滑計算（與 Tableau 相同的模型），可能與 Tableau 有些微差異"
+
+    def forecast(unit: str) -> dict[str, Any]:
+        """Monthly Profit（篩選成兩年的資料）的時間改成 unit、加上預測。"""
+        ws = sheet(client, "ws_monthly_profit")
+        ws["columns"][0]["date"]["unit"] = unit
+        ws["forecast"] = {"measures": [use("f_profit", agg="sum", continuous=True)]}
+        put(client, ws)
+        return render(client, "ws_monthly_profit")
+
+    # 月：估計得出來，只有計算方式的說明——不是 warnings
+    monthly = forecast("month")
+    assert monthly["notes"] == [caveat] and monthly["warnings"] == []
+    assert monthly["describe"]["forecast"]["models"]
+    # 年：只有兩年，扣掉忽略的最後一期剩一期——沒有估計的值，warnings 說明原因
+    yearly = forecast("year")
+    assert yearly["rows"] == 2 and yearly["describe"]["forecast"]["models"] == []
+    reason = "預測：扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"
+    assert yearly["notes"] == [caveat, reason] and yearly["warnings"] == [reason]
+    # 沒有附註的工作表：兩者都是空的
+    plain = render(client, "ws_sub_category_profit")
+    assert plain["notes"] == [] and plain["warnings"] == []
 
 
 def test_hierarchies_api(client: TestClient) -> None:

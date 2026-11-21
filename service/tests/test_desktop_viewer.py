@@ -146,10 +146,11 @@ window.confirm = async (message) => {
 
 
 def test_confirmations_wait_for_the_shell_dialog(engine: str, tmp_path: Path) -> None:
-    """桌面版外殼裡的確認（2026-11-21 在真正的視窗中發現：刪除工作表、關閉還沒儲存的報表都沒有問就做了）。
+    """桌面版外殼裡的確認（2026-11-21 在真正的視窗中發現：刪除、關閉還沒儲存的報表都沒有問就做了）。
     外殼的 window.confirm 是非同步的，回傳 Promise——Promise 是真值，`if (!window.confirm(…))` 等於沒有問。
     這裡把 window.confirm 換成與外殼相同的非同步版本：回答取消（或對話框出不來）時不刪除、不關閉，
-    回答確定才做。"""
+    回答確定才做。以刪除 dashboard 的裝置版面與關閉報表驗證；刪除工作表不再先問（可以復原，與 Tableau
+    相同），所以它不經過確認。"""
     from playwright.sync_api import expect, sync_playwright
 
     source = tmp_path / "demo.twbx"
@@ -158,6 +159,10 @@ def test_confirmations_wait_for_the_shell_dialog(engine: str, tmp_path: Path) ->
     def sheets(page: Any) -> list[str]:
         ir = page.evaluate("async () => (await (await fetch('/api/workbooks/demo/ir')).json())")
         return [w["name"] for w in ir["worksheets"]]
+
+    def layouts(page: Any) -> list[str]:
+        ir = page.evaluate("async () => (await (await fetch('/api/workbooks/demo/ir')).json())")
+        return [layout["device"] for layout in ir["dashboards"][0]["layouts"]]
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -182,28 +187,47 @@ def test_confirmations_wait_for_the_shell_dialog(engine: str, tmp_path: Path) ->
         before = sheets(page)
         assert "工作表 1" in before
 
-        # 對話框出不來（外殼沒有允許）：當作取消，不刪除
+        # 刪除工作表不先問（可以復原）：不經過確認，就算對話框出不來也照樣刪除；留在編輯器（開啟左邊的分頁），
+        # 右下角的訊息上可以復原
         page.evaluate("window.__answer = 'blocked'")
-        tab_menu(page, current_tab(page), "刪除")
-        page.wait_for_function("window.__confirms.length === 1")
-        page.wait_for_timeout(500)
-        assert sheets(page) == before
-        expect(sheet_tab(page, "工作表 1")).to_be_visible()
-
-        # 回答取消：不刪除
-        page.evaluate("window.__answer = false")
-        tab_menu(page, current_tab(page), "刪除")
-        page.wait_for_function("window.__confirms.length === 2")
-        page.wait_for_timeout(500)
-        assert sheets(page) == before
-        assert "刪除之後不能復原" in page.evaluate("window.__confirms[1]")
-
-        # 回答確定：刪除，留在編輯器（開啟左邊的分頁）
-        page.evaluate("window.__answer = true")
         tab_menu(page, current_tab(page), "刪除")
         page.wait_for_url(f"{engine}/w/demo/edit/ws_sub_category_profit")
         page.wait_for_selector('.editor[data-saving="false"]')
+        assert page.evaluate("window.__confirms.length") == 0
         assert sheets(page) == [name for name in before if name != "工作表 1"]
+        expect(sheet_tab(page, "工作表 1")).to_have_count(0)
+        deleted = page.locator(".toast", has_text="已刪除工作表「工作表 1」")
+        expect(deleted.get_by_role("button", name="復原")).to_be_visible()
+
+        # dashboard 的裝置版面：刪除前先問。對話框出不來（外殼沒有允許）：當作取消，不刪除
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        page.get_by_label("新增裝置版面").select_option("phone")
+        page.wait_for_function("document.querySelector('.device-layouts button.danger') !== null")
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        assert layouts(page) == ["phone"]
+        remove = page.locator(".device-layouts").get_by_role("button", name="刪除手機版面")
+        page.evaluate("window.__answer = 'blocked'")
+        remove.click()
+        page.wait_for_function("window.__confirms.length === 1")
+        page.wait_for_timeout(500)
+        assert layouts(page) == ["phone"]
+        expect(remove).to_be_visible()
+
+        # 回答取消：不刪除
+        page.evaluate("window.__answer = false")
+        remove.click()
+        page.wait_for_function("window.__confirms.length === 2")
+        page.wait_for_timeout(500)
+        assert layouts(page) == ["phone"]
+        assert page.evaluate("window.__confirms[1]") == "刪除手機版面？"
+
+        # 回答確定：刪除
+        page.evaluate("window.__answer = true")
+        remove.click()
+        expect(remove).to_have_count(0)
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        assert layouts(page) == []
 
         # 報表改過、還沒儲存：關閉前先問；取消時不關閉
         page.evaluate("window.__answer = false")
@@ -212,7 +236,7 @@ def test_confirmations_wait_for_the_shell_dialog(engine: str, tmp_path: Path) ->
         page.wait_for_function(f"window.__confirms.length === {asked + 1}")
         page.wait_for_timeout(500)
         assert "尚未儲存的變更" in page.evaluate("window.__confirms.at(-1)")
-        assert page.url == f"{engine}/w/demo/edit/ws_sub_category_profit"
+        assert page.url == f"{engine}/w/demo/edit-d/db_ee909b0c"
         assert (
             page.evaluate(
                 "async () => (await (await fetch('/api/desktop/documents')).json()).length"

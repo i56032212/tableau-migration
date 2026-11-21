@@ -89,6 +89,7 @@ import {
   windowMenu,
 } from "./Workspace";
 import { ShowMePanel } from "./ShowMe";
+import { edited, useUndoRedo } from "./structure";
 import { PageControl } from "../PageControl";
 
 const EMPTY_STATE = { filters: {}, parameters: {} };
@@ -579,6 +580,8 @@ export function Editor({
           return;
         }
         if (JSON.stringify(next) === JSON.stringify(base)) return;
+        // 新的變更之後不能再重做剛剛復原的刪除（整份報表的結構歷程，見 structure.ts）
+        edited(workbook);
         // 先顯示變更，存檔失敗時退回
         setHistory({ entries: [...current.entries.slice(0, current.index + 1), next], index: current.index + 1 });
         const saved = await save(next);
@@ -591,7 +594,7 @@ export function Editor({
         setHistory({ entries: latest.entries.map((e, i) => (i === latest.index ? saved : e)), index: latest.index });
         if (saved.name !== base.name) onChanged();
       }),
-    [enqueue, save, notify, onChanged],
+    [enqueue, save, notify, onChanged, workbook],
   );
 
   const move = useCallback(
@@ -610,24 +613,13 @@ export function Editor({
   );
   const undo = useCallback(() => move(-1), [move]);
   const redo = useCallback(() => move(1), [move]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const key = e.key.toLowerCase();
-      if (key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      } else if (key === "y" || (key === "z" && e.shiftKey)) {
-        e.preventDefault();
-        redo();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  // 工具列的復原、重做與 Ctrl+Z、Ctrl+Y：這張工作表自己的歷程，加上整份報表刪除分頁的紀錄
+  const undoRedo = useUndoRedo(
+    ws,
+    { kind: "worksheet", id: worksheet },
+    history ? { index: history.index, length: history.entries.length, undo, redo } : null,
+    sheet?.datasource ?? null,
+  );
 
   const newId = useCallback((prefix: string, text: string) => editApi.newId(workbook, prefix, text), [workbook]);
   const create = useCreateSheet((text) => notify(text, "error"));
@@ -912,8 +904,8 @@ export function Editor({
       <div className="editor workspace" data-editor={sheet.id} data-saving={pending > 0 ? "true" : "false"}>
         <MenuBar menus={menus} saving={pending > 0} onDone={done} />
         <div className="ws-toolbar" role="toolbar" aria-label="工作表編輯">
-          <ToolButton icon="undo" label="復原" title="復原（Ctrl+Z）" disabled={history.index === 0} onClick={undo} />
-          <ToolButton icon="redo" label="重做" title="重做（Ctrl+Y）" disabled={history.index >= history.entries.length - 1} onClick={redo} />
+          <ToolButton icon="undo" label="復原" title={undoRedo.undoTitle} disabled={!undoRedo.canUndo} onClick={undoRedo.undo} />
+          <ToolButton icon="redo" label="重做" title={undoRedo.redoTitle} disabled={!undoRedo.canRedo} onClick={undoRedo.redo} />
           <span className="sep" />
           <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(workbook, false)} />
           <span className="sep" />
@@ -1077,9 +1069,17 @@ export function Editor({
                     { label: "在預設位置顯示資料", run: () => apply((s) => ({ ...s, null_marks: "zero" })) },
                     { label: "隱藏指示器", run: () => apply((s) => ({ ...s, null_indicator: false })) },
                   ]}
+                  // 畫圖的附註全部列出（沒有畫出來、算不出來的原因，以及計算方式的說明）
+                  showNotes="all"
                   selected={selected}
                   onMarks={(event) => {
                     if (event.kind !== "click") return;
+                    if (event.marks) {
+                      // 框選（在檢視上拖曳出方框；地圖是選取工具）：選取的就是方框裡的這些標記——按住 Ctrl 時
+                      // 已經含原本選取的
+                      setSelected(event.marks.filter((m) => Object.keys(m).length > 0));
+                      return;
+                    }
                     const mark = event.mark;
                     if (!mark || !Object.keys(mark).length) {
                       setSelected([]);

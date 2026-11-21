@@ -68,6 +68,11 @@ interface Props {
   pinAbove?: boolean;
   /** 編輯器：拖曳標記或點的註解文字之後，第 index 個註解的文字移動了 dx、dy 像素 */
   onAnnotationMove?: (index: number, dx: number, dy: number) => void;
+  /**
+   * 畫圖的附註（左下角的標示）：warnings（預設，檢視器）只在有「沒有畫出來、算不出來或畫得不同」的附註時標示、
+   * 只列出它們；all（編輯器）連單純的說明也列出；none 不標示（工具提示中的工作表）
+   */
+  showNotes?: "warnings" | "all" | "none";
 }
 
 /** 停止平移、縮放之後多久以新的範圍重新繪製（毫秒） */
@@ -115,6 +120,30 @@ interface SceneItem {
 
 /** 框選：拖曳超過這個距離（像素）才算拖曳，否則仍是點選 */
 const BOX_THRESHOLD = 4;
+
+/**
+ * 按 Esc 取消選取（Tableau：Esc 取消選取的標記）。畫面上有選取的每張工作表登記在這裡；按一次 Esc 取消最近
+ * 選取的那一張（dashboard 上幾張工作表都有選取時，再按一次是前一張）。一次只動一張：各張工作表的選取記在
+ * 同一份檢視狀態裡，同時清除會互相蓋掉。
+ */
+const selections = new Map<symbol, { at: number; clear: () => void }>();
+let selectionClock = 0;
+let escapeInstalled = false;
+
+function installEscape(): void {
+  if (escapeInstalled) return;
+  escapeInstalled = true;
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented || selections.size === 0) return;
+    // 正在輸入、開著對話框或選單時，Esc 是它們的（取消輸入、收起選單）
+    const target = event.target as Element | null;
+    if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+    if (document.querySelector(".modal-backdrop, .popup-menu, .options.floating, .notes-list")) return;
+    let latest: { at: number; clear: () => void } | null = null;
+    for (const entry of selections.values()) if (latest === null || entry.at > latest.at) latest = entry;
+    latest?.clear();
+  });
+}
 
 type SelectTool = "rect" | "radius" | "lasso";
 /** 地圖工具列的選取工具（Tableau 地圖工具列的矩形、半徑與套索選取） */
@@ -321,6 +350,84 @@ function NullIndicator({ count, actions }: { count: number; actions?: NullAction
   );
 }
 
+/**
+ * 畫圖的附註（render 回應的 notes）：檢視左下角一個不顯眼的標示，點了列出各則。warnings 是其中「作者要的東西
+ * 沒有畫出來、算不出來或畫得與設定的不同」的那些（例如預測估計不出來的原因、尚未支援的畫法），others 是單純的
+ * 說明（計算方式與 Tableau 的差異等）。檢視器只給 warnings：沒有時不出現；編輯器兩種都列出。
+ * 清單浮在畫面上（視窗座標），不被 dashboard 的區塊裁切；點別的地方或按 Esc 收起來。
+ */
+function NotesIndicator({ warnings, others }: { warnings: string[]; others: string[] }) {
+  const [at, setAt] = useState<{ left: number; bottom: number } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const open = at !== null;
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") setAt(null);
+        return;
+      }
+      const target = event.target as Node | null;
+      if (target && (button.current?.contains(target) || list.current?.contains(target))) return;
+      setAt(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  if (warnings.length === 0 && others.length === 0) return null;
+  const label = warnings.length > 0 ? `⚠ ${warnings.length} 項未能呈現` : `ⓘ ${others.length} 則附註`;
+  const title =
+    warnings.length > 0
+      ? "這張圖有設定的東西沒有畫出來、算不出來，或畫得與設定的不同：點一下看原因"
+      : "這張圖的附註（計算與畫法的說明）：點一下列出";
+  return (
+    <span className="notes-indicator" data-warnings={warnings.length} data-notes={warnings.length + others.length}>
+      <button
+        type="button"
+        ref={button}
+        title={title}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => {
+          const box = button.current?.getBoundingClientRect();
+          setAt(open || !box ? null : { left: box.left, bottom: window.innerHeight - box.top + 4 });
+        }}
+      >
+        {label}
+      </button>
+      {at &&
+        createPortal(
+          <div
+            ref={list}
+            className="notes-list"
+            role="note"
+            aria-label="畫圖的附註"
+            style={{ left: Math.max(4, Math.min(at.left, window.innerWidth - 364)), bottom: at.bottom }}
+          >
+            <ul>
+              {warnings.map((note) => (
+                <li key={note} data-kind="warning">
+                  {note}
+                </li>
+              ))}
+              {others.map((note) => (
+                <li key={note} data-kind="info">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 /** 工具提示欄位清單中的記號（見 kernel 的 TOOLTIP_CARD）：這一層是第幾張標記卡，不顯示 */
 const CARD_KEY = "__card:";
 /** 「暫留時」的工具提示：停在標記上多久才顯示（毫秒） */
@@ -491,6 +598,7 @@ function VizTooltip({
               showTitle={false}
               fit="entire_view"
               hideLegend
+              showNotes="none"
             />
           </div>
         ))}
@@ -834,6 +942,7 @@ export function WorksheetView({
   onKeep,
   pinAbove,
   onAnnotationMove,
+  showNotes = "warnings",
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
   /** 剛框選完（放開滑鼠後瀏覽器還會送出 click，那不是點選標記） */
@@ -841,6 +950,8 @@ export function WorksheetView({
   const onAnnotationMoveRef = useRef(onAnnotationMove);
   onAnnotationMoveRef.current = onAnnotationMove;
   const movable = onAnnotationMove !== undefined;
+  /** 編輯器：這一下滑鼠按在註解上、正在拖曳它（不是框選） */
+  const annotationDrag = useRef(false);
   const onKeepRef = useRef(onKeep);
   onKeepRef.current = onKeep;
   const canKeep = onKeep !== undefined;
@@ -1053,6 +1164,8 @@ export function WorksheetView({
             const found = /^__deco_annotation(\d+)_marks$/.exec(String(item?.mark?.name ?? ""));
             if (!found) return;
             event.preventDefault?.();
+            // 這一下是拖曳註解：圖表上的框選（startBox，同一個 mousedown 稍後才輪到它）不啟動
+            annotationDrag.current = true;
             const index = Number(found[1]);
             const startX = event.clientX;
             const startY = event.clientY;
@@ -1063,6 +1176,7 @@ export function WorksheetView({
             const drop = (up: MouseEvent) => {
               document.removeEventListener("mousemove", drag);
               document.removeEventListener("mouseup", drop);
+              annotationDrag.current = false;
               const dx = Math.round(up.clientX - startX);
               const dy = Math.round(up.clientY - startY);
               if (Math.abs(dx) + Math.abs(dy) > 2) {
@@ -1221,11 +1335,12 @@ export function WorksheetView({
 
   // 框選（Tableau 預設的矩形選取工具）：在一般圖表上按住左鍵拖曳出方框，方框碰到的標記都選取；按住
   // Ctrl／⌘／Shift 時加進原本的選取，框到空白處取消選取。地圖上拖曳是平移，要框選用地圖工具列的選取工具。
-  const canSelect = (interactive || canKeep) && !zoomable && !movable && !tool;
+  // 編輯器裡註解可以拖曳：按在註解上拖曳是移動它，按在其他地方拖曳是框選。
+  const canSelect = (interactive || canKeep) && !zoomable && !tool;
   const startBox = (event: React.MouseEvent<HTMLDivElement>) => {
     const body = bodyRef.current;
     const chart = chartRef.current;
-    if (!canSelect || !body || !chart || event.button !== 0) return;
+    if (!canSelect || !body || !chart || event.button !== 0 || annotationDrag.current) return;
     // 捲軸上的拖曳是捲動
     const area = chart.getBoundingClientRect();
     if (event.clientX > area.left + chart.clientWidth || event.clientY > area.top + chart.clientHeight) return;
@@ -1267,27 +1382,37 @@ export function WorksheetView({
     document.addEventListener("mouseup", up);
   };
 
-  // 釘住的工具提示：資料重新查詢、按 Esc 或點別的地方時放開
+  // 釘住的工具提示：資料重新查詢、按 Esc（見下面的取消選取）或點別的地方時放開
   useEffect(() => setPin(null), [response]);
   const pinned = pin !== null;
   useEffect(() => {
     if (!pinned) return;
     const close = (event: Event) => {
-      if (event instanceof KeyboardEvent) {
-        if (event.key === "Escape") setPin(null);
-        return;
-      }
       const target = event.target as Element | null;
       if (target?.closest(".viz-tooltip, .select-overlay") || (chartRef.current && target && chartRef.current.contains(target))) return;
       setPin(null);
     };
     document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", close);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", close);
-    };
+    return () => document.removeEventListener("mousedown", close);
   }, [pinned]);
+
+  /** 取消這張工作表的選取：放開釘住的工具提示，並告訴呼叫端（與點空白處相同：篩選動作清除、編輯器的選取清空）。 */
+  const clearSelection = () => {
+    setPin(null);
+    if ((selected?.length ?? 0) > 0) onMarksRef.current?.({ kind: "click", mark: null, additive: false, x: 0, y: 0 });
+  };
+  const clearSelectionRef = useRef(clearSelection);
+  clearSelectionRef.current = clearSelection;
+  // 按 Esc 取消選取：有可以取消的選取時登記（最近選取的那一張工作表先取消，見 installEscape）
+  const selectionId = useRef<symbol | null>(null);
+  const clearable = pinned || ((selected?.length ?? 0) > 0 && interactive);
+  useEffect(() => {
+    if (!clearable) return;
+    installEscape();
+    const id = (selectionId.current ??= Symbol("selection"));
+    selections.set(id, { at: ++selectionClock, clear: () => clearSelectionRef.current() });
+    return () => void selections.delete(id);
+  }, [clearable, selectedKey]);
   /** 依類別選取：這個維度的值相同的所有標記 */
   const selectCategory = (key: string, value: Scalar) => {
     const { records, dimensions } = tipData.current;
@@ -1325,6 +1450,10 @@ export function WorksheetView({
   const shapeLegend = legendMeta?.entries.some((entry) => entry.image) ? legendMeta : null;
   // 連續座標軸上的值是 Null 而沒有畫出的標記數（「N 個 Null」指示器）
   const nulls = Number((response?.spec?.usermeta as { nulls?: number } | undefined)?.nulls ?? 0);
+  // 畫圖的附註：沒有畫出來、算不出來的（warnings；回應沒有分類時全部當成這一種），與單純的說明
+  const allNotes = [...new Set(response?.notes ?? [])];
+  const warnings = [...new Set(response?.warnings ?? response?.notes ?? [])];
+  const otherNotes = showNotes === "all" ? allNotes.filter((note) => !warnings.includes(note)) : [];
   // 工作表的背景（含標題，可以透明）與標題的顏色
   const usermeta = (response?.spec as Spec | null | undefined)?.usermeta ?? {};
   const meta = (
@@ -1333,11 +1462,8 @@ export function WorksheetView({
         <button
           type="button"
           className="link selection"
-          title="清除選取"
-          onClick={() => {
-            setPin(null);
-            onMarks?.({ kind: "click", mark: null, additive: false, x: 0, y: 0 });
-          }}
+          title="清除選取（Esc）"
+          onClick={clearSelection}
         >
           已選取 {count} 個標記 ✕
         </button>
@@ -1497,6 +1623,7 @@ export function WorksheetView({
           </div>
         )}
         {nulls > 0 && !error && !showTable && !response?.unsupported && <NullIndicator count={nulls} actions={nullActions} />}
+        {showNotes !== "none" && !error && !showTable && !response?.unsupported && <NotesIndicator warnings={warnings} others={otherNotes} />}
         {loading && !response && <div className="placeholder">載入中…</div>}
       </div>
       {response?.caption && (showCaption ?? response.caption_shown === true) && (

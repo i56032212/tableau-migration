@@ -3,7 +3,6 @@
 
 import type React from "react";
 import { useCallback, useRef, useState } from "react";
-import { confirmBox } from "../confirm";
 import { addDatasource, saveDocument } from "../desktop";
 import { Modal } from "../Server";
 import type { ViewState } from "../state";
@@ -13,6 +12,7 @@ import { editApi } from "./api";
 import { useEditHistory, useNotice } from "./history";
 import { type RichRun, RichTextEditor } from "./RichText";
 import { SEPARATOR } from "./Shelves";
+import { edited, removeSheet, useUndoRedo } from "./structure";
 import {
   dataMenuItems,
   fileMenu,
@@ -65,7 +65,10 @@ export function StoryEditor({
     (saved, previous) => {
       if (saved.name !== previous.name) onChanged();
     },
+    () => edited(workbook),
   );
+  // 工具列的復原、重做與 Ctrl+Z、Ctrl+Y：這個 Story 自己的歷程，加上整份報表刪除分頁的紀錄
+  const undoRedo = useUndoRedo(ws, { kind: "story", id }, history.current ? history : null);
   const [selected, setSelected] = useState<string | null>(null);
   const [noteEditing, setNoteEditing] = useState<number | null>(null);
   const [formatOpen, setFormatOpen] = useState(false);
@@ -149,16 +152,8 @@ export function StoryEditor({
 
   const tab = { kind: "story" as const, id: story.id };
   const done = () => onClose(story.id);
-  const removeStory = async () => {
-    if (!(await confirmBox(`刪除 Story「${story.name}」？`))) return;
-    void editApi
-      .removeStory(workbook, story.id)
-      .then(() => {
-        onChanged();
-        onClose(null);
-      })
-      .catch((e: Error) => notify(e.message, "error"));
-  };
+  // 不先問：刪除可以復原（Ctrl+Z、工具列的復原或刪除之後訊息上的「復原」）；刪除之後留在編輯器（structure.ts）
+  const removeStory = () => removeSheet(ws, { kind: "story", id: story.id, name: story.name }, (text) => notify(text, "error"));
   const menus: MenuDef[] = [
     fileMenu(ws),
     { label: "資料", items: dataMenuItems(ws) },
@@ -183,8 +178,8 @@ export function StoryEditor({
     <div className="story-editor workspace" data-story-editor={story.id} data-saving={history.pending > 0 ? "true" : "false"}>
       <MenuBar menus={menus} saving={history.pending > 0} onDone={done} />
       <div className="ws-toolbar" role="toolbar" aria-label="Story 編輯">
-        <ToolButton icon="undo" label="復原" title="復原（Ctrl+Z）" disabled={!history.canUndo} onClick={history.undo} />
-        <ToolButton icon="redo" label="重做" title="重做（Ctrl+Y）" disabled={!history.canRedo} onClick={history.redo} />
+        <ToolButton icon="undo" label="復原" title={undoRedo.undoTitle} disabled={!undoRedo.canUndo} onClick={undoRedo.undo} />
+        <ToolButton icon="redo" label="重做" title={undoRedo.redoTitle} disabled={!undoRedo.canRedo} onClick={undoRedo.redo} />
         <span className="sep" />
         <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(workbook, false)} />
         <span className="sep" />

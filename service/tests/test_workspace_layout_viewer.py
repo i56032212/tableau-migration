@@ -17,7 +17,16 @@ from typing import Any
 
 import pytest
 import uvicorn
-from editor_ui import current_tab, menu_item, menubar, sheet_tab, side_tab, tab_menu, tool
+from editor_ui import (
+    current_tab,
+    menu_item,
+    menubar,
+    rename_tab,
+    sheet_tab,
+    side_tab,
+    tab_menu,
+    tool,
+)
 
 from tmig_service.background import free_port
 from tmig_service.desktop import TOKEN_HEADER, create_desktop_app
@@ -405,8 +414,9 @@ def test_new_dashboard_takes_dropped_sheets_and_home_has_the_menu_bar(engine: st
 
 def test_sheet_tabs_delete_rename_and_scroll(engine: str) -> None:
     """分頁列（2026-11-21 稽核）：連按兩下「還不是目前的」分頁會切過去並開始改名（原本只切換）；刪除目前的
-    工作表之後留在編輯器、開啟左邊的分頁（原本被丟到檢視器），刪除前說明不能復原；分頁很多時目前的分頁
-    捲進看得到的範圍（原本停在最左邊），按看得到的分頁時分頁列不跳動。"""
+    工作表之後留在編輯器、開啟左邊的分頁（原本被丟到檢視器），與 Tableau 相同不先問（刪除可以復原，見
+    test_deleted_sheets_come_back_with_undo）；分頁很多時目前的分頁捲進看得到的範圍（原本停在最左邊），
+    按看得到的分頁時分頁列不跳動。"""
     from playwright.sync_api import Dialog, Page, expect, sync_playwright
 
     def settle(page: Page) -> None:
@@ -473,38 +483,39 @@ def test_sheet_tabs_delete_rename_and_scroll(engine: str) -> None:
         expect(page.locator(".sheet-tabs .renaming")).to_have_count(0)
         expect(current_tab(page)).to_have_text("Sales by Region")
 
-        # 刪除目前的工作表：先確認（說明不能復原）；按取消不刪
+        # 刪除目前的工作表：不先問（可以復原），刪掉之後留在編輯器，開啟左邊的分頁；訊息上可以復原
         for _ in range(2):
             tool(page, "新增工作表").click()
             page.wait_for_selector(".editor-canvas .placeholder")
         page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
         settle(page)
-        accept[0] = False
-        tab_menu(page, current_tab(page), "刪除")
-        page.wait_for_timeout(300)
-        assert asked[-1] == "刪除工作表「工作表 2」？刪除之後不能復原。"
-        assert "工作表 2" in names() and page.url == f"{engine}/w/demo/edit/ws_2"
-        # 按確定：刪掉之後留在編輯器，開啟左邊的分頁
-        accept[0] = True
+        accept[0] = False  # 萬一還跳出確認，按取消：就不會刪除
         tab_menu(page, current_tab(page), "刪除")
         page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
         settle(page)
+        assert asked == []
         expect(current_tab(page)).to_have_text("工作表 1")
         expect(page.locator(".editor .menu-bar")).to_be_visible()
         expect(sheet_tab(page, "工作表 2")).to_have_count(0)
         assert "工作表 2" not in names()
-        # 刪除不是目前的分頁：留在原來的分頁
+        deleted = page.locator(".toast", has_text="已刪除工作表「工作表 2」")
+        expect(deleted.get_by_role("button", name="復原")).to_be_visible()
+        deleted.evaluate("element => element.remove()")
+        # 刪除不是目前的分頁：留在原來的分頁。新的工作表是「工作表 3」：剛刪除的「工作表 2」還可以復原，
+        # 名稱與 id 留給它
         tool(page, "新增工作表").click()
-        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_3")
         settle(page)
         tab_menu(page, sheet_tab(page, "工作表 1"), "刪除")
         expect(sheet_tab(page, "工作表 1")).to_have_count(0)
-        assert page.url == f"{engine}/w/demo/edit/ws_2"
-        expect(current_tab(page)).to_have_text("工作表 2")
+        assert page.url == f"{engine}/w/demo/edit/ws_3"
+        expect(current_tab(page)).to_have_text("工作表 3")
+        page.locator(".toast", has_text="已刪除工作表「工作表 1」").evaluate("e => e.remove()")
         # dashboard 還在用的工作表刪不掉：說明原因，留在原來的分頁
         tab_menu(page, sheet_tab(page, "Sales by Region"), "刪除")
         expect(page.locator(".toast")).to_contain_text("不能刪除")
-        assert "Sales by Region" in names() and page.url == f"{engine}/w/demo/edit/ws_2"
+        assert "Sales by Region" in names() and page.url == f"{engine}/w/demo/edit/ws_3"
+        assert asked == []
 
         # 分頁很多：開啟最右邊的 dashboard，目前的分頁捲進看得到的範圍
         for _ in range(40):
@@ -533,4 +544,256 @@ def test_sheet_tabs_delete_rename_and_scroll(engine: str) -> None:
         latest = tab_box(page)
         assert latest["visible"] and latest["scroll"] > after["scroll"], latest
         assert errors == []
+        browser.close()
+
+
+def test_deleted_sheets_come_back_with_undo(engine: str) -> None:
+    """刪除工作表、dashboard、Story 可以復原（Tableau：刪除之後按 Ctrl+Z，它原樣回到原本的位置）。原本編輯的
+    歷程是每個分頁各自的，刪除之後沒有東西可以復原。
+
+    - 刪除不先問；右下角的訊息上有「復原」，工具列的復原與 Ctrl+Z 也可以
+    - 復原之後報表的定義與刪除之前完全相同（id、名稱、定義、分頁的位置、其他工作表的工具提示），編輯器回到
+      放回來的分頁；重做（工具列、Ctrl+Y）是再刪一次
+    - 復原之後又改過報表就不能重做；刪除別的分頁時人留在原來的分頁，Ctrl+Z 先復原那次刪除，不是這個分頁
+      之前的變更
+    - 放不回去時（之後新增了同名的工作表）說明原因，報表不變"""
+    from playwright.sync_api import Dialog, Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.workspace[data-saving="false"], .ds-workspace')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder, '
+            ".dash-editor .dash-canvas, .story-editor .story-preview, .ds-workspace .ws-scroll",
+            timeout=30000,
+        )
+
+    def ir() -> dict[str, Any]:
+        return call(engine, "/api/workbooks/demo/ir")
+
+    def names() -> list[str]:
+        return [w["name"] for w in ir()["worksheets"]]
+
+    def put(worksheet: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{worksheet['id']}",
+            data=json.dumps({"worksheet": worksheet}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            assert response.status == 200
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": agg is not None,
+            "table_calc": None,
+        }
+
+    # 「工作表 1」有內容（列、欄），在另一張工作表的工具提示裡，後面還有「工作表 2」
+    first = call(engine, "/api/edit/demo/worksheets", {})["worksheet"]
+    call(engine, "/api/edit/demo/worksheets", {})
+    first["rows"] = [use("f_segment")]
+    first["columns"] = [use("f_sales", "sum")]
+    put(first)
+    host = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
+    host["marks"]["tooltip_sheets"] = [{"worksheet": "ws_1", "max_width": 260}]
+    put(host)
+    before = ir()
+    order = [w["id"] for w in before["worksheets"]]
+    assert order[-2:] == ["ws_1", "ws_2"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        asked: list[str] = []
+
+        def answer(dialog: Dialog) -> None:
+            asked.append(dialog.message)
+            dialog.dismiss()  # 還跳出確認的話按取消：就不會刪除
+
+        def tabs() -> list[str]:
+            return page.locator(".sheet-tab-list .sheet-tab").all_inner_texts()
+
+        def toast(text: str) -> Any:
+            return page.locator(".toast", has_text=text)
+
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", answer)
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        expect(tool(page, "復原")).to_be_disabled()
+
+        # 刪除目前的分頁：不問，開啟左邊的分頁；訊息與工具列都可以復原
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_sub_category_profit")
+        settle(page)
+        assert asked == []
+        gone = ir()
+        assert [w["id"] for w in gone["worksheets"]] == [i for i in order if i != "ws_1"]
+        monthly = next(w for w in gone["worksheets"] if w["id"] == "ws_monthly_profit")
+        assert monthly["marks"]["tooltip_sheets"] == []
+        expect(toast("已刪除工作表「工作表 1」").get_by_role("button", name="復原")).to_be_visible()
+        expect(tool(page, "復原")).to_be_enabled()
+        assert tool(page, "復原").get_attribute("title") == "復原刪除工作表「工作表 1」（Ctrl+Z）"
+        expect(tool(page, "重做")).to_be_disabled()
+
+        # Ctrl+Z：回到原本的位置（「工作表 2」之前），定義、工具提示都與刪除之前相同；編輯器開啟它
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert ir() == before
+        expect(current_tab(page)).to_have_text("工作表 1")
+        assert tabs()[-3:-1] == ["工作表 1", "工作表 2"]
+        expect(page.locator('[data-shelf="rows"] .pill')).to_have_count(1)
+        expect(toast("已刪除工作表")).to_have_count(0)
+        expect(toast("已復原工作表「工作表 1」")).to_be_visible()
+        expect(tool(page, "復原")).to_be_disabled()
+
+        # 重做（工具列）：再刪一次，結果與第一次相同；再以工具列復原
+        expect(tool(page, "重做")).to_be_enabled()
+        assert tool(page, "重做").get_attribute("title") == "重做刪除工作表「工作表 1」（Ctrl+Y）"
+        tool(page, "重做").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_sub_category_profit")
+        settle(page)
+        assert ir() == gone
+        tool(page, "復原").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert ir() == before
+
+        # 復原之後改了報表（交換欄與列）：不能再重做刪除；Ctrl+Z 復原的是這個變更
+        expect(tool(page, "重做")).to_be_enabled()
+        tool(page, "交換").click()
+        settle(page)
+        expect(tool(page, "重做")).to_be_disabled()
+        swapped = ir()
+        sheet = next(w for w in swapped["worksheets"] if w["id"] == "ws_1")
+        assert sheet["rows"][0]["field"] == "f_sales"
+        page.keyboard.press("Control+y")
+        page.wait_for_timeout(400)
+        assert ir() == swapped and page.url == f"{engine}/w/demo/edit/ws_1"
+        page.keyboard.press("Control+z")
+        expect(tool(page, "復原")).to_be_disabled()
+        settle(page)
+        assert ir() == before
+
+        # 人在「工作表 1」（剛做了一個變更）時刪除別的分頁：Ctrl+Z 先復原那次刪除，這個分頁的變更還在
+        tool(page, "交換").click()
+        settle(page)
+        tab_menu(page, sheet_tab(page, "工作表 2"), "刪除")
+        expect(sheet_tab(page, "工作表 2")).to_have_count(0)
+        assert page.url == f"{engine}/w/demo/edit/ws_1" and "工作表 2" not in names()
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        settle(page)
+        assert ir() == swapped
+        expect(current_tab(page)).to_have_text("工作表 2")
+
+        # 訊息上的「復原」
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert "工作表 2" not in names()
+        toast("已刪除工作表「工作表 2」").get_by_role("button", name="復原").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        settle(page)
+        assert ir() == swapped
+
+        # 刪除之後新增工作表：新的是「工作表 3」（「工作表 2」的名稱與 id 留給還可以復原的那一張），
+        # 所以在新的分頁上按 Ctrl+Z，刪除的那一張照樣回到原本的位置
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        tool(page, "新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_3")
+        settle(page)
+        expect(current_tab(page)).to_have_text("工作表 3")
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        settle(page)
+        assert tabs()[-4:-1] == ["工作表 1", "工作表 2", "工作表 3"]
+        with_third = ir()
+        assert [w for w in with_third["worksheets"] if w["id"] != "ws_3"] == swapped["worksheets"]
+
+        # 放不回去：刪除「工作表 2」之後把別的工作表改成同一個名稱——說明原因，報表不變；
+        # 把名稱改回去之後就能復原
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        rename_tab(page, sheet_tab(page, "工作表 3"), "工作表 2")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_3")
+        settle(page)
+        expect(current_tab(page)).to_have_text("工作表 2")
+        sheet_tab(page, "工作表 1").click()  # 換分頁：改名不在這個分頁的歷程裡
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        page.wait_for_timeout(900)  # 等連按兩下的時間過去
+        taken = ir()
+        page.keyboard.press("Control+z")
+        expect(page.locator(".toast.error")).to_contain_text("已經有同名的工作表")
+        assert ir() == taken and page.url == f"{engine}/w/demo/edit/ws_1"
+        page.locator(".toast.error").evaluate("element => element.remove()")
+        rename_tab(page, sheet_tab(page, "工作表 2"), "工作表 3")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_3")
+        settle(page)
+        expect(current_tab(page)).to_have_text("工作表 3")
+        # 剛改的名稱是這個分頁最近的一步：第一次 Ctrl+Z 復原它，第二次才是那次刪除——所以到別的分頁再按
+        sheet_tab(page, "工作表 1").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        page.wait_for_timeout(900)
+        tool(page, "復原").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        settle(page)
+        assert ir() == with_third
+
+        # dashboard：分頁的右鍵選單刪除，Ctrl+Z 放回來
+        page.locator(".sheet-tab-add").get_by_role("button", name="新增 dashboard").click()
+        page.wait_for_url(re.compile(r"/w/demo/edit-d/"))
+        settle(page)
+        board = page.url.rsplit("/", 1)[1]
+        with_board = ir()
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_url(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        settle(page)
+        assert board not in [d["id"] for d in ir()["dashboards"]]
+        expect(toast("已刪除 dashboard「儀表板 1」")).to_be_visible()
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit-d/{board}")
+        settle(page)
+        assert ir() == with_board
+        expect(current_tab(page)).to_have_text("儀表板 1")
+
+        # Story：功能表的「刪除 Story」也不先問、留在編輯器；工具列的復原放回來
+        page.locator(".sheet-tab-add").get_by_role("button", name="新增 Story").click()
+        page.wait_for_url(re.compile(r"/w/demo/edit-story/"))
+        settle(page)
+        story = page.url.rsplit("/", 1)[1]
+        with_story = ir()
+        menubar(page, "Story", "刪除 Story")
+        page.wait_for_url(f"{engine}/w/demo/edit-d/{board}")
+        settle(page)
+        assert ir()["stories"] == []
+        tool(page, "復原").click()
+        page.wait_for_url(f"{engine}/w/demo/edit-story/{story}")
+        settle(page)
+        assert ir() == with_story
+
+        # 資料來源分頁：刪除別的分頁之後，這裡的工具列也可以復原
+        sheet_tab(page, "資料來源").click()
+        page.wait_for_url(re.compile(r"/w/demo/edit-ds/"))
+        settle(page)
+        tab_menu(page, sheet_tab(page, "工作表 1"), "刪除")
+        expect(sheet_tab(page, "工作表 1")).to_have_count(0)
+        assert "工作表 1" not in names()
+        tool(page, "復原").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert ir() == with_story
+        assert asked == [] and errors == []
         browser.close()

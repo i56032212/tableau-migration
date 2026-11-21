@@ -274,10 +274,16 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
       window.removeEventListener("resize", measure);
     };
   }, [fixed]);
+  // 手機上沒有裝置版面的 dashboard 顯示預設版面：隨畫面調整大小的（自動，或沒有下限的範圍）不壓到比作者
+  // 設計的尺寸小——壓進手機的寬度圖表就看不到了；超出畫面的部分在區塊中捲動（固定大小的本來就是原尺寸）
+  const floor =
+    device === "phone" && !layout && (dashboard.sizing === "automatic" || (dashboard.sizing === "range" && !dashboard.min_size))
+      ? dashboard.size
+      : null;
   const [width, height] = fixed
     ? [dashboard.size.width, dashboard.size.height]
     : available
-      ? displaySize(dashboard, available[0], available[1])
+      ? displaySize(dashboard, Math.max(available[0], floor?.width ?? 0), Math.max(available[1], floor?.height ?? 0))
       : [0, 0];
   const boxes = useMemo(() => layoutDashboard(dashboard, width, height), [dashboard, width, height]);
 

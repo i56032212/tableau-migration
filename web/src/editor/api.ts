@@ -37,6 +37,24 @@ export interface FormulaCheck {
   message?: string;
 }
 
+/** 刪除工作表、dashboard、Story 時引擎回傳的復原用紀錄（原樣交回 restoreSheet；內容見 kernel 的 tmig.sheet_undo）。 */
+export interface RemovedSheet {
+  kind: "worksheet" | "dashboard" | "story";
+  id: string;
+  name: string;
+  changes: unknown[];
+}
+
+/** 刪除的回應：removed 是復原用的紀錄，state 是刪除之後報表內容的指紋。 */
+export interface RemoveResult {
+  ok: boolean;
+  removed: RemovedSheet;
+  state: string;
+}
+
+/** 重做刪除時帶上復原之後的指紋（報表又改過時引擎回應 409，不刪）。 */
+const expecting = (expect?: string) => (expect ? `?expect=${encodeURIComponent(expect)}` : "");
+
 /** dashboard 與 Story 編輯器的概要。 */
 export interface Outline {
   worksheets: {
@@ -79,8 +97,8 @@ export const editApi = {
       method: "POST",
       body: "{}",
     }).then((r) => r.dashboard),
-  removeDashboard: (workbook: string, dashboard: string) =>
-    request<{ ok: boolean }>(`${edit(workbook)}/dashboards/${part(dashboard)}`, { method: "DELETE" }),
+  removeDashboard: (workbook: string, dashboard: string, expect?: string) =>
+    request<RemoveResult>(`${edit(workbook)}/dashboards/${part(dashboard)}${expecting(expect)}`, { method: "DELETE" }),
   story: (workbook: string, story: string) =>
     request<{ story: Story }>(`${edit(workbook)}/stories/${part(story)}`).then((r) => r.story),
   saveStory: (workbook: string, story: Story) =>
@@ -93,8 +111,14 @@ export const editApi = {
       method: "POST",
       body: JSON.stringify({ name: name ?? null }),
     }).then((r) => r.story),
-  removeStory: (workbook: string, story: string) =>
-    request<{ ok: boolean }>(`${edit(workbook)}/stories/${part(story)}`, { method: "DELETE" }),
+  removeStory: (workbook: string, story: string, expect?: string) =>
+    request<RemoveResult>(`${edit(workbook)}/stories/${part(story)}${expecting(expect)}`, { method: "DELETE" }),
+  /** 復原刪除的工作表、dashboard 或 Story：回到原本的位置，連帶移除的東西一併放回；state 是復原之後的指紋 */
+  restoreSheet: (workbook: string, removed: RemovedSheet) =>
+    request<{ ok: boolean; kind: RemovedSheet["kind"]; id: string; state: string }>(`${edit(workbook)}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ removed }),
+    }),
   saveAction: (workbook: string, action: Record<string, unknown>) =>
     request<{ action: Action }>(`${edit(workbook)}/actions`, {
       method: "POST",
@@ -145,8 +169,8 @@ export const editApi = {
       method: "POST",
       body: "{}",
     }).then((r) => r.worksheet),
-  removeWorksheet: (workbook: string, worksheet: string) =>
-    request<{ ok: boolean }>(`${edit(workbook)}/worksheets/${part(worksheet)}`, { method: "DELETE" }),
+  removeWorksheet: (workbook: string, worksheet: string, expect?: string) =>
+    request<RemoveResult>(`${edit(workbook)}/worksheets/${part(worksheet)}${expecting(expect)}`, { method: "DELETE" }),
   checkFormula: (workbook: string, datasource: string, formula: string, field?: string | null) =>
     request<FormulaCheck>(`${edit(workbook)}/formula`, {
       method: "POST",

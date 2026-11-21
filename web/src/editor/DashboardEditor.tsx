@@ -36,6 +36,7 @@ import {
   zoneLabel,
 } from "./dashboardModel";
 import { useEditHistory, useNotice } from "./history";
+import { edited, useUndoRedo } from "./structure";
 import { CONTROL_OPTIONS, SEPARATOR } from "./Shelves";
 import {
   dataMenuItems,
@@ -185,7 +186,10 @@ export function DashboardEditor({
       // 圖片物件的圖片變了：選圖片的對話框列出的「報表中的圖片」跟著更新
       if (usedImages(saved) !== usedImages(previous)) void reloadOutline();
     },
+    () => edited(workbook),
   );
+  // 工具列的復原、重做與 Ctrl+Z、Ctrl+Y：這個 dashboard 自己的歷程，加上整份報表刪除分頁的紀錄
+  const undoRedo = useUndoRedo(ws, { kind: "dashboard", id }, history.current ? history : null);
   const [selected, setSelected] = useState<string | null>(null);
   const [floating, setFloating] = useState(false);
   const [controlSheet, setControlSheet] = useState<string>("");
@@ -953,8 +957,8 @@ export function DashboardEditor({
     <div className="dash-editor workspace" data-dashboard-editor={dashboard.id} data-saving={history.pending > 0 ? "true" : "false"}>
       <MenuBar menus={menus} saving={history.pending > 0} onDone={done} />
       <div className="ws-toolbar" role="toolbar" aria-label="dashboard 編輯">
-        <ToolButton icon="undo" label="復原" title="復原（Ctrl+Z）" disabled={!history.canUndo} onClick={history.undo} />
-        <ToolButton icon="redo" label="重做" title="重做（Ctrl+Y）" disabled={!history.canRedo} onClick={history.redo} />
+        <ToolButton icon="undo" label="復原" title={undoRedo.undoTitle} disabled={!undoRedo.canUndo} onClick={undoRedo.undo} />
+        <ToolButton icon="redo" label="重做" title={undoRedo.redoTitle} disabled={!undoRedo.canRedo} onClick={undoRedo.redo} />
         <span className="sep" />
         <ToolButton icon="save" label="儲存" onClick={() => void saveDocument(workbook, false)} />
         <span className="sep" />

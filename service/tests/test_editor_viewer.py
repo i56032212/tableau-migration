@@ -3505,6 +3505,291 @@ def test_null_indicator(engine: str) -> None:
         browser.close()
 
 
+def test_render_notes_are_shown(engine: str) -> None:
+    """畫圖的附註（render 回應的 notes）原本在編輯器與檢視器都不顯示：預測估計不出來時，圖上沒有預測、也看不到
+    原因。現在檢視的左下角有一個標示，點了列出各則。
+
+    - 預測估計不出來（只有兩年的資料、預設忽略最後一期）：編輯器列出原因與計算方式的說明，檢視器只列出原因
+    - 預測估計得出來：只剩計算方式的說明——編輯器列出來，檢視器不標示（圖上沒有少東西）"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{body['id']}",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    def forecast(unit: str) -> dict[str, Any]:
+        """Monthly Profit 的時間改成 unit、加上預測；回傳 render 的回應。"""
+        body = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
+        body["columns"][0]["date"]["unit"] = unit
+        body["forecast"] = {"measures": [{"field": "f_profit", "agg": "sum"}]}
+        put(body)
+        return call(engine, "/api/workbooks/demo/worksheets/ws_monthly_profit/render", {})
+
+    caveat = "預測的估計值以平台的指數平滑計算（與 Tableau 相同的模型），可能與 Tableau 有些微差異"
+    reason = "預測：扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"
+    # 年：只有兩年的資料，估計不出來——回應的附註有原因，warnings 只有原因（不含計算方式的說明）
+    failed = forecast("year")
+    assert failed["rows"] == 2 and failed["notes"] == [caveat, reason]
+    assert failed["warnings"] == [reason]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        notes = page.locator(".notes-list li")
+
+        # 編輯器：標示「1 項未能呈現」，點了列出原因（在前）與計算方式的說明；按 Esc 收起來
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+        badge = page.locator(".editor .notes-indicator")
+        expect(badge).to_have_text("⚠ 1 項未能呈現")
+        expect(notes).to_have_count(0)
+        badge.get_by_role("button").click()
+        assert notes.all_inner_texts() == [reason, caveat]
+        assert notes.evaluate_all("items => items.map(i => i.dataset.kind)") == ["warning", "info"]
+        page.keyboard.press("Escape")
+        expect(notes).to_have_count(0)
+
+        # 檢視器（單張工作表）：同樣的標示，只列出原因；點別的地方收起來
+        page.goto(f"{engine}/w/demo/s/ws_monthly_profit")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        badge = page.locator(".single-sheet .notes-indicator")
+        expect(badge).to_have_text("⚠ 1 項未能呈現")
+        badge.get_by_role("button").click()
+        assert notes.all_inner_texts() == [reason]
+        page.locator(".toolbar .wb").click()
+        expect(notes).to_have_count(0)
+
+        # dashboard 上的工作表：標示在那一格，清單浮在畫面上、不被區塊裁切
+        page.goto(f"{engine}/w/demo/d/db_ee909b0c")
+        page.wait_for_function(
+            "document.querySelectorAll('.dashboard .worksheet[data-loading=\"false\"]').length === 4"
+        )
+        expect(page.locator(".dashboard .notes-indicator")).to_have_count(1)
+        badge = page.locator(".dashboard [data-worksheet='ws_monthly_profit'] .notes-indicator")
+        badge.get_by_role("button").click()
+        expect(notes).to_have_text([reason])
+        shown = page.locator(".notes-list").bounding_box()
+        zone = page.locator(".dashboard [data-worksheet='ws_monthly_profit']").bounding_box()
+        assert shown is not None and zone is not None
+        assert shown["width"] > 200 and shown["y"] >= 0 and shown["x"] >= 0
+        assert shown["y"] + shown["height"] <= zone["y"] + zone["height"]
+        assert page.evaluate(
+            """() => { const list = document.querySelector('.notes-list').getBoundingClientRect();
+              const hit = document.elementFromPoint(list.left + 12, list.top + list.height / 2);
+              return hit !== null && hit.closest('.notes-list') !== null; }"""
+        )
+        # 列印（匯出 PDF、訂閱）不印標示
+        page.emulate_media(media="print")
+        expect(badge).to_be_hidden()
+        page.emulate_media(media="screen")
+
+        # 月：估計得出來，只剩計算方式的說明——編輯器列出來，檢視器不標示
+        fine = forecast("month")
+        assert fine["rows"] > 12 and fine["notes"] == [caveat] and fine["warnings"] == []
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+        badge = page.locator(".editor .notes-indicator")
+        expect(badge).to_have_text("ⓘ 1 則附註")
+        badge.get_by_role("button").click()
+        assert notes.all_inner_texts() == [caveat]
+        badge.get_by_role("button").click()
+        expect(notes).to_have_count(0)
+        page.goto(f"{engine}/w/demo/s/ws_monthly_profit")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.wait_for_selector(".single-sheet svg [class*='__deco_forecast']", state="attached")
+        expect(page.locator(".notes-indicator")).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
+def test_box_selection_and_escape_in_the_editor(engine: str) -> None:
+    """編輯器的檢視上拖曳是框選（原本編輯器裡的拖曳只用來移動註解，檢視上不能框選）：方框碰到的標記都選取，
+    選取之後的命令（只保留、排除、群組、建立集合）與點選時相同；按住 Ctrl 加選；按 Esc 取消選取（Tableau：
+    Esc 取消選取）；按在註解上拖曳仍是移動註解，不是框選。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+        page.wait_for_selector('.editor .chart[data-drawn="true"]')
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_sub_category_profit")["worksheet"]
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{body['id']}",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    original = sheet()
+    bars = ".editor-canvas svg path[aria-roledescription='bar']:not(.frozen *)"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sub_category_profit")
+        settle(page)
+
+        def rows() -> list[dict[str, Any]]:
+            """畫面上由上到下的長條：子類別的名稱與位置。"""
+            found = page.locator(bars).evaluate_all(
+                """nodes => nodes.map(n => { const r = n.getBoundingClientRect();
+                  return { label: n.getAttribute('aria-label'), left: r.left, right: r.right,
+                           y: r.top + r.height / 2 }; })"""
+            )
+            for item in found:
+                matched = re.search(r"Sub-Category: ([^;]+)", item["label"])
+                assert matched is not None, item
+                item["name"] = matched.group(1)
+            return sorted(found, key=lambda item: item["y"])
+
+        names = [item["name"] for item in rows()]
+        assert len(names) >= 6 and len(set(names)) == len(names), names
+        # 在第一個長條上加一個標記的註解（之後確認拖曳它是移動、不是框選）
+        noted = {
+            **original,
+            "annotations": [
+                {
+                    "kind": "mark",
+                    "text": [{"text": "看這裡"}],
+                    "point": {"mark": {"f_sub_category": names[0]}},
+                    "offset": [60, 0],
+                }
+            ],
+        }
+        put(noted)
+        page.reload()
+        settle(page)
+        # 註解加上之後長條的順序可能不同（重新讀取）
+        names = [item["name"] for item in rows()]
+
+        def drag(first: int, last: int) -> None:
+            """從第 first 個長條拖到第 last 個（由上到下的順序）：方框跨過 0 的那條線，中間的長條
+            不論正負都碰得到。"""
+            found = rows()
+            zero = max(item["left"] for item in found)
+            start = (zero - 4, found[first]["y"])
+            end = (zero + 4, found[last]["y"])
+            page.mouse.move(*start)
+            page.mouse.down()
+            page.mouse.move((start[0] + end[0]) / 2, (start[1] + end[1]) / 2, steps=4)
+            page.mouse.move(*end, steps=4)
+
+        bar = page.locator(".selection-bar")
+        assert page.locator(".editor-canvas .chart").get_attribute("data-selectable") == "true"
+
+        # 從第 2 個長條拖到第 4 個：拖曳中畫出方框，放開後三個標記都選取
+        drag(1, 3)
+        expect(page.locator(".editor-canvas .select-overlay.passive rect")).to_have_count(1)
+        page.mouse.up()
+        expect(bar).to_contain_text("已選取 3 個標記")
+        expect(page.locator(".editor-canvas .select-overlay")).to_have_count(0)
+        # 只保留：加上這三個成員的篩選（與點選之後的「只保留」相同）；Ctrl+Z 復原
+        bar.get_by_role("button", name="✓ 只保留").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        kept = [f for f in sheet()["filters"] if f not in original["filters"]]
+        assert len(kept) == 1 and kept[0]["mode"] == "include", kept
+        assert kept[0]["field"]["field"] == "f_sub_category"
+        assert sorted(kept[0]["values"]) == sorted(names[1:4])
+        expect(page.locator(bars)).to_have_count(3)
+        page.keyboard.press("Control+z")
+        expect(page.locator(bars)).to_have_count(len(names))
+        settle(page)
+        assert sheet()["filters"] == original["filters"]
+
+        # 按住 Ctrl 再框選：加進原本的選取；排除：這些成員以外的留下
+        drag(0, 1)
+        page.mouse.up()
+        expect(bar).to_contain_text("已選取 2 個標記")
+        page.keyboard.down("Control")
+        drag(4, 5)
+        page.mouse.up()
+        page.keyboard.up("Control")
+        expect(bar).to_contain_text("已選取 4 個標記")
+        bar.get_by_role("button", name="✕ 排除").click()
+        page.wait_for_timeout(300)
+        settle(page)
+        excluded = [f for f in sheet()["filters"] if f not in original["filters"]]
+        assert excluded[0]["mode"] == "exclude"
+        assert sorted(excluded[0]["values"]) == sorted([*names[0:2], *names[4:6]])
+        page.keyboard.press("Control+z")
+        expect(page.locator(bars)).to_have_count(len(names))
+        settle(page)
+
+        # 按 Esc：取消選取（選取的命令列收起來）；框到空白處也是
+        drag(2, 3)
+        page.mouse.up()
+        expect(bar).to_contain_text("已選取 2 個標記")
+        page.keyboard.press("Escape")
+        expect(bar).to_have_count(0)
+        page.locator(bars).nth(2).click()
+        expect(bar).to_contain_text("已選取 1 個標記")
+        page.keyboard.press("Escape")
+        expect(bar).to_have_count(0)
+
+        # 群組、建立集合：對話框裡是框選的成員
+        drag(1, 2)
+        page.mouse.up()
+        expect(bar).to_contain_text("已選取 2 個標記")
+        bar.get_by_role("button", name="📎 群組…").click()
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_contain_text("建立群組")
+        for name in names[1:3]:
+            expect(dialog.locator(".group-list")).to_contain_text(name)
+        # 對話框開著時按 Esc：關掉的是對話框，檢視上的選取還在
+        page.keyboard.press("Escape")
+        expect(page.get_by_role("dialog")).to_have_count(0)
+        page.wait_for_timeout(200)
+        expect(bar).to_contain_text("已選取 2 個標記")
+        bar.get_by_role("button", name="◎ 建立集合…").click()
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_contain_text("集合")
+        for name in names[1:3]:
+            expect(dialog).to_contain_text(name)
+        dialog.get_by_role("button", name="取消", exact=True).click()
+        expect(page.get_by_role("dialog")).to_have_count(0)
+        page.keyboard.press("Escape")
+        expect(bar).to_have_count(0)
+
+        # 按在註解上拖曳：移動註解（文字相對於標記的位置改變），不是框選
+        note = page.locator('.editor .worksheet g[class*="__deco_annotation0"] text')
+        note.first.wait_for()
+        box = note.first.bounding_box()
+        assert box is not None
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x + 15, y + 10, steps=4)
+        page.mouse.move(x + 30, y + 20, steps=4)
+        expect(page.locator(".editor-canvas .select-overlay")).to_have_count(0)
+        page.mouse.up()
+        page.wait_for_timeout(300)
+        settle(page)
+        assert sheet()["annotations"][0]["offset"] == [90, 20]
+        expect(bar).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
 def test_cell_and_pane_borders(engine: str) -> None:
     """格式對話框的框線：儲存格的框線畫在每一列之間、窗格的框線是外框；存進工作表、畫面上的格線與外框跟著變，
     清除格式後回到沒有框線。"""
@@ -3945,6 +4230,208 @@ def test_measure_values_adds_measure_names(engine: str) -> None:
         drag(page, "measure_names", "marks.color")
         drag(page, "measure_values", "rows")
         assert pills(page, "rows") == ["Measure Values"] and pills(page, "columns") == []
+        assert errors == []
+        browser.close()
+
+
+def test_multi_line_labels_make_text_table_rows_taller(engine: str) -> None:
+    """標籤上有多個欄位（每個欄位一行）的文字表（2026-11-21 稽核時記下的：列高不跟著變高，上下列的文字疊在
+    一起）：列高跟著行數變高——各格的文字互不重疊、各列等距（就是規格中的列高）、整段文字以列標題的中線為中心。
+    欄架上加上維度、顯示大小換成符合寬度、符合高度與整個檢視（後兩者的列照舊填滿檢視）、自訂的標籤文字（行數依
+    文字中的換行）、設定的列高比文字矮時也一樣。只有一行時列高照舊是 20 像素。"""
+    from itertools import pairwise
+
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    ws = "ws_1"
+    marks = f"{MAIN_SVG} .mark-text.role-mark:not([class*='__deco']) text"
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def drag(page: Page, field: str, target: str) -> None:
+        page.locator(f'.data-pane [data-field="{field}"]').drag_to(
+            page.locator(f'[data-drop="{target}"]')
+        )
+        settle(page)
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{ws}")["worksheet"]
+
+    def rendered() -> dict[str, Any]:
+        response = call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})
+        assert response["unsupported"] is None, response
+        return response
+
+    def row_step() -> int:
+        """規格中每一列的高度（usermeta.sizing.rows.step）。"""
+        return rendered()["spec"]["usermeta"]["sizing"]["rows"]["step"]
+
+    def steps(boxes: list[tuple[float, float, float, float]]) -> list[float]:
+        """相鄰兩列文字上緣的距離（各列等距時只有一個值）。"""
+        tops = sorted({round(box[1], 1) for box in boxes})
+        return sorted({round(b - a, 1) for a, b in pairwise(tops)})
+
+    def cells(
+        page: Page, lines: int, count: int, step: float | None = None
+    ) -> list[tuple[float, float, float, float]]:
+        """檢視上每一格文字（文字標記）的外框：左、上、右、下。等檢視重畫成 count 格、每一格 lines 行
+        （給了 step 時各列的距離也都是它）再量；等不到就失敗。"""
+        page.wait_for_selector(marks)
+        deadline = time.monotonic() + 10
+        while True:
+            found = page.locator(marks).evaluate_all(
+                "nodes => nodes.map((n) => { const r = n.getBoundingClientRect();"
+                " return [r.left, r.top, r.right, r.bottom,"
+                " Math.max(n.querySelectorAll('tspan').length, 1)]; })"
+            )
+            boxes = [(left, top, right, bottom) for left, top, right, bottom, _ in found]
+            state = (len(found), {n for *_, n in found}, steps(boxes) if step is not None else [])
+            if state == (count, {lines}, [step] if step is not None else []):
+                return boxes
+            assert time.monotonic() < deadline, state
+            page.wait_for_timeout(100)
+
+    def overlapping(boxes: list[tuple[float, float, float, float]]) -> int:
+        """互相蓋到的文字有幾對（外框重疊超過 1 像素）。"""
+        count = 0
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1 :]:
+                wide = min(a[2], b[2]) - max(a[0], b[0])
+                tall = min(a[3], b[3]) - max(a[1], b[1])
+                count += wide > 1 and tall > 1
+        return count
+
+    def off_center(page: Page, boxes: list[tuple[float, float, float, float]]) -> float:
+        """各列的文字（外框的中線）與列標題的中線最多差幾像素。"""
+        members = {v["c0_label"] for v in rendered()["spec"]["data"]["values"]}
+        labels = page.locator(f"{MAIN_SVG} .role-axis-label text").evaluate_all(
+            "nodes => nodes.map((n) => { const r = n.getBoundingClientRect();"
+            " return [n.textContent, (r.top + r.bottom) / 2]; })"
+        )
+        heads = sorted(y for text, y in labels if text in members)
+        middles = sorted({round((box[1] + box[3]) / 2, 1) for box in boxes})
+        assert len(heads) == len(middles) == 17, (len(heads), len(middles))
+        return max(abs(a - b) for a, b in zip(heads, middles, strict=True))
+
+    def confirm(page: Page, dialog: str) -> None:
+        page.locator(dialog).get_by_role("button", name="確定").click()
+        expect(page.locator(dialog)).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+
+    def choose_fit(page: Page, mode: str) -> None:
+        """工具列的顯示大小；等圖依新的大小重畫（填滿的方向與檢視的區塊同寬、同高）。"""
+        page.get_by_label("顯示大小").select_option(mode)
+        page.wait_for_timeout(300)
+        settle(page)
+        assert sheet()["fit"] == mode
+        page.wait_for_function(
+            """([selector, wide, tall]) => {
+              const svg = document.querySelector(selector);
+              const chart = svg && svg.closest('.chart');
+              if (!chart) return false;
+              const box = svg.getBoundingClientRect();
+              return (!wide || box.width >= chart.clientWidth - 2)
+                && (!tall || box.height >= chart.clientHeight - 2);
+            }""",
+            arg=[
+                MAIN_SVG,
+                mode in ("fit_width", "entire_view"),
+                mode in ("fit_height", "entire_view"),
+            ],
+        )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1200})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        tool(page, "新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/{ws}")
+        page.wait_for_selector(".editor-canvas .placeholder")
+
+        # 標籤上只有一個欄位：每一列 20 像素（與修正前相同）
+        drag(page, "f_sub_category", "rows")
+        drag(page, "f_sales", "marks.label")
+        single = cells(page, 1, 17, step=20)
+        assert overlapping(single) == 0 and row_step() == 20
+        centered = off_center(page, single)
+
+        # 標籤上三個欄位：每一格三行，列跟著變高——不重疊、各列等距、整段文字仍以列標題為中心
+        drag(page, "f_profit", "marks.label")
+        drag(page, "f_quantity", "marks.label")
+        assert [u["field"] for u in sheet()["marks"]["label"]] == [
+            "f_sales",
+            "f_profit",
+            "f_quantity",
+        ]
+        shown = cells(page, 3, 17)
+        assert overlapping(shown) == 0
+        tall = row_step()
+        assert tall > 20 and steps(shown) == [tall]
+        assert all(bottom - top <= tall for _, top, _, bottom in shown)  # 文字的高度在列高之內
+        assert abs(off_center(page, shown) - centered) <= 1
+
+        # 欄架上加上維度：四欄、每一列仍是同樣的高度
+        drag(page, "f_region", "columns")
+        crossed = cells(page, 3, 17 * 4, step=tall)
+        assert overlapping(crossed) == 0 and row_step() == tall
+        assert len({round(box[2] / 10) for box in crossed}) == 4
+
+        # 顯示大小：符合寬度時列高不變；符合高度與整個檢視時列填滿檢視（不捲動），文字仍在各自的列中
+        choose_fit(page, "fit_width")
+        wide = cells(page, 3, 17 * 4, step=tall)
+        assert overlapping(wide) == 0
+        chart = page.locator(".editor-canvas .chart").first
+        for mode in ("fit_height", "entire_view"):
+            choose_fit(page, mode)
+            assert rendered()["spec"]["height"] == "container" and row_step() == tall
+            filled = cells(page, 3, 17 * 4)
+            assert overlapping(filled) == 0, mode
+            gaps = steps(filled)  # 各列等距：列高是檢視的高度平分，差不到 1 像素
+            assert gaps[-1] - gaps[0] <= 1 and gaps[0] >= max(b - t for _, t, _, b in filled), mode
+            assert chart.evaluate("n => n.scrollHeight - n.clientHeight") <= 1, mode  # 不捲動
+            assert abs(off_center(page, filled) - centered) <= 1, mode
+        choose_fit(page, "standard")
+
+        # 自訂的標籤文字（標籤的編輯器）：兩行——行數依文字中的換行，不是標籤上欄位的數目
+        page.locator(".mark-buttons").get_by_role("button", name="標籤…").click()
+        page.get_by_role("textbox", name="標籤的文字").click()
+        tools = page.get_by_role("toolbar", name="標籤的文字的格式")
+        page.keyboard.type("業績 ")
+        tools.get_by_label("插入").select_option(label="SUM(Sales)")
+        page.keyboard.press("Enter")
+        page.keyboard.type("利潤 ")
+        tools.get_by_label("插入").select_option(label="SUM(Profit)")
+        confirm(page, ".label-dialog")
+        text = sheet()["marks"]["label_text"]
+        assert [r.get("text") for r in text] == ["業績 ", None, "\n利潤 ", None]
+        lower = row_step()
+        assert 20 < lower < tall
+        typed = cells(page, 2, 17 * 4, step=lower)
+        assert overlapping(typed) == 0
+
+        # 設定的列高（格式＞儲存格大小）比兩行的文字矮：列高加大到放得下；比文字高時照設定
+        menubar(page, "格式", "格式…")
+        page.get_by_label("列的儲存格大小").fill("24")
+        confirm(page, ".format-dialog")
+        assert sheet()["row_style"]["cell"] == 24
+        tight = cells(page, 2, 17 * 4, step=lower)
+        assert overlapping(tight) == 0 and row_step() == lower
+        assert any("列高" in note for note in rendered()["notes"])
+        menubar(page, "格式", "格式…")
+        page.get_by_label("列的儲存格大小").fill("60")
+        confirm(page, ".format-dialog")
+        roomy = cells(page, 2, 17 * 4, step=60)
+        assert overlapping(roomy) == 0 and row_step() == 60
+        assert not any("列高" in note for note in rendered()["notes"])
         assert errors == []
         browser.close()
 

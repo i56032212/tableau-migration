@@ -70,6 +70,7 @@ from tmig.render.datasource import datasource_summary
 from tmig.render.format import accept_language, display_locale, fiscal_label
 from tmig.render.format import format_value as display_value
 from tmig.render.missing import COLUMN_ORDER, pad_empty, pad_result
+from tmig.render.notes import warnings as note_warnings
 from tmig.render.vegalite import (
     after_groups,
     build_spec,
@@ -166,6 +167,9 @@ class Workspace:
         self._cache: dict[str, Loaded] = {}
         self._lock = threading.Lock()
         self._data_ready: set[str] = set()
+        self.reserved: dict[str, set[str]] = {}
+        """桌面版編輯器：各份報表中刪除之後還可以復原的工作表、dashboard、Story 的 id 與名稱。之後新增的東西
+        不占用它們（tmig.edit.reserving），復原時才放得回去；關閉報表時清掉。"""
 
     def fixture_names(self) -> list[str]:
         if not self.fixtures.is_dir():
@@ -224,6 +228,7 @@ class Workspace:
         with self._lock:
             self._cache.pop(name, None)
             self._data_ready.discard(name)
+            self.reserved.pop(name, None)
 
     def published(self, loaded: Loaded, datasource: str) -> DatasourceRecord | None:
         """報表的資料源連到伺服器上的 Published Data Source（萃取取自 .tdsx）時，回傳那個資料源。"""
@@ -928,6 +933,7 @@ def create_app(
             "spec": None,
             "unsupported": None,
             "notes": [],
+            "warnings": [],
         }
         if target is not None and not [
             *target.rows,
@@ -1016,6 +1022,7 @@ def create_app(
                 "spec": None,
                 "unsupported": str(exc),
                 "notes": notes,
+                "warnings": note_warnings(notes),
             }
         except SourceConnectionError as exc:
             raise HTTPException(503, str(exc)) from exc
@@ -1126,7 +1133,10 @@ def create_app(
             "mark": rendered.mark,
             "spec": rendered.spec,
             "unsupported": rendered.unsupported,
+            # 畫圖的附註：全部（編輯器列出來）；warnings 是其中「作者要的東西沒有畫出來、算不出來或畫得不同」
+            # 的那些，檢視器在工作表上標示（單純的說明不標示，見 tmig.render.notes）
             "notes": rendered.notes,
+            "warnings": note_warnings(rendered.notes),
             "applied": query.state.applied,
             "skipped": query.state.skipped,
             "drill": drill,

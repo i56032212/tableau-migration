@@ -131,12 +131,17 @@ def _forecast(
     result: list[tuple[Any, ...]] = [(*row, *([None] * len(extra))) for row in rows]
     appended: dict[int, list[tuple[Any, ...]]] = {}
     models: list[dict[str, Any]] = []
+    # 可以用來估計的資料不到兩期、估計不了的時間序列數：本來就不到兩期的，與扣掉忽略的最後幾期之後不到兩期的
+    too_short = 0
+    short_after_ignoring = 0
     for key, members in groups.items():
         dated = sorted(
             (i for i in members if rows[i][time_at] is not None), key=lambda i: rows[i][time_at]
         )
         if len(dated) < 2:
+            too_short += 1
             continue
+        short = False
         timeline = _timeline(rows[dated[0]][time_at], rows[dated[-1]][time_at], unit)
         index = {rows[i][time_at]: i for i in dated}
         trim = min(max(settings.ignore_last, 0), len(timeline) - 1)
@@ -152,13 +157,15 @@ def _forecast(
                 values.append(value)
             series = _fill(values, settings.fill_zeros)
             if series is None:
+                short = True
                 estimates.append(None)
                 bands.append(None)
                 continue
             try:
                 found = best_fit(series, period, seasonal, custom)
             except ForecastError as exc:
-                notes.append(f"預測（{columns[j]}）：{exc}")
+                # 每條時間序列各估計一次：同一個原因只說一次
+                _note(notes, f"預測（{columns[j]}）：{exc}")
                 estimates.append(None)
                 bands.append(None)
                 continue
@@ -190,6 +197,7 @@ def _forecast(
                 }
             )
         if all(e is None for e in estimates):
+            short_after_ignoring += short
             continue
         # 忽略的最後幾期：以估計值取代實際值
         trimmed = timeline[len(timeline) - trim :]
@@ -223,6 +231,13 @@ def _forecast(
     for i, row in enumerate(result):
         ordered.append(row)
         ordered.extend(appended.get(i, []))
+    if too_short or short_after_ignoring:
+        # 沒有估計的值、也沒有別的說明時，使用者看不出預測為什麼沒有出現：說明原因
+        count = too_short + short_after_ignoring
+        ignored = max(settings.ignore_last, 0)
+        after = f"扣掉忽略的最後 {ignored} 期之後，" if short_after_ignoring and ignored else ""
+        which = "" if count == len(groups) else f"有 {count} 條時間序列"
+        _note(notes, f"預測：{which}{after}資料不到兩期，估計不出來")
     if details is not None:
         # 描述預測：選項與各條時間序列的模型（水準、趨勢、季節的平滑係數與品質）
         details["forecast"] = {
@@ -235,6 +250,12 @@ def _forecast(
             "models": models,
         }
     return out_columns, ordered
+
+
+def _note(notes: list[str], text: str) -> None:
+    """加上一則附註（已經有同樣的就不重複）。"""
+    if text not in notes:
+        notes.append(text)
 
 
 def _estimate_row(

@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -1222,7 +1225,7 @@ def duplicate_as_crosstab(ir: IR, worksheet: str) -> tuple[IR, Worksheet]:
     else:
         text = list(measures)
     update["marks"] = Marks(type="text", label=text)
-    taken = {w.name for w in ir.worksheets}
+    taken = {w.name for w in ir.worksheets} | _RESERVED.get()
     name = _next_name(taken, f"{source.name} (交叉資料表)", start=2, template="{base} ({n})")
     if f"{source.name} (交叉資料表)" not in taken:
         name = f"{source.name} (交叉資料表)"
@@ -1781,8 +1784,27 @@ def _first_error(exc: ValidationError) -> str:
     return f"{where}：{first.get('msg', '')}" if where else str(first.get("msg", ""))
 
 
+_RESERVED: ContextVar[frozenset[str]] = ContextVar("tmig_edit_reserved", default=frozenset())
+"""這次編輯中新增的實體不能使用的 id 與名稱（見 reserving）。"""
+
+
+@contextmanager
+def reserving(taken: Iterable[str]) -> Iterator[None]:
+    """這段期間新增的實體（工作表、dashboard、Story、篩選、Table Calculation、動作…）不使用 taken 中的 id，
+    自動取的名稱（「工作表 N」「<名稱> (2)」）也不使用其中的名稱；使用者自己輸入的名稱不受限制。
+
+    桌面版編輯器以它保留刪除之後還可以復原的工作表、dashboard、Story 的 id 與名稱（tmig.sheet_undo 的
+    reserved_by）：之後新增的東西不占用它們，復原時才放得回去。"""
+    token = _RESERVED.set(frozenset(taken))
+    try:
+        yield
+    finally:
+        _RESERVED.reset(token)
+
+
 def _all_ids(ir: IR) -> set[str]:
-    ids: set[str] = set()
+    """報表中已經用掉的 id，加上保留、不能拿來用的 id（reserving）：新的 id 都要避開。"""
+    ids: set[str] = set(_RESERVED.get())
 
     def walk(value: Any) -> None:
         if isinstance(value, dict):
@@ -1818,6 +1840,8 @@ def _slug(text: str) -> str:
 
 
 def _next_name(taken: set[str], base: str, start: int = 1, template: str = "{base} {n}") -> str:
+    """自動取的名稱（「工作表 N」「<名稱> (N)」）：避開已經有的與保留的名稱（reserving）。"""
+    taken = taken | _RESERVED.get()
     n = start
     while template.format(base=base, n=n) in taken:
         n += 1
@@ -1891,6 +1915,7 @@ __all__ = [
     "replace_dashboard",
     "replace_story",
     "replace_worksheet",
+    "reserving",
     "upsert_action",
     "upsert_calc",
     "upsert_hierarchy",
