@@ -78,15 +78,16 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 - 沒有實機驗證過的（資料庫、Windows 安裝檔、與 Tableau 的畫面比對）在文件與回報中照實寫，不寫成已驗證
 - 其餘見 README 的「開發規則」
 
-## 目前的狀態（2026-11-19）
+## 目前的狀態（2026-11-21）
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（7f3e5c5，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2674 項通過、114 項略過
+- Windows 上的完整測試（24ebe58，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2675 項通過、114 項略過
   （其中 110 項需要 PostgreSQL、MySQL、Spark，在 Windows 上還沒跑過）；前端可以建置，結果與 Linux 上的相同。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
 - GitHub Actions 目前沒有在跑（使用者決定先不處理）；Windows 上的測試與安裝檔的建置在本機做
-- 桌面版安裝檔（7fcbad5，含 2026-11-19 的版面改版）：2026-11-19 在 Windows 本機重建，引擎的冒煙測試與外殼的啟動測試通過；還沒有實際安裝、
-  也還沒有在視窗中操作過（見 `docs/backlog.md`）。建置的做法在 `desktop/README.md`
+- 桌面版安裝檔（24ebe58，含新的工作區排列與單一功能表列）：2026-11-21 在 Windows 本機重建，引擎的冒煙測試與外殼的
+  啟動測試通過；同一天在真正的視窗中驗證過版面、功能表與拉 dashboard（以 WebView2 的除錯埠操作，見
+  `docs/backlog.md`）。還沒有實際執行安裝檔，原生的選檔與存檔對話框也還沒驗證。建置的做法在 `desktop/README.md`
 - `scripts/regen_ir.py`、`scripts/check_commit.py` 在 Linux 與 Windows 上都跑過
 - 接下來的工作與待決定的事項見 `docs/backlog.md`
