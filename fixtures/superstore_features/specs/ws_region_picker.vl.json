@@ -240,6 +240,7 @@
         "y": {
           "field": "c0_label",
           "type": "ordinal",
+          "sort": null,
           "title": "Region",
           "scale": {
             "type": "band",
@@ -290,6 +291,7 @@
         "y": {
           "field": "c0_label",
           "type": "ordinal",
+          "sort": null,
           "title": "Region",
           "scale": {
             "type": "band",

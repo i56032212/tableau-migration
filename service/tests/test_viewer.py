@@ -292,6 +292,155 @@ def test_fit_modes_size_and_scroll(tmp_path: Path) -> None:
         browser.close()
 
 
+ROW_LAYOUT = """(sheet) => {
+  // 一張工作表的文字表：不同列（場景圖項目的 y 不同）、左右有交集的兩格文字，外框上下重疊超過 1 像素的有幾對；
+  // 相鄰兩列相隔多遠（列高）；圖與區塊的高度、能不能捲動、列高是不是保持標準的大小（data-rows）
+  const chart = document.querySelector(`[data-worksheet='${sheet}'] .chart`);
+  const svg = chart.querySelector(':scope > svg, :scope > .frozen-host > svg');
+  const texts = [];
+  for (const group of svg.querySelectorAll('g.mark-text.role-mark')) {
+    if ([...group.classList].some((name) => name.startsWith('__'))) continue;
+    for (const text of group.querySelectorAll(':scope > text'))
+      texts.push({ box: text.getBoundingClientRect(), row: text.__data__.y });
+  }
+  let overlapping = 0;
+  for (let i = 0; i < texts.length; i++) for (let j = i + 1; j < texts.length; j++) {
+    const a = texts[i], b = texts[j];
+    if (Math.abs(a.row - b.row) < 0.5) continue;
+    const wide = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left);
+    const tall = Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top);
+    if (wide > 1 && tall > 1) overlapping++;
+  }
+  const rows = [...new Set(texts.map((t) => Math.round(t.row * 10) / 10))].sort((a, b) => a - b);
+  return {
+    texts: texts.length,
+    overlapping,
+    step: rows.length > 1 ? rows[1] - rows[0] : null,
+    textHeight: Math.max(...texts.map((t) => t.box.height)),
+    svg: svg.getBoundingClientRect().height,
+    client: chart.clientHeight,
+    scrollable: chart.scrollHeight - chart.clientHeight,
+    scroll: chart.dataset.scroll,
+    kept: chart.dataset.rows === 'kept',
+    frozen: chart.querySelectorAll('.frozen-top').length,
+  };
+}"""
+
+
+def test_fit_height_keeps_rows_readable_when_the_zone_is_too_short(tmp_path: Path) -> None:
+    """符合高度、整個檢視時列平分區塊的高度；區塊太矮、把列壓到相鄰兩列的文字互相蓋住時不再壓——改用標準大小
+    的列高，放不下的在區塊內上下捲動（欄標題固定）。文字沒有互相蓋住的照舊填滿：只是被壓得比標準的列高小一點
+    的不受影響。
+
+    原本一律填滿：17 列、每格三行的文字表在 592 像素高的檢視中每列只有 33 像素，44 像素高的文字上下疊在一起
+    （16 對、最多疊 11 像素）。Tableau 怎麼處理沒有查到文件，這是平台自己的做法（README「已知限制與待驗證」）。"""
+    from playwright.sync_api import sync_playwright
+
+    from tmig.edit import add_worksheet, replace_worksheet
+
+    target = tmp_path / "rows"
+    target.mkdir()
+    shutil.copy(DEMO / "superstore_demo.twbx", target / "superstore_demo.twbx")
+    shutil.copytree(DEMO / "data", target / "data")
+    ir = load_ir(DEMO / "golden.ir.json")
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": agg is not None,
+            "table_calc": None,
+        }
+
+    # Sub-Category（17 列）的文字表，標籤上一到三個量值（每個量值一行）
+    measures = [use("f_sales", "sum"), use("f_profit", "sum"), use("f_quantity", "sum")]
+    sheets: dict[str, str] = {}
+    for name, lines, fit in (
+        ("三行", 3, "entire_view"),
+        ("三行符合高度", 3, "fit_height"),
+        ("兩行", 2, "entire_view"),
+        ("一行", 1, "entire_view"),
+    ):
+        ir, created = add_worksheet(ir, name, None)
+        data = created.model_dump(mode="json")
+        data["rows"] = [use("f_sub_category")]
+        data["marks"]["label"] = measures[:lines]
+        data["fit"] = fit
+        ir, saved = replace_worksheet(ir, data)
+        sheets[name] = saved.id
+
+    # dashboard 上很矮的區塊（顯示大小由區塊指定）：也是三行的文字表
+    def refit(zones: list[Any]) -> list[Any]:
+        return [
+            z.model_copy(
+                update={
+                    "children": refit(z.children),
+                    **(
+                        {"worksheet": sheets["三行"], "fit": "entire_view"} if z.id == "z10" else {}
+                    ),
+                }
+            )
+            for z in zones
+        ]
+
+    board = ir.dashboards[0]
+    board = board.model_copy(update={"zones": refit(board.zones)})
+    ir = ir.model_copy(update={"dashboards": [board]})
+    (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+
+    with running_server(tmp_path, DIST) as url, sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+        def standard(name: str) -> int:
+            """標準大小的列高（規格的 usermeta.sizing.rows.step）。"""
+            response = page.request.post(
+                f"{url}/api/workbooks/rows/worksheets/{sheets[name]}/render"
+            )
+            return response.json()["spec"]["usermeta"]["sizing"]["rows"]["step"]
+
+        def layout(name: str, path: str | None = None) -> dict[str, Any]:
+            sheet = sheets[name]
+            page.goto(f"{url}/w/rows/{path or 's/' + sheet}")
+            page.wait_for_selector(f"[data-worksheet='{sheet}'][data-loading='false']")
+            page.wait_for_selector(f"[data-worksheet='{sheet}'] .chart[data-drawn='true']")
+            page.wait_for_timeout(300)
+            return page.evaluate(ROW_LAYOUT, sheet)
+
+        assert (standard("一行"), standard("兩行"), standard("三行")) == (20, 34, 48)
+
+        # 三行、整個檢視：填滿的話每列比文字矮——列高保持標準的 48 像素，文字不重疊，上下捲動、欄標題固定
+        for name, scroll in (("三行", "y"), ("三行符合高度", "both")):
+            found = layout(name)
+            assert found["texts"] == 17 and found["overlapping"] == 0, (name, found)
+            assert found["kept"] and found["step"] == pytest.approx(48, abs=0.1), (name, found)
+            assert found["textHeight"] <= 48 and found["scroll"] == scroll, (name, found)
+            assert found["scrollable"] > 100 and found["frozen"] == 1, (name, found)
+
+        # 兩行：填滿時每列比標準的列高（34 像素）小一點，但文字沒有互相蓋住——照舊填滿，不捲動
+        found = layout("兩行")
+        assert found["texts"] == 17 and found["overlapping"] == 0, found
+        assert not found["kept"] and found["scroll"] == "false", found
+        assert found["textHeight"] < found["step"] < 34, found
+        assert found["svg"] == pytest.approx(found["client"], abs=2) and found["scrollable"] <= 1
+
+        # 一行：列被拉高到填滿，照舊
+        found = layout("一行")
+        assert found["overlapping"] == 0 and not found["kept"] and found["scroll"] == "false", found
+        assert found["step"] > 20 and found["svg"] == pytest.approx(found["client"], abs=2)
+
+        # dashboard 上很矮的區塊：列高保持，區塊內捲動
+        found = layout("三行", f"d/{board.id}")
+        assert found["texts"] == 17 and found["overlapping"] == 0, found
+        assert found["kept"] and found["step"] == pytest.approx(48, abs=0.1), found
+        assert found["scrollable"] > 100 and found["frozen"] == 1, found
+        assert errors == []
+        browser.close()
+
+
 def test_datasource_page(server: str) -> None:
     """資料源分頁：連線、資料源篩選、資料格（前 100 列，含總列數）與欄位（公式以顯示名稱呈現）。"""
     from playwright.sync_api import sync_playwright

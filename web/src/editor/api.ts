@@ -1,11 +1,58 @@
 // 桌面版編輯器的 API（/api/edit）：資料窗格、工作表、計算欄位與篩選的可選值。
 
-import { request } from "../api";
+import { ApiError, request as send } from "../api";
 import type { Action, Dashboard, Domain, FieldUse, MemberAlias, Scalar, Story } from "../types";
 import type { Catalog, CatalogField, CatalogHierarchy, FilterIR, GeoAlias, GeoRole, SetRuleIR, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
 const part = encodeURIComponent;
+
+/**
+ * 編輯器改動了報表（/api/edit 上會改動報表的請求成功之後發出）。引擎在一個操作中可能連帶改到別的工作表
+ * （刪除工作表時拿掉其他工作表工具提示裡的它、刪除 dashboard 時拿掉它的動作的篩選、計算欄位的層級改變時調整
+ * 膠囊…）：開著的工作表編輯器收到後確認手上的定義還是引擎上的那一份（Editor.tsx 的 sync）。
+ * worksheet：這個請求存回的工作表（存回的人已經拿到它最新的定義，不必再確認）；其他請求是 null。
+ */
+export const EDITED_EVENT = "tmig:workbook-edited";
+export interface EditedDetail {
+  workbook: string;
+  worksheet: string | null;
+}
+
+/** 不改動報表的 POST：篩選的可選值、公式檢查、欄位的值、新的 id。 */
+const READ_ONLY = /\/(domain|formula|field-values|ids)$/;
+/** 存回整張工作表的請求（PUT /api/edit/<報表>/worksheets/<工作表>）。 */
+const SAVED_SHEET = /^\/api\/edit\/[^/]+\/worksheets\/([^/]+)$/;
+
+/** /api/edit 的請求：會改動報表的（GET 與上面幾個只讀的 POST 以外）成功之後發出 EDITED_EVENT。 */
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const result = await send<T>(path, init);
+  const method = init?.method ?? "GET";
+  const route = path.split("?")[0];
+  if (method !== "GET" && !READ_ONLY.test(route)) {
+    const saved = method === "PUT" ? SAVED_SHEET.exec(route) : null;
+    const detail: EditedDetail = {
+      workbook: decodeURIComponent(route.split("/")[3] ?? ""),
+      worksheet: saved ? decodeURIComponent(saved[1]) : null,
+    };
+    window.dispatchEvent(new CustomEvent<EditedDetail>(EDITED_EVENT, { detail }));
+  }
+  return result;
+}
+
+/** 引擎上的工作表與它的版本（revision）：存回時帶上這個版本，引擎上的定義已經不是這一版就不覆蓋。 */
+export interface StoredSheet {
+  worksheet: SheetIR;
+  revision: string;
+}
+
+/** 存回工作表時引擎回應「定義在編輯器之外改過了」（409）：回應裡引擎上現在的定義與版本；其他錯誤為 null。 */
+export function sheetConflict(error: unknown): StoredSheet | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const detail = error.detail as Partial<StoredSheet> | null;
+  if (!detail || typeof detail !== "object" || !detail.worksheet || typeof detail.revision !== "string") return null;
+  return { worksheet: detail.worksheet, revision: detail.revision };
+}
 
 /** 建立或修改集合時送出的規則（固定成員、條件或 Top／Bottom N）。 */
 export type SetRuleBody = SetRuleIR;
@@ -134,6 +181,17 @@ export const editApi = {
       method: "PUT",
       body: JSON.stringify({ worksheet: sheet }),
     }).then((r) => r.worksheet),
+  /** 工作表編輯器用的讀取：連同版本 */
+  storedWorksheet: (workbook: string, worksheet: string) => request<StoredSheet>(`${edit(workbook)}/worksheets/${part(worksheet)}`),
+  /**
+   * 工作表編輯器用的存回：base 是手上那一份定義的版本。引擎上的定義已經不是這一版時（引擎在編輯器之外改了
+   * 這張工作表）不覆蓋，丟出 409 的錯誤——sheetConflict 取出引擎上現在的定義。
+   */
+  replaceWorksheet: (workbook: string, sheet: SheetIR, base: string) =>
+    request<StoredSheet>(`${edit(workbook)}/worksheets/${part(sheet.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ worksheet: sheet, base }),
+    }),
   /** 篩選可以套用到的其他工作表（同一個資料源）與目前是否已套用 */
   filterTargets: (workbook: string, worksheet: string, filter: string) =>
     request<{ worksheets: { id: string; name: string; applied: boolean }[] }>(

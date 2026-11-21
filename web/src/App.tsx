@@ -442,14 +442,23 @@ function WorkbookPage({
     const leave = () => {
       if (!document.fullscreenElement) setPresenting(false);
     };
+    // 一次 Esc 只做一件事：簡報模式中是離開簡報模式（Tableau 的使用經驗；官方文件沒有寫，見 README「已知限制
+    // 與待驗證」）。真正全螢幕時瀏覽器自己收下 Esc、結束全螢幕（上面的 leave）；沒有全螢幕時（外殼、不允許
+    // 全螢幕的環境）按鍵會送到頁面上，同一下 Esc 原本還會
+    // 取消標記的選取（WorksheetView 的 installEscape）。這裡在捕捉階段先處理並標成已處理，選取留著——離開
+    // 之後再按一次才取消。開著對話框、選單或清單時，Esc 是它們的（收起來），簡報模式不結束；焦點留在篩選的
+    // 控制項上（剛勾過的核取方塊、下拉選單）不算，照樣離開
     const keys = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPresenting(false);
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector(".modal-backdrop, .popup-menu, .options.floating, .notes-list")) return;
+      event.preventDefault();
+      setPresenting(false);
     };
     document.addEventListener("fullscreenchange", leave);
-    document.addEventListener("keydown", keys);
+    document.addEventListener("keydown", keys, true);
     return () => {
       document.removeEventListener("fullscreenchange", leave);
-      document.removeEventListener("keydown", keys);
+      document.removeEventListener("keydown", keys, true);
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     };
   }, [presenting]);

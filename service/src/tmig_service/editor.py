@@ -86,6 +86,7 @@ from tmig.ir import (
     MemberAlias,
     ParamRef,
     TupleFilter,
+    Worksheet,
     has_local_data,
 )
 from tmig.ir.models import SHAPE_FOLDER, GeoAlias, GeoRole, Scalar, SetRule, shape_image_error
@@ -103,6 +104,10 @@ from tmig_service.app import Workspace, current_user
 class WorksheetBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     worksheet: dict[str, Any]
+    base: str | None = None
+    """送出的定義是從哪一版改來的（讀取或上次存回時回應的 revision）。引擎上的定義已經不是這一版時
+    （引擎在編輯器之外改了這張工作表：刪除別的工作表、dashboard，計算欄位的層級改變…）不覆蓋，回應 409。
+    省略時不檢查。"""
 
 
 class ApplyFilterBody(BaseModel):
@@ -617,12 +622,12 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
 
     @router.get("/{workbook}/worksheets/{worksheet}")
     def get_worksheet(workbook: str, worksheet: str, request: Request) -> dict[str, Any]:
-        """完整的工作表定義（編輯器以它為起點）。"""
+        """完整的工作表定義（編輯器以它為起點）與它的版本（存回時帶上，見 put_worksheet）。"""
         ir = workspace(request).get(workbook).ir
         sheet = next((w for w in ir.worksheets if w.id == worksheet), None)
         if sheet is None:
             raise HTTPException(404, f"找不到工作表「{worksheet}」")
-        return {"worksheet": sheet.model_dump(mode="json")}
+        return {"worksheet": sheet.model_dump(mode="json"), "revision": _revision(sheet)}
 
     @router.post("/{workbook}/domain")
     def post_domain(workbook: str, body: DomainBody, request: Request) -> dict[str, Any]:
@@ -744,10 +749,29 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
     def put_worksheet(
         workbook: str, worksheet: str, body: WorksheetBody, request: Request
     ) -> dict[str, Any]:
+        """換掉整張工作表（編輯器的每次變更）。編輯器送來的是它手上那一份定義改過之後的樣子；引擎也會在
+        別的操作中改到這張工作表（刪除別的工作表時拿掉工具提示裡的它、刪除 dashboard 時拿掉它的動作的篩選、
+        計算欄位的層級改變時調整膠囊、復原刪除時把這些放回來…）。body.base 是編輯器手上那一份的版本：
+        引擎上的定義已經不是這一版時不覆蓋，回應 409，detail 帶著引擎上現在的定義與版本——編輯器把自己的
+        變更重新套在它上面再存。"""
         if body.worksheet.get("id") != worksheet:
             raise HTTPException(422, "工作表的 id 與網址不符")
-        sheet = edit(request, workbook, lambda ir: replace_worksheet(ir, body.worksheet))
-        return {"worksheet": sheet.model_dump(mode="json")}
+
+        def change(ir: IR) -> tuple[IR, Any]:
+            current = next((w for w in ir.worksheets if w.id == worksheet), None)
+            if body.base is not None and current is not None and _revision(current) != body.base:
+                raise HTTPException(
+                    409,
+                    {
+                        "message": "這張工作表在編輯器之外改過了，沒有覆蓋它",
+                        "worksheet": current.model_dump(mode="json"),
+                        "revision": _revision(current),
+                    },
+                )
+            return replace_worksheet(ir, body.worksheet)
+
+        sheet = edit(request, workbook, change)
+        return {"worksheet": sheet.model_dump(mode="json"), "revision": _revision(sheet)}
 
     @router.get("/{workbook}/worksheets/{worksheet}/filters/{filter_id}/apply")
     def get_apply_filter(
@@ -1370,6 +1394,11 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
 def _state(ir: IR) -> str:
     """報表內容的指紋（重做刪除時確認復原之後報表沒有再改過）。"""
     return hashlib.sha256(ir.model_dump_json().encode("utf-8")).hexdigest()[:16]
+
+
+def _revision(sheet: Worksheet) -> str:
+    """工作表定義的版本：內容的指紋。編輯器存回時帶上它讀到的版本，引擎上的定義不是那一版就不覆蓋。"""
+    return hashlib.sha256(sheet.model_dump_json().encode("utf-8")).hexdigest()[:16]
 
 
 def _as_of(directory: Path) -> str | None:

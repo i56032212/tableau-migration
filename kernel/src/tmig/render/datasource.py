@@ -7,7 +7,7 @@ IR 本來就不含帳號、密碼或權杖；摘要只給可以取得完整報�
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -206,7 +206,7 @@ def describe_filter(flt: Filter, fields: dict[str, DataField]) -> str:
     return f"{name}：相對日期（以{unit}計，{flt.first} 到 {flt.last}）"
 
 
-def use_caption(use: FieldUse, fields: dict[str, DataField]) -> str:
+def use_caption(use: FieldUse, fields: Mapping[str, DataField]) -> str:
     """欄位使用的名稱，與 Tableau 膠囊的寫法相同（YEAR(Order Date)、SUM(Sales)）。"""
     data_field = fields.get(use.field)
     name = data_field.caption if data_field is not None else use.field

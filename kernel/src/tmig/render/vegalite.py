@@ -18,7 +18,8 @@
   共用刻度。格線、座標軸線與刻度依列（縱軸）與欄（橫軸）的設定
 - 工作表的背景（可以透明）與文字顏色：座標軸、圖例、標籤與文字表的文字
 - 顯示大小（standard、fit_width、fit_height、entire_view）：離散的列每一列固定高度（預設 20 像素；
-  文字表的每一格有多行文字時加高到放得下，見 _Builder.stack_text）、離散的欄依內容的寬度，連續的
+  文字表與圓點表格的每一格有多行文字、或字大到一行放不下時加高到放得下，見 _Builder.fit_rows）、
+  離散的欄依內容的寬度（文字依各行自己的字級估計，見 _Builder.cell_width），連續的
   座標軸填滿；大小寫在 usermeta.sizing，檢視器依區塊的設定再套用一次（見 apply_fit）。標題與座標軸
   區域設定的寬度、列與欄的色帶與分隔線也照樣畫出
 - 甘特、地圖等尚未支援的標記回傳 None，由檢視器顯示「未支援」
@@ -113,6 +114,7 @@ from tmig.render.format import (
     parse_format,
 )
 from tmig.render.missing import pad_result
+from tmig.render.names import annotation_name, mark_name, pill_name, reference_name
 from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
 from tmig.render.trends import fit_model, format_p, format_r2, t_quantile
 from tmig.sqlgen.query import (
@@ -210,11 +212,14 @@ ROW_HEIGHT = 20
 LINE_SPACING = 2
 """多行的文字（一個文字標記，lineBreak）的行距：Vega 的行高預設是字級加 2 像素。"""
 LINE_PITCH = 1.2
-"""各行格式不同的文字（每一行一個圖層，見 _Builder.line_layers）的行高，相對於這一行的字級。"""
+"""各行格式不同的文字（每一行一個圖層，見 _Builder.line_layers）的行高，相對於這一行的字級。只有一行的文字
+放不放得下預設的列高也用它判斷（見 _Builder.fit_rows）。"""
 ROW_PADDING = 0.5
 """文字表的列高在文字之外上下合計留的空白，相對於字級：預設的列（ROW_HEIGHT）中一行 12 像素的字、行高
-14 像素，留 6 像素。多行的文字依同樣的比例算出需要的列高（見 _Builder.stack_text）。推定的：Tableau 的
-文件沒有寫多行文字的列高，也還沒有與 Tableau 的畫面對過。"""
+14 像素，留 6 像素。多行的文字、放不下預設列高的大字依同樣的比例算出需要的列高（見 _Builder.fit_rows）。
+推定的：Tableau 的文件沒有寫文字放不下時的列高，也還沒有與 Tableau 的畫面對過。"""
+LABEL_GAP = 4
+"""圓點、形狀與方塊的標籤與標記邊緣的距離（像素）。"""
 COLUMN_WIDTH = (40, 320)
 """離散的欄依內容估計寬度時的最小與最大值（像素）。"""
 BAR_BAND = 0.75
@@ -368,6 +373,8 @@ class _Builder:
     ) -> None:
         self.ws = ws
         self.channels = channels
+        self.fields: dict[str, DataField] = {}
+        """資料源的欄位（欄位 id → 欄位，見 build_spec）：附註裡依它寫出欄位在膠囊上的名稱（pill）。"""
         self.notes: list[str] = []
         self.trend_models: list[dict[str, Any]] = []
         """畫出的趨勢線的模型（「描述趨勢模型」）：寫進 usermeta.trends。"""
@@ -408,8 +415,17 @@ class _Builder:
         （畫布的 font 字串）。檢視器在畫圖之前量各段的寬度，把每一段相對於這一行定位點的位移寫進位移欄位。"""
         """各行格式不同的自訂標籤文字（例如 KPI 的小標題與大數字）：每一行的資料欄與格式。"""
         self.row_text = 0.0
-        """離散的列上多行的文字需要的列高（像素；只有一行時為 0）：見 stack_text、line_layers，列高不夠時
-        由 shelf_size 加大。"""
+        """離散的列上多行的文字需要的列高（像素；只有一行時為 0）：見 fit_rows，列高不夠時由 shelf_size 加大
+        （設定的列高放不下時也加大，並寫進附註）。"""
+        self.row_line = 0.0
+        """離散的列上只有一行、但字大到放不下預設列高的文字需要的列高（像素；放得下時為 0）：見 fit_rows。
+        只在沒有設定列高時由 shelf_size 加大——設定了列高的照設定。"""
+        self.main_marks: Marks | None = None
+        """第一張圖的標記卡（unit 第一次畫的那一張；雙軸時是第一個量值的）：build_spec 依它的文字估計欄寬。"""
+        self.cell_lines: dict[int, list[list[tuple[str, float]]]] = {}
+        """文字標記每一格的文字（標記卡的 id → 各行；每一行是並排的各段：資料欄與字級的像素）：欄寬依它
+        估計（見 cell_width）。一個文字標記是一行一段（值裡的換行在估計時再分行）；各行格式不同的自訂文字
+        每一行一筆，同一行內格式不同的各段並排。"""
         self.culled = False
         """有重疊時隱藏的標記標籤（規格加上 __label_hidden 參數與標籤 id）。"""
         self.pie_extent = "min(width, height)"
@@ -457,6 +473,14 @@ class _Builder:
 
     def shown(self, use: FieldUse) -> bool:
         return use.field not in SPECIAL_FIELDS or use.field in self.channels
+
+    def pill(self, use: FieldUse) -> str:
+        """欄位在膠囊上的寫法（SUM(Profit)、YEAR(Order Date)）：附註裡這樣稱呼欄位，不寫內部的代號。"""
+        return pill_name(use, self.fields, self.ws.table_calcs)
+
+    def reference(self, line: ReferenceLine) -> str:
+        """參考線在附註裡的稱呼：「分析」分頁清單上的寫法（平均：SUM(Sales)），不寫它的編號。"""
+        return reference_name(line, self.fields, self.ws.table_calcs)
 
     def with_pane_data(self, body: dict[str, Any], pane: Pane | None) -> dict[str, Any]:
         """標記卡有自己的資料時，這張圖改用它；工具提示只列出資料中有的欄位。"""
@@ -555,14 +579,17 @@ class _Builder:
         dims: list[FieldUse],
         shelf: Literal["rows", "columns"],
         values: list[dict[str, Any]],
-        texts: list[str],
+        content: float = 0.0,
     ) -> dict[str, Any]:
         """一個方向的大小（usermeta.sizing）：離散的為每一列（欄）的大小 step，欄另有成員數 count
         與是否固定寬度 fixed（設定了大小；文字表在 build_spec 中也設為固定）；連續的座標軸設定了
-        大小時為 size，否則為空（填滿）。
+        大小時為 size，否則為空（填滿）。content 是每一格文字的寬度估計（像素，見 cell_width），欄寬
+        不小於它。
 
         列高是設定的大小（沒有設定時為 ROW_HEIGHT），但不小於多行的文字需要的高度（row_text）：文字表的
-        每一格有好幾行字時列跟著變高，設定的列高放不下時也加大（寫進附註）——上下列的文字不互相蓋住。"""
+        每一格有好幾行字時列跟著變高，設定的列高放不下時也加大（寫進附註）——上下列的文字不互相蓋住。
+        只有一行、字卻大到放不下預設列高時（row_line），沒有設定列高的列也跟著變高；設定了列高的照設定
+        （作者決定的列高不改、不寫附註，與修正前相同；Tableau 的畫法未查證）。"""
         style = self.ws.row_style if shelf == "rows" else self.ws.column_style
         if encoding is None:
             return {}
@@ -577,11 +604,57 @@ class _Builder:
                         f"設定的列高（{explicit} 像素）放不下多行的文字，列高加大到 {needed} 像素"
                         "（Tableau 的畫法未查證）"
                     )
-                return {"step": max(step, needed)}
+                step = max(step, needed)
+                if not explicit:
+                    step = max(step, math.ceil(self.row_line))
+                return {"step": step}
             labels = list(dict.fromkeys(v.get(encoding.get("field", "")) for v in values))
-            natural = explicit or _column_width([*labels, *texts])
+            natural = explicit or _column_width(labels, content=content)
             return {"step": natural, "count": len(labels), "fixed": explicit is not None}
         return {"size": style.cell} if style.cell else {}
+
+    def fit_rows(
+        self,
+        encoding: dict[str, Any],
+        block: float,
+        largest: float,
+        lines: int,
+        margin: float | None = None,
+    ) -> None:
+        """離散的列上每一格的文字需要的列高：block 是整段文字的高度（各行的行高相加），largest 是其中最大的
+        字級（像素），lines 是行數。記在 row_text、row_line，由 shelf_size 加大列高；列不是離散的（KPI、
+        只有欄的表格、連續的座標軸）時沒有列高可言。
+
+        需要的列高是整段文字的高度加上留白（margin；省略時與預設的列相同比例——ROW_PADDING：預設的
+        12 像素的字一行 14 像素，留 6 像素，剛好是 ROW_HEIGHT）。多行的文字一律依它；只有一行時，放得下
+        預設的列高（這一行占的高度——字級的 LINE_PITCH 倍——不超過 ROW_HEIGHT，約 12pt 以下）就不動，
+        列照舊是 ROW_HEIGHT，放不下才依它加高（例如 20pt 的字：42 像素）。推定的：Tableau 的文件沒有寫，
+        也還沒有與 Tableau 的畫面對過。"""
+        y = encoding.get("y")
+        if not isinstance(y, dict) or y.get("type") not in ("ordinal", "nominal"):
+            return
+        needed = block + (largest * ROW_PADDING if margin is None else margin)
+        if lines > 1:
+            self.row_text = max(self.row_text, needed)
+        elif largest * LINE_PITCH > ROW_HEIGHT:
+            # 字級的像素是四捨五入到小數兩位的（20pt 是 26.67）：先捨去這個誤差再進位，20pt 才是 42 而不是 43
+            self.row_line = max(self.row_line, round(needed, 1))
+
+    def cell_width(self, values: list[dict[str, Any]]) -> float:
+        """文字表每一格文字的寬度估計（像素，不含左右的空白）：各行依自己的字級估計、取最寬的一行，一行
+        有格式不同的幾段時各段相加（見 cell_lines）；不是文字標記時為 0。"""
+        lines = self.cell_lines.get(id(self.main_marks)) if self.main_marks is not None else None
+        if not lines:
+            return 0.0
+        # str()：沒有值的格子照舊當成「None」四個字估計（與原本一律依 12 像素估計時相同）
+        return max(
+            (
+                sum(_text_width(str(record.get(name, "")), size) for name, size in segments)
+                for record in values
+                for segments in lines
+            ),
+            default=0.0,
+        )
 
     def header(
         self, uses: list[FieldUse], shelf: Literal["rows", "columns"]
@@ -871,6 +944,8 @@ class _Builder:
         cols_meas: list[FieldUse],
     ) -> tuple[dict[str, Any], str]:
         """一張圖的 mark、encoding（與標籤圖層）。回傳規格片段與實際的標記類型。"""
+        if self.main_marks is None:
+            self.main_marks = marks
         if (
             mark == "circle"
             and marks.type == "automatic"
@@ -1088,6 +1163,10 @@ class _Builder:
             lines = self.line_layers(marks, vl_mark, encoding)
             if lines is not None:
                 return lines, mark
+            text = encoding.get("text")
+            if isinstance(text, dict) and "field" in text:
+                # 欄寬依這個文字標記的字級估計（見 cell_width）
+                self.cell_lines[id(marks)] = [[(text["field"], float(vl_mark["fontSize"]))]]
             self.stack_text(marks, vl_mark, encoding)
         if jump is not None:
             return {"encoding": encoding, "layer": [*jump, *drops]}, mark
@@ -1318,14 +1397,21 @@ class _Builder:
             return None
         fonts = [self.text_font(marks, style) for _, style in lines]
         heights = [font.size * LINE_PITCH for font in fonts]
-        y = encoding.get("y")
-        if len(lines) > 1 and isinstance(y, dict) and y.get("type") in ("ordinal", "nominal"):
-            # 文字表的每一格有好幾行：列高要放得下各行（見 shelf_size）
-            padding = max(font.size for font in fonts) * ROW_PADDING
-            self.row_text = max(self.row_text, sum(heights) + padding)
+        # 文字表的每一格：列高要放得下各行（好幾行，或只有一行但字很大；見 fit_rows、shelf_size）
+        self.fit_rows(encoding, sum(heights), max(font.size for font in fonts), len(lines))
         offset = -sum(heights) / 2
         layers: list[dict[str, Any]] = []
         segments = self.text_segments.get(id(marks), {})
+        # 欄寬依各行自己的字級估計：同一行內格式不同的各段並排（見 cell_width）
+        self.cell_lines[id(marks)] = [
+            [
+                (part_field, self.text_font(marks, part_style or TextStyle()).size)
+                for part_field, part_style in segments[index]
+            ]
+            if segments.get(index)
+            else [(field_name, font.size)]
+            for index, ((field_name, _), font) in enumerate(zip(lines, fonts, strict=True))
+        ]
         # 沒有指定顏色的行（段）用文字的預設顏色，不沿用其他行的顏色
         plain = self.text_bases.get(id(marks)) or vl_mark.get("color") or TEXT_COLOR
         for index, ((field_name, style), font, height) in enumerate(
@@ -1383,30 +1469,35 @@ class _Builder:
         return {"encoding": {k: v for k, v in encoding.items() if k != "text"}, "layer": layers}
 
     def stack_text(self, marks: Marks, vl_mark: dict[str, Any], encoding: dict[str, Any]) -> None:
-        """離散的列上多行的文字（一個文字標記）：標籤上的多個欄位各占一行、自訂標籤文字中的換行，或值本身
-        有換行。Vega 把第一行畫在定位點（列的中線）、其餘各行往下排，列高不變時會畫到下面幾列上。這裡把
-        整段文字往上移、以列的中線為中心（與單行時相同置中；各列的行數不同時各自依行數），並記下放得下
-        最多行的那一格需要的列高（row_text，見 ROW_PADDING），由 shelf_size 加大列高。
+        """一個文字標記的文字（同一種格式）在定位點上的位置與需要的列高。
 
-        只有一行時什麼都不改；字級依大小上的欄位而定時（行高不固定）也不改。"""
-        text, y = encoding.get("text"), encoding.get("y")
-        if not isinstance(text, dict) or "field" not in text or "size" in encoding:
+        多行的文字——標籤上的多個欄位各占一行、自訂標籤文字中的換行，或值本身有換行：Vega 把第一行畫在
+        定位點、其餘各行往下排。這裡把整段文字往上移、以定位點為中心（與單行時相同置中；各格的行數不同時
+        各自依行數）：離散的列上是列的中線，沒有列的檢視（KPI、只有欄的文字表）是檢視的中線——與各行格式
+        不同的文字（line_layers，本來就整段置中）一致。
+
+        離散的列上另外記下每一格需要的列高（多行的，或只有一行但字很大的；見 fit_rows），由 shelf_size
+        加大列高，上下列的文字不互相蓋住。
+
+        字級依大小上的欄位而定時（行高不固定）什麼都不改。"""
+        text = encoding.get("text")
+        if not isinstance(text, dict) or "size" in encoding:
             return
-        if not isinstance(y, dict) or y.get("type") not in ("ordinal", "nominal"):
-            return
-        name = text["field"]
-        counts = {str(r.get(name) or "").count("\n") + 1 for r in self.records_of(marks)}
+        name = text.get("field")
+        counts = (
+            {str(r.get(name) or "").count("\n") + 1 for r in self.records_of(marks)}
+            if name is not None
+            else set()
+        )
         most = max(counts, default=1)
-        if most < 2:
-            return
         size = float(vl_mark["fontSize"])
         pitch = size + LINE_SPACING
-        if len(counts) == 1:
+        if most > 1 and len(counts) == 1:
             vl_mark["dy"] = -round((most - 1) * pitch / 2, 2)
-        else:
+        elif most > 1:
             lines = f"length(split(datum[{json.dumps(name)}] || '', '\\n'))"
             vl_mark["dy"] = {"expr": f"-({lines} - 1) * {round(pitch / 2, 2)}"}
-        self.row_text = max(self.row_text, most * pitch + size * ROW_PADDING)
+        self.fit_rows(encoding, most * pitch, size, most)
 
     def line_breaks(self, vl_type: str, marks: Marks, dims: list[FieldUse]) -> list[FieldUse]:
         """折線與區域依沿著線的那一架上的離散維度分開各條線（與 Tableau 相同，線不跨窗格）：沒有路徑時
@@ -1451,6 +1542,33 @@ class _Builder:
         centered = marks.cell_align == "center" if horizontal else marks.label_valign == "center"
         if vl_type == "bar" and not stacked and centered:
             middle = self.bar_middle(marks, encoding["x" if horizontal else "y"]["field"])
+        font = self.text_font(marks)
+        radius = (
+            _image_radius(marks, encoding) if _image_shapes(marks) else POINT_DIAMETER * size / 2
+        )
+        # 標籤的行數依資料：標籤上的多個欄位各占一行、自訂標籤文字或值裡的換行、換行的標籤（各標記的
+        # 行數不同時 varying 是標籤的欄，行數在畫圖時依各標記的文字算）
+        counts = {str(r.get(field_name) or "").count("\n") + 1 for r in self.records_of(marks)}
+        most = max(counts, default=1)
+        varying = field_name if len(counts) > 1 else None
+        rotated = setting.direction is not None
+        # 圓點與形狀的表格（每格一個標記）：多行的標籤整段以標記的中線為中心，列高跟著標籤變高。
+        # 圖片形狀的大小相對於儲存格（半徑是運算式）：列高改了圖片也跟著變，不處理；直寫的標籤各行是
+        # 左右排的，也不處理
+        table = vl_type == "cell" and not rotated and not isinstance(radius, str)
+        if rotated:
+            # 直寫的標籤：位置照舊只依自訂標籤文字中的換行往外移
+            most = 1 + sum(run.text.count("\n") for run in marks.label_text if run.text)
+            varying = None
+        if table and not isinstance(radius, str):
+            # 列高要放得下每一格的標籤（與文字表相同，見 fit_rows）。標籤在標記的上方或下方時，多行的
+            # 整段文字要留在自己的這一列裡（不畫到上、下一列或欄標題上）：標記在列的中線，列高的一半要
+            # 放得下標記的半徑、間距與整段文字（只有一行的照舊）
+            block = most * (font.size + LINE_SPACING)
+            if marks.label_valign not in ("top", "bottom"):
+                self.fit_rows(encoding, block, font.size, most)
+            elif most > 1:
+                self.fit_rows(encoding, block, font.size, most, block + 2 * (radius + LABEL_GAP))
 
         def layer(extreme: Literal["max", "min"] | None = None) -> dict[str, Any]:
             found = _label_layer(
@@ -1458,17 +1576,17 @@ class _Builder:
                 vl_type,
                 field_name,
                 self.text_fill(marks, self.label_color(marks, vl_mark)),
-                self.text_font(marks),
+                font,
                 marks.label_match,
                 marks.cell_align,
-                _image_radius(marks, encoding)
-                if _image_shapes(marks)
-                else POINT_DIAMETER * size / 2,
+                radius,
                 extreme,
                 stacked,
                 marks.label_valign,
                 middle,
-                1 + sum(run.text.count("\n") for run in marks.label_text if run.text),
+                most,
+                varying,
+                table,
             )
             if setting.direction is not None:
                 _rotate_label(found["mark"], setting.direction)
@@ -2254,7 +2372,9 @@ class _Builder:
                     self.is_continuous_date,
                 )
             if mark in UNSUPPORTED_MARKS or mark == "pie":
-                self.notes.append(f"{self.ch(use).title} 的標記類型 {mark} 尚未支援，以長條呈現")
+                self.notes.append(
+                    f"{self.pill(use)} 的標記類型「{mark_name(mark)}」尚未支援，以長條呈現"
+                )
                 mark = "bar"
             if axis == "rows":
                 body, kind = self.unit(marks, mark, rows_dims, cols_dims, [use], cols_meas)
@@ -2540,6 +2660,7 @@ def build_spec(
     uses += [u for pane in ws.panes for u in pane.marks.uses()]
     long = bool(ws.measure_values) and any(u.field in (MEASURE_NAMES, MEASURE_VALUES) for u in uses)
     builder = _Builder(ws, channels)
+    builder.fields = fields
     builder.extent = _sheet_extent(ir, ws)
 
     # ---------------------------------------------------------- 資料
@@ -2918,15 +3039,12 @@ def build_spec(
         and not any(k in encoding for k in ("row", "column"))
     )
     if sized and encoding is not None:
-        text = encoding.get("text")
-        texts = (
-            [str(v.get(text["field"], "")) for v in values]
-            if isinstance(text, dict) and "field" in text
-            else []
-        )
+        # 文字表每一格的文字依各行自己的字級估計的寬度（各行格式不同的自訂文字是每一行一個圖層，最上層的
+        # encoding 裡沒有文字的欄位，見 _Builder.cell_lines）
+        content = builder.cell_width(values)
         spec["usermeta"]["sizing"] = {
-            "rows": builder.shelf_size(encoding.get("y"), rows_dims, "rows", values, []),
-            "columns": builder.shelf_size(encoding.get("x"), cols_dims, "columns", values, texts),
+            "rows": builder.shelf_size(encoding.get("y"), rows_dims, "rows", values),
+            "columns": builder.shelf_size(encoding.get("x"), cols_dims, "columns", values, content),
         }
         y_type = encoding.get("y", {}).get("type") if isinstance(encoding.get("y"), dict) else None
         sizing: dict[str, dict[str, Any]] = spec["usermeta"]["sizing"]
@@ -2935,9 +3053,10 @@ def build_spec(
         if dots:
             label = builder.label_field(ws.marks)
             labels = [str(v.get(label, "")) for v in values] if label is not None else []
-            width = POINT_DIAMETER + 16 + (_column_width(labels) if labels else 0)
+            label_size = builder.text_font(ws.marks).size
+            width = POINT_DIAMETER + 16 + (_column_width(labels, label_size) if labels else 0)
         else:
-            width = _column_width(texts)
+            width = _column_width([], content=content)
         if (mark == "text" or dots) and "x" not in encoding and y_type in ("ordinal", "nominal"):
             # 只有列標題的文字表是一欄：寬度依內容（與離散的欄相同），不填滿
             sizing["columns"] = {"size": ws.column_style.cell or width}
@@ -3481,17 +3600,21 @@ def _channel_field(node: dict[str, Any], channel: str) -> str | None:
     return found.get("field") if isinstance(found, dict) else None
 
 
-def _column_width(texts: Sequence[Any], size: float = 12) -> int:
-    """離散的欄依內容估計的寬度：最長的標題或儲存格文字（全形字約一個字高、其餘約 0.55 個字高，size 為
-    字級的像素）加上左右的空白，限制在 COLUMN_WIDTH 之間。"""
+def _text_width(text: Any, size: float) -> float:
+    """文字的寬度估計（像素）：最寬的一行（換行或多層標題的分隔符號分開的各行）；全形字約一個字高、其餘約
+    0.55 個字高，size 為字級的像素。"""
     widest = 0.0
     wide, narrow = size, size * 0.55
-    for text in texts:
-        for line in re.split(f"{SEPARATOR}|\n", str(text if text is not None else "")):
-            width = sum(
-                wide if unicodedata.east_asian_width(c) in ("W", "F") else narrow for c in line
-            )
-            widest = max(widest, width)
+    for line in re.split(f"{SEPARATOR}|\n", str(text if text is not None else "")):
+        width = sum(wide if unicodedata.east_asian_width(c) in ("W", "F") else narrow for c in line)
+        widest = max(widest, width)
+    return widest
+
+
+def _column_width(texts: Sequence[Any], size: float = 12, content: float = 0.0) -> int:
+    """離散的欄依內容估計的寬度：最長的標題（texts，字級 size 像素）或儲存格的文字（content：已經依各行
+    自己的字級估計好的寬度，見 _Builder.cell_width）加上左右的空白，限制在 COLUMN_WIDTH 之間。"""
+    widest = max([content, *(_text_width(text, size) for text in texts)])
     low, high = COLUMN_WIDTH
     return int(min(max(round(widest + 16), low), high))
 
@@ -4631,7 +4754,7 @@ def _with_reference_lines(
     body = walk(body)
     for n, line in enumerate(ws.reference_lines):
         if n not in handled:
-            notes.append(f"參考線 {line.id} 的量值不在座標軸上，沒有畫出")
+            notes.append(f"參考線「{builder.reference(line)}」的量值不在座標軸上，沒有畫出")
     return body
 
 
@@ -4681,12 +4804,14 @@ def _chart_reference_lines(
         temporal = encoding[position].get("type") == "temporal"
         source = _reference_source(line, builder.channels, params, temporal)
         if source is None:
-            notes.append(f"參考線 {line.id} 的值不在查詢結果中，沒有畫出")
+            notes.append(f"參考線「{builder.reference(line)}」的值不在查詢結果中，沒有畫出")
             continue
         if line.formula == "total" and isinstance(source, str):
             agg = line.value.agg if isinstance(line.value, FieldUse) else None
             if agg not in ("sum", "count", "min", "max"):
-                notes.append(f"參考線 {line.id} 的合計需要重新彙總整體資料，沒有畫出")
+                notes.append(
+                    f"參考線「{builder.reference(line)}」的合計需要重新彙總整體資料，沒有畫出"
+                )
                 continue
         count = len(_reference_values(line, [1.0, 2.0, 3.0], "x"))
         names = [f"{REF}{n}_{i}" for i in range(count)]
@@ -4759,12 +4884,14 @@ def _with_annotations(
     layers: list[dict[str, Any]] = []
     for n, annotation in enumerate(ws.annotations):
         name = f"{ANNOTATION}{n}"
+        # 附註裡以註解的文字稱呼它（與註解對話框的清單相同）
+        shown = annotation_name(annotation, n, builder.fields, ir.parameters, ws.table_calcs)
         dx, dy = annotation.offset
         if annotation.kind == "mark":
             assert annotation.point is not None
             record = _annotation_record(builder, rows, annotation.point.mark or {})
             if record is None:
-                notes.append(f"註解 {n + 1} 的標記不在目前的資料中，沒有畫出")
+                notes.append(f"{shown}的標記不在目前的資料中，沒有畫出")
                 continue
             record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
             position = {
@@ -4779,7 +4906,7 @@ def _with_annotations(
             assert annotation.point is not None
             position = _annotation_position(builder, encoding, annotation.point, record, name)
             if position is None:
-                notes.append(f"註解 {n + 1} 的位置不在這張圖的座標軸上，沒有畫出")
+                notes.append(f"{shown}的位置不在這張圖的座標軸上，沒有畫出")
                 continue
             record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
             layers += _annotation_text(name, position, dx, dy)
@@ -4788,7 +4915,7 @@ def _with_annotations(
         start = _annotation_position(builder, encoding, annotation.top_left, record, f"{name}_a")
         end = _annotation_position(builder, encoding, annotation.bottom_right, record, f"{name}_b")
         if start is None or end is None or set(start) != set(end):
-            notes.append(f"註解 {n + 1} 的區域不在這張圖的座標軸上，沒有畫出")
+            notes.append(f"{shown}的區域不在這張圖的座標軸上，沒有畫出")
             continue
         record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
         box: dict[str, Any] = dict(start)
@@ -5019,8 +5146,12 @@ def _annotation_record(
 
 
 def _band_center(enc: dict[str, Any]) -> dict[str, Any]:
-    """離散軸上的位置取格子的中間（與標記相同）。"""
-    out = {k: v for k, v in enc.items() if k in ("field", "type", "title", "scale", "timeUnit")}
+    """離散軸上的位置取格子的中間（與標記相同）。
+
+    排序（sort）要與主圖的相同：共用同一個離散比例尺的各圖層只要有一層沒有寫 sort（Vega-Lite 的預設是依值
+    遞增），整個座標軸就改成依名稱排列，查詢排好的順序（sort: null 是依資料的順序）會不見。"""
+    kept = ("field", "type", "title", "scale", "timeUnit", "sort")
+    out = {k: v for k, v in enc.items() if k in kept}
     if out.get("type") in ("nominal", "ordinal"):
         out["bandPosition"] = 0.5
     return out
@@ -6225,12 +6356,18 @@ def _label_layer(
     valign: Literal["top", "center", "bottom"] | None = None,
     middle: str | None = None,
     lines: int = 1,
+    varying: str | None = None,
+    centre: bool = False,
 ) -> dict[str, Any]:
     """標籤：長條在尾端（stacked：依標記卡上的維度堆疊時在各段內側；對齊為靠左／下時在起點、置中時在
     長條中間——middle 為資料中「量值的一半」的欄），圓點、形狀與方塊在右邊（對齊設為
     置中時在標記中央、靠左時在左邊；與 Tableau 相同），折線與區域在點的上方；折線的最大值（extreme）
     寫在點的右上、最小值在右下（與 Tableau 的畫面相同）。match 時文字的顏色與標記相同（依欄位著色時沿用
-    同一個色彩的 encoding）。"""
+    同一個色彩的 encoding）。
+
+    lines 是標籤的行數（圓點、形狀與方塊的標籤用）：各標記的行數不同時 varying 是標籤的資料欄，行數在
+    畫圖時依各標記的文字算。在標記上方的多行標籤一律整段往上移；centre 時（圓點與形狀的表格）在標記
+    左右或中央的多行標籤整段以標記的中線為中心。"""
     stacked = stacked and vl_type == "bar"
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
     font = font or resolve()
@@ -6239,15 +6376,31 @@ def _label_layer(
     if "size" in encoding:
         layer["size"] = {"value": font.size}  # 大小上的欄位決定標記的大小，不是標籤的字級
     if vl_type in ("cell", "circle", "square", "point"):
-        # 多行的標籤（自訂的標籤文字中有換行）：Vega 把第一行放在定位點、其餘往下排，
-        # 在標記上方或置中時要把整段往上移，最後一行才不會蓋到標記
-        extra = (lines - 1) * (font.size + 2)
+        # 多行的標籤（標籤上的多個欄位各占一行、標籤文字或值裡的換行）：Vega 把第一行放在定位點、其餘
+        # 往下排。在標記上方時要把整段往上移，最後一行才不會蓋到標記；表格中（centre）在標記的左右或
+        # 中央時整段以標記的中線為中心（與單行時相同置中）。extra 是第一行以外各行占的高度（各標記的
+        # 行數不同時是運算式）
+        pitch = font.size + LINE_SPACING
+        extra: float | str = (lines - 1) * pitch
+        if varying is not None:
+            extra = f"(length(split(datum[{json.dumps(varying)}] || '', '\\n')) - 1) * {pitch}"
 
-        def gap(sign: int, more: float = 0) -> Any:
-            """標記的邊緣再往外 4 像素；半徑是運算式時（大小相對於儲存格的圖片）回傳運算式。"""
+        def gap(sign: int, more: float | str = 0) -> Any:
+            """標記的邊緣再往外 LABEL_GAP 像素（再加上 more）；半徑（大小相對於儲存格的圖片）或 more 是
+            運算式時回傳運算式。"""
+            if isinstance(more, str):
+                return {"expr": f"{sign} * (({radius}) + {LABEL_GAP} + {more})"}
             if isinstance(radius, str):
-                return {"expr": f"{sign} * (({radius}) + {4 + more})"}
-            return sign * (radius + 4 + more)
+                return {"expr": f"{sign} * (({radius}) + {LABEL_GAP + more})"}
+            return sign * (radius + LABEL_GAP + more)
+
+        def centred() -> dict[str, Any]:
+            """多行的標籤整段往上移半段，以標記的中線為中心；只有一行時不必移。"""
+            if not centre or extra == 0:
+                return {}
+            if isinstance(extra, str):
+                return {"dy": {"expr": f"-({extra}) / 2"}}
+            return {"dy": -round(extra / 2, 2)}
 
         if valign in ("top", "bottom"):
             # 垂直對齊：標籤在標記的上方或下方；水平沒有指定時置中
@@ -6262,11 +6415,11 @@ def _label_layer(
             else:
                 mark.update(align="center")
         elif align == "center":
-            mark.update(align="center", baseline="middle")
+            mark.update(align="center", baseline="middle", **centred())
         elif align == "left":
-            mark.update(align="right", baseline="middle", dx=gap(-1))
+            mark.update(align="right", baseline="middle", dx=gap(-1), **centred())
         else:
-            mark.update(align="left", baseline="middle", dx=gap(1))
+            mark.update(align="left", baseline="middle", dx=gap(1), **centred())
     elif vl_type == "bar" and horizontal:
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
         if stacked:

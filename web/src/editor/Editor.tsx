@@ -3,14 +3,14 @@
 // 每次變更整理後把整張工作表存回（PUT），檢視重新查詢；復原與重做在這裡記錄。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api";
-import { addDatasource, saveDocument } from "../desktop";
+import { api, ApiError } from "../api";
+import { addDatasource, CHANGED_EVENT, saveDocument } from "../desktop";
 import { Modal } from "../Server";
 import type { FieldUse, IR, Mark, Scalar } from "../types";
 import type { ViewerAccess } from "../viewerApi";
 import { DataDialog } from "../ViewerTools";
 import { WorksheetView } from "../WorksheetView";
-import { editApi } from "./api";
+import { EDITED_EVENT, type EditedDetail, editApi, sheetConflict, type StoredSheet } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
 import { ImportSheetsDialog } from "./ImportDialog";
 import { DescribeModelDialog } from "./DescribeDialogs";
@@ -89,6 +89,7 @@ import {
   windowMenu,
 } from "./Workspace";
 import { ShowMePanel } from "./ShowMe";
+import { rebase } from "./rebase";
 import { edited, useUndoRedo } from "./structure";
 import { PageControl } from "../PageControl";
 
@@ -492,8 +493,10 @@ export function Editor({
   const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "info" | "error" } | null>(null);
   const [pending, setPending] = useState(0);
-  // 引擎中目前的工作表（存檔完成的版本）：檢視以它決定要不要查詢
-  const [stored, setStored] = useState<SheetIR | null>(null);
+  // 引擎中目前的工作表（存檔完成的版本）：檢視以它決定要不要查詢。連同它的版本記在 storedRef：存回時帶上，
+  // 引擎在編輯器之外改過這張工作表就不覆蓋（見 store、adopt）
+  const [stored, setStoredState] = useState<SheetIR | null>(null);
+  const storedRef = useRef<StoredSheet | null>(null);
   const historyRef = useRef<History | null>(null);
   const fieldsRef = useRef(new Map<string, CatalogField>());
   const queue = useRef<Promise<void>>(Promise.resolve());
@@ -501,6 +504,10 @@ export function Editor({
   const setHistory = (next: History | null) => {
     historyRef.current = next;
     setHistoryState(next);
+  };
+  const setStored = (next: StoredSheet) => {
+    storedRef.current = next;
+    setStoredState(next.worksheet);
   };
 
   const notify = useCallback((text: string, kind: "info" | "error" = "info") => {
@@ -525,12 +532,12 @@ export function Editor({
     let cancelled = false;
     setHistory(null);
     setCard("all");
-    Promise.all([editApi.catalog(workbook), editApi.worksheet(workbook, worksheet)])
-      .then(([loadedCatalog, sheet]) => {
+    Promise.all([editApi.catalog(workbook), editApi.storedWorksheet(workbook, worksheet)])
+      .then(([loadedCatalog, loaded]) => {
         if (cancelled) return;
         setCatalog(loadedCatalog);
-        setHistory({ entries: [sheet], index: 0 });
-        setStored(sheet);
+        setHistory({ entries: [loaded.worksheet], index: 0 });
+        setStored(loaded);
         setError(null);
       })
       .catch((e: Error) => !cancelled && setError(e.message));
@@ -551,19 +558,49 @@ export function Editor({
     queue.current = queue.current.then(task).finally(() => setPending((n) => n - 1));
   }, []);
 
-  const save = useCallback(
-    async (next: SheetIR): Promise<SheetIR | null> => {
-      try {
-        const saved = await editApi.saveWorksheet(workbook, next);
-        setStored(saved);
-        setRevision((r) => r + 1);
-        return saved;
-      } catch (e) {
-        notify((e as Error).message, "error");
-        return null;
+  /**
+   * 引擎上的定義不是編輯器所知的那一份——引擎在編輯器之外改了這張工作表（刪除別的工作表時拿掉工具提示裡的它、
+   * 刪除 dashboard 時拿掉它的動作的篩選、計算欄位的層級改變時調整膠囊、取代參照…）。歷程的每一步都套上引擎的
+   * 那些改變（rebase.ts），目前這一步就是引擎上的定義：之後的變更、復原與重做都不會把引擎的改變蓋掉，
+   * 使用者的歷程也還在。
+   */
+  const adopt = useCallback((fresh: StoredSheet) => {
+    const known = storedRef.current;
+    const current = historyRef.current;
+    if (!known || !current) return;
+    setHistory({ entries: current.entries.map((entry) => rebase(known.worksheet, fresh.worksheet, entry)), index: current.index });
+    setStored(fresh);
+    setRevision((r) => r + 1);
+  }, []);
+
+  /**
+   * 把歷程的第 index 步存回引擎，帶著編輯器所知的版本。引擎上的定義已經不是那一版時（409）不覆蓋：先跟上
+   * （adopt，要存的這一步也套上引擎的改變）再存。回傳存好的定義（rebased：中途跟上過引擎）；內容不正確等
+   * 失敗時說明原因、回傳 null。
+   */
+  const store = useCallback(
+    async (index: number): Promise<{ sheet: SheetIR; rebased: boolean } | null> => {
+      for (let attempt = 0; ; attempt++) {
+        const entry = historyRef.current?.entries[index];
+        const known = storedRef.current;
+        if (!entry || !known) return null;
+        try {
+          const saved = await editApi.replaceWorksheet(workbook, entry, known.revision);
+          setStored(saved);
+          setRevision((r) => r + 1);
+          return { sheet: saved.worksheet, rebased: attempt > 0 };
+        } catch (e) {
+          const fresh = sheetConflict(e);
+          if (fresh && attempt < 3) {
+            adopt(fresh);
+            continue;
+          }
+          notify((e as Error).message, "error");
+          return null;
+        }
       }
     },
-    [workbook, notify],
+    [workbook, notify, adopt],
   );
 
   const apply = useCallback(
@@ -584,17 +621,19 @@ export function Editor({
         edited(workbook);
         // 先顯示變更，存檔失敗時退回
         setHistory({ entries: [...current.entries.slice(0, current.index + 1), next], index: current.index + 1 });
-        const saved = await save(next);
+        const saved = await store(current.index + 1);
         const latest = historyRef.current;
         if (!latest) return;
-        if (saved === null) {
+        // 存不進去，或跟上引擎之後這個變更已經沒有東西可改（引擎上已經是這樣）：這一步不留在歷程裡
+        const previous = latest.entries[latest.index - 1];
+        if (saved === null || (saved.rebased && JSON.stringify(saved.sheet) === JSON.stringify(previous))) {
           setHistory({ entries: latest.entries.slice(0, latest.index), index: latest.index - 1 });
           return;
         }
-        setHistory({ entries: latest.entries.map((e, i) => (i === latest.index ? saved : e)), index: latest.index });
-        if (saved.name !== base.name) onChanged();
+        setHistory({ entries: latest.entries.map((e, i) => (i === latest.index ? saved.sheet : e)), index: latest.index });
+        if (saved.sheet.name !== base.name) onChanged();
       }),
-    [enqueue, save, notify, onChanged, workbook],
+    [enqueue, store, notify, onChanged, workbook],
   );
 
   const move = useCallback(
@@ -604,12 +643,15 @@ export function Editor({
         if (!current) return;
         const index = current.index + delta;
         if (index < 0 || index >= current.entries.length) return;
-        const saved = await save(current.entries[index]);
-        if (saved === null) return;
-        setHistory({ entries: current.entries, index });
-        if (saved.name !== current.entries[current.index].name) onChanged();
+        const name = current.entries[current.index].name;
+        const saved = await store(index);
+        const latest = historyRef.current;
+        if (saved === null || !latest) return;
+        // 這一步換成引擎存好的定義：歷程中目前的這一步一直與引擎上的相同（跟上引擎的改變時以它為準）
+        setHistory({ entries: latest.entries.map((e, i) => (i === index ? saved.sheet : e)), index });
+        if (saved.sheet.name !== name) onChanged();
       }),
-    [enqueue, save, onChanged],
+    [enqueue, store, onChanged],
   );
   const undo = useCallback(() => move(-1), [move]);
   const redo = useCallback(() => move(1), [move]);
@@ -635,23 +677,45 @@ export function Editor({
     return index;
   }, [workbook]);
 
-  /** 伺服器端改了工作表之後（預設屬性套用到工作表、取代參照）：以伺服器上的內容取代目前這一步。 */
-  const reloadSheet = useCallback(
-    () =>
+  /**
+   * 確認手上的定義還是引擎上的那一份；引擎在編輯器之外改了這張工作表時跟上（adopt）。排在存檔的佇列裡，
+   * 與變更的先後一致。redraw：定義沒有變也重新查詢檢視（欄位的預設屬性改了，畫出來的不一樣）。
+   */
+  const sync = useCallback(
+    (redraw = false) =>
       enqueue(async () => {
-        const current = historyRef.current;
-        if (!current) return;
+        const known = storedRef.current;
+        if (!known) return;
         try {
-          const fresh = await editApi.worksheet(workbook, current.entries[current.index].id);
-          setHistory({ entries: current.entries.map((e, i) => (i === current.index ? fresh : e)), index: current.index });
-          setStored(fresh);
-          setRevision((r) => r + 1);
+          const fresh = await editApi.storedWorksheet(workbook, known.worksheet.id);
+          if (fresh.revision !== storedRef.current?.revision) adopt(fresh);
+          else if (redraw) setRevision((r) => r + 1);
         } catch (e) {
+          // 這張工作表剛被刪除（編輯器正要換到別的分頁）：沒有東西要跟上
+          if (e instanceof ApiError && e.status === 404) return;
           notify((e as Error).message, "error");
         }
       }),
-    [enqueue, workbook, notify],
+    [enqueue, workbook, notify, adopt],
   );
+  /** 伺服器端改了工作表之後（預設屬性套用到工作表、取代參照）：讀取伺服器上的內容並重新查詢檢視。 */
+  const reloadSheet = useCallback(() => sync(true), [sync]);
+  // 報表在這張工作表的存檔之外改過了（編輯器的其他請求、報表改用發布的資料源）：確認手上的定義
+  useEffect(() => {
+    const onEdited = (event: Event) => {
+      const detail = (event as CustomEvent<EditedDetail>).detail;
+      if (detail.workbook === workbook && detail.worksheet !== worksheet) sync();
+    };
+    const onChangedOutside = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === workbook) sync();
+    };
+    window.addEventListener(EDITED_EVENT, onEdited);
+    window.addEventListener(CHANGED_EVENT, onChangedOutside);
+    return () => {
+      window.removeEventListener(EDITED_EVENT, onEdited);
+      window.removeEventListener(CHANGED_EVENT, onChangedOutside);
+    };
+  }, [workbook, worksheet, sync]);
 
   const prepare = useCallback(
     async (current: SheetIR, use: FieldUse): Promise<[SheetIR, FieldUse]> => {

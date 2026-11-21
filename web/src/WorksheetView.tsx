@@ -787,8 +787,16 @@ const AXIS_ALLOWANCE = 100;
  * entire_view 時寬度填滿，fit_height／entire_view 時高度填滿；否則離散的列固定每一列的高度、
  * 設定了大小的欄與連續座標軸固定大小，離散的欄在區塊放不下時固定為依內容估計的寬度。
  * 回傳可以捲動的方向。
+ *
+ * keepRows：fit_height／entire_view 時區塊太矮、填滿的列被壓到相鄰兩列的文字互相蓋住（squeezedRowStep 量出來
+ * 的）——離散的列不再填滿高度，改用標準大小的列高，放不下的在區塊內上下捲動，與標準大小時相同。
  */
-export function applyFit(spec: Spec, fit: FitMode | null | undefined, availableWidth: number): { x: boolean; y: boolean } {
+export function applyFit(
+  spec: Spec,
+  fit: FitMode | null | undefined,
+  availableWidth: number,
+  keepRows = false,
+): { x: boolean; y: boolean } {
   const sizing = spec.usermeta?.sizing;
   if (!sizing) return { x: false, y: typeof spec.height === "object" };
   const mode: FitMode = fit ?? spec.usermeta?.fit ?? "standard";
@@ -799,7 +807,7 @@ export function applyFit(spec: Spec, fit: FitMode | null | undefined, availableW
   if (mode !== "fit_height" && mode !== "entire_view") {
     if (rows.step) height = { step: rows.step };
     else if (rows.size) height = rows.size;
-  }
+  } else if (keepRows && rows.step) height = { step: rows.step };
   if (mode !== "fit_width" && mode !== "entire_view") {
     if (columns.size) width = columns.size;
     else if (columns.step && (columns.fixed || columns.step * (columns.count ?? 0) > availableWidth - AXIS_ALLOWANCE))
@@ -811,6 +819,41 @@ export function applyFit(spec: Spec, fit: FitMode | null | undefined, availableW
   const fillY = height === "container";
   spec.autosize = { type: fillX && fillY ? "fit" : fillX ? "fit-x" : fillY ? "fit-y" : "pad", contains: "padding" };
   return { x: !fillX, y: !fillY };
+}
+
+/** 相鄰兩列的文字外框重疊超過這麼多像素才算互相蓋住。 */
+const ROW_OVERLAP = 1;
+
+/**
+ * 列被壓得多小：畫好的文字標記（文字表各格的文字）中，不同列、左右有交集的兩個外框互相蓋住時，回傳這樣的
+ * 兩列相隔的距離（目前的列高）中最小的；沒有互相蓋住的回傳 null。同一列的文字（一格裡各行、各段的文字是
+ * 分開的圖層，定位點都在這一列的中線）不互相比；標題、標記標籤等名稱以 __ 開頭的圖層不算。
+ */
+export function squeezedRowStep(element: HTMLElement): number | null {
+  const svg = element.querySelector(":scope > svg, :scope > .frozen-host > svg");
+  if (!svg) return null;
+  const texts: { box: DOMRect; row: number }[] = [];
+  svg.querySelectorAll<SVGGElement>("g.mark-text.role-mark").forEach((group) => {
+    if ([...group.classList].some((name) => name.startsWith("__"))) return;
+    group.querySelectorAll<SVGTextElement>(":scope > text").forEach((text) => {
+      // Vega 畫好的元素帶著場景圖的項目：y 是定位點（這一列的中線；各行的位移另外在 dy）
+      const row = (text as unknown as { __data__?: SceneItem }).__data__?.y;
+      const box = text.getBoundingClientRect();
+      if (typeof row === "number" && box.width > 0 && box.height > 0) texts.push({ box, row });
+    });
+  });
+  texts.sort((a, b) => a.box.top - b.box.top);
+  let step: number | null = null;
+  texts.forEach((upper, i) => {
+    for (let j = i + 1; j < texts.length && texts[j].box.top < upper.box.bottom - ROW_OVERLAP; j++) {
+      const lower = texts[j];
+      const apart = Math.abs(lower.row - upper.row);
+      if (apart < 0.5) continue; // 同一列
+      if (Math.min(upper.box.right, lower.box.right) - Math.max(upper.box.left, lower.box.left) <= ROW_OVERLAP) continue;
+      step = step === null ? apart : Math.min(step, apart);
+    }
+  });
+  return step;
 }
 
 /**
@@ -955,9 +998,8 @@ export function WorksheetView({
   const onKeepRef = useRef(onKeep);
   onKeepRef.current = onKeep;
   const canKeep = onKeep !== undefined;
-  // 點選標記後釘住的工具提示（命令按鈕、依類別選取）；最近一次滑過的工具提示留著給它用
+  // 點選標記後釘住的工具提示（命令按鈕、依類別選取）；內容與滑過這個標記時的工具提示相同
   const [pin, setPin] = useState<{ tip: Tip; marks: Mark[] } | null>(null);
-  const lastTip = useRef<Tip | null>(null);
   const tipData = useRef<{ records: Record<string, unknown>[]; dimensions: Record<string, string>; titles: Record<string, string>; commands: boolean; select: boolean }>({
     records: [],
     dimensions: {},
@@ -997,6 +1039,10 @@ export function WorksheetView({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showTable, setShowTable] = useState(false);
+  // 區塊的大小改變、要重新決定列是填滿還是保持標準的列高時遞增（重畫）
+  const [relayout, setRelayout] = useState(0);
+  // 上一次決定「保持列高」時的查詢結果、顯示大小與區塊的高度（見 applyFit 的 keepRows）
+  const rowsKept = useRef<{ response: RenderResponse | null; fit: FitMode | null | undefined; height: number } | null>(null);
   const stateKey = JSON.stringify(viewport && !onViewport ? { ...state, viewport } : state);
   const tooltipSheets = tooltipState ? (response?.tooltip_sheets ?? []) : [];
   const vizTooltips = tooltipSheets.length > 0;
@@ -1065,8 +1111,25 @@ export function WorksheetView({
     sizeConcat(spec, element.clientWidth, element.clientHeight);
     sizeFacets(spec, element.clientWidth, element.clientHeight);
     // 固定大小的方向（例如標準大小下每一列固定高度）：放不下時在區塊內捲動
-    const scroll = applyFit(spec, fit, element.clientWidth);
-    element.dataset.scroll = scroll.x && scroll.y ? "both" : scroll.y ? "y" : scroll.x ? "x" : "false";
+    let scroll = applyFit(spec, fit, element.clientWidth);
+    const markScroll = () => {
+      element.dataset.scroll = scroll.x && scroll.y ? "both" : scroll.y ? "y" : scroll.x ? "x" : "false";
+    };
+    // 離散的列填滿區塊的高度（符合高度、整個檢視）：畫好之後看相鄰兩列的文字有沒有互相蓋住（見下面的 embed）
+    const rowStep = Number(spec.usermeta?.sizing?.rows?.step) || 0;
+    const fillsRows = rowStep > 0 && !scroll.y;
+    // 這份查詢結果在這個高度的區塊中已經量過、決定保持列高：選取標記等原因重畫時直接照做，不再量一次
+    const decided = rowsKept.current;
+    const keepRows =
+      fillsRows && decided !== null && decided.response === response && decided.fit === fit && Math.abs(decided.height - element.offsetHeight) < 1;
+    const keepRowHeight = () => {
+      scroll = applyFit(spec, fit, element.clientWidth, true);
+      element.dataset.rows = "kept";
+    };
+    if (keepRows) keepRowHeight();
+    markScroll();
+    let resizeTimer: number | undefined;
+    let observer: ResizeObserver | null = null;
     // 工具提示中的工作表：以自己的工具提示取代 Vega 的（文字相同，下方加上以標記篩選的工作表）
     // 自訂的工具提示（文字與格式，或不顯示工具提示）也用自己的工具提示
     const custom = spec.usermeta?.tooltip as TooltipTemplate | undefined;
@@ -1077,14 +1140,12 @@ export function WorksheetView({
     tipData.current = { records, dimensions, titles: tooltipTitles(spec, dimensions), commands, select };
     let hoverTimer: number | undefined;
     let hoverItem: unknown = null;
-    const tooltip = (_handler: unknown, event: MouseEvent, item: any, value: unknown) => {
-      if (value === null || value === undefined || value === "" || custom?.show === false) {
-        window.clearTimeout(hoverTimer);
-        hoverItem = null;
-        lastTip.current = null;
-        setTip(null);
-        return;
-      }
+    /**
+     * 一個標記的工具提示：Vega 算好的欄位與值（value，就是畫好的項目的 tooltip）、標記的維度值與自訂的文字。
+     * 滑過與點選（釘住）共用，兩者的內容相同；標記沒有工具提示、或這張工作表不顯示工具提示時為 null。
+     */
+    const tipOf = (item: any, value: unknown, x: number, y: number): Tip | null => {
+      if (value === null || value === undefined || value === "" || custom?.show === false) return null;
       const row = item?.datum?.__row;
       const record = typeof row === "number" ? records[row] : undefined;
       const mark = record ? markOf(record, dimensions) : null;
@@ -1094,8 +1155,17 @@ export function WorksheetView({
       const own = typeof row === "number" && row >= ownFrom;
       const runs = (card !== undefined ? custom?.cards?.[card.slice(CARD_KEY.length)] : undefined) ?? (own ? [] : (custom?.runs ?? []));
       const rich = runs.length > 0 && record ? richTooltip(runs, record, dimensions) : null;
-      const next: Tip = { x: event.clientX, y: event.clientY, value, mark, rich };
-      lastTip.current = next;
+      return { x, y, value, mark, rich };
+    };
+    const tooltip = (_handler: unknown, event: MouseEvent | null, item: any, value: unknown) => {
+      // 移開標記時 Vega 以空的事件與值呼叫
+      const next = event ? tipOf(item, value, event.clientX, event.clientY) : null;
+      if (!next) {
+        window.clearTimeout(hoverTimer);
+        hoverItem = null;
+        setTip(null);
+        return;
+      }
       if (custom?.mode !== "hover") {
         setTip(next);
         return;
@@ -1125,7 +1195,57 @@ export function WorksheetView({
       .then(() => bundledFontsReady(JSON.stringify([spec.config, spec.usermeta?.title_font, spec.usermeta?.text_segments])))
       // 同一行內格式不同的文字：量各段的寬度、決定各段的位置
       .then(() => layoutTextSegments(spec))
-      .then(() => embed(element, spec as any, { actions: false, renderer: "svg", patch, ...(vizTooltips || custom || pinnable ? { tooltip } : {}) }))
+      .then(async () => {
+        const options = { actions: false as const, renderer: "svg" as const, patch, ...(vizTooltips || custom || pinnable ? { tooltip } : {}) };
+        if (!fillsRows) return embed(element, spec as any, options);
+        // 符合高度、整個檢視時列平分區塊的高度。區塊太矮、列被壓得比標準的列高還小，壓到相鄰兩列的文字互相
+        // 蓋住時就不再壓：改用標準大小的列高重畫，放不下的在區塊內上下捲動（標題照樣固定）。文字沒有互相蓋住
+        // 的照舊填滿，不受影響。
+        /** 保持列高時：區塊的高度改變就重新決定（變高到放得下時回到填滿）。看外框的高度，捲軸出現不算 */
+        const watchHeight = () => {
+          if (disposed) return;
+          const height = element.offsetHeight;
+          observer = new ResizeObserver(() => {
+            if (Math.abs(element.offsetHeight - height) < 1) return;
+            window.clearTimeout(resizeTimer);
+            resizeTimer = window.setTimeout(() => !disposed && setRelayout((n) => n + 1), 150);
+          });
+          observer.observe(element);
+        };
+        if (keepRows) {
+          const kept = await embed(element, spec as any, options);
+          watchHeight();
+          return kept;
+        }
+        // 先照填滿的畫一次、量文字的位置；量的時候不顯示（重畫時不閃一下被壓扁的樣子）
+        element.style.visibility = "hidden";
+        try {
+          const filled = await embed(element, spec as any, options);
+          if (disposed) return filled;
+          const squeezed = squeezedRowStep(element);
+          if (squeezed === null || squeezed >= rowStep) {
+            rowsKept.current = null;
+            // 之後區塊變矮（視窗縮小）而壓到互相蓋住時重新決定
+            filled.view.addResizeListener(() => {
+              window.clearTimeout(resizeTimer);
+              resizeTimer = window.setTimeout(() => {
+                const now = disposed ? null : squeezedRowStep(element);
+                if (now !== null && now < rowStep) setRelayout((n) => n + 1);
+              }, 150);
+            });
+            return filled;
+          }
+          filled.finalize();
+          rowsKept.current = { response, fit, height: element.offsetHeight };
+          keepRowHeight();
+          markScroll();
+          const kept = await embed(element, spec as any, options);
+          watchHeight();
+          return kept;
+        } finally {
+          element.style.visibility = "";
+        }
+      })
       .then(async (result) => {
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
@@ -1221,14 +1341,16 @@ export function WorksheetView({
           const mark = markAt(item);
           if (mark === undefined) return;
           if (pinnable) {
-            // 釘住這個標記的工具提示（按住 Ctrl／⌘／Shift 加入或移除標記）
+            // 釘住這個標記的工具提示（按住 Ctrl／⌘／Shift 加入或移除標記）。內容直接由點選的標記算出，與滑過時
+            // 的相同（欄位的名稱、格式化的值、自訂的文字）：不靠滑過時留下的工具提示——觸控的裝置上點選之前
+            // 沒有滑過，原本只能列出標記的內部欄位鍵。標記沒有工具提示時只有命令按鈕（沒有命令按鈕就不釘）
             const additive = Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey);
-            const last = lastTip.current;
+            const bare: Tip | null = commands ? { x: event.clientX, y: event.clientY, value: {}, mark, rich: null } : null;
+            const shown = mark ? (tipOf(item, item?.tooltip, event.clientX, event.clientY) ?? bare) : null;
             setPin((current) => {
               const marks = nextSelection(current?.marks ?? [], mark, additive);
-              if (!mark || marks.length === 0) return null;
-              const base = last?.mark && sameMark(last.mark, mark) ? last : { value: mark, mark, rich: null };
-              return { tip: { ...base, x: event.clientX, y: event.clientY }, marks };
+              if (!shown || marks.length === 0) return null;
+              return { tip: shown, marks };
             });
           }
           if (interactive) emit("click", event, mark, item);
@@ -1254,11 +1376,14 @@ export function WorksheetView({
       window.clearTimeout(leaveTimer);
       window.clearTimeout(viewTimer);
       window.clearTimeout(hoverTimer);
+      window.clearTimeout(resizeTimer);
+      observer?.disconnect();
+      delete element.dataset.rows;
       view?.finalize();
       viewRef.current = null;
       setTip(null);
     };
-  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable]);
+  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable, relayout]);
 
   // 地圖的選取工具（矩形、半徑、套索）：選了工具之後在圖上拖曳，範圍內的標記都選取
   const [tool, setTool] = useState<SelectTool | null>(null);

@@ -365,3 +365,58 @@ def test_forecast_that_cannot_be_estimated_says_why() -> None:
     out, notes = run([*six, *short], series=True)
     assert len(out) > len(six) + len(short)
     assert notes == ["預測：有 2 條時間序列扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"]
+
+
+def test_forecast_notes_name_the_measure_as_on_the_pill(tmp_path: Path, db: Path) -> None:
+    """量值估計不出來時的附註以膠囊上的寫法稱呼它（SUM(Sales)），不寫輸出欄名（原本是
+    「預測（sum(f_sales)）：…」，附註從 2026-11-21 起會顯示給看報表的人）；自訂的模型估計不出來時寫出趨勢與
+    季節在預測選項中的名稱，不寫模型的代號（原本是「資料不足以估計 NA 模型」）。"""
+    from tmig.ir.models import FieldUse, Forecast
+    from tmig.planner.analytics import Analytics, ForecastPlan, apply
+
+    ir = forecast_ir(tmp_path)
+    ws = ir.worksheets[0]  # type: ignore[attr-defined]
+    query = worksheet_sql(ir, ws.id)  # type: ignore[arg-type]
+    assert query.analytics is not None and query.analytics.forecast is not None
+    # 查詢的計畫記下各量值在膠囊上的寫法
+    assert query.analytics.forecast.captions == {"sum(f_sales)": "SUM(Sales)"}
+
+    # 自訂的模型（季節：加法）：15 個月的資料不夠估計 12 個月的季節
+    custom = ws.forecast.model_copy(
+        update={"model": "custom", "trend": "none", "season": "additive"}
+    )
+    sheet = ws.model_copy(update={"forecast": custom})
+    patched = ir.model_copy(update={"worksheets": [sheet]})  # type: ignore[attr-defined]
+    query = worksheet_sql(patched, sheet.id)
+    result = execute_query(db, query)
+    assert query.analytics is not None
+    reason = "預測（SUM(Sales)）：資料不足以估計自訂的模型（趨勢：無、季節：加法）"
+    assert query.analytics.notes == [reason]
+    assert reason in warnings(query.analytics.notes)  # 圖上少了預測：檢視器要標示
+    assert all(r["f_forecast_indicator"] == ACTUAL for r in result.records())
+
+    # 計畫裡沒有寫法時（直接組出的計畫）退回輸出欄名，不會出錯
+    def notes(captions: dict[str, str]) -> list[str]:
+        plan = Analytics(
+            forecast=ForecastPlan(
+                time="year",
+                unit="year",
+                measures=["sum(f_sales)"],
+                settings=Forecast(
+                    measures=[FieldUse(field="f_sales", agg="sum")],
+                    ignore_last=0,
+                    model="custom",
+                    trend="additive",
+                    season="none",
+                ),
+                captions=captions,
+            )
+        )
+        rows = [(dt.date(2023, 1, 1), 10.0), (dt.date(2024, 1, 1), 12.0)]
+        apply(plan, ["year", "sum(f_sales)"], rows)
+        return plan.notes
+
+    assert notes({"sum(f_sales)": "SUM(Sales)"}) == [
+        "預測（SUM(Sales)）：資料不足以估計自訂的模型（趨勢：加法、季節：無）"
+    ]
+    assert notes({}) == ["預測（sum(f_sales)）：資料不足以估計自訂的模型（趨勢：加法、季節：無）"]

@@ -797,3 +797,237 @@ def test_deleted_sheets_come_back_with_undo(engine: str) -> None:
         assert ir() == with_story
         assert asked == [] and errors == []
         browser.close()
+
+
+def test_editor_follows_engine_changes_to_the_open_sheet(engine: str) -> None:
+    """引擎在編輯器之外改了「正在編輯的」工作表時，編輯器跟上，不拿手上的舊定義存回去。
+
+    引擎的一個操作會連帶改到別的工作表：刪除工作表時其他工作表的工具提示不再有它，刪除 dashboard 時它的動作在
+    目標工作表上的篩選一併移除，計算欄位從彙總改成列層級時用到它的膠囊加上 SUM。原本編輯器不知道：
+
+    - 刪除「不是目前的」工作表或 dashboard 之後，目前這張工作表的每個變更都存檔失敗（422「工作表的參照
+      不正確」），換一次分頁才恢復；重做刪除也一樣
+    - 計算欄位改成列層級之後，下一個變更把引擎加上的 SUM 蓋掉（量值被當成維度），沒有任何訊息
+
+    現在引擎改過之後編輯器立刻跟上；歷程裡的每一步也套上引擎的改變，所以這張工作表自己的復原與重做照常
+    可用，刪除也仍然可以復原（報表回到與刪除之前完全相同）。改別的分頁的名稱（不會動到目前的工作表）之後
+    照常可以編輯。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.workspace[data-saving="false"], .ds-workspace')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder, '
+            ".dash-editor .dash-canvas, .story-editor .story-preview, .ds-workspace .ws-scroll",
+            timeout=30000,
+        )
+
+    def ir() -> dict[str, Any]:
+        return call(engine, "/api/workbooks/demo/ir")
+
+    def sheet(worksheet: str) -> dict[str, Any]:
+        return next(w for w in ir()["worksheets"] if w["id"] == worksheet)
+
+    def put(worksheet: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{worksheet['id']}",
+            data=json.dumps({"worksheet": worksheet}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            assert response.status == 200
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": agg is not None,
+            "table_calc": None,
+        }
+
+    def fields(uses: list[dict[str, Any]]) -> list[tuple[str, str | None]]:
+        return [(u["field"], u["agg"]) for u in uses]
+
+    # 「工作表 1」在 Monthly Profit 的工具提示裡；「動作用」dashboard 的篩選動作以 Region Share by Year 為目標；
+    # 「比率」的欄是彙總層級的計算欄位「利潤率」
+    first = call(engine, "/api/edit/demo/worksheets", {})["worksheet"]
+    first["rows"] = [use("f_segment")]
+    first["columns"] = [use("f_sales", "sum")]
+    put(first)
+    host = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
+    host["marks"]["tooltip_sheets"] = [{"worksheet": "ws_1", "max_width": 260}]
+    put(host)
+    board = call(engine, "/api/edit/demo/dashboards", {"name": "動作用"})["dashboard"]
+    action = call(
+        engine,
+        "/api/edit/demo/actions",
+        {
+            "action": {
+                "caption": "依區域",
+                "kind": "filter",
+                "activation": "select",
+                "dashboard": board["id"],
+                "sources": ["ws_sales_by_region"],
+                "targets": ["ws_region_share_by_year"],
+                "clearing": "show_all",
+                "fields": ["f_region"],
+            }
+        },
+    )["action"]
+    catalog = call(engine, "/api/edit/demo/catalog")["datasources"][0]["fields"]
+    ratio = next(f["id"] for f in catalog if f["caption"] == "利潤率")
+    rate = call(engine, "/api/edit/demo/worksheets", {"name": "比率"})["worksheet"]
+    rate["rows"] = [use("f_segment")]
+    rate["columns"] = [{**use(ratio), "continuous": True}]
+    put(rate)
+    before = ir()
+    monthly = sheet("ws_monthly_profit")
+    rows, columns = fields(monthly["rows"]), fields(monthly["columns"])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        failed: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on(
+            "response",
+            lambda r: (
+                failed.append(f"{r.request.method} {r.url} {r.status}")
+                if "/api/edit/" in r.url and r.status >= 400
+                else None
+            ),
+        )
+
+        def no_error() -> None:
+            expect(page.locator(".toast.error")).to_have_count(0)
+            assert failed == [] and errors == []
+
+        def swap() -> None:
+            tool(page, "交換").click()
+            settle(page)
+
+        def open_tab(name: str, path: str) -> None:
+            sheet_tab(page, name).click()
+            page.wait_for_url(f"{engine}/w/demo/{path}")
+            settle(page)
+            page.wait_for_timeout(700)  # 連按兩下（改名）的等待時間過去
+
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+
+        # 這張工作表先做一個變更再復原：歷程裡有一步可以重做（它是刪除之前的定義，工具提示裡還有「工作表 1」）
+        swap()
+        tool(page, "復原").click()
+        settle(page)
+        assert ir() == before
+        # 刪除不是目前的「工作表 1」：引擎把它從這張工作表的工具提示拿掉，編輯器跟上
+        tab_menu(page, sheet_tab(page, "工作表 1"), "刪除")
+        expect(sheet_tab(page, "工作表 1")).to_have_count(0)
+        settle(page)
+        assert sheet("ws_monthly_profit")["marks"]["tooltip_sheets"] == []
+        # 這張工作表自己的重做照常可用（原本：422「工作表的參照不正確」）
+        assert tool(page, "重做").get_attribute("title") == "重做（Ctrl+Y）"
+        tool(page, "重做").click()
+        settle(page)
+        no_error()
+        swapped = sheet("ws_monthly_profit")
+        assert (fields(swapped["rows"]), fields(swapped["columns"])) == (columns, rows)
+        assert swapped["marks"]["tooltip_sheets"] == []
+        # 新的變更也存得進去
+        swap()
+        no_error()
+        assert fields(sheet("ws_monthly_profit")["rows"]) == rows
+        # Ctrl+Z：先是這張工作表自己的兩步，再來是那次刪除——報表回到與刪除之前完全相同，
+        # 這張工作表的工具提示裡又有「工作表 1」
+        for _ in range(2):
+            page.keyboard.press("Control+z")
+            settle(page)
+        no_error()
+        assert sheet("ws_monthly_profit")["marks"]["tooltip_sheets"] == []
+        assert page.url == f"{engine}/w/demo/edit/ws_monthly_profit"
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert ir() == before
+
+        # 重做刪除（人在工具提示裡有它的那張工作表上）：一樣跟上
+        open_tab("Monthly Profit", "edit/ws_monthly_profit")
+        assert tool(page, "重做").get_attribute("title") == "重做刪除工作表「工作表 1」（Ctrl+Y）"
+        tool(page, "重做").click()
+        expect(sheet_tab(page, "工作表 1")).to_have_count(0)
+        settle(page)
+        swap()
+        no_error()
+        assert fields(sheet("ws_monthly_profit")["rows"]) == columns
+        assert sheet("ws_monthly_profit")["marks"]["tooltip_sheets"] == []
+        page.keyboard.press("Control+z")
+        settle(page)
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert ir() == before
+
+        # 刪除 dashboard：它的篩選動作在目標工作表（正在編輯的這一張）上的篩選一併移除
+        open_tab("Region Share by Year", "edit/ws_region_share_by_year")
+        target = sheet("ws_region_share_by_year")
+        assert [f["id"] for f in target["filters"] if f.get("action") == action["id"]]
+        tab_menu(page, sheet_tab(page, "動作用"), "刪除")
+        expect(sheet_tab(page, "動作用")).to_have_count(0)
+        settle(page)
+        swap()
+        no_error()  # 原本：422「篩選動作…不存在」
+        changed = sheet("ws_region_share_by_year")
+        assert fields(changed["rows"]) == fields(target["columns"])
+        assert all(f.get("action") is None for f in changed["filters"]) and ir()["actions"] == []
+        page.keyboard.press("Control+z")
+        settle(page)
+        page.keyboard.press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit-d/{board['id']}")
+        settle(page)
+        assert ir() == before
+
+        # 改別的分頁的名稱、隱藏別的工作表（不會動到正在編輯的工作表）之後照常可以編輯
+        open_tab("比率", f"edit/{rate['id']}")
+        tab_menu(page, sheet_tab(page, "工作表 1"), "重新命名")
+        entry = page.locator(".sheet-tabs .renaming input")
+        entry.fill("細分")
+        entry.press("Enter")
+        expect(sheet_tab(page, "細分")).to_have_count(1)
+        tab_menu(page, sheet_tab(page, "細分"), "隱藏工作表")
+        expect(page.locator(".sheet-tabs .sheet-tab.hidden-sheet")).to_have_text("細分")
+        settle(page)
+        assert page.url == f"{engine}/w/demo/edit/{rate['id']}"
+
+        # 計算欄位從彙總改成列層級：引擎替膠囊加上 SUM，編輯器的膠囊跟著變
+        swap()  # 歷程裡較早的一步：「利潤率」還在欄架上
+        no_error()
+        assert fields(sheet(rate["id"])["rows"]) == [(ratio, None)]
+        page.locator(f'.data-pane [data-field="{ratio}"]').click(button="right")
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text="編輯").first.click()
+        page.get_by_label("公式").fill("[Profit] / [Sales]")
+        expect(page.locator(".calc-status")).to_contain_text("列層級")
+        page.locator(".calc-dialog").get_by_role("button", name="確定").click()
+        expect(page.locator(".calc-dialog")).to_have_count(0)
+        settle(page)
+        assert fields(sheet(rate["id"])["rows"]) == [(ratio, "sum")]
+        expect(page.locator('[data-shelf="rows"] .pill .pill-text')).to_have_text("SUM(利潤率)")
+        # 復原這張工作表較早的一步（交換之前）：膠囊回到欄架上，引擎加上的 SUM 還在
+        # （原本：存回手上的舊定義，量值沒有彙總、被當成維度）
+        tool(page, "復原").click()
+        settle(page)
+        no_error()
+        back = sheet(rate["id"])
+        assert (fields(back["rows"]), fields(back["columns"])) == (
+            [("f_segment", None)],
+            [(ratio, "sum")],
+        )
+        expect(page.locator('[data-shelf="columns"] .pill .pill-text')).to_have_text("SUM(利潤率)")
+        # 再做一個變更：存的仍是引擎調整過的膠囊
+        swap()
+        no_error()
+        assert fields(sheet(rate["id"])["rows"]) == [(ratio, "sum")]
+        browser.close()

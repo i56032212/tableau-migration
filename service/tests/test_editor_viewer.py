@@ -4436,6 +4436,462 @@ def test_multi_line_labels_make_text_table_rows_taller(engine: str) -> None:
         browser.close()
 
 
+def test_mark_annotation_keeps_sorted_bars_in_order(engine: str) -> None:
+    """排序過的長條圖加上標記的註解之後長條的順序不變（2026-11-21 記下的：示範報表的 Sub-Category Profit 依利潤
+    由大到小，加上一個標記的註解之後變成依名稱排列——註解的圖層在離散的座標上少了與主圖相同的排序）：長條仍依
+    利潤由大到小，註解畫在它的標記所在的那一列；再加上一條參考線也一樣。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    ws = "ws_sub_category_profit"
+    bars = ".editor-canvas svg path[aria-roledescription='bar']:not(.frozen *)"
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+        page.wait_for_selector('.editor .chart[data-drawn="true"]')
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{body['id']}",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    def rows(page: Page) -> list[tuple[str, float]]:
+        """畫面上由上到下的長條：子類別的名稱與中線的位置。"""
+        found = page.locator(bars).evaluate_all(
+            """nodes => nodes.map(n => { const r = n.getBoundingClientRect();
+              return [n.getAttribute('aria-label'), r.top + r.height / 2]; })"""
+        )
+        named: list[tuple[str, float]] = []
+        for label, y in sorted(found, key=lambda item: item[1]):
+            matched = re.search(r"Sub-Category: ([^;]+)", label)
+            assert matched is not None, label
+            named.append((matched.group(1), y))
+        return named
+
+    original = call(engine, f"/api/edit/demo/worksheets/{ws}")["worksheet"]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{ws}")
+        settle(page)
+        names = [name for name, _ in rows(page)]
+        spec = call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})["spec"]
+        # 依利潤由大到小（查詢排好的順序），不是依名稱
+        assert names == [v["c0"] for v in spec["data"]["values"]]
+        assert len(names) >= 6 and names != sorted(names)
+
+        # 第三個長條加上標記的註解：順序不變，註解的文字在那個長條的那一列
+        noted = {
+            **original,
+            "annotations": [
+                {
+                    "kind": "mark",
+                    "text": [{"text": "看這裡"}],
+                    "point": {"mark": {"f_sub_category": names[2]}},
+                    "offset": [60, 0],
+                }
+            ],
+        }
+        put(noted)
+        page.reload()
+        settle(page)
+        text = page.locator(f"{MAIN_SVG} g[class*='__deco_annotation0'] text").first
+        text.wait_for()
+        shown = rows(page)
+        assert [name for name, _ in shown] == names
+        box = text.bounding_box()
+        assert box is not None and text.text_content() == "看這裡"
+        assert abs(box["y"] + box["height"] / 2 - shown[2][1]) <= 2
+
+        # 再加上一條參考線（整張表的平均）：長條的順序仍然不變
+        profit = original["columns"][0]
+        lined = {
+            **noted,
+            "reference_lines": [
+                {"id": "refline_e2e", "axis": profit, "value": profit}
+                | {"formula": "average", "scope": "table", "source_ref": "/editor"}
+            ],
+        }
+        put(lined)
+        page.reload()
+        settle(page)
+        page.wait_for_selector(f"{MAIN_SVG} g[class*='__ref0_0']", state="attached")
+        assert [name for name, _ in rows(page)] == names
+        assert errors == []
+        browser.close()
+
+
+def test_render_notes_name_things_as_on_screen(engine: str) -> None:
+    """畫圖的附註不寫內部的代號（2026-11-21 記下的：附註開始顯示給使用者之後，裡面是「參考線 ref_1 …」
+    「預測（sum(f_profit)）：…」）：參考線是「分析」分頁清單上的寫法、欄位是膠囊上的寫法、註解是它的文字。
+    編輯器與檢視器列出的附註裡都找不到欄位 id、參考線的編號與輸出欄名。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{body['id']}",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    def notes_of(ws: str) -> list[str]:
+        return call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})["notes"]
+
+    internal = re.compile(r"\bf_[a-z_]+\b|refline|\b(sum|avg)\(|\bws_")
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+    # Sub-Category Profit：一條在 SUM(Sales) 軸上的參考線（檢視裡沒有這個軸）、一個標記不在資料中的註解
+    bars = call(engine, "/api/edit/demo/worksheets/ws_sub_category_profit")["worksheet"]
+    bars["reference_lines"] = [
+        {"id": "refline_e2e", "axis": sales, "value": sales}
+        | {"formula": "average", "scope": "table", "source_ref": "/editor"}
+    ]
+    bars["annotations"] = [
+        {"kind": "mark", "text": [{"text": "看這裡"}]}
+        | {"point": {"mark": {"f_sub_category": "沒有這個子類別"}}, "offset": [60, 0]}
+    ]
+    put(bars)
+    line_note = "參考線「平均：SUM(Sales)」的量值不在座標軸上，沒有畫出"
+    mark_note = "註解「看這裡」的標記不在目前的資料中，沒有畫出"
+    assert notes_of("ws_sub_category_profit") == [line_note, mark_note]
+    # Monthly Profit：兩年的資料估計不了自訂的模型（趨勢：加法）
+    monthly = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
+    monthly["columns"][0]["date"]["unit"] = "year"
+    monthly["forecast"] = {"measures": [{"field": "f_profit", "agg": "sum"}], "ignore_last": 0}
+    monthly["forecast"] |= {"model": "custom", "trend": "additive", "season": "none"}
+    put(monthly)
+    forecast_note = "預測（SUM(Profit)）：資料不足以估計自訂的模型（趨勢：加法、季節：無）"
+    assert forecast_note in notes_of("ws_monthly_profit")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        listed = page.locator(".notes-list li")
+
+        # 編輯器：附註裡參考線的寫法與「分析」分頁清單上的那一項相同
+        page.goto(f"{engine}/w/demo/edit/ws_sub_category_profit")
+        settle(page)
+        side_tab(page, "分析")
+        item = page.locator(".analytics-list li > span").first.inner_text().strip()
+        assert item == "平均：SUM(Sales)"
+        page.locator(".editor .notes-indicator").get_by_role("button").click()
+        assert listed.all_inner_texts() == [line_note, mark_note]
+        assert f"「{item}」" in line_note
+
+        # 編輯器：預測的附註以膠囊上的寫法稱呼量值
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+        pills = page.locator('[data-shelf="rows"] .pill .pill-text').all_inner_texts()
+        pill = pills[0].replace("▾", "").strip()
+        assert pill == "SUM(Profit)"
+        page.locator(".editor .notes-indicator").get_by_role("button").click()
+        shown = listed.all_inner_texts()
+        assert forecast_note in shown and f"（{pill}）" in forecast_note
+
+        # 檢視器：看報表的人看到的也是同樣的文字
+        page.goto(f"{engine}/w/demo/s/ws_sub_category_profit")
+        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
+        page.locator(".single-sheet .notes-indicator").get_by_role("button").click()
+        viewed = listed.all_inner_texts()
+        assert viewed == [line_note, mark_note]
+        assert not [note for note in [*shown, *viewed] if internal.search(note)]
+        assert errors == []
+        browser.close()
+
+
+TEXT_LAYOUT_BOXES = """([selector]) => {
+  const svg = document.querySelector(selector);
+  if (!svg) return null;
+  const box = (n) => { const r = n.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; };
+  const marks = [...svg.querySelectorAll('g.mark-text.role-mark:not([class*="__deco"]) text')];
+  return {
+    view: box(svg),
+    texts: marks.map((n) => [...box(n), Math.max(n.querySelectorAll('tspan').length, 1)]),
+    symbols: [...svg.querySelectorAll('g.mark-symbol.role-mark path')].map(box),
+    headers: [...svg.querySelectorAll('g.role-axis-label text')].map(box),
+  };
+}"""
+"""檢視上的文字標記（含標記標籤；每一個的外框與行數）、圓點、標題成員的外框與整張圖的外框。"""
+
+
+def _text_layout(engine: str, page: Any, name: str, **sheet: Any) -> dict[str, Any]:
+    """新增一張工作表、設成 sheet（marks 只寫要改的），在編輯器中畫出來之後量：回傳 render 回應的 sizing
+    （rows、columns）、附註與畫面上各元素的外框（texts 是 [左, 上, 右, 下]，lines 是各文字的行數）。"""
+    created = call(engine, "/api/edit/demo/worksheets", {"name": name})["worksheet"]
+    marks = {**created["marks"], **sheet.pop("marks", {})}
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/{created['id']}",
+        data=json.dumps({"worksheet": {**created, **sheet, "marks": marks}}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    urllib.request.urlopen(request, timeout=60).close()
+    page.goto(f"{engine}/w/demo/edit/{created['id']}")
+    page.wait_for_selector('.editor[data-saving="false"]')
+    page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+    page.wait_for_selector('.editor .chart[data-drawn="true"]')
+    page.wait_for_timeout(300)
+    found = page.evaluate(TEXT_LAYOUT_BOXES, [MAIN_SVG])
+    assert found is not None, name
+    response = call(engine, f"/api/workbooks/demo/worksheets/{created['id']}/render", {})
+    assert response["unsupported"] is None, response
+    return {
+        **response["spec"]["usermeta"]["sizing"],
+        "notes": response["notes"],
+        "view": found["view"],
+        "texts": [box[:4] for box in found["texts"]],
+        "lines": [box[4] for box in found["texts"]],
+        "symbols": found["symbols"],
+        "headers": found["headers"],
+    }
+
+
+def _overlapping(boxes: list[list[float]]) -> int:
+    """互相蓋到的外框有幾對（重疊超過 1 像素）。"""
+    count = 0
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1 :]:
+            wide = min(a[2], b[2]) - max(a[0], b[0])
+            tall = min(a[3], b[3]) - max(a[1], b[1])
+            count += wide > 1 and tall > 1
+    return count
+
+
+def _middle(box: list[float]) -> float:
+    return (box[1] + box[3]) / 2
+
+
+def test_large_single_line_text_makes_rows_taller(engine: str) -> None:
+    """文字表中只有一行的大字（2026-11-21 記下的：20pt 的字在 20 像素的列中，文字的外框 36 像素、上下兩列
+    重疊 16 像素）：列跟著字變高——文字在自己的列裡、互不重疊，仍以列標題的中線為中心。預設的字照舊是
+    20 像素的列。"""
+    from itertools import pairwise
+
+    from playwright.sync_api import sync_playwright
+
+    sub, region = {"field": "f_sub_category"}, {"field": "f_region"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+
+    def steps(boxes: list[list[float]]) -> list[float]:
+        """相鄰兩列文字上緣的距離（各列等距時只有一個值）。"""
+        tops = sorted({round(box[1], 1) for box in boxes})
+        return sorted({round(b - a, 1) for a, b in pairwise(tops)})
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1300})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        # 預設的字：每一列 20 像素（與修正前相同）
+        plain = _text_layout(
+            engine, page, "plain", rows=[sub], marks={"type": "text", "label": [sales]}
+        )
+        assert plain["rows"] == {"step": 20} and steps(plain["texts"]) == [20]
+        assert len(plain["texts"]) == 17 and _overlapping(plain["texts"]) == 0
+
+        # 20pt 的字：列跟著變高（42 像素），文字的外框（約 36 像素）在自己的列裡、互不重疊，
+        # 仍以列標題的中線為中心
+        marks = {"type": "text", "label": [sales], "label_font": {"size": 20}}
+        large = _text_layout(engine, page, "large", rows=[sub], marks=marks)
+        assert large["rows"] == {"step": 42} and steps(large["texts"]) == [42]
+        heights = {round(box[3] - box[1]) for box in large["texts"]}
+        assert len(large["texts"]) == 17 and all(30 <= h <= 42 for h in heights), heights
+        assert _overlapping(large["texts"]) == 0 and large["notes"] == []
+        heads = sorted(_middle(box) for box in large["headers"])
+        middles = sorted(_middle(box) for box in large["texts"])
+        # 外框的中線隨字型的上下伸部略有出入（這台電腦上差 2.5 像素）；列高是 42 像素
+        assert max(abs(a - b) for a, b in zip(heads, middles, strict=True)) <= 5
+
+        # 欄架上有維度：每一格的大字上下都不互相蓋到
+        crossed = _text_layout(engine, page, "crossed", rows=[sub], columns=[region], marks=marks)
+        assert crossed["rows"] == {"step": 42} and len(crossed["texts"]) == 17 * 4
+        assert steps(crossed["texts"]) == [42]
+        assert errors == []
+        browser.close()
+
+
+def test_text_table_columns_fit_each_line_and_its_font(engine: str) -> None:
+    """文字表的欄寬依每一格的文字估計（2026-11-21 記下的：各行格式不同的自訂文字欄寬固定 40 像素，16pt 的
+    數字往左蓋到列標題；一種格式的大字也一律當成 12 像素估計）：各行依自己的字級、取最寬的一行——文字不
+    蓋到列標題，欄架上有維度時各格的文字左右不互相蓋到。"""
+    from playwright.sync_api import sync_playwright
+
+    sub, region = {"field": "f_sub_category"}, {"field": "f_region"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+    per_line = [
+        {"text": "Sales", "style": {"size": 8}},
+        {"text": "\n"},
+        {"use": sales, "style": {"size": 16}},
+    ]
+
+    def over_headers(found: dict[str, Any]) -> float:
+        """文字往左超出列標題右緣幾像素（沒有蓋到時是 0）。"""
+        right = max(box[2] for box in found["headers"])
+        return max(0.0, right - min(box[0] for box in found["texts"]))
+
+    def widest(boxes: list[list[float]]) -> float:
+        return max(box[2] - box[0] for box in boxes)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1300})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        # 各行格式不同的自訂文字（8pt 的小標題、16pt 的數字）：欄寬放得下 16pt 的數字，不蓋到列標題
+        marks = {"type": "text", "label": [sales], "label_text": per_line}
+        lined = _text_layout(engine, page, "lined", rows=[sub], marks=marks)
+        assert len(lined["texts"]) == 17 * 2
+        assert lined["columns"]["size"] >= widest(lined["texts"]) > 40
+        assert over_headers(lined) == 0
+        # 欄架上有維度：各格的數字（較高的那一行）左右不互相蓋到
+        lined = _text_layout(engine, page, "lined2", rows=[sub], columns=[region], marks=marks)
+        numbers = [box for box in lined["texts"] if box[3] - box[1] > 20]
+        assert len(numbers) == 17 * 4 and _overlapping(numbers) == 0
+        assert lined["columns"]["step"] >= widest(numbers)
+
+        # 一種格式的大字（20pt）：欄寬依 20pt 估計，不蓋到列標題；欄架上有維度時各格互不重疊
+        marks = {"type": "text", "label": [sales], "label_font": {"size": 20}}
+        large = _text_layout(engine, page, "large", rows=[sub], marks=marks)
+        assert large["columns"]["size"] >= widest(large["texts"]) and over_headers(large) == 0
+        crossed = _text_layout(engine, page, "crossed", rows=[sub], columns=[region], marks=marks)
+        assert len(crossed["texts"]) == 17 * 4 and _overlapping(crossed["texts"]) == 0
+        assert crossed["columns"]["step"] >= widest(crossed["texts"])
+
+        # 預設的字：欄寬與修正前相同
+        plain = _text_layout(
+            engine, page, "plain", rows=[sub], marks={"type": "text", "label": [sales]}
+        )
+        assert plain["columns"] == {"size": 62} and over_headers(plain) == 0
+        assert errors == []
+        browser.close()
+
+
+def test_multi_line_text_is_centred_without_rows(engine: str) -> None:
+    """沒有列的檢視（KPI、只有欄的文字表）中同一種格式的多行文字（2026-11-21 記下的，2026-11-22 量過：三行
+    的 KPI 整段的中線比檢視的中線低 14 像素——第一行在中間，其餘往下排）：整段以檢視的中線為中心，與只有
+    一行時在同一個地方。"""
+    from playwright.sync_api import sync_playwright
+
+    region = {"field": "f_region"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+    profit = {"field": "f_profit", "agg": "sum", "continuous": True}
+    quantity = {"field": "f_quantity", "agg": "sum", "continuous": True}
+    three = [sales, profit, quantity]
+
+    def offsets(found: dict[str, Any]) -> list[float]:
+        """各段文字的中線相對於整張圖的中線。"""
+        middle = _middle(found["view"])
+        return sorted(_middle(box) - middle for box in found["texts"])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1300})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        # KPI（欄列架上沒有欄位）：三行的文字整段的中線與只有一行時在同一個地方
+        one = _text_layout(engine, page, "kpi1", marks={"type": "text", "label": [sales]})
+        many = _text_layout(engine, page, "kpi3", marks={"type": "text", "label": three})
+        assert (one["lines"], many["lines"]) == ([1], [3])
+        assert abs(offsets(many)[0] - offsets(one)[0]) <= 1.5
+        # 只有欄的文字表：每一格三行，也一樣
+        one = _text_layout(
+            engine, page, "across1", columns=[region], marks={"type": "text", "label": [sales]}
+        )
+        many = _text_layout(
+            engine, page, "across3", columns=[region], marks={"type": "text", "label": three}
+        )
+        assert set(many["lines"]) == {3} and len(many["texts"]) == 4
+        assert max(abs(a - b) for a, b in zip(offsets(many), offsets(one), strict=True)) <= 1.5
+        assert errors == []
+        browser.close()
+
+
+def test_dot_table_rows_follow_multi_line_labels(engine: str) -> None:
+    """圓點的表格（每一列一個圓點）中多個欄位的標籤（2026-11-21 記下的，2026-11-22 量過：列高照舊 20 像素，
+    三行的標籤疊在一起、有一半因為重疊被隱藏，整段的中線比圓點低 14 像素；在標記上方時第二行起蓋在標記上）：
+    列跟著標籤變高，每個標籤都畫出來、互不重疊，整段的中線與圓點對齊；在標記上方或下方的標籤不蓋到標記。"""
+    from playwright.sync_api import sync_playwright
+
+    sub = {"field": "f_sub_category"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+    profit = {"field": "f_profit", "agg": "sum", "continuous": True}
+    quantity = {"field": "f_quantity", "agg": "sum", "continuous": True}
+    three = [sales, profit, quantity]
+
+    def beside(found: dict[str, Any]) -> list[tuple[list[float], list[float]]]:
+        """每個圓點與它的標籤（由上到下配對）。"""
+        assert len(found["symbols"]) == len(found["texts"]) == 17
+        return list(
+            zip(
+                sorted(found["symbols"], key=_middle),
+                sorted(found["texts"], key=_middle),
+                strict=True,
+            )
+        )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        # 一個欄位的標籤照舊（20 像素的列）
+        single = _text_layout(
+            engine, page, "dots1", rows=[sub], marks={"type": "circle", "label": [sales]}
+        )
+        assert single["rows"] == {"step": 20}
+        level = [_middle(text) - _middle(dot) for dot, text in beside(single)]
+
+        # 三個欄位：列跟著變高（48 像素），17 個標籤都畫出來（沒有因為重疊被隱藏）、互不重疊，整段的
+        # 中線與圓點的中線對齊（與一個欄位時相同），標籤在圓點的右邊
+        dots = _text_layout(
+            engine, page, "dots3", rows=[sub], marks={"type": "circle", "label": three}
+        )
+        assert dots["rows"] == {"step": 48}
+        assert dots["lines"] == [3] * 17 and _overlapping(dots["texts"]) == 0
+        centred = [_middle(text) - _middle(dot) for dot, text in beside(dots)]
+        assert max(abs(c - level[0]) for c in centred) <= 1.5
+        assert all(text[0] >= dot[2] for dot, text in beside(dots))
+
+        # 標籤在標記的上方：整段在圓點之上（最後一行的下緣不低於圓點的上緣），不蓋到任何圓點或其他標籤
+        marks = {"type": "circle", "label": three, "label_valign": "top"}
+        above = _text_layout(engine, page, "above", rows=[sub], marks=marks)
+        assert above["lines"] == [3] * 17
+        assert _overlapping([*above["texts"], *above["symbols"]]) == 0
+        for dot, text in beside(above):
+            assert text[3] <= dot[1] + 1 and dot[1] - text[3] <= 8
+        # 標籤在標記的下方也一樣
+        marks = {"type": "circle", "label": three, "label_valign": "bottom"}
+        below = _text_layout(engine, page, "below", rows=[sub], marks=marks)
+        assert below["lines"] == [3] * 17
+        assert _overlapping([*below["texts"], *below["symbols"]]) == 0
+        assert all(text[1] >= dot[3] - 1 for dot, text in beside(below))
+        assert errors == []
+        browser.close()
+
+
 def test_dual_axis_with_trend_lines(engine: str) -> None:
     """雙軸加趨勢線（2026-11-21 稽核：整張圖變成「查詢失敗：Duplicate data set name: "__ref_trend_pathgroup"」）：
     連續的月份 × SUM(Sales)、SUM(Profit)，Profit 設成雙軸後加上趨勢線——圖照樣畫出來，兩個量值各一條趨勢線。"""
@@ -4723,5 +5179,138 @@ def test_dashboard_image_object_asks_for_an_image(engine: str, tmp_path: Path) -
         expect(gone).to_have_count(2)
         label = gone.first.evaluate("e => getComputedStyle(e, '::after').content")
         assert "找不到圖片：Image/gone.png" in label
+        assert errors == []
+        browser.close()
+
+
+def test_fit_height_rows_are_not_squeezed_into_each_other(engine: str) -> None:
+    """編輯器裡符合高度、整個檢視的文字表（檢視的高度隨視窗）：放得下時列填滿檢視；視窗變矮、列被壓到相鄰兩列的
+    文字互相蓋住時，列高保持標準的大小、檢視上下捲動；視窗再變高，回到填滿。只是被壓得比標準的列高小一點、
+    文字沒有互相蓋住的時候照舊填滿。原本一律填滿：17 列三行的文字表在 694 像素高的檢視中每列 39 像素，
+    44 像素高的文字上下疊在一起。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": agg is not None,
+            "table_calc": None,
+        }
+
+    def put(worksheet: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{worksheet['id']}",
+            data=json.dumps({"worksheet": worksheet}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            assert response.status == 200
+
+    measure = """() => {
+      const chart = document.querySelector('.editor-canvas .chart');
+      const svg = chart.querySelector(':scope > svg, :scope > .frozen-host > svg');
+      const texts = [];
+      for (const group of svg.querySelectorAll('g.mark-text.role-mark')) {
+        if ([...group.classList].some((name) => name.startsWith('__'))) continue;
+        for (const text of group.querySelectorAll(':scope > text'))
+          texts.push({ box: text.getBoundingClientRect(), row: text.__data__.y });
+      }
+      let overlapping = 0;
+      for (let i = 0; i < texts.length; i++) for (let j = i + 1; j < texts.length; j++) {
+        const a = texts[i], b = texts[j];
+        if (Math.abs(a.row - b.row) < 0.5) continue;
+        const wide = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left);
+        const tall = Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top);
+        if (wide > 1 && tall > 1) overlapping++;
+      }
+      const rows = [...new Set(texts.map((t) => Math.round(t.row * 10) / 10))].sort((a, b) => a - b);
+      return {
+        texts: texts.length,
+        overlapping,
+        step: rows.length > 1 ? rows[1] - rows[0] : null,
+        textHeight: Math.max(...texts.map((t) => t.box.height)),
+        client: chart.clientHeight,
+        scrollable: chart.scrollHeight - chart.clientHeight,
+        kept: chart.dataset.rows === 'kept',
+      };
+    }"""
+
+    # Sub-Category（17 列）的文字表，標籤上三個量值（每格三行），顯示大小是整個檢視
+    sheet = call(engine, "/api/edit/demo/worksheets", {})["worksheet"]
+    sheet["rows"] = [use("f_sub_category")]
+    sheet["marks"]["label"] = [
+        use("f_sales", "sum"),
+        use("f_profit", "sum"),
+        use("f_quantity", "sum"),
+    ]
+    sheet["fit"] = "entire_view"
+    put(sheet)
+    rendered = call(engine, f"/api/workbooks/demo/worksheets/{sheet['id']}/render", {})
+    assert rendered["spec"]["usermeta"]["sizing"]["rows"]["step"] == 48
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1200})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+
+        def layout(
+            kept: bool, height: int | None = None, scroll: str | None = None
+        ) -> dict[str, Any]:
+            """量檢視的排列；給了 height 時先把視窗改成這個高度。等檢視重畫成預期的樣子（列高保持或填滿；
+            給了 scroll 時連同捲動的方向）再量，等不到就失敗。"""
+            if height is not None:
+                page.set_viewport_size({"width": 1500, "height": height})
+            page.wait_for_function(
+                """([kept, scroll]) => {
+                  const chart = document.querySelector('.editor-canvas .chart[data-drawn="true"]');
+                  const svg = chart && chart.querySelector(':scope > svg, :scope > .frozen-host > svg');
+                  if (!svg || (chart.dataset.rows === 'kept') !== kept) return false;
+                  if (scroll !== null && chart.dataset.scroll !== scroll) return false;
+                  // 填滿時圖與檢視同高；保持列高時圖比檢視高
+                  const fills = Math.abs(svg.getBoundingClientRect().height - chart.clientHeight) <= 2;
+                  return fills !== kept;
+                }""",
+                arg=[kept, scroll],
+            )
+            return page.evaluate(measure)
+
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{sheet['id']}")
+        settle(page)
+
+        # 視窗夠高：列填滿檢視（每列比標準的 48 像素高），不捲動
+        found = layout(kept=False)
+        assert found["texts"] == 17 and found["overlapping"] == 0, found
+        assert found["step"] > 48 and found["scrollable"] <= 1, found
+        # 視窗變矮（檢視 694 像素）：填滿的話每列 39 像素、比 44 像素的文字矮——列高保持 48 像素，上下捲動
+        found = layout(kept=True, height=900)
+        assert found["overlapping"] == 0 and found["step"] == pytest.approx(48, abs=0.1), found
+        assert found["scrollable"] > 100, found
+        # 檢視 794 像素：每列 45 像素，比標準的列高小一點，但文字沒有互相蓋住——照舊填滿
+        found = layout(kept=False, height=1000)
+        assert found["overlapping"] == 0 and found["scrollable"] <= 1, found
+        assert found["textHeight"] <= found["step"] < 48, found
+        # 更矮，然後回到夠高：保持列高，再回到填滿
+        found = layout(kept=True, height=700)
+        assert found["overlapping"] == 0 and found["step"] == pytest.approx(48, abs=0.1), found
+        found = layout(kept=False, height=1200)
+        assert found["overlapping"] == 0 and found["step"] > 48 and found["scrollable"] <= 1, found
+
+        # 符合高度（工具列的顯示大小）在矮的視窗中也一樣
+        page.set_viewport_size({"width": 1500, "height": 900})
+        page.get_by_label("顯示大小").select_option("fit_height")
+        settle(page)
+        found = layout(kept=True, scroll="both")  # 符合高度時寬度不填滿：兩個方向都可以捲動
+        assert found["overlapping"] == 0 and found["step"] == pytest.approx(48, abs=0.1), found
         assert errors == []
         browser.close()

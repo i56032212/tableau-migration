@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import re
 from pathlib import Path
 
 from tmig.render.notes import INFORMATIONAL, INFORMATIONAL_PREFIXES, warnings
@@ -37,6 +39,39 @@ def test_informational_notes_match_the_text_the_renderer_writes() -> None:
         assert "".join(note.split()) in flattened, note
     for prefix in INFORMATIONAL_PREFIXES:
         assert "".join(prefix.split()) in flattened, prefix
+
+
+def test_notes_do_not_interpolate_internal_ids() -> None:
+    """附註是給使用者看的（檢視器與編輯器都會列出來）：文字裡代入的值不能是內部的代號——參考線的編號
+    （line.id）、欄位鍵與輸出欄名（.key、columns[j]）、標記類型與樣式的代號（marks.type、options.style、
+    model.code）。要稱呼東西時用 tmig.render.names（膠囊上的寫法、選單上的名稱）。
+
+    這裡檢查產生附註的程式：每一個寫進附註的 f-string 代入的運算式。"""
+    forbidden = re.compile(r"(\.(id|key|code|type|style|field)|\bcolumns\[[^\]]*\]|^mark)$")
+    found: list[str] = []
+    for folder in ("render", "planner"):
+        for path in sorted((SOURCE / folder).glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                target = (
+                    ast.unparse(func.value)
+                    if isinstance(func, ast.Attribute) and func.attr in ("append", "extend")
+                    else ""
+                )
+                writes = target.endswith("notes") or (
+                    isinstance(func, ast.Name) and func.id == "_note"
+                )
+                if not writes:
+                    continue
+                for part in ast.walk(node):
+                    if isinstance(part, ast.FormattedValue):
+                        expression = ast.unparse(part.value)
+                        if forbidden.search(expression):
+                            found.append(f"{path.name}:{node.lineno} {{{expression}}}")
+    assert found == []
 
 
 def test_taller_rows_for_multi_line_text_are_informational() -> None:

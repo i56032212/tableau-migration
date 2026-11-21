@@ -332,7 +332,8 @@ def test_reference_line_total_of_average_is_not_drawn(tmp_path: Path, db: Path) 
     )
     rendered = render_lines(tmp_path, db, sheet)
     assert "layer" not in rendered.spec
-    assert rendered.notes == ["參考線 refline0 的合計需要重新彙總整體資料，沒有畫出"]
+    # 附註以「分析」分頁清單上的寫法稱呼參考線，不寫它的編號（refline0）
+    assert rendered.notes == ["參考線「總計：AVG(Sales)」的合計需要重新彙總整體資料，沒有畫出"]
 
 
 # ---------------------------------------------------------------- J3 甜甜圈與各標記卡的詳細程度

@@ -512,3 +512,49 @@ def test_map_reference_band_and_trend_line(tmp_path: Path, db: Path) -> None:
     (model,) = spec["usermeta"]["trends"]
     assert model["fit"] == "linear" and model["observations"] == len(located)
     assert model["equation"].startswith("Latitude = ")
+
+
+def test_map_notes_use_the_names_on_screen(tmp_path: Path, db: Path) -> None:
+    """地圖的附註不寫內部的代號（附註從 2026-11-21 起會顯示給看報表的人）：參考線是「分析」分頁清單上的寫法
+    （原本是「地圖上的參考線 refline3 …」），標記類型與背景地圖的樣式是選單上的名稱（原本是「地圖上的 pie
+    標記…」「背景地圖的「satellite」樣式…」）。"""
+    from tmig.ir.models import FieldUse, ParamRef, ReferenceLine
+
+    sheet = map_sheet(
+        "Cities",
+        [STATE, CITY, SALES],
+        "Circle",
+        f"<lod column='{b.ref('none:City:nk')}' /><lod column='{b.ref('none:State:nk')}' />",
+    )
+    ir = parse(tmp_path, sheet)
+    ws = ir.worksheets[0]
+    latitude = ws.rows[0]
+    sales = FieldUse(field="f_sales", agg="sum", continuous=True)
+
+    def line(n: int, **settings: Any) -> ReferenceLine:
+        base: dict[str, Any] = {"id": f"refline{n}", "axis": latitude, "value": latitude}
+        base |= {"formula": "average", "scope": "table", "source_ref": "test"}
+        return ReferenceLine.model_validate({**base, **settings})
+
+    text = next(p for p in ir.parameters if p.datatype == "string")
+    lines = [
+        line(3, axis=sales, value=sales),
+        line(4, kind="distribution", formula="percentile", percentiles=[60, 80]),
+        line(5, formula="constant", value=ParamRef(parameter=text.id)),
+    ]
+    changed = ws.model_copy(
+        update={
+            "reference_lines": lines,
+            "map": MapOptions(style="satellite"),
+            "marks": ws.marks.model_copy(update={"type": "pie"}),
+        }
+    )
+    rendered = render(ir.model_copy(update={"worksheets": [changed]}), db)
+    assert rendered.mark == "map"
+    assert rendered.notes == [
+        "背景地圖的「衛星」樣式以簡化的配色呈現（平台的底圖沒有街道、地形與衛星影像）",
+        "地圖上的圓餅標記以圓點呈現",
+        "地圖上的參考線「平均：SUM(Sales)」不在經緯度的座標軸上，沒有畫出",
+        "地圖上的分布與盒鬚圖尚未畫出（參考線「分布（百分位數）：Latitude (generated)」）",
+        "地圖上的參考線「常數：Latitude (generated)」的值不在查詢結果中，沒有畫出",
+    ]

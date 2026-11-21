@@ -27,6 +27,8 @@ SEASONS = {"month": 12, "quarter": 4, "week": 13, "day": 7, "hour": 24}
 """時間的細度 → 季節長度。"""
 AUTO_LENGTH = {"year": 5, "quarter": 4, "month": 12, "week": 13, "day": 7, "hour": 24}
 """自動的預測長度（Tableau 依資料決定，沒有公開；這裡取一個季節，年為 5 年）。"""
+COMPONENT_NAMES: dict[str, str] = {"none": "無", "additive": "加法", "multiplicative": "乘法"}
+"""趨勢與季節的種類在預測選項（自訂模型）中的名稱。"""
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,11 @@ class Model:
     def code(self) -> str:
         names = {"none": "N", "additive": "A", "multiplicative": "M"}
         return f"{names[self.trend]}{names[self.season]}"
+
+    @property
+    def name(self) -> str:
+        """給使用者看的寫法：趨勢與季節在預測選項中的名稱（附註用，不寫模型的代號）。"""
+        return f"趨勢：{COMPONENT_NAMES[self.trend]}、季節：{COMPONENT_NAMES[self.season]}"
 
 
 NON_SEASONAL = [Model("none", "none"), Model("additive", "none"), Model("multiplicative", "none")]
@@ -293,7 +300,7 @@ def best_fit(y: list[float], period: int, seasonal: bool = True, model: Model | 
     if model is not None:
         found = fit(y, model, period)
         if found is None:
-            raise ForecastError(f"資料不足以估計 {model.code} 模型")
+            raise ForecastError(f"資料不足以估計自訂的模型（{model.name}）")
         return found
     fits = candidates(y, period, seasonal)
     if not fits:

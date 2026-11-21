@@ -1142,6 +1142,84 @@ def test_tooltip_commands_keep_only_and_select_by_category(server: str) -> None:
         browser.close()
 
 
+def test_tap_pins_the_same_tooltip_as_hover(server: str) -> None:
+    """觸控的裝置上點標記（點之前沒有滑過）：釘住的工具提示與桌面上滑過同一個標記時的相同——欄位的名稱、
+    格式化的值、工作表自訂的工具提示文字（含格式），單張工作表與 dashboard 上都一樣。
+
+    原本釘住的內容取自「上一次滑過時留下的工具提示」，觸控時沒有滑過，於是列出標記的內部欄位鍵
+    （「f_category　Furniture」），也沒有量值（Chromium 的手機模擬上量到的）。"""
+    from playwright.sync_api import Locator, expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    bars = "svg path[aria-roledescription='bar']:not(.frozen *)"
+    # 頁面、工作表、標記、工具提示裡要有的文字：一般的工具提示（各欄位一列）、自訂文字的工具提示、
+    # dashboard 上有篩選動作的工作表
+    cases = [
+        (
+            "s/ws_sub_category_sales",
+            "ws_sub_category_sales",
+            "[aria-label*='Furniture｜Chairs']",
+            ["Category Furniture", "Sub-Category Chairs", "Sales 328,449"],
+        ),
+        (
+            "s/ws_sales_by_segment",
+            "ws_sales_by_segment",
+            "[aria-label$='Segment: Consumer']",
+            ["Segment: Consumer"],
+        ),
+        (
+            f"d/{board.id}",
+            "ws_region_picker",
+            "[aria-label$='Region: East']",
+            ["Region East", "Sales 678,781"],
+        ),
+    ]
+
+    def lines(tooltip: Locator) -> str:
+        """工具提示的文字（不含命令按鈕與工具提示中的工作表），空白合併成一個。"""
+        return " ".join(
+            tooltip.locator(".viz-tooltip-text, .viz-tooltip-rich").inner_text().split()
+        )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        desktop = browser.new_page(viewport={"width": 1400, "height": 1000})
+        phone = browser.new_context(**p.devices["Pixel 5"]).new_page()
+        errors: list[str] = []
+        for page in (desktop, phone):
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+        for path, sheet, mark, expected in cases:
+            shown: list[str] = []
+            for page in (desktop, phone):
+                page.goto(f"{server}/w/superstore_features/{path}")
+                page.wait_for_selector(
+                    f".worksheet[data-worksheet='{sheet}'][data-loading='false']"
+                )
+                page.wait_for_function(LOADED)
+                target = page.locator(f"[data-worksheet='{sheet}'] {bars}{mark}")
+                if page is desktop:
+                    target.hover()
+                    tooltip = page.locator(".viz-tooltip")
+                else:
+                    # 觸控：直接點，沒有滑過。工具提示釘住，上面有命令按鈕
+                    target.tap()
+                    tooltip = page.locator(".viz-tooltip.pinned")
+                    expect(tooltip.get_by_role("button", name="✓ 只保留")).to_be_visible()
+                expect(tooltip).to_have_count(1)
+                shown.append(lines(tooltip))
+                if sheet == "ws_sales_by_segment":
+                    # 自訂的工具提示文字連同格式：值是粗體
+                    value = tooltip.locator(".viz-tooltip-rich span", has_text="Consumer")
+                    expect(value).to_have_css("font-weight", "700")
+            hovered, tapped = shown
+            assert tapped == hovered, (path, shown)
+            assert all(text in tapped for text in expected), (path, tapped)
+            assert "f_" not in tapped, (path, tapped)  # 內部的欄位鍵
+        assert errors == []
+        browser.close()
+
+
 LOADED = "document.querySelectorAll('.worksheet[data-loading=\"true\"]').length === 0"
 ALL_FOUR = "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
 
@@ -1383,6 +1461,87 @@ def test_escape_clears_the_selection(server: str) -> None:
         page.keyboard.press("Escape")
         renders.wait_for(page, targets, start)
         expect(picker.locator(".selection")).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
+def test_escape_in_presentation_mode_only_leaves_presentation(server: str) -> None:
+    """簡報模式中按一次 Esc 只做一件事：離開簡報模式（Tableau 的使用經驗；官方文件沒有寫 Esc，哪個優先是
+    推定的，見 README「已知限制與待驗證」），標記的選取留著；離開之後再按一次才取消選取。
+
+    原本按鍵送到頁面上的時候（沒有全螢幕的環境——桌面版的外殼、不允許全螢幕的瀏覽器）同一下 Esc 既離開簡報
+    模式又取消選取，篩選動作跟著清除、目標工作表重新查詢。開著選單時 Esc 是選單的：收起選單，簡報模式不結束。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    filters = next(d for d in ir.dashboards if d.name == "篩選條件")
+    targets = {"ws_category_detail", "ws_segment_detail"}
+    no_fullscreen = (
+        "Element.prototype.requestFullscreen = () => Promise.reject(new Error('不允許全螢幕'));"
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        errors: list[str] = []
+        # 不允許全螢幕，以及無頭的 Chromium 自己的全螢幕（按鍵一樣送到頁面上）
+        for fullscreen in (False, True):
+            page = browser.new_page(viewport={"width": 1300, "height": 900})
+            if not fullscreen:
+                page.add_init_script(no_fullscreen)
+            renders = Renders()
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+            page.on("response", renders)
+            page.goto(f"{server}/w/superstore_features/d/{board.id}")
+            page.wait_for_function(ALL_FOUR)
+            page.wait_for_timeout(300)
+            picker = page.locator("[data-worksheet='ws_region_picker']")
+            start = len(renders.items)
+            picker.locator(
+                "svg path[aria-roledescription='bar']:not(.frozen *)[aria-label$='Region: East']"
+            ).click()
+            renders.wait_for(page, targets, start)
+            page.wait_for_function(ALL_FOUR)
+            expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+
+            page.get_by_role("button", name="簡報模式").click()
+            presenting = page.locator(".page.presenting")
+            expect(presenting).to_have_count(1)
+            if not fullscreen:
+                assert page.evaluate("document.fullscreenElement === null")
+            # 第一次 Esc：離開簡報模式，選取與篩選動作都還在（沒有重新查詢）
+            start = len(renders.items)
+            page.keyboard.press("Escape")
+            expect(presenting).to_have_count(0)
+            page.wait_for_timeout(500)
+            expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+            assert len(renders.items) == start, fullscreen
+            # 第二次 Esc：取消選取
+            page.keyboard.press("Escape")
+            renders.wait_for(page, targets, start)
+            expect(picker.locator(".selection")).to_have_count(0)
+            page.close()
+
+        # 簡報模式中開著多選下拉的選單：Esc 收起選單、簡報模式不結束；再按一次才離開
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        page.add_init_script(no_fullscreen)
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/d/{filters.id}")
+        page.wait_for_selector(".worksheet")
+        page.wait_for_function(LOADED)
+        page.get_by_role("button", name="簡報模式").click()
+        presenting = page.locator(".page.presenting")
+        expect(presenting).to_have_count(1)
+        control = page.locator("fieldset.control", has_text="Sub-Category").first
+        control.locator("button.dropdown").click()
+        options = control.locator(".options")
+        expect(options).to_be_visible()
+        page.locator("body").press("Escape")
+        expect(options).to_have_count(0)
+        page.wait_for_timeout(300)
+        expect(presenting).to_have_count(1)
+        page.locator("body").press("Escape")
+        expect(presenting).to_have_count(0)
         assert errors == []
         browser.close()
 

@@ -42,6 +42,8 @@ class ForecastPlan:
     """其他維度的輸出欄名：各自一條時間序列。"""
     indicator: str | None = None
     settings: Forecast | None = None
+    captions: dict[str, str] = field(default_factory=dict)
+    """量值的輸出欄名 → 膠囊上的寫法（SUM(Profit)）：附註裡這樣稱呼量值，不寫輸出欄名。"""
 
 
 @dataclass
@@ -165,7 +167,7 @@ def _forecast(
                 found = best_fit(series, period, seasonal, custom)
             except ForecastError as exc:
                 # 每條時間序列各估計一次：同一個原因只說一次
-                _note(notes, f"預測（{columns[j]}）：{exc}")
+                _note(notes, f"預測（{plan.captions.get(columns[j], columns[j])}）：{exc}")
                 estimates.append(None)
                 bands.append(None)
                 continue

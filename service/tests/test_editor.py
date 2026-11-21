@@ -561,6 +561,109 @@ def test_deleted_sheets_can_be_restored(client: TestClient) -> None:
     assert [w["name"] for w in ir()["worksheets"]][-2:] == ["工作表 1", "工作表 2"]
 
 
+def test_stale_worksheet_is_not_saved_over_engine_changes(client: TestClient) -> None:
+    """編輯器存回整張工作表時帶著它手上那一份的版本（base）；引擎在別的操作中改過這張工作表時不覆蓋（409）。
+
+    原本沒有版本：刪除別的工作表、dashboard 之後，編輯器手上的定義還參照著它們，之後每次存檔都 422；計算欄位
+    改成列層級之後，引擎替膠囊加上的 SUM 被編輯器手上的舊定義蓋掉、沒有任何訊息。409 的回應帶著引擎上現在的
+    定義與版本，編輯器把自己的變更重新套上去再存。"""
+
+    def get(worksheet: str) -> dict[str, Any]:
+        response = client.get(f"/api/edit/demo/worksheets/{worksheet}")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def put(ws: dict[str, Any], base: str | None = None) -> Any:
+        body = {"worksheet": ws} if base is None else {"worksheet": ws, "base": base}
+        return client.put(f"/api/edit/demo/worksheets/{ws['id']}", json=body)
+
+    # 讀取與存回都回應版本；內容相同版本就相同，內容變了版本跟著變
+    loaded = get("ws_monthly_profit")
+    assert loaded["revision"] and loaded["revision"] == get("ws_monthly_profit")["revision"]
+    extra = client.post("/api/edit/demo/worksheets", json={"name": "工具提示用"}).json()[
+        "worksheet"
+    ]
+    host = loaded["worksheet"]
+    host["marks"]["tooltip_sheets"] = [{"worksheet": extra["id"], "max_width": 240}]
+    saved = put(host, loaded["revision"])
+    assert saved.status_code == 200, saved.text
+    known = saved.json()
+    assert (
+        known["revision"] != loaded["revision"] and known["revision"] == get(host["id"])["revision"]
+    )
+
+    # 刪除工具提示裡的那張工作表：引擎改了這張工作表（工具提示不再有它），版本變了
+    deleted = client.delete(f"/api/edit/demo/worksheets/{extra['id']}")
+    assert deleted.status_code == 200, deleted.text
+    current = get(host["id"])
+    assert current["worksheet"]["marks"]["tooltip_sheets"] == []
+    assert current["revision"] != known["revision"]
+    # 編輯器手上的舊定義（交換了欄與列）帶著舊的版本存回：不覆蓋，回應引擎上現在的定義與版本
+    stale = dict(known["worksheet"])
+    stale["rows"], stale["columns"] = stale["columns"], stale["rows"]
+    refused = put(stale, known["revision"])
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert "編輯器之外改過" in detail["message"]
+    assert detail["worksheet"] == current["worksheet"] and detail["revision"] == current["revision"]
+    assert get(host["id"]) == current
+    # 變更重新套在引擎的定義上、帶著新的版本：存得進去
+    rebased = dict(current["worksheet"])
+    rebased["rows"], rebased["columns"] = rebased["columns"], rebased["rows"]
+    accepted = put(rebased, current["revision"])
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["worksheet"]["rows"] == current["worksheet"]["columns"]
+    assert accepted.json()["worksheet"]["marks"]["tooltip_sheets"] == []
+    # 不帶版本的存回（分頁列改別的分頁的名稱等「讀出、修改、立刻存回」的地方）照舊不檢查版本
+    assert put(accepted.json()["worksheet"]).status_code == 200
+    assert put(stale).status_code == 422  # 舊定義裡的參照已經不存在，引擎的檢查照舊擋下
+
+    # 復原刪除：引擎把工具提示裡的它放回這張工作表——刪除之後讀到的那一版同樣不能再存回去
+    after_delete = get(host["id"])
+    restored = client.post("/api/edit/demo/restore", json={"removed": deleted.json()["removed"]})
+    assert restored.status_code == 200, restored.text
+    back = get(host["id"])
+    assert [t["worksheet"] for t in back["worksheet"]["marks"]["tooltip_sheets"]] == [extra["id"]]
+    assert back["revision"] != after_delete["revision"]
+    refused = put({**after_delete["worksheet"], "fit": "fit_width"}, after_delete["revision"])
+    assert refused.status_code == 409 and refused.json()["detail"]["revision"] == back["revision"]
+    assert get(host["id"]) == back
+
+    # 計算欄位從彙總改成列層級：引擎替用到它的膠囊加上 SUM。舊定義（膠囊沒有彙總）原本存得進去、把它蓋掉
+    calc = next(
+        f
+        for f in client.get("/api/edit/demo/catalog").json()["datasources"][0]["fields"]
+        if f["caption"] == "利潤率"
+    )
+    pill = {"field": calc["id"], "agg": None, "date": None, "continuous": True, "table_calc": None}
+    ws = client.post("/api/edit/demo/worksheets", json={"name": "比率"}).json()["worksheet"]
+    ws["columns"] = [pill]
+    before = put(ws, get(ws["id"])["revision"]).json()
+    edited = client.post(
+        "/api/edit/demo/calcs",
+        json={
+            "datasource": "ds_orders",
+            "caption": "利潤率",
+            "formula": "[Profit] / [Sales]",
+            "field": calc["id"],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    adapted = get(ws["id"])
+    assert adapted["worksheet"]["columns"] == [{**pill, "agg": "sum"}]
+    overwrite = dict(before["worksheet"])
+    overwrite["fit"] = "fit_width"
+    refused = put(overwrite, before["revision"])
+    assert (
+        refused.status_code == 409 and refused.json()["detail"]["revision"] == adapted["revision"]
+    )
+    assert get(ws["id"])["worksheet"]["columns"] == [{**pill, "agg": "sum"}]
+
+    # 已經刪除的工作表：照舊 422（找不到），不是 409
+    assert client.delete(f"/api/edit/demo/worksheets/{ws['id']}").status_code == 200
+    assert put(overwrite, before["revision"]).status_code == 422
+
+
 def test_calculated_fields(client: TestClient) -> None:
     ok = client.post(
         "/api/edit/demo/formula",

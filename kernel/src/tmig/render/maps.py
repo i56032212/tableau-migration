@@ -41,6 +41,7 @@ from tmig.ir.models import (
 from tmig.planner.state import use_key
 from tmig.render.colors import member_order
 from tmig.render.density import KERNEL_RADIUS, MAX_GRID, density_image, palette_of
+from tmig.render.names import MAP_STYLE_NAMES, mark_name
 from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
 
 if TYPE_CHECKING:
@@ -411,7 +412,8 @@ def _body(
     builder.notes.extend(dict.fromkeys(plan.notes))
     if options.style in ("satellite", "streets", "outdoors"):
         builder.notes.append(
-            f"背景地圖的「{options.style}」樣式以簡化的配色呈現（平台的底圖沒有街道、地形與衛星影像）"
+            f"背景地圖的「{MAP_STYLE_NAMES[options.style]}」樣式以簡化的配色呈現"
+            "（平台的底圖沒有街道、地形與衛星影像）"
         )
     marks_layers: list[dict[str, Any]] = []
     label_layers: list[dict[str, Any]] = []
@@ -482,10 +484,14 @@ def _reference_layers(
     for n, line in enumerate(ws.reference_lines):
         role = _coordinate_role(line.axis, fields)
         if role is None:
-            builder.notes.append(f"地圖上的參考線 {line.id} 不在經緯度的座標軸上，沒有畫出")
+            builder.notes.append(
+                f"地圖上的參考線「{builder.reference(line)}」不在經緯度的座標軸上，沒有畫出"
+            )
             continue
         if line.kind != "line":
-            builder.notes.append(f"地圖上的分布與盒鬚圖尚未畫出（參考線 {line.id}）")
+            builder.notes.append(
+                f"地圖上的分布與盒鬚圖尚未畫出（參考線「{builder.reference(line)}」）"
+            )
             continue
         position = main.name(LAT if role == "latitude" else LON)
         source: str | _Constant | None = _reference_source(line, builder.channels, params, False)
@@ -493,7 +499,9 @@ def _reference_layers(
             # 標記的位置（Latitude／Longitude (generated)）：以這個圖層找到的經緯度計算
             source = position if _coordinate_role(line.value, fields) == role else None
         if source is None:
-            builder.notes.append(f"地圖上的參考線 {line.id} 的值不在查詢結果中，沒有畫出")
+            builder.notes.append(
+                f"地圖上的參考線「{builder.reference(line)}」的值不在查詢結果中，沒有畫出"
+            )
             continue
         numbers = [
             float(r[source])
@@ -1041,7 +1049,7 @@ def _data_layer(
                 }
             )
         if marks.type in ("pie", "bar", "area", "gantt", "polygon"):
-            builder.notes.append(f"地圖上的{marks.type}標記以圓點呈現")
+            builder.notes.append(f"地圖上的{mark_name(marks.type)}標記以圓點呈現")
     labels = _label_layer(builder, layer, project, encoding, data, position, placed, keys or [])
     return drawn, labels
 

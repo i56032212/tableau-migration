@@ -78,6 +78,7 @@ from tmig.natural import natural_sql
 from tmig.planner.analytics import Analytics, ClusterPlan, ForecastPlan
 from tmig.planner.identity import Identity
 from tmig.planner.state import EffectiveState, QueryState, SetValue, apply_state, use_key
+from tmig.render.names import pill_name
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
 from tmig.sqlgen.model import (
     PART_COL,
@@ -3384,6 +3385,12 @@ def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analyt
             series=series,
             indicator=indicator,
             settings=forecast,
+            # 估計不出來時的附註以膠囊上的寫法稱呼量值（SUM(Profit)）
+            captions={
+                key: pill_name(use, fields, ws.table_calcs)
+                for use, key in zip(forecast.measures, measures, strict=True)
+                if key is not None
+            },
         )
     return plan
 

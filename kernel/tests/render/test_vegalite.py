@@ -71,6 +71,57 @@ def structure(spec: dict[str, Any]) -> dict[str, Any]:
     return copy
 
 
+def sort_conflicts(spec: dict[str, Any]) -> list[str]:
+    """離散的座標（x、y）在共用同一個比例尺的各圖層中排序（sort）不一致的地方；都一致時是空的。
+
+    Vega-Lite 把各圖層的定義域合併成一個比例尺：只要有一層沒有寫 sort（預設是依值遞增），或各層的 sort
+    不同，合併後就改成依名稱排列——查詢排好的順序（主圖的 sort: null）不見了。主圖上疊的每一個圖層
+    （註解、參考線、標籤、色帶、表頭…）在離散的座標上都要帶著與主圖相同的 sort。"""
+    found: list[str] = []
+
+    def leaves(node: dict[str, Any], inherited: dict[str, Any], path: str) -> Any:
+        encoding = {**inherited, **(node.get("encoding") or {})}
+        if "layer" in node:
+            for i, child in enumerate(node["layer"]):
+                yield from leaves(child, encoding, f"{path}.layer[{i}]")
+        elif "mark" in node:
+            yield f"{path}（{node.get('name', '')}）", encoding
+
+    def visit(node: Any, path: str) -> None:
+        if not isinstance(node, dict):
+            return
+        for key in ("vconcat", "hconcat", "concat"):
+            for i, child in enumerate(node.get(key, [])):
+                visit(child, f"{path}.{key}[{i}]")
+        if "spec" in node:
+            visit(node["spec"], f"{path}.spec")
+        if "layer" not in node:
+            return
+        independent = (node.get("resolve") or {}).get("scale") or {}
+        for channel in ("x", "y"):
+            if independent.get(channel) == "independent":
+                # 各層各自的比例尺（雙軸）：每一層自己檢查
+                for i, child in enumerate(node["layer"]):
+                    if "layer" in child:
+                        visit({"layer": child["layer"]}, f"{path}.layer[{i}]")
+                continue
+            sorts: dict[str, list[str]] = {}
+            for where, encoding in leaves(node, {}, path):
+                enc = encoding.get(channel)
+                if (
+                    isinstance(enc, dict)
+                    and enc.get("type") in ("nominal", "ordinal")
+                    and "field" in enc
+                ):
+                    sort = json.dumps(enc["sort"], ensure_ascii=False) if "sort" in enc else "沒有"
+                    sorts.setdefault(sort, []).append(where)
+            if len(sorts) > 1:
+                found.append(f"{path} 的 {channel}：{sorts}")
+
+    visit(spec, "spec")
+    return found
+
+
 @pytest.mark.parametrize(("directory", "worksheet"), CASES, ids=[f"{d.name}/{w}" for d, w in CASES])
 def test_spec_snapshot_and_schema(directory: Path, worksheet: str) -> None:
     ir = fixture_ir(directory)
@@ -86,6 +137,8 @@ def test_spec_snapshot_and_schema(directory: Path, worksheet: str) -> None:
     assert rendered.spec is not None
     errors = [e.message for e in validator().iter_errors(rendered.spec)]
     assert errors == []
+    # 主圖上疊的圖層（註解、參考線、標籤…）不改掉離散座標的排序
+    assert sort_conflicts(rendered.spec) == []
     snapshot = directory / "specs" / f"{worksheet}.vl.json"
     text = json.dumps(structure(rendered.spec), ensure_ascii=False, indent=2) + "\n"
     if os.environ.get("TMIG_UPDATE_SNAPSHOTS") == "1":
