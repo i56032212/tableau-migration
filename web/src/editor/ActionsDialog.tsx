@@ -1,6 +1,7 @@
 // 動作（Tableau 的「儀表板＞動作」）：篩選、醒目提示、網址、參數、切換與集合動作的新增、修改、刪除。
 
 import { useEffect, useMemo, useState } from "react";
+import { confirmBox } from "../confirm";
 import { Modal } from "../Server";
 import type { Action, Dashboard, FieldUse, Zone } from "../types";
 import { editApi, type Outline } from "./api";
@@ -205,7 +206,7 @@ export function ActionsDialog({
   };
 
   const remove = async (action: Action) => {
-    if (!window.confirm(`刪除動作「${action.caption}」？`)) return;
+    if (!(await confirmBox(`刪除動作「${action.caption}」？`))) return;
     try {
       await editApi.removeAction(workbook, action.id);
       onSaved();

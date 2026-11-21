@@ -1,5 +1,6 @@
 // 桌面版（D0）：本機引擎提供開啟、儲存、關閉的 API；選檔對話框由桌面版外殼（Tauri）提供。
 // 在瀏覽器中開發時沒有外殼，改以輸入完整路徑代替對話框。外殼的選單呼叫 window.tmigDesktop。
+import { confirmBox } from "./confirm";
 import { api } from "./api";
 import { datasourceApi, type InspectedTable } from "./editor/datasourceApi";
 import type { DesktopDocument } from "./types";
@@ -250,7 +251,7 @@ export async function closeDocument(workbook: string, go: Go): Promise<void> {
   try {
     const doc = (await api.desktopDocuments()).find((d) => d.id === workbook);
     // 編輯過、還沒儲存：先確認（與 Tableau 關閉活頁簿時相同）
-    if (doc?.modified && !window.confirm(`「${doc.name}」有尚未儲存的變更，仍要關閉嗎？`)) return;
+    if (doc?.modified && !(await confirmBox(`「${doc.name}」有尚未儲存的變更，仍要關閉嗎？`))) return;
     await api.desktopClose(workbook);
     go("/");
   } catch (e) {

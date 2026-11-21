@@ -5,6 +5,7 @@
 
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { confirmBox } from "../confirm";
 import { errorText, fileUrl } from "../api";
 import { caseState, DashboardView } from "../Dashboard";
 import type { Button, Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
@@ -910,8 +911,8 @@ export function DashboardEditor({
     history.apply((d) => ({ ...d, layouts: [...(d.layouts ?? []), newDeviceLayout(d, kind)] }));
     showLayout(kind);
   };
-  const removeLayout = () => {
-    if (!layout || !window.confirm(`刪除${DEVICE_NAMES[layout.device]}版面？`)) return;
+  const removeLayout = async () => {
+    if (!layout || !(await confirmBox(`刪除${DEVICE_NAMES[layout.device]}版面？`))) return;
     const removed = layout.device;
     showLayout("default");
     history.apply((d) => ({ ...d, layouts: (d.layouts ?? []).filter((l) => l.device !== removed) }));
@@ -937,7 +938,7 @@ export function DashboardEditor({
             ...(full?.layouts ?? []).map((l) => ({ label: DEVICE_NAMES[l.device], checked: layout?.device === l.device, action: () => showLayout(l.device) })),
             ...(missingLayouts.length > 0 || layout ? [SEPARATOR] : []),
             ...missingLayouts.map((kind) => ({ label: `新增${DEVICE_NAMES[kind]}版面`, action: () => addLayout(kind) })),
-            ...(layout ? [{ label: `刪除${DEVICE_NAMES[layout.device]}版面`, action: removeLayout }] : []),
+            ...(layout ? [{ label: `刪除${DEVICE_NAMES[layout.device]}版面`, action: () => void removeLayout() }] : []),
           ],
         },
       ],
@@ -995,7 +996,7 @@ export function DashboardEditor({
             ))}
           </select>
           {layout ? (
-            <button type="button" className="danger" onClick={removeLayout}>
+            <button type="button" className="danger" onClick={() => void removeLayout()}>
               刪除{DEVICE_NAMES[layout.device]}版面
             </button>
           ) : (
@@ -1441,7 +1442,7 @@ function ImageObjectDialog({
     setFile(picked);
     setExisting(null);
   };
-  const confirm = async () => {
+  const submit = async () => {
     if (!file) {
       if (existing) onPick(existing);
       return;
@@ -1515,7 +1516,7 @@ function ImageObjectDialog({
         )}
       </div>
       <div className="dialog-actions">
-        <button type="button" className="primary" disabled={busy || (!file && !existing)} onClick={() => void confirm()}>
+        <button type="button" className="primary" disabled={busy || (!file && !existing)} onClick={() => void submit()}>
           {busy ? "加入中…" : "確定"}
         </button>
         <button type="button" onClick={onClose}>

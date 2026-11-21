@@ -89,5 +89,11 @@ python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine fixtu
 `src-tauri/capabilities/default.json` 允許：主視窗載入的是引擎的頁面（遠端網址），沒有允許的指令一律被擋下
 （錯誤訊息為「not allowed」），新增指令時兩處都要加。打包後的引擎以 UTF-8 模式執行（`tmig-engine.spec`）。
 
+確認與訊息：外殼的對話框外掛（tauri-plugin-dialog）會把頁面的 `window.confirm`、`window.alert` 換成原生的訊息方塊，
+而且 `window.confirm` 變成非同步的（回傳 Promise）。所以前端一律用 `web/src/confirm.ts` 的 `confirmBox`（等結果），
+不直接寫 `if (!window.confirm(…))`——Promise 是真值，那樣寫在外殼中等於沒有問就做了；capabilities 要允許
+`dialog:allow-message`，否則訊息方塊出不來（`confirmBox` 這時當作取消）。`service/tests/test_desktop_viewer.py` 以與外殼
+相同的非同步 `window.confirm` 測試，並檢查前端沒有直接呼叫 `window.confirm`。
+
 Linux 上建置外殼需要 WebKitGTK 等開發套件（`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
 libayatana-appindicator3-dev`）。

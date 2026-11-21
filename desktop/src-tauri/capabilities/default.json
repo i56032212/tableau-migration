@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主視窗：本機引擎提供的檢視器頁面（http://127.0.0.1:<埠號>）可以呼叫選檔與存檔對話框、結束與關於",
+  "description": "主視窗：本機引擎提供的檢視器頁面（http://127.0.0.1:<埠號>）可以呼叫選檔與存檔對話框、結束與關於，以及訊息方塊（對話框外掛把頁面的 window.confirm、window.alert 換成原生的訊息方塊；不允許時確認一律出不來）",
   "windows": [
     "main"
   ],
@@ -12,6 +12,7 @@
   },
   "permissions": [
     "core:default",
+    "dialog:allow-message",
     "allow-pick-open-path",
     "allow-pick-data-path",
     "allow-pick-folder-path",

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { confirmBox } from "../confirm";
 import { toast, workbookChanged } from "../desktop";
 import { Modal } from "../Server";
 import {
@@ -120,7 +121,7 @@ export function ConnectServerDialog({ workbook, onClose, go }: { workbook: strin
                       }
                       onRemove={() =>
                         void run(async () => {
-                          if (!window.confirm(`刪除連線「${describeConnection(c)}」？（記住的密碼一併刪除；已建立的報表不受影響）`)) return;
+                          if (!(await confirmBox(`刪除連線「${describeConnection(c)}」？（記住的密碼一併刪除；已建立的報表不受影響）`))) return;
                           await connectionsApi.remove(c.id);
                           await reload();
                         })
@@ -212,7 +213,7 @@ export function PickConnectionDialog({
                   }
                   onRemove={() =>
                     void run(async () => {
-                      if (!window.confirm(`刪除連線「${describeConnection(c)}」？（記住的密碼一併刪除；已建立的報表不受影響）`)) return;
+                      if (!(await confirmBox(`刪除連線「${describeConnection(c)}」？（記住的密碼一併刪除；已建立的報表不受影響）`))) return;
                       await connectionsApi.remove(c.id);
                       await reload();
                     })

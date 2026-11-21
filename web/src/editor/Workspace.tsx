@@ -17,6 +17,7 @@ import {
   signOutServer,
   toast,
 } from "../desktop";
+import { confirmBox } from "../confirm";
 import { Modal } from "../Server";
 import type { Dashboard, Story } from "../types";
 import { editApi } from "./api";
@@ -464,9 +465,9 @@ export function SheetTabs({
         ws.open(kind, made.id);
       })
       .catch((e: Error) => fail(e.message));
-  const remove = (tab: SheetTab) => {
+  const remove = async (tab: SheetTab) => {
     // 刪除不在編輯的歷程裡（歷程是每個分頁各自的定義），Ctrl+Z 救不回來：先說清楚再刪
-    if (!window.confirm(`刪除${tab.kind === "worksheet" ? "工作表" : ` ${KIND_NAMES[tab.kind]}`}「${tab.name}」？刪除之後不能復原。`)) return;
+    if (!(await confirmBox(`刪除${tab.kind === "worksheet" ? "工作表" : ` ${KIND_NAMES[tab.kind]}`}「${tab.name}」？刪除之後不能復原。`))) return;
     // 刪除目前的分頁之後留在編輯器：開啟左邊的分頁（它是第一個時開啟右邊的；都沒有時開啟資料來源）
     const at = tabs.findIndex((t) => key(t) === key(tab));
     const neighbour = at < 0 ? null : (tabs[at - 1] ?? tabs[at + 1] ?? null);
@@ -501,7 +502,7 @@ export function SheetTabs({
         ? [{ label: "複製", action: () => opened(editApi.duplicateDashboard(ws.workbook, tab.id), "dashboard") }]
         : []),
     SEPARATOR,
-    { label: "刪除", action: () => remove(tab) },
+    { label: "刪除", action: () => void remove(tab) },
   ];
   const sourceMenu: MenuItem[] = ws.datasources.map((d) => ({
     label: `資料源：${d.caption}`,

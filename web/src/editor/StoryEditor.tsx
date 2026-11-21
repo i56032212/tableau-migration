@@ -3,6 +3,7 @@
 
 import type React from "react";
 import { useCallback, useRef, useState } from "react";
+import { confirmBox } from "../confirm";
 import { addDatasource, saveDocument } from "../desktop";
 import { Modal } from "../Server";
 import type { ViewState } from "../state";
@@ -148,8 +149,8 @@ export function StoryEditor({
 
   const tab = { kind: "story" as const, id: story.id };
   const done = () => onClose(story.id);
-  const removeStory = () => {
-    if (!window.confirm(`刪除 Story「${story.name}」？`)) return;
+  const removeStory = async () => {
+    if (!(await confirmBox(`刪除 Story「${story.name}」？`))) return;
     void editApi
       .removeStory(workbook, story.id)
       .then(() => {
@@ -170,7 +171,7 @@ export function StoryEditor({
         // Story 的底色、標題、導覽與文字物件的樣式（Tableau 的「Story＞格式」）
         { label: "格式…", action: () => setFormatOpen(true) },
         SEPARATOR,
-        { label: "刪除 Story", action: removeStory },
+        { label: "刪除 Story", action: () => void removeStory() },
       ],
     },
     serverMenu(ws),
