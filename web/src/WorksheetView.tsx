@@ -857,6 +857,20 @@ export function squeezedRowStep(element: HTMLElement): number | null {
 }
 
 /**
+ * 寬度填滿區塊、上下捲動的圖（符合寬度，或符合高度／整個檢視時保持列高）：捲軸占寬度的環境裡（Windows 上的
+ * 瀏覽器、桌面版的視窗），捲軸在圖畫好、內容超出區塊之後才出現，區塊可用的寬度跟著變窄，圖卻是照沒有捲軸時的
+ * 寬度畫的——最右邊的字被捲軸蓋住。畫好之後可用的寬度與圖的寬度不同時，照現在的寬度重排一次。
+ * fills：規格的寬度是填滿容器（並排、分格的圖寬度是算好的數字，不處理）。
+ */
+export async function fitBesideScrollbar(element: HTMLElement, result: Result, fills: boolean): Promise<void> {
+  if (!fills) return;
+  const available = element.clientWidth;
+  const drawn = Number(result.view.signal("width"));
+  if (!(available > 0) || !Number.isFinite(drawn) || Math.abs(drawn - available) < 1) return;
+  await result.view.signal("width", available).runAsync();
+}
+
+/**
  * 捲動時固定標題（與 Tableau 相同）：上下捲動時，圖上方（欄標題、欄位標籤）與下方（座標軸）的區域固定在區塊的
  * 上緣與下緣；左右捲動時，左側（列標題）固定在左緣。以繪好的 SVG 的複本裁出這些區域、以 sticky 疊在原圖上。
  */
@@ -1247,6 +1261,8 @@ export function WorksheetView({
         }
       })
       .then(async (result) => {
+        // 上下捲動而寬度填滿：捲軸出現之後照剩下的寬度重排，右邊的字不被捲軸蓋住
+        if (scroll.y && !scroll.x && !disposed) await fitBesideScrollbar(element, result, spec.width === "container");
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
         element.dataset.drawn = "true";

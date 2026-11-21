@@ -441,6 +441,88 @@ def test_fit_height_keeps_rows_readable_when_the_zone_is_too_short(tmp_path: Pat
         browser.close()
 
 
+def test_filled_width_leaves_room_for_the_scrollbar(tmp_path: Path) -> None:
+    """寬度填滿區塊而上下捲動的文字表（符合寬度；整個檢視時區塊太矮、列高保持）：捲軸占寬度的環境裡（Windows 上
+    的瀏覽器、桌面版的視窗）捲軸在圖畫好之後才出現，圖要照剩下的寬度重排——最右邊的數字不被捲軸蓋住。
+
+    原本圖照沒有捲軸時的寬度畫（2026-11-22 在桌面版的視窗裡量到：圖寬 1038 像素、可用的寬度 1023 像素，17 格
+    靠右的數字都超出 6.5 像素、最後一位被捲軸蓋住）。測試用的瀏覽器預設不顯示捲軸（--hide-scrollbars），這裡
+    拿掉這個參數。"""
+    from playwright.sync_api import sync_playwright
+
+    from tmig.edit import add_worksheet, replace_worksheet
+
+    target = tmp_path / "rows"
+    target.mkdir()
+    shutil.copy(DEMO / "superstore_demo.twbx", target / "superstore_demo.twbx")
+    shutil.copytree(DEMO / "data", target / "data")
+    ir = load_ir(DEMO / "golden.ir.json")
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {
+            "field": field,
+            "agg": agg,
+            "date": None,
+            "continuous": agg is not None,
+            "table_calc": None,
+        }
+
+    measures = [use("f_sales", "sum"), use("f_profit", "sum"), use("f_quantity", "sum")]
+    sheets: dict[str, str] = {}
+    for name, fit in (("符合寬度", "fit_width"), ("整個檢視", "entire_view")):
+        ir, created = add_worksheet(ir, name, None)
+        data = created.model_dump(mode="json")
+        data["rows"] = [use("f_sub_category")]
+        data["marks"]["label"] = measures
+        data["fit"] = fit
+        ir, saved = replace_worksheet(ir, data)
+        sheets[name] = saved.id
+    (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+
+    measure = """(sheet) => {
+      const chart = document.querySelector(`[data-worksheet='${sheet}'] .chart`);
+      const svg = chart.querySelector(':scope > svg, :scope > .frozen-host > svg');
+      const visible = chart.getBoundingClientRect().left + chart.clientWidth;
+      const rights = [];
+      for (const group of svg.querySelectorAll('g.mark-text.role-mark')) {
+        if ([...group.classList].some((name) => name.startsWith('__'))) continue;
+        for (const text of group.querySelectorAll(':scope > text'))
+          rights.push(text.getBoundingClientRect().right);
+      }
+      return {
+        texts: rights.length,
+        beyond: Math.max(...rights) - visible,
+        scrollbar: chart.offsetWidth - chart.clientWidth,
+        svg: svg.getBoundingClientRect().width,
+        client: chart.clientWidth,
+        scroll: chart.dataset.scroll,
+        scrollable: chart.scrollHeight - chart.clientHeight,
+      };
+    }"""
+
+    with running_server(tmp_path, DIST) as url, sync_playwright() as p:
+        browser = p.chromium.launch(ignore_default_args=["--hide-scrollbars"])
+        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        for name in ("符合寬度", "整個檢視"):
+            sheet = sheets[name]
+            page.goto(f"{url}/w/rows/s/{sheet}")
+            page.wait_for_selector(f"[data-worksheet='{sheet}'][data-loading='false']")
+            page.wait_for_selector(f"[data-worksheet='{sheet}'] .chart[data-drawn='true']")
+            page.wait_for_timeout(300)
+            found = page.evaluate(measure, sheet)
+            assert found["texts"] == 17 and found["scroll"] == "y", (name, found)
+            assert found["scrollable"] > 100, (name, found)
+            if found["scrollbar"] == 0:
+                pytest.skip("這個環境的捲軸不占寬度，測不到")
+            # 圖的寬度是扣掉捲軸之後的寬度，靠右的數字都在看得到的範圍裡
+            assert found["svg"] == pytest.approx(found["client"], abs=1), (name, found)
+            assert found["beyond"] <= 0.5, (name, found)
+        assert errors == []
+        browser.close()
+
+
 def test_datasource_page(server: str) -> None:
     """資料源分頁：連線、資料源篩選、資料格（前 100 列，含總列數）與欄位（公式以顯示名稱呈現）。"""
     from playwright.sync_api import sync_playwright
