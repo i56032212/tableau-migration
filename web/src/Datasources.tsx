@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, request, UNAUTHORIZED_EVENT } from "./api";
 import { ConfirmDialog } from "./dialogs";
-import { Modal } from "./Server";
+import { formatTime, Modal } from "./Server";
 
 // 伺服器上的 Published Data Source（tmig_service.datasource_api）：清單、發布、詳細資料與下載
 
@@ -162,7 +162,7 @@ function DetailDialog({ id, onClose }: { id: string; onClose: () => void }) {
         <>
           <p className="hint">
             {detail.project_path}；擁有者 {detail.owner}；{detail.connection}
-            {detail.refreshed_at ? `；萃取更新於 ${detail.refreshed_at.replace("T", " ").slice(0, 16)}` : ""}
+            {detail.refreshed_at ? `；萃取更新於 ${formatTime(detail.refreshed_at)}` : ""}
           </p>
           <h3>欄位</h3>
           {detail.fields.length === 0 ? (
@@ -206,7 +206,7 @@ function DetailDialog({ id, onClose }: { id: string; onClose: () => void }) {
               {detail.versions.map((v) => (
                 <tr key={v.version}>
                   <td>第 {v.version} 版</td>
-                  <td>{v.published_at.replace("T", " ").slice(0, 16)}</td>
+                  <td>{formatTime(v.published_at)}</td>
                   <td>{v.publisher}</td>
                   <td>{v.comment}</td>
                   <td>
@@ -298,7 +298,7 @@ export function DatasourcesPage({ go }: { go: (to: string) => void }) {
                   <td>{item.project_path}</td>
                   <td>{item.owner}</td>
                   <td>{item.connection}</td>
-                  <td>{item.refreshed_at ? item.refreshed_at.replace("T", " ").slice(0, 16) : "—"}</td>
+                  <td>{item.refreshed_at ? formatTime(item.refreshed_at) : "—"}</td>
                   <td>
                     {item.used_by.map((r, i) => (
                       <span key={r.id}>

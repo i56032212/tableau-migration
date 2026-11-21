@@ -43,7 +43,7 @@ import {
   VersionsButton,
 } from "./Server";
 import { SessionGate, UserBar } from "./Session";
-import { keepMarks, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
+import { keepMarks, pendingTitle, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
 import { ConnectServerDialog } from "./editor/ConnectServer";
 import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
@@ -829,6 +829,7 @@ function WorkbookPage({
               );
               setCustomName(name);
             }}
+            onSaved={setCustomName}
           />
         )}
         {customName && <span className="custom-view-name">自訂檢視：{customName}</span>}
@@ -984,6 +985,7 @@ function WorkbookPage({
               key={refresh}
               workbook={workbook}
               worksheet={worksheet.id}
+              name={pendingTitle(ir, worksheet.id)}
               state={stateFor(ir, worksheet.id, view)}
               revision={refresh}
               onDrill={(key, delta) => changeView(setDrill(view, worksheet.id, key, delta))}

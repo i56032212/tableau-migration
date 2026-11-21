@@ -296,7 +296,7 @@ def schedule_router(
             result.append(
                 {
                     "id": report.name,
-                    "name": record.name if record is not None else ir.workbook.name,
+                    "name": report.label,
                     "published": record is not None,
                     "datasources": [
                         {"id": ds.id, "caption": ds.caption or ds.id}
@@ -457,7 +457,7 @@ def schedule_router(
         if report is None:
             raise _bad(f"找不到報表「{body.report}」")
         if not report.extract_datasources():
-            raise _bad(f"報表「{report.ir.workbook.name}」沒有萃取型的資料源")
+            raise _bad(f"報表「{report.label}」沒有萃取型的資料源")
         source = body.report.startswith("pds:")
         if source and not is_admin(user):
             raise HTTPException(403, "資料源的萃取更新只有站台管理員可以排程")
@@ -482,7 +482,7 @@ def schedule_router(
                     schedule=body.schedule,
                     refresh=body.refresh,
                     target_kind="workbook",
-                    target_name=report.ir.workbook.name,
+                    target_name=report.label,
                     report=body.report,
                     priority=body.priority,
                 )
@@ -683,14 +683,14 @@ def schedule_router(
                 data.subscriptions.append(
                     Subscription(
                         id=sub_id,
-                        subject=body.subject.strip() or (body.view or report.ir.workbook.name),
+                        subject=body.subject.strip() or (body.view or report.label),
                         message=body.message or None,
                         user=target.name,
                         user_domain=target.domain,
                         schedule=body.schedule,
                         content_kind="view" if body.view is not None else "workbook",
                         report=body.report,
-                        workbook_name=report.ir.workbook.name,
+                        workbook_name=report.label,
                         view=body.view,
                         attach_image=body.attach_image,
                         attach_pdf=body.attach_pdf,

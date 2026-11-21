@@ -2,7 +2,7 @@
 
 - 交叉資料表：工作表的資料表，與檢視器的「資料」相同（別名、數字與日期格式、小計與總計）；Excel 中看起來是
   數字的（千分位、百分比、小數、負數的括號）存成數字並套用相同的格式，可以直接計算
-- 摘要資料：每個標記一列、未格式化的值
+- 摘要資料：每個標記一列、未格式化的值（浮點數去掉加總留下的尾數，見 summary_value）
 - 完整資料：工作表的基礎資料列（套用資料源篩選、列層級權限、工作表的篩選，只含仍在檢視中的標記的資料列）
 
 CSV 為 UTF-8（含 BOM，Excel 直接開啟中文不會亂碼）。
@@ -13,10 +13,13 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import io
+import math
 import re
 from collections.abc import Iterable, Sequence
 from decimal import Decimal
 from typing import Any
+
+from tmig.data.executor import format_value
 
 CSV_TYPE = "text/csv; charset=utf-8"
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -66,6 +69,33 @@ def _plain(value: Any) -> Any:
     if isinstance(value, dt.date):
         return value.isoformat()
     return value
+
+
+SUMMARY_TOLERANCE = 1e-12
+"""摘要資料中浮點數容許的相對誤差：二進位浮點數加總時每一步的捨入會累積，留下的尾數（例如
+909369.9110000005，真正的總和是 909369.911）出現在第 15、16 位有效數字之後，而且隨列數變多往前移；
+相差不到一兆分之一的值視為同一個數字，前 12 位有效數字不受影響。"""
+
+
+def without_float_tail(value: float) -> float:
+    """與 value 相差不到 SUMMARY_TOLERANCE（相對）的十進位數字中位數最少的那一個：去掉二進位浮點數加總
+    留下的尾數（909369.9110000005 → 909369.911、0.30000000000000004 → 0.3）；本來就是這麼多位數的值
+    不變（123456789.1234 仍是 123456789.1234）。"""
+    if value == 0 or not math.isfinite(value):
+        return value
+    for digits in range(1, 17):
+        candidate = float(format(value, f".{digits}g"))
+        if abs(candidate - value) <= SUMMARY_TOLERANCE * abs(value):
+            return candidate
+    return value
+
+
+def summary_value(value: Any) -> str:
+    """摘要資料的一格：未格式化的值（沒有千分位、貨幣符號），但二進位浮點數不把加總留下的尾數寫進檔案
+    （見 without_float_tail）。Decimal（資料庫的定點數）是精確的值，與其他型別一樣原樣寫出。"""
+    if isinstance(value, float):
+        return format_value(without_float_tail(value))
+    return format_value(value)
 
 
 def csv_bytes(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> bytes:
@@ -134,5 +164,6 @@ __all__ = [
     "excel_value",
     "file_name",
     "sheet_title",
+    "summary_value",
     "xlsx_bytes",
 ]

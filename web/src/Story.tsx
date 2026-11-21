@@ -1,7 +1,7 @@
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { DashboardView } from "./Dashboard";
-import { fieldKey, keepMarks, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
+import { fieldKey, keepMarks, pendingTitle, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import type { CaseInfo, Dashboard, FilterValue, IR, Story, StoryPoint, Zone } from "./types";
 import { WorksheetView } from "./WorksheetView";
 
@@ -177,6 +177,7 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView
             <WorksheetView
               workbook={workbook}
               worksheet={worksheet.id}
+              name={pendingTitle(ir, worksheet.id)}
               state={stateFor(ir, worksheet.id, view)}
               selected={view.selections[worksheet.id]}
               onDrill={(key, delta) => setView(setDrill(view, worksheet.id, key, delta))}

@@ -3,7 +3,7 @@ import { request } from "./api";
 import { ScheduleTabs } from "./AdminSchedules";
 import { datasourceApi, type DatasourceItem, PublishDatasourceDialog } from "./Datasources";
 import { ChecklistDialog, ConfirmDialog, PromptDialog } from "./dialogs";
-import { Modal } from "./Server";
+import { formatTime, Modal } from "./Server";
 import type { Me } from "./types";
 
 // 站台管理：Project、報表、使用者、群組與權限（tmig_service.admin）
@@ -261,7 +261,7 @@ export function AdminPage({ me, tab, go }: { me: Me; tab?: string; go: (to: stri
       {site && (
         <p className="hint">
           {site.source ? `匯入自 ${site.source}` : "新建的站台"}
-          {site.updated_at ? `；最後修改 ${site.updated_at.replace("T", " ").slice(0, 16)}` : ""}
+          {site.updated_at ? `；最後修改 ${formatTime(site.updated_at)}` : ""}
         </p>
       )}
       <nav className="tabs" aria-label="站台管理">
@@ -1390,7 +1390,7 @@ function ChangesTab() {
       <table className="admin-table">
         <thead>
           <tr>
-            <th>時間（UTC）</th>
+            <th>時間</th>
             <th>修改的人</th>
             <th>動作</th>
             <th>對象</th>
@@ -1399,7 +1399,7 @@ function ChangesTab() {
         <tbody>
           {changes.map((change, index) => (
             <tr key={index}>
-              <td>{change.time.replace("T", " ").slice(0, 19)}</td>
+              <td>{formatTime(change.time)}</td>
               <td>{change.user}</td>
               <td>
                 {ACTION_NAMES[change.action] ?? change.action}

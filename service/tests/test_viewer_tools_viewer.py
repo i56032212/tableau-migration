@@ -180,3 +180,110 @@ def test_viewer_tools(tmp_path: Path) -> None:
         page.get_by_role("button", name="留言（1）").click()
         expect(page.get_by_label("新增留言")).to_have_count(0)
         browser.close()
+
+
+def test_published_name_local_time_and_saved_view_name(tmp_path: Path) -> None:
+    """發布的名稱出現在首頁、搜尋與檢視器的標題列（稽核 A11）；留言的時間以檢視者電腦的時區顯示
+    （C19：原本是不標示的 UTC）；剛儲存的自訂檢視的名稱立刻出現在工具列（C14：原本要重新整理）。"""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    from playwright.sync_api import expect, sync_playwright
+
+    from tmig.package import write_package
+    from tmig.verify.run import ensure_data, load_fixture_ir
+
+    fixtures = tmp_path / "fixtures"
+    target = fixtures / "superstore_demo"
+    target.mkdir(parents=True)
+    for name in ("golden.ir.json", "cases.yaml"):
+        shutil.copy(DEMO / name, target / name)
+    shutil.copytree(DEMO / "data", target / "data")
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(DEMO / "superstore_demo.twbx", work / "demo.twbx")
+    packed = load_fixture_ir(work)
+    ensure_data(work, packed)
+    package = tmp_path / "demo.tmigx"
+    write_package(package, packed, work)
+    settings = AuthSettings(
+        mode="dev",
+        directory=Directory.model_validate(DIRECTORY),
+        permissions=Permissions.model_validate(PERMISSIONS),
+    )
+    store = ReportStore(tmp_path / "store")
+    loaded = "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+    with (
+        running_server(
+            fixtures, DIST, auth=settings, usage_dir=tmp_path / "usage", store=store
+        ) as url,
+        sync_playwright() as p,
+    ):
+        browser = p.chromium.launch()
+        # 檢視者的電腦在台北（UTC+8）：伺服器記的是 UTC
+        context = browser.new_context(
+            viewport={"width": 1400, "height": 1000}, timezone_id="Asia/Taipei", locale="zh-TW"
+        )
+        page = context.new_page()
+        page.goto(f"{url}/")
+        with page.expect_navigation():
+            page.select_option("select[aria-label='切換使用者']", "amy")
+
+        # 同一個檔案發布成兩份不同名稱的報表
+        ids: dict[str, str] = {}
+        for name in ("季度銷售", "華北週報"):
+            published = page.request.post(
+                f"{url}/api/reports/publish",
+                params={"name": name, "project": "default"},
+                data=package.read_bytes(),
+                headers={"Content-Type": "application/vnd.tmig.tmigx"},
+            )
+            assert published.ok, published.text()
+            ids[name] = published.json()["report"]["id"]
+        page.goto(f"{url}/")
+        names = page.locator(".workbooks .wb-name")
+        expect(names).to_have_text(["季度銷售", "華北週報", "superstore_demo"])
+        page.get_by_label("搜尋報表").fill("華北")
+        expect(names).to_have_text(["華北週報"])
+        page.get_by_label("搜尋報表").fill("")
+        page.goto(f"{url}/w/{ids['季度銷售']}")
+        page.wait_for_function(loaded)
+        expect(page.locator(".toolbar .wb")).to_have_text("季度銷售")
+        # 我的最愛與最近檢視也是發布的名稱
+        page.get_by_role("button", name="☆ 我的最愛").click()
+        expect(page.get_by_role("button", name="★ 我的最愛")).to_be_visible()
+        page.goto(f"{url}/")
+        expect(page.get_by_role("region", name="我的最愛")).to_contain_text("季度銷售／銷售總覽")
+        expect(page.get_by_role("region", name="最近檢視")).to_contain_text("季度銷售／銷售總覽")
+
+        # carol（可以留言、可以存自訂檢視）
+        with page.expect_navigation():
+            page.select_option(".userbar select", "carol")
+        page.goto(f"{url}/w/superstore_demo/d/{BOARD}")
+        page.wait_for_function(loaded)
+        page.get_by_role("button", name="留言").click()
+        page.get_by_label("新增留言").fill("時間是當地時間")
+        page.get_by_role("button", name="送出").click()
+        stamp = page.locator(".comments li time")
+        expect(stamp).to_have_count(1)
+        comments = page.request.get(
+            f"{url}/api/workbooks/superstore_demo/views/{BOARD}/comments"
+        ).json()["comments"]
+        created = dt.datetime.fromisoformat(comments[0]["created_at"])
+        assert created.utcoffset() == dt.timedelta(0)  # 伺服器記的是 UTC
+        local = created.astimezone(ZoneInfo("Asia/Taipei"))
+        expected = f"{local.year}/{local.month}/{local.day} {local:%H:%M:%S}"
+        expect(stamp).to_have_text(expected)
+        assert stamp.get_attribute("datetime") == comments[0]["created_at"]
+        assert f"{created:%H:%M}" not in (stamp.text_content() or "")  # 不是 UTC 的時刻
+        page.get_by_role("dialog", name="留言").get_by_role("button", name="關閉").last.click()
+
+        # 存成自訂檢視：工具列立刻顯示名稱
+        expect(page.locator(".custom-view-name")).to_have_count(0)
+        page.get_by_role("button", name="自訂檢視").click()
+        page.get_by_role("button", name="儲存目前的檢視…").click()
+        page.get_by_label("自訂檢視的名稱").fill("我的檢視")
+        page.get_by_role("dialog", name="儲存自訂檢視").get_by_role("button", name="儲存").click()
+        expect(page.locator("tr[data-custom-view]")).to_contain_text("我的檢視")
+        expect(page.locator(".custom-view-name")).to_have_text("自訂檢視：我的檢視")
+        browser.close()

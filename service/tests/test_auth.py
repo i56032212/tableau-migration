@@ -526,3 +526,21 @@ def test_example_config_loads(config_dir: Path, monkeypatch: pytest.MonkeyPatch)
     assert settings.mode == "oidc" and settings.strip_domain
     assert settings.oidc is not None and settings.oidc.username_claim == "preferred_username"
     assert settings.permissions is not None
+
+
+def test_me_tells_an_unknown_account_from_no_login(fixtures: Path) -> None:
+    """反向代理已經驗證過身分、但帳號不在使用者目錄中：/api/me 回傳原因（denied），檢視器據此說明帳號沒有
+    權限；沒有帶帳號的請求（沒有經過登入入口）沒有 denied（稽核 A3：兩種情形都顯示「沒有登入者」）。"""
+    client = proxy_client(fixtures, "10.1.2.3")
+    unknown = client.get("/api/me", headers={"X-Forwarded-User": "zed"}).json()
+    assert unknown["mode"] == "proxy" and unknown["user"] is None
+    assert unknown["denied"] == "帳號 zed 不在使用者目錄中（Tableau Server 的使用者）"
+    assert client.get("/api/me").json() == {"mode": "proxy", "user": None}
+    known = client.get("/api/me", headers={"X-Forwarded-User": "alice"}).json()
+    assert known["user"]["username"] == "alice" and "denied" not in known
+    # 不是經由信任的反向代理：同樣是沒有登入，不透露帳號是否存在
+    outside = proxy_client(fixtures, "192.168.1.5")
+    assert outside.get("/api/me", headers={"X-Forwarded-User": "zed"}).json() == {
+        "mode": "proxy",
+        "user": None,
+    }

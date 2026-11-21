@@ -21,6 +21,8 @@ import type {
 
 type Go = (to: string) => void;
 
+/** 伺服器記下的時間（ISO 格式、UTC）→ 檢視者電腦的當地時間（與 Tableau Server 相同，時間以使用者的時區顯示）。
+ * 畫面上的時間都經過這裡，不直接顯示伺服器的 UTC 字串。 */
 export function formatTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("zh-TW", { hour12: false });

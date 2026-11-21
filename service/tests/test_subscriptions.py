@@ -32,6 +32,7 @@ from tmig_service.subscriptions import (
     SubscriptionError,
     SubscriptionHandler,
     load_mail,
+    subscription_views,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -506,3 +507,69 @@ def test_cli_store_mode_renders_published_report(
     runs = ScheduleStore(store).runs()
     assert runs[0]["status"] == "failed" and "沒有 email" in runs[0]["detail"]
     assert ScheduleStore(store).data().subscriptions[1].consecutive_failures == 1
+
+
+def pdf_text(pdf: bytes) -> tuple[int, tuple[float, float], str]:
+    """PDF 的頁數、第一頁的寬高（點）與文字。Chromium 不會把頁面以外（被裁掉）的內容寫進 PDF，
+    所以文字裡有沒有某個區塊就是它有沒有印出來。"""
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(pdf))
+    page = reader.pages[0]
+    size = (float(page.mediabox.width), float(page.mediabox.height))
+    return len(reader.pages), size, page.extract_text()
+
+
+@pytest.mark.parametrize("landscape", [False, True])
+def test_pdf_fits_the_page_and_shows_only_the_view(
+    fixtures: Path, handler: SubscriptionHandler, landscape: bool
+) -> None:
+    """訂閱的 PDF（稽核 G6）：dashboard（1000×700）比 A4 直向的頁面寬，縮放到一頁之內——原本照畫面的
+    大小印，右邊五分之一（篩選控制項與圖例那一欄）被裁掉，橫向時多出第二頁；也不印檢視器的介面
+    （每張工作表的「N 列」「資料」與切入的連結）。"""
+    views = subscription_views(Catalog.load(fixtures).reports[0], None)
+    (item,) = handler.renderer.render(
+        "dave", views, png=True, pdf=True, paper="A4", landscape=landscape
+    )
+    assert item.pdf is not None and item.png is not None
+    pages, (width, height), text = pdf_text(item.pdf)
+    assert pages == 1
+    a4 = (841.9, 595.3) if landscape else (595.3, 841.9)
+    assert (width, height) == pytest.approx(a4, abs=2)
+    # 最右邊那一欄的控制項與圖例都在頁面裡
+    assert "Segment" in text and "Technology" in text and "Sub-Category Profit" in text
+    # 不印檢視器的介面
+    assert "資料" not in text and " 列" not in text and "⊞" not in text
+
+
+def test_mail_has_a_date_header(smtp: MailSettings) -> None:
+    """寄出的信有 Date 標頭（RFC 5322 規定必要；smtplib 不會代填。稽核 G5）：訂閱、警示與通知都經過
+    send_message。已經有 Date 的信不改。"""
+    from email.message import EmailMessage
+    from email.utils import parsedate_to_datetime
+
+    from tmig_service.subscriptions import send_message
+
+    message = EmailMessage()
+    message["Subject"] = "測試"
+    message["From"] = smtp.sender
+    message["To"] = "alice@example.com"
+    message.set_content("內容\n")
+    before = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    send_message(message, smtp)
+    ((_, raw),) = SmtpHandler.messages
+    received = email.message_from_bytes(raw, policy=email.policy.default)
+    assert len(received.get_all("Date", [])) == 1
+    sent_at = parsedate_to_datetime(received["Date"])
+    assert sent_at.tzinfo is not None  # 含時區
+    assert before <= sent_at <= dt.datetime.now(dt.UTC) + dt.timedelta(seconds=1)
+
+    dated = EmailMessage()
+    dated["Subject"] = "測試"
+    dated["From"] = smtp.sender
+    dated["To"] = "alice@example.com"
+    dated["Date"] = "Mon, 02 Nov 2026 08:00:00 +0800"
+    dated.set_content("內容\n")
+    send_message(dated, smtp)
+    again = email.message_from_bytes(SmtpHandler.messages[-1][1], policy=email.policy.default)
+    assert again.get_all("Date") == ["Mon, 02 Nov 2026 08:00:00 +0800"]

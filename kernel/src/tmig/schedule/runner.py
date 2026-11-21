@@ -127,7 +127,7 @@ def plan_jobs(schedules: ScheduleFile, catalog: Catalog) -> list[Job]:
             if report is not None:
                 job.targets = [Target(report, ds) for ds in report.extract_datasources()]
                 if not job.targets:
-                    job.problem = f"報表「{report.name}」沒有萃取型的資料源"
+                    job.problem = f"報表「{report.label}」沒有萃取型的資料源"
         else:
             job.targets = [
                 Target(report, ds)
@@ -161,7 +161,7 @@ def plan_jobs(schedules: ScheduleFile, catalog: Catalog) -> list[Job]:
             job.problem = f"找不到對應的報表（{sub.report or sub.workbook or sub.workbook_name}）"
         elif sub.content_kind == "view":
             if not any(v == sub.view for v in _view_names(report)):
-                job.problem = f"報表「{report.name}」沒有 view「{sub.view}」"
+                job.problem = f"報表「{report.label}」沒有 view「{sub.view}」"
             else:
                 job.targets = [Target(report, view=sub.view)]
         else:

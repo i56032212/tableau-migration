@@ -2957,7 +2957,44 @@ def build_spec(
         spec["config"] = {**spec["config"], "view": view}
     spec["usermeta"]["fit"] = ws.fit
     apply_fit(spec, ws.fit)
+    if marks_count == 0 and not any(pane_values.values()) and map_plan is None:
+        # 沒有任何標記（例如篩選之後沒有資料）：空白的檢視，不畫沒有刻度可言的座標軸（「0.000000」）
+        spec = _blank(spec)
     return RenderResult(spec, marks_count, mark, None, builder.notes)
+
+
+BLANK_META = (
+    "worksheet",
+    "name",
+    "rows",
+    "mark",
+    "dimensions",
+    "measures",
+    "background",
+    "text_color",
+    "title_color",
+    "title_font",
+    "title_background",
+    "fit",
+)
+"""空白的檢視保留的 usermeta：檢視器辨識工作表、畫標題與背景用的；與座標軸、標記有關的都不留。"""
+
+
+def _blank(spec: dict[str, Any]) -> dict[str, Any]:
+    """沒有標記的檢視：什麼都不畫（沒有座標軸、表頭、格線與參考線），工作表的背景與標題的格式不變。"""
+    blank: dict[str, Any] = {
+        "$schema": spec["$schema"],
+        "usermeta": {k: v for k, v in spec["usermeta"].items() if k in BLANK_META},
+        "data": {"values": []},
+        "width": "container",
+        "height": "container",
+        "autosize": {"type": "fit", "contains": "padding"},
+        "config": spec["config"],
+        "mark": {"type": "point"},
+    }
+    if "background" in spec:
+        blank["background"] = spec["background"]
+    return blank
 
 
 def apply_fit(spec: dict[str, Any], fit: str) -> None:
@@ -5547,6 +5584,7 @@ def _config(ws: Worksheet) -> dict[str, Any]:
         "view": {"stroke": None},
         "axis": {
             "labelLimit": 160,
+            "labelSeparation": LABEL_SEPARATION,
             **label.axis("label"),
             **base.axis("title"),
             **colors,
@@ -5560,6 +5598,9 @@ def _config(ws: Worksheet) -> dict[str, Any]:
     }
 
 
+LABEL_SEPARATION = 4
+"""連續座標軸上相鄰的刻度文字至少相隔的像素（約一個空白字元）：不到時 Vega 每隔一個省略。Vega 的預設是 0，
+兩個文字只差 0.02 像素也都留著，看起來連成一串（「90,000100,000」）。"""
 GRID_COLOR = "#f0f0f0"
 """格線的顏色（Tableau 的預設，依畫面量測）。"""
 RULER_COLOR = "#f4f4f4"

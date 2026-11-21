@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "./api";
 import { ConfirmDialog } from "./dialogs";
 import { saveFile } from "./exporter";
-import { Modal } from "./Server";
+import { formatTime, Modal } from "./Server";
 import { stateFor, type ViewState } from "./state";
 import type { IR, Zone } from "./types";
 import {
@@ -253,11 +253,14 @@ export function CustomViewsButton({
   view,
   state,
   onApply,
+  onSaved,
 }: {
   workbook: string;
   view: string;
   state: ViewState;
   onApply: (state: ViewState | null, name: string | null) => void;
+  /** 目前的檢視剛存成自訂檢視：畫面沒有變，但現在看的就是這個自訂檢視（工具列顯示它的名稱） */
+  onSaved?: (name: string) => void;
 }) {
   const [data, setData] = useState<{ views: CustomViewItem[]; default: string | null; can_share: boolean } | null>(
     null,
@@ -396,9 +399,13 @@ export function CustomViewsButton({
         <SaveViewDialog
           canShare={data.can_share}
           onClose={() => setSaving(false)}
-          onSave={(name, isPublic, makeDefault) =>
-            run(() => viewerApi.saveView(workbook, view, { name, state, public: isPublic, make_default: makeDefault }))
-          }
+          onSave={async (name, isPublic, makeDefault) => {
+            const saved = await run(() =>
+              viewerApi.saveView(workbook, view, { name, state, public: isPublic, make_default: makeDefault }),
+            );
+            if (saved) onSaved?.(name);
+            return saved;
+          }}
         />
       )}
       {removing && (
@@ -488,7 +495,10 @@ export function CommentsButton({ workbook, view }: { workbook: string; view: str
             {data.comments.map((c) => (
               <li key={c.id}>
                 <div className="comment-meta">
-                  <strong>{c.user}</strong> <span className="hint">{c.created_at.replace("T", " ").slice(0, 16)}</span>
+                  <strong>{c.user}</strong>{" "}
+                  <time className="hint" dateTime={c.created_at}>
+                    {formatTime(c.created_at)}
+                  </time>
                   {c.can_delete && (
                     <button
                       type="button"

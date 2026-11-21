@@ -124,10 +124,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .map-tools button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .select-overlay { position: absolute; inset: 0; z-index: 1; cursor: crosshair; }
 .select-overlay svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.select-overlay.passive { pointer-events: none; cursor: default; }
+.box-selecting .viz-tooltip, .box-selecting .vg-tooltip { display: none !important; }
 .select-overlay rect, .select-overlay circle, .select-overlay polygon { fill: rgba(31, 119, 180, 0.12); stroke: #1f77b4; stroke-width: 1; stroke-dasharray: 4 3; }
 .chart[data-zoomable="true"] { cursor: grab; }
 .chart[data-zoomable="true"]:active { cursor: grabbing; }
 .chart, .chart > .vega-embed { width: 100%; height: 100%; }
+/* 圖表裡的文字（座標軸、標題、標籤）不是可以選取的文字：拖曳是框選標記或平移地圖 */
+.chart { -webkit-user-select: none; user-select: none; }
 .chart[data-scroll="y"] { overflow-y: auto; overflow-x: hidden; }
 .chart[data-scroll="x"] { overflow-x: auto; overflow-y: hidden; }
 .chart[data-scroll="both"] { overflow: auto; }
@@ -173,7 +177,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .control .dropdown { display: flex; justify-content: space-between; align-items: center; gap: 6px; width: 100%; border: 1px solid var(--line); background: var(--panel); padding: 3px 6px; cursor: pointer; text-align: left; }
 .control .summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .control .options { display: flex; flex-direction: column; gap: 2px; overflow: auto; }
-.control .options.floating { position: relative; z-index: 2; max-height: 220px; background: var(--panel); border: 1px solid var(--line); padding: 4px 6px; }
+/* 多選下拉的選單：浮在 dashboard 上面（視窗座標，位置由 Controls.tsx 依按鈕決定），不被篩選區塊裁切 */
+.control .options.floating { position: fixed; z-index: 30; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); padding: 4px 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14); }
 .control label { display: flex; align-items: center; gap: 6px; }
 
 .legend { font-family: var(--tableau-font); font-size: 12px; color: #555555; padding: 2px 4px; display: flex; flex-direction: column; gap: 3px; overflow: auto; height: 100%; }
@@ -210,11 +215,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 相對日期與條件篩選：唯讀顯示 */
 .control .fixed-filter { padding: 3px 6px; border: 1px dashed var(--line); color: var(--ink); font-size: 13px; }
 
-/* 匯出 PDF 按鈕以瀏覽器列印：只印 dashboard */
+/* 列印（「匯出＞PDF」、dashboard 的匯出 PDF 按鈕、訂閱的 PDF）：只印檢視本身。檢視器的介面——工具列、動作選單、
+   每張工作表右上角的列數、「資料」切換、切入的連結與選取的提示、地圖工具列、工具提示、框選的方框——都不印；
+   頁面的底色（:root 的灰色）也不印 */
 @media print {
-  .toolbar, .action-menu, .dashboard-button { display: none !important; }
-  body { background: #fff; }
+  .toolbar, .action-menu, .dashboard-button, .worksheet-meta, .worksheet-overlay, .map-tools, .viz-tooltip, .select-overlay, .presentation-bar { display: none !important; }
+  :root, body { background: #fff; }
 }
+/* 訂閱與資料警示擷取畫面時（tmig_service.subscriptions 在 <html> 加上 capture）：圖片裡同樣不畫檢視器的介面 */
+.capture .worksheet-meta, .capture .worksheet-overlay, .capture .map-tools { display: none !important; }
 
 .story { display: inline-flex; flex-direction: column; gap: 8px; }
 .story-title { font-size: 20px; font-weight: 600; padding: 2px 4px; }

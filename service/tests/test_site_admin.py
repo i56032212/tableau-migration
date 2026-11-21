@@ -293,3 +293,106 @@ def test_site_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fresh = tmp_path / "fresh"
     assert main(["site", "init", "--store", str(fresh), "--admin", "root"]) == 0
     assert SiteStore(fresh).data().users[0].site_role == "SiteAdministratorCreator"
+
+
+def test_published_name_is_the_name_shown_everywhere(tmp_path: Path, package: Path) -> None:
+    """發布時填的名稱就是報表在伺服器上的名稱（稽核 A11：同一個檔案發布成三份，首頁全叫檔案裡的名稱、
+    分不出來，也搜尋不到）：報表清單、檢視器的標題、我的最愛、最近檢視、使用統計與訂閱都用它；
+    在站台管理改名之後跟著改。報表庫中存的 IR 不變。"""
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    settings = AuthSettings(
+        mode="dev",
+        directory=Directory.model_validate(DIRECTORY),
+        permissions=Permissions.model_validate(PERMISSIONS),
+    )
+    store = ReportStore(tmp_path / "store")
+    app = create_app(
+        fixtures, tmp_path / "no-web", auth=settings, usage_dir=tmp_path / "usage", store=store
+    )
+    amy = login(app, "amy")
+    ids: dict[str, str] = {}
+    for name in ("季度銷售", "華北週報"):
+        published = amy.post(
+            "/api/reports/publish",
+            params={"name": name, "project": "default"},
+            content=package.read_bytes(),
+            headers={"Content-Type": "application/vnd.tmig.tmigx"},
+        )
+        assert published.status_code == 200, published.text
+        ids[name] = published.json()["report"]["id"]
+
+    def inside(report_id: str) -> str:
+        """報表庫中存的 IR 裡的名稱（報表檔的名稱）。"""
+        record = store.get(report_id)
+        assert record is not None
+        return load_fixture_ir(store.directory(record)).workbook.name
+
+    assert {inside(i) for i in ids.values()} == {"superstore_demo"}  # 兩份是同一個檔案
+
+    def listed() -> dict[str, str]:
+        return {w["id"]: w["name"] for w in amy.get("/api/workbooks").json()}
+
+    assert listed() == {ids["季度銷售"]: "季度銷售", ids["華北週報"]: "華北週報"}
+    report = ids["季度銷售"]
+    ir = amy.get(f"/api/workbooks/{report}/ir").json()
+    assert ir["workbook"]["name"] == "季度銷售"  # 檢視器的標題列
+    board = ir["dashboards"][0]["id"]
+
+    # 我的最愛、最近檢視、使用統計
+    favorites = amy.put("/api/favorites", json={"report": report, "view": board}).json()
+    assert [f["report_name"] for f in favorites] == ["季度銷售"]
+    assert amy.post(f"/api/workbooks/{report}/views/{board}/visit").status_code == 204
+    assert [r["report_name"] for r in amy.get("/api/recents").json()] == ["季度銷售"]
+    usage = {u["workbook"]: u["name"] for u in amy.get("/api/usage").json()["workbooks"]}
+    assert usage == {report: "季度銷售", ids["華北週報"]: "華北週報"}
+
+    # 訂閱：預設的主旨與「我的訂閱」中的報表名稱
+    amy.patch("/api/admin/schedule-settings", json={"timezone": "Asia/Taipei"})
+    schedule = amy.post(
+        "/api/admin/schedules",
+        json={
+            "name": "每週一",
+            "kind": "Subscription",
+            "frequency": {"kind": "weekly", "start": "08:00:00", "weekdays": ["Monday"]},
+        },
+    ).json()
+    created = amy.post(
+        "/api/subscriptions", json={"report": report, "view": None, "schedule": schedule["id"]}
+    )
+    assert created.status_code == 201, created.text
+    mine = created.json()["subscriptions"][0]
+    assert (mine["report_name"], mine["subject"]) == ("季度銷售", "季度銷售")
+
+    # 管理員改名：下一個請求就是新的名稱
+    renamed = amy.patch(f"/api/admin/reports/{report}", json={"name": "季度銷售（新）"})
+    assert renamed.status_code == 200, renamed.text
+    assert listed()[report] == "季度銷售（新）"
+    assert amy.get(f"/api/workbooks/{report}/ir").json()["workbook"]["name"] == "季度銷售（新）"
+    assert [f["report_name"] for f in amy.get("/api/favorites").json()] == ["季度銷售（新）"]
+    subscriptions = amy.get("/api/subscriptions").json()["subscriptions"]
+    assert [s["report_name"] for s in subscriptions] == ["季度銷售（新）"]
+    # 報表庫中的 IR 仍是原本的名稱（下載的套件與發布的相同）
+    assert inside(report) == "superstore_demo"
+
+
+def test_user_email_must_look_like_an_address(tmp_path: Path) -> None:
+    """新增或修改使用者時，不像信箱的 email 不接受（稽核 H1：not-an-email 被接受；訂閱與警示的信寄不出去）。"""
+    amy = login(make_app(tmp_path), "amy")
+    for bad in ("not-an-email", "a@", "@example.com", "a b@example.com", "a@b@example.com"):
+        rejected = amy.post("/api/admin/users", json={"name": "dave", "email": bad})
+        assert rejected.status_code == 422, bad
+        assert "email" in rejected.json()["detail"] and "格式不正確" in rejected.json()["detail"]
+    assert all(u["name"] != "dave" for u in amy.get("/api/admin/site").json()["users"])
+    created = amy.post("/api/admin/users", json={"name": "dave", "email": " dave@example.com "})
+    assert created.status_code == 201 and created.json()["email"] == "dave@example.com"
+    # 公司內部沒有點的網域也接受；空字串是沒有 email
+    internal = amy.post("/api/admin/users", json={"name": "erin", "email": "erin@mailhost"})
+    assert internal.status_code == 201 and internal.json()["email"] == "erin@mailhost"
+    assert amy.post("/api/admin/users", json={"name": "fay", "email": ""}).json()["email"] is None
+    changed = amy.patch("/api/admin/users/dave", json={"email": "not-an-email"})
+    assert changed.status_code == 422 and "格式不正確" in changed.json()["detail"]
+    assert amy.patch("/api/admin/users/dave", json={"email": "d@example.com"}).json()["email"] == (
+        "d@example.com"
+    )
+    assert amy.patch("/api/admin/users/dave", json={"email": ""}).json()["email"] is None

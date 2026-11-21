@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import type React from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import {
   currentFilter,
@@ -119,6 +120,56 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
   // 顯示套用按鈕：勾選先記在草稿，按「套用」才送出；搜尋：只列出名稱包含輸入文字的成員
   const [draft, setDraft] = useState<FilterValue | null>(null);
   const [search, setSearch] = useState("");
+  // 多選下拉的選單浮在 dashboard 上面（與 Tableau 相同），不受篩選區塊的大小限制：以視窗座標定位在按鈕
+  // 下方（下方放不下時往上開），捲動或視窗大小改變時跟著按鈕；點別的地方或按 Esc 收起來
+  const dropdown = control === "multi_dropdown";
+  const fieldRef = useRef<HTMLFieldSetElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [popup, setPopup] = useState<React.CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    if (!dropdown || !open) {
+      setPopup(null);
+      return;
+    }
+    const place = (event?: Event) => {
+      const button = buttonRef.current;
+      // 選單自己的捲動不必重新定位
+      if (!button || (event?.target instanceof Node && fieldRef.current?.contains(event.target))) return;
+      const rect = button.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom - POPUP_MARGIN;
+      const above = rect.top - POPUP_MARGIN;
+      const up = below < POPUP_ROOM && above > below;
+      setPopup({
+        left: rect.left,
+        minWidth: rect.width,
+        maxWidth: Math.max(rect.width, POPUP_WIDTH),
+        maxHeight: Math.max(POPUP_LEAST, Math.min(POPUP_HEIGHT, up ? above : below)),
+        ...(up ? { bottom: window.innerHeight - rect.top + 1 } : { top: rect.bottom + 1 }),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [dropdown, open]);
+  useEffect(() => {
+    if (!dropdown || !open) return;
+    const outside = (event: MouseEvent) => {
+      if (event.target instanceof Node && !fieldRef.current?.contains(event.target)) setOpen(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", key);
+    };
+  }, [dropdown, open]);
   useEffect(() => {
     let cancelled = false;
     api
@@ -233,16 +284,20 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
   const term = search.trim().toLowerCase();
   const listed = searchable && term ? domain.filter((v) => label(v).toLowerCase().includes(term)) : domain;
   return (
-    <fieldset className="control" data-control={control}>
+    <fieldset className="control" data-control={control} ref={fieldRef}>
       <legend>{title}</legend>
-      {control === "multi_dropdown" && (
-        <button type="button" className="dropdown" onClick={() => setOpen(!open)} aria-expanded={open}>
+      {dropdown && (
+        <button type="button" className="dropdown" onClick={() => setOpen(!open)} aria-expanded={open} ref={buttonRef}>
           <span className="summary">{summary}</span>
           <span aria-hidden>▾</span>
         </button>
       )}
       {open && (
-        <div className={control === "multi_dropdown" ? "options floating" : "options"}>
+        <div
+          className={dropdown ? "options floating" : "options"}
+          // 位置在版面完成後才知道：之前先不顯示，避免閃一下
+          style={dropdown ? (popup ?? { visibility: "hidden" }) : undefined}
+        >
           {searchable && <input type="search" className="control-search" aria-label={`搜尋 ${title}`} placeholder="搜尋" value={search} onChange={(e) => setSearch(e.target.value)} />}
           {options.show_exclude === true && (
             <label className="control-exclude" title="勾選的值改為排除">
@@ -311,6 +366,13 @@ function SelectionControl({ ir, workbook, zone, state, onChange, query }: Filter
 
 /** 成員超過這個數目的多選清單顯示搜尋的輸入框。 */
 const SEARCH_FROM = 10;
+/** 多選下拉的選單：最高的高度、最窄時可以放寬到的寬度、與視窗邊緣的距離（像素）。 */
+const POPUP_HEIGHT = 320;
+const POPUP_WIDTH = 240;
+const POPUP_MARGIN = 8;
+/** 按鈕下方不到這個高度、而上方比較寬敞時往上開；再怎麼擠也至少這麼高（可以捲動）。 */
+const POPUP_ROOM = 160;
+const POPUP_LEAST = 60;
 
 /**
  * 集合控制項（Tableau 2020.2 的「顯示集合」）：列出集合所在維度的值，勾選的是集合的成員；改變後使用這個集合的

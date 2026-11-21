@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Modal } from "./Server";
 
 export interface PageSetup {
-  paper: keyof typeof PAPERS;
+  paper: keyof typeof PAPERS | keyof typeof MORE_PAPERS;
   orientation: "portrait" | "landscape";
   /** 邊界（公釐） */
   margin: number;
@@ -26,6 +26,19 @@ export const PAPERS = {
   Tabloid: [279.4, 431.8],
 } as const;
 
+/** 訂閱可以選、但「頁面設定」對話框沒有列出的紙張（寬、高，公釐，直向） */
+const MORE_PAPERS = {
+  A5: [148, 210],
+  Ledger: [279.4, 431.8],
+} as const;
+
+/** CSS 的 @page size 認得的紙張名稱 */
+const CSS_PAPERS: ReadonlySet<string> = new Set(["A3", "A4", "A5", "Letter", "Legal", "Ledger"]);
+
+function paperSize(name: PageSetup["paper"]): readonly [number, number] {
+  return name in PAPERS ? PAPERS[name as keyof typeof PAPERS] : MORE_PAPERS[name as keyof typeof MORE_PAPERS];
+}
+
 const STORE = "tmig.page-setup";
 const STYLE_ID = "tmig-print-setup";
 const DEFAULTS: PageSetup = { paper: "A4", orientation: "landscape", margin: 10, scaling: "page", percent: 100, title: true, caption: true, legends: true };
@@ -34,7 +47,7 @@ export function loadPageSetup(): PageSetup {
   try {
     const stored = JSON.parse(window.localStorage.getItem(STORE) ?? "null") as Partial<PageSetup> | null;
     const merged = { ...DEFAULTS, ...(stored ?? {}) };
-    return merged.paper in PAPERS ? merged : DEFAULTS;
+    return merged.paper in PAPERS || merged.paper in MORE_PAPERS ? merged : DEFAULTS;
   } catch {
     return DEFAULTS;
   }
@@ -44,7 +57,7 @@ export function loadPageSetup(): PageSetup {
 export function printScale(setup: PageSetup, width: number, height: number): number {
   if (setup.scaling === "auto") return 1;
   if (setup.scaling === "percent") return Math.max(0.1, Math.min(4, setup.percent / 100));
-  const [short, long] = PAPERS[setup.paper];
+  const [short, long] = paperSize(setup.paper);
   const [paperW, paperH] = setup.orientation === "portrait" ? [short, long] : [long, short];
   const px = (mm: number) => ((mm - 2 * setup.margin) * 96) / 25.4;
   const byWidth = px(paperW) / Math.max(width, 1);
@@ -59,8 +72,15 @@ export function printStyles(setup: PageSetup, scale: number): string {
     ...(setup.caption ? [] : [".worksheet-caption"]),
     ...(setup.legends ? [] : [".role-legend", ".zone-legend"]),
   ];
+  // CSS 認得的紙張名稱直接寫；不認得的（Tabloid）寫出寬高，否則整條 @page 規則無效、照預設的紙張印
+  const [short, long] = paperSize(setup.paper);
+  const size = CSS_PAPERS.has(setup.paper)
+    ? `${setup.paper} ${setup.orientation}`
+    : setup.orientation === "portrait"
+      ? `${short}mm ${long}mm`
+      : `${long}mm ${short}mm`;
   return [
-    `@page { size: ${setup.paper} ${setup.orientation}; margin: ${setup.margin}mm; }`,
+    `@page { size: ${size}; margin: ${setup.margin}mm; }`,
     "@media print {",
     "  .page { padding: 0 !important; overflow: visible !important; }",
     `  .page .dashboard, .page .single-sheet, .page .story { zoom: ${scale.toFixed(4)}; }`,
@@ -82,6 +102,28 @@ export function applyPageSetup(setup: PageSetup, element: HTMLElement | null): n
   }
   style.textContent = printStyles(setup, scale);
   return scale;
+}
+
+/** 列印的對象：畫面上的 dashboard、工作表或 Story。 */
+export const PRINT_TARGET = ".page .dashboard, .page .single-sheet, .page .story";
+
+declare global {
+  interface Window {
+    /**
+     * 訂閱的 PDF（tmig_service.subscriptions 以 Chromium 列印畫面）：套用與「頁面設定」相同的列印樣式——
+     * 紙張、方向、邊界與縮放（預設縮放到一頁之內），回傳縮放的比例。沒有這一步時 Chromium 照畫面的大小印，
+     * 比紙寬的 dashboard 右邊會被裁掉。
+     */
+    tmigPageSetup?: (setup: Partial<PageSetup>) => number;
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.tmigPageSetup = (setup) => {
+    const merged = { ...DEFAULTS, ...setup };
+    const known = merged.paper in PAPERS || merged.paper in MORE_PAPERS;
+    return applyPageSetup(known ? merged : { ...merged, paper: DEFAULTS.paper }, document.querySelector<HTMLElement>(PRINT_TARGET));
+  };
 }
 
 export function PageSetupDialog({ target, onClose }: { target: () => HTMLElement | null; onClose: () => void }) {

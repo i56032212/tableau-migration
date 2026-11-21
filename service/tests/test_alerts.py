@@ -316,3 +316,93 @@ def test_scheduler_runs_alert_checks(tmp_path: Path) -> None:
     ]
     runs = schedules.runs()
     assert [r["job"] for r in runs][:2] == ["alert:nope", f"alert:{alert.id}"]
+
+
+def test_moved_reports_are_named_by_the_report_not_the_folder(
+    fixtures: Path, tmp_path: Path
+) -> None:
+    """移轉的報表放在 fixtures 的目錄裡（這裡是 secure，報表本身叫 superstore_demo）：資料警示的信、
+    「我的訂閱」與萃取更新工作列出的報表名稱是報表本身的名稱，不是目錄名稱這個內部的代號
+    （稽核 G7：警示信寫「secure」；G10：我的訂閱寫「secure／銷售總覽」）。"""
+    from tmig_service.schedules import store_reports
+
+    # 排程器（報表庫模式）的報表目錄：警示與失敗通知的信用它的名稱
+    catalog = store_reports(ReportStore(tmp_path / "scheduler"), None, fixtures)
+    report = catalog.report("secure")
+    assert report is not None and (report.name, report.label) == ("secure", "superstore_demo")
+    root = tmp_path / "alerts"
+    site = SiteStore(root)
+    site.initialize(from_exports(None, Directory.model_validate(DIRECTORY)), actor="test")
+    store = AlertStore(root)
+    store.create(
+        {
+            "owner": "carol",
+            "recipients": ["carol"],
+            "report": "secure",
+            "view": BOARD,
+            "worksheet": SHEET,
+            "measure": "sum(f_sales)",
+            "measure_name": "Sales",
+            "condition": "above",
+            "threshold": 100,
+        }
+    )
+    sent: list[EmailMessage] = []
+    checker = AlertChecker(
+        store,
+        site,
+        lambda: catalog,
+        lambda: [],
+        MailSettings(
+            host="smtp.invalid", sender="bi@example.com", site_url="https://bi.example.com"
+        ),
+        evaluate=lambda r, a, u: [("West", 250.0)],
+        send=lambda message, _: sent.append(message),
+    )
+    (record,) = checker([])
+    assert record.status == "ok", record.detail
+    body = sent[0].get_content()
+    assert body.startswith("「superstore_demo」的 Sales 高於 100：")
+    # 連結仍然用報表的 id（網址）
+    assert f"https://bi.example.com/w/secure/d/{BOARD}" in body
+
+    # 查詢服務：我的訂閱與萃取更新工作
+    settings = AuthSettings(mode="dev", directory=Directory.model_validate(DIRECTORY))
+    app = create_app(
+        fixtures, tmp_path / "no-web", auth=settings, store=ReportStore(tmp_path / "store")
+    )
+    amy = login(app, "amy")
+    amy.patch("/api/admin/schedule-settings", json={"timezone": "Asia/Taipei"})
+    weekly = amy.post(
+        "/api/admin/schedules",
+        json={
+            "name": "每週一",
+            "kind": "Subscription",
+            "frequency": {"kind": "weekly", "start": "08:00:00", "weekdays": ["Monday"]},
+        },
+    ).json()
+    daily = amy.post(
+        "/api/admin/schedules",
+        json={
+            "name": "每天",
+            "kind": "Extract",
+            "frequency": {"kind": "daily", "start": "06:00:00"},
+        },
+    ).json()
+    created = amy.post(
+        "/api/subscriptions",
+        json={"report": "secure", "view": IR.dashboards[0].name, "schedule": weekly["id"]},
+    )
+    assert created.status_code == 201, created.text
+    mine = amy.get("/api/subscriptions").json()["subscriptions"]
+    assert [(s["report_id"], s["report_name"]) for s in mine] == [("secure", "superstore_demo")]
+    whole = amy.post(
+        "/api/subscriptions", json={"report": "secure", "view": None, "schedule": weekly["id"]}
+    )
+    assert whole.json()["subscriptions"][0]["subject"] == "superstore_demo"
+    task = amy.post("/api/admin/extract-tasks", json={"report": "secure", "schedule": daily["id"]})
+    assert task.status_code == 201, task.text
+    assert task.json()["targets"] == ["superstore_demo／ds_orders"]
+    assert task.json()["label"] == "萃取更新（完整）：superstore_demo"
+    names = {r["id"]: r["name"] for r in amy.get("/api/admin/schedules").json()["reports"]}
+    assert names == {"secure": "superstore_demo"}

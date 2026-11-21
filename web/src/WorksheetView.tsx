@@ -27,6 +27,11 @@ export interface MarkEvent {
 interface Props {
   workbook: string;
   worksheet: string;
+  /**
+   * 查詢完成之前顯示的標題：工作表的名稱（見 state.ts 的 pendingTitle；自訂標題的工作表要等查詢結果，傳空字串）。
+   * 沒有傳入時查詢完成之前不顯示標題——不顯示工作表的內部代號。
+   */
+  name?: string;
   state: QueryState;
   hideLegend?: boolean;
   showTitle?: boolean;
@@ -99,6 +104,17 @@ interface PinActions {
   onKeep: (mode: "keep" | "exclude") => void;
   onCategory: (key: string, value: Scalar) => void;
 }
+
+/** Vega 場景圖的項目（畫好的 SVG 元素的 __data__）：只列出選取時用到的欄位 */
+interface SceneItem {
+  datum?: { __row?: unknown };
+  x?: number;
+  y?: number;
+  mark?: { marktype?: string; items?: SceneItem[] };
+}
+
+/** 框選：拖曳超過這個距離（像素）才算拖曳，否則仍是點選 */
+const BOX_THRESHOLD = 4;
 
 type SelectTool = "rect" | "radius" | "lasso";
 /** 地圖工具列的選取工具（Tableau 地圖工具列的矩形、半徑與套索選取） */
@@ -800,6 +816,7 @@ function sizeConcat(spec: Record<string, any>, width: number, height: number) {
 export function WorksheetView({
   workbook,
   worksheet,
+  name,
   state,
   hideLegend,
   showTitle = true,
@@ -819,6 +836,8 @@ export function WorksheetView({
   onAnnotationMove,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
+  /** 剛框選完（放開滑鼠後瀏覽器還會送出 click，那不是點選標記） */
+  const boxSelected = useRef(false);
   const onAnnotationMoveRef = useRef(onAnnotationMove);
   onAnnotationMoveRef.current = onAnnotationMove;
   const movable = onAnnotationMove !== undefined;
@@ -1080,8 +1099,8 @@ export function WorksheetView({
           });
         };
         result.view.addEventListener("click", (event: any, item: any) => {
-          if (moved) {
-            // 拖曳平移之後放開滑鼠：不是點選
+          if (moved || boxSelected.current) {
+            // 拖曳平移或框選之後放開滑鼠：不是點選
             moved = false;
             return;
           }
@@ -1131,6 +1150,49 @@ export function WorksheetView({
   const [tool, setTool] = useState<SelectTool | null>(null);
   const [region, setRegion] = useState<[number, number][] | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  /**
+   * 選取範圍內的標記（地圖的選取工具與一般圖表的框選共用）：hit 判斷畫好的一個標記在不在範圍內；
+   * 選取的標記與點選相同，回報給呼叫端（篩選動作等）並釘住工具提示（只保留、排除）。
+   * previous：按住 Ctrl／⌘／Shift 框選時原本選取的標記，新的加在後面。
+   */
+  const selectMarks = (hit: (box: DOMRect) => boolean, end: [number, number], previous: Mark[] = []) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const { records, dimensions } = tipData.current;
+    const marks: Mark[] = [...previous];
+    const add = (row: unknown) => {
+      if (typeof row !== "number" || row < 0 || !records[row]) return;
+      const mark = markOf(records[row], dimensions);
+      if (Object.keys(mark).length > 0 && !marks.some((m) => sameMark(m, mark))) marks.push(mark);
+    };
+    // Vega 的 SVG 元素帶著場景圖的項目（__data__）；固定標題的複本沒有，不會重複計算
+    chart.querySelectorAll<SVGGraphicsElement>("svg .role-mark > *").forEach((node) => {
+      const item = (node as unknown as { __data__?: SceneItem }).__data__;
+      const series = item?.mark?.marktype;
+      if (item && (series === "line" || series === "area" || series === "trail")) {
+        // 折線與區域是一整條路徑：逐點判斷（各點在路徑自己的座標系，換算成視窗座標）
+        const matrix = node.getScreenCTM();
+        if (!matrix) return;
+        for (const point of item.mark?.items ?? []) {
+          if (typeof point.x !== "number" || typeof point.y !== "number") continue;
+          const x = matrix.a * point.x + matrix.c * point.y + matrix.e;
+          const y = matrix.b * point.x + matrix.d * point.y + matrix.f;
+          if (hit(new DOMRect(x, y, 0, 0))) add(point.datum?.__row);
+        }
+        return;
+      }
+      const box = node.getBoundingClientRect();
+      if (box.width === 0 && box.height === 0) return;
+      if (hit(box)) add(item?.datum?.__row);
+    });
+    const pinnable = tipData.current.commands || tipData.current.select;
+    setPin(
+      marks.length > 0 && pinnable
+        ? { tip: { x: end[0], y: end[1], value: { 選取: `${marks.length} 個標記` }, mark: null, rich: null }, marks }
+        : null,
+    );
+    onMarksRef.current?.({ kind: "click", mark: marks[0] ?? null, marks, additive: false, x: end[0], y: end[1] });
+  };
   const startSelection = (event: React.MouseEvent<HTMLDivElement>) => {
     const body = bodyRef.current;
     const chart = chartRef.current;
@@ -1150,25 +1212,56 @@ export function WorksheetView({
       setRegion(null);
       const end: [number, number] = [e.clientX, e.clientY];
       const inside = regionTest(tool, tool === "lasso" ? path : [start, end]);
-      const { records, dimensions } = tipData.current;
-      const marks: Mark[] = [];
-      // Vega 的 SVG 元素帶著場景圖的項目（__data__）；固定標題的複本沒有，不會重複計算
-      chart.querySelectorAll<SVGGraphicsElement>("svg .role-mark > *").forEach((node) => {
-        const row = (node as unknown as { __data__?: { datum?: { __row?: unknown } } }).__data__?.datum?.__row;
-        if (typeof row !== "number" || row < 0 || !records[row]) return;
-        const box = node.getBoundingClientRect();
-        if (box.width === 0 && box.height === 0) return;
-        if (!inside((box.left + box.right) / 2, (box.top + box.bottom) / 2)) return;
-        const mark = markOf(records[row], dimensions);
-        if (Object.keys(mark).length > 0 && !marks.some((m) => sameMark(m, mark))) marks.push(mark);
-      });
-      const pinnable = tipData.current.commands || tipData.current.select;
-      setPin(
-        marks.length > 0 && pinnable
-          ? { tip: { x: end[0], y: end[1], value: { 選取: `${marks.length} 個標記` }, mark: null, rich: null }, marks }
-          : null,
+      // 地圖的選取工具：標記的中心在範圍內
+      selectMarks((box) => inside((box.left + box.right) / 2, (box.top + box.bottom) / 2), end);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  };
+
+  // 框選（Tableau 預設的矩形選取工具）：在一般圖表上按住左鍵拖曳出方框，方框碰到的標記都選取；按住
+  // Ctrl／⌘／Shift 時加進原本的選取，框到空白處取消選取。地圖上拖曳是平移，要框選用地圖工具列的選取工具。
+  const canSelect = (interactive || canKeep) && !zoomable && !movable && !tool;
+  const startBox = (event: React.MouseEvent<HTMLDivElement>) => {
+    const body = bodyRef.current;
+    const chart = chartRef.current;
+    if (!canSelect || !body || !chart || event.button !== 0) return;
+    // 捲軸上的拖曳是捲動
+    const area = chart.getBoundingClientRect();
+    if (event.clientX > area.left + chart.clientWidth || event.clientY > area.top + chart.clientHeight) return;
+    const origin = body.getBoundingClientRect();
+    const start: [number, number] = [event.clientX, event.clientY];
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+    let dragging = false;
+    const move = (e: MouseEvent) => {
+      // 手抖的幾個像素不算拖曳（仍是點選）
+      if (!dragging && Math.hypot(e.clientX - start[0], e.clientY - start[1]) < BOX_THRESHOLD) return;
+      dragging = true;
+      // 框選中不顯示滑過標記的工具提示（styles.css 的 .box-selecting）
+      document.body.classList.add("box-selecting");
+      setRegion([
+        [start[0] - origin.left, start[1] - origin.top],
+        [e.clientX - origin.left, e.clientY - origin.top],
+      ]);
+    };
+    const up = (e: MouseEvent) => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      if (!dragging) return;
+      document.body.classList.remove("box-selecting");
+      setRegion(null);
+      // 放開滑鼠之後瀏覽器還會送出 click：那不是點選標記
+      boxSelected.current = true;
+      window.setTimeout(() => {
+        boxSelected.current = false;
+      }, 0);
+      const [left, right] = [Math.min(start[0], e.clientX), Math.max(start[0], e.clientX)];
+      const [top, bottom] = [Math.min(start[1], e.clientY), Math.max(start[1], e.clientY)];
+      selectMarks(
+        (box) => box.right >= left && box.left <= right && box.bottom >= top && box.top <= bottom,
+        [e.clientX, e.clientY],
+        additive ? (JSON.parse(selectedKey) as Mark[]) : [],
       );
-      onMarksRef.current?.({ kind: "click", mark: marks[0] ?? null, marks, additive: false, x: end[0], y: end[1] });
     };
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
@@ -1224,7 +1317,8 @@ export function WorksheetView({
     else setViewport(null);
   };
 
-  const title = response?.title ?? response?.name ?? worksheet;
+  // 查詢完成之前只知道工作表的名稱（呼叫端傳入）；不拿工作表的 id（ws_…）當標題
+  const title = response?.title ?? response?.name ?? name ?? "";
   const count = selected?.length ?? 0;
   // 形狀的圖例有圖片時由這裡畫（規格中已經關掉 Vega 的形狀圖例）
   const legendMeta = (response?.spec as Spec | undefined)?.usermeta?.shape_legend as ShapeLegend | undefined;
@@ -1340,7 +1434,9 @@ export function WorksheetView({
             </table>
           </div>
         )}
-        {!error && !response?.unsupported && !showTable && <div className="chart" ref={chartRef} />}
+        {!error && !response?.unsupported && !showTable && (
+          <div className="chart" ref={chartRef} data-selectable={canSelect ? "true" : undefined} onMouseDown={canSelect ? startBox : undefined} />
+        )}
         {!error && !response?.unsupported && !showTable && !hideLegend && shapeLegend && <ShapeLegendView workbook={workbook} legend={shapeLegend} />}
         {zoomable && !showTable && !error && (
           <div className="map-tools" role="toolbar" aria-label="地圖工具列">
@@ -1385,6 +1481,19 @@ export function WorksheetView({
                 {tool === "lasso" && <polygon points={region.map(([x, y]) => `${x},${y}`).join(" ")} />}
               </svg>
             )}
+          </div>
+        )}
+        {!tool && region && region.length > 1 && (
+          // 一般圖表的框選：只畫出方框，不攔截滑鼠
+          <div className="select-overlay passive" data-tool="rect" aria-hidden="true">
+            <svg>
+              <rect
+                x={Math.min(region[0][0], region[1][0])}
+                y={Math.min(region[0][1], region[1][1])}
+                width={Math.abs(region[1][0] - region[0][0])}
+                height={Math.abs(region[1][1] - region[0][1])}
+              />
+            </svg>
           </div>
         )}
         {nulls > 0 && !error && !showTable && !response?.unsupported && <NullIndicator count={nulls} actions={nullActions} />}

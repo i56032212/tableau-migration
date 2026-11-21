@@ -50,6 +50,7 @@
     },
     "axis": {
       "labelLimit": 160,
+      "labelSeparation": 4,
       "labelFont": "\"Tableau Book\", \"Benton Sans\", \"Segoe UI\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
       "labelFontSize": 12.0,
       "labelFontWeight": 400,

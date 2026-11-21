@@ -488,3 +488,18 @@ def test_cli_store_mode(tmp_path: Path, package: Path, capsys: pytest.CaptureFix
     assert "二選一" in capsys.readouterr().err
     assert main(["schedule", "tick", "--store", str(store), "--workers", "0"]) == 1
     assert "--workers 必須是 1 到 32" in capsys.readouterr().err
+
+
+def test_scheduler_catalog_follows_report_renames(tmp_path: Path, package: Path) -> None:
+    """排程器（報表庫模式）的報表目錄用發布的名稱；報表在站台管理中改名之後，下一次檢查就是新的名稱
+    （警示與失敗通知的信、執行紀錄中的報表名稱）。"""
+    app = make_app(tmp_path)
+    amy = login(app, "amy")
+    report = publish(amy, package)
+    root = tmp_path / "store"
+    jobs = StoreJobs(ScheduleStore(root), ReportStore(root), SiteStore(root), None)
+    found = jobs.catalog().report(report)
+    assert found is not None and found.label == "Superstore"
+    assert amy.patch(f"/api/admin/reports/{report}", json={"name": "銷售"}).status_code == 200
+    renamed = jobs.catalog().report(report)
+    assert renamed is not None and renamed.label == "銷售"

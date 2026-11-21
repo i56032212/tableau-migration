@@ -47,6 +47,13 @@ export function SessionGate({ children }: { children: (me: Me) => React.ReactNod
     );
   }
   if (me.mode === "proxy" && !me.user) {
+    // 登入入口已經驗證過身分、但這個帳號不能使用（不在站台的使用者中）：說明是帳號沒有權限，不是沒有登入
+    if (me.denied)
+      return (
+        <main className="home error" data-denied="true">
+          這個帳號沒有使用這個網站的權限：{me.denied}。請向站台管理員申請加入。
+        </main>
+      );
     return <main className="home error">沒有登入者：請經由公司的登入入口開啟這個網站</main>;
   }
   return <>{children(me)}</>;

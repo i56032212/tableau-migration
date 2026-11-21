@@ -7,6 +7,7 @@ import datetime as dt
 import io
 import math
 import shutil
+from decimal import Decimal
 from pathlib import Path
 
 import duckdb
@@ -20,7 +21,7 @@ from tmig.access.permissions import Permissions
 from tmig.ir import load_ir
 from tmig_service.app import create_app
 from tmig_service.auth import AuthSettings
-from tmig_service.downloads import excel_value
+from tmig_service.downloads import excel_value, summary_value
 from tmig_service.store import ReportStore
 from tmig_service.usage import UsageLog, Visit
 
@@ -321,3 +322,53 @@ def test_favorites_comments_and_recents(fixtures: Path, tmp_path: Path) -> None:
     recents = bob.get("/api/recents").json()
     assert [r["view"] for r in recents] == [SHEET, BOARD]
     assert carol.get("/api/recents").json() == []
+
+
+def test_summary_values_have_no_binary_float_tail() -> None:
+    """摘要資料的值：二進位浮點數去掉加總留下的尾數（稽核 C5：畫面上是 909,370，CSV 裡是
+    909369.9110000005）——取相差不到一兆分之一的十進位數字中位數最少的；本來就有這麼多位數的值不變。
+    Decimal 是精確的值，與整數、文字、日期一樣原樣寫出。"""
+    assert summary_value(909369.9110000005) == "909369.911"
+    assert summary_value(0.1 + 0.2) == "0.3"
+    assert summary_value(-0.30000000000000004) == "-0.3"
+    assert summary_value(2297200.0) == "2297200.0"
+    assert summary_value(-1234.5) == "-1234.5"
+    assert summary_value(123456789.1234) == "123456789.1234"  # 13 位有效數字都是真的
+    assert summary_value(0.000123456789012) == "0.000123456789012"
+    assert summary_value(1e21) == "1e+21" and summary_value(0.0) == "0.0"
+    assert summary_value(Decimal("123456789012345.6789")) == "123456789012345.6789"
+    assert summary_value(12345678901234567890) == "12345678901234567890"
+    assert summary_value("909369.9110000005") == "909369.9110000005"  # 文字欄不動
+    assert summary_value(None) == "" and summary_value(True) == "true"
+    assert summary_value(dt.date(2024, 1, 31)) == "2024-01-31"
+    assert summary_value(float("nan")) == "nan"
+
+
+def test_summary_csv_has_no_float_tail(fixtures: Path, tmp_path: Path) -> None:
+    """摘要資料的 CSV：量值與查詢的值相同（到 12 位有效數字），但沒有二進位浮點數的尾數；檢視器與計算比對
+    用的 table.raw 仍是完整精度。"""
+    carol = login(make_app(fixtures, tmp_path), "carol")
+    base = f"/api/workbooks/superstore_demo/worksheets/{SHEET}"
+    table = carol.post(f"{base}/render", json={}).json()["table"]
+    text = carol.post(
+        f"{base}/download", json={"kind": "summary", "format": "csv", "state": {}}
+    ).content.decode("utf-8")
+    rows = list(csv.reader(io.StringIO(text[1:])))
+    assert rows[0] == table["headers"] and len(rows) - 1 == len(table["raw"])
+    measures = [i for i, role in enumerate(table["roles"]) if role == "measure"]
+    assert measures
+    for row, raw in zip(rows[1:], table["raw"], strict=True):
+        for index, (cell, full) in enumerate(zip(row, raw, strict=True)):
+            if index not in measures:
+                assert cell == full
+                continue
+            # 與查詢的值相同（兩次查詢的加總順序可能不同，所以以去掉尾數之後的值比較）
+            assert cell == summary_value(float(full))
+            assert math.isclose(float(cell), float(full), rel_tol=1e-12)
+            # 來源資料是小數 4 位以內的金額：總和的小數也在 4 位以內
+            assert len(cell.partition(".")[2]) <= 4, cell
+    # 檢視器與計算比對用的值不變：完整精度
+    again = carol.post(f"{base}/render", json={}).json()["table"]
+    assert all(
+        cell == repr(float(cell)) for row in again["raw"] for cell in (row[m] for m in measures)
+    )

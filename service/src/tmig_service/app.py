@@ -107,6 +107,7 @@ from tmig_service.downloads import (
     XLSX_TYPE,
     csv_bytes,
     file_name,
+    summary_value,
     xlsx_bytes,
 )
 from tmig_service.site import SiteStore, from_exports
@@ -145,6 +146,12 @@ class Loaded:
     stamp: float
     published: ReportRecord | None = None
     """報表庫的報表（發布到伺服器的）；fixtures 的報表為 None。"""
+
+    @property
+    def name(self) -> str:
+        """給人看的報表名稱：發布到伺服器的報表是發布時填的名稱（站台管理中改名後是新的名稱，與
+        Tableau Server 相同），不是報表檔裡的名稱；其餘是報表本身的名稱。"""
+        return self.published.name if self.published is not None else self.ir.workbook.name
 
 
 class Workspace:
@@ -300,7 +307,14 @@ def workspace_catalog(workspace: Workspace, site: SiteStore | None) -> Catalog:
             )
         else:
             reports.append(
-                Report(loaded.directory, loaded.ir, workbook_url_name(loaded.directory), key=name)
+                Report(
+                    loaded.directory,
+                    loaded.ir,
+                    workbook_url_name(loaded.directory),
+                    key=name,
+                    # 給人看的名稱是報表本身的名稱，不是目錄名稱（內部的代號）
+                    title=loaded.name,
+                )
             )
     sources = datasource_reports(workspace.datasources) if workspace.datasources is not None else []
     return Catalog(reports, sources)
@@ -534,13 +548,18 @@ def create_app(
         )
 
         def viewer_granted(wb: str, user: Identity | None) -> tuple[IR, Grant, str | None]:
-            """報表、登入者的權限與報表的擁有者（報表庫的報表，或 Tableau 匯出的權限中的擁有者）。"""
+            """報表、登入者的權限與報表的擁有者（報表庫的報表，或 Tableau 匯出的權限中的擁有者）。
+            報表的名稱是給人看的名稱（發布的報表是發布時填的名稱；我的最愛等列出報表時用它）。"""
             loaded, grant = granted(wb, user)
             owner = loaded.published.owner if loaded.published is not None else None
             if owner is None and authorizer.permissions is not None:
                 entry = authorizer.entry(loaded.directory, loaded.ir)
                 owner = entry.owner if entry is not None else None
-            return loaded.ir, grant, owner
+            ir = loaded.ir
+            if loaded.name != ir.workbook.name:
+                named = ir.workbook.model_copy(update={"name": loaded.name})
+                ir = ir.model_copy(update={"workbook": named})
+            return ir, grant, owner
 
         def manages(user: Identity, report_id: str) -> bool:
             """站台管理員、報表的擁有者，或報表所在 Project（與上層）的擁有者與 Project Leader。"""
@@ -589,12 +608,7 @@ def create_app(
                     (uses_published(d) or "").casefold() == content_url.casefold()
                     for d in loaded.ir.datasources
                 ):
-                    title = (
-                        loaded.published.name
-                        if loaded.published is not None
-                        else loaded.ir.workbook.name
-                    )
-                    found.append({"id": name, "name": title})
+                    found.append({"id": name, "name": loaded.name})
             return found
 
         def can_publish(user: Identity | None, project: str) -> tuple[bool, str | None]:
@@ -736,7 +750,7 @@ def create_app(
                     time=dt.datetime.now(dt.UTC),
                     user=user.username if user is not None else None,
                     workbook=wb,
-                    workbook_name=ir.workbook.name,
+                    workbook_name=loaded.name,
                     view=name,
                     view_id=view_id,
                     kind=kind,  # type: ignore[arg-type]
@@ -754,7 +768,7 @@ def create_app(
         if days < 1:
             raise HTTPException(422, "days 至少為 1")
         since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
-        names = {name: workspace.get(name).ir.workbook.name for name in workspace.names()}
+        names = {name: workspace.get(name).name for name in workspace.names()}
         visits = usage.visits(since) if usage is not None else iter(())
         return {
             "since": since.isoformat(),
@@ -787,7 +801,7 @@ def create_app(
                         "can_overwrite": rights.overwrite(user, record).allowed,
                     },
                     "workbook": ir.workbook.id,
-                    "name": ir.workbook.name,
+                    "name": loaded.name,
                     "dashboards": [
                         {"id": d.id, "name": d.name}
                         for d in ir.dashboards
@@ -810,8 +824,12 @@ def create_app(
 
     @app.get("/api/workbooks/{wb}/ir")
     def workbook_ir(wb: str, user: User) -> dict[str, Any]:
+        """檢視器用的報表定義。報表的名稱是給人看的名稱（發布的報表是發布時填的名稱，見 Loaded.name）：
+        檢視器的標題列顯示它；報表庫中存的 IR 不變。"""
         loaded, grant = granted(wb, user)
-        return viewer_ir(loaded.ir, grant)
+        data = viewer_ir(loaded.ir, grant)
+        data["workbook"]["name"] = loaded.name
+        return data
 
     @app.get("/api/workbooks/{wb}/cases")
     def cases(wb: str, user: User) -> list[dict[str, Any]]:
@@ -870,7 +888,11 @@ def create_app(
         with display_locale(accept_language(request.headers.get("accept-language"))):
             return render(wb, ws, user, state)
 
-    def render(wb: str, ws: str, user: User, state: QueryState | None = None) -> dict[str, Any]:
+    def render(
+        wb: str, ws: str, user: User, state: QueryState | None = None, summary: bool = False
+    ) -> dict[str, Any]:
+        """summary：下載摘要資料用——table.raw 的浮點數去掉加總留下的尾數（tmig_service.downloads 的
+        summary_value）；其餘（檢視器、比對）是完整精度。"""
         loaded, grant = granted(wb, user)
         ir = loaded.ir
         if not grant.worksheet_allowed(ir, ws):
@@ -921,13 +943,8 @@ def create_app(
             raise HTTPException(422, str(exc)) from exc
         except QueryError as exc:
             if exc.unsupported:
-                return {
-                    "worksheet": ws,
-                    "rows": 0,
-                    "spec": None,
-                    "unsupported": str(exc),
-                    "notes": [],
-                }
+                # 名稱與標題照樣附上：檢視器的標題是工作表的名稱，不是它的 id
+                return {**empty, "unsupported": str(exc)}
             raise HTTPException(422, str(exc)) from exc
         if not query.columns:
             # 沒有任何欄位要查詢（例如只有 Measure Names、還沒有量值）
@@ -1086,6 +1103,7 @@ def create_app(
             return out
 
         table_rows = [cells(row, index, {}) for row in result.rows]
+        raw_value = summary_value if summary else format_value
         # 與圖表相同：各架的小計緊接在它的組之後，總計與交叉處在最後
         for total, total_result in totals:
             positions = {key: i for i, key in enumerate(total_result.columns)}
@@ -1119,7 +1137,7 @@ def create_app(
                 "keys": [c.key for c in shown],
                 "headers": [caption(fields[c.use.field], c.use, sheet) for c in shown if c.use],
                 "rows": table_rows,
-                "raw": [[format_value(row[index[c.key]]) for c in shown] for row in result.rows],
+                "raw": [[raw_value(row[index[c.key]]) for c in shown] for row in result.rows],
                 "roles": [c.role for c in shown],
             },
         }
@@ -1206,7 +1224,7 @@ def create_app(
         else:
             if not grant.can("ExportData"):
                 raise HTTPException(403, "沒有下載資料的權限（下載摘要資料）")
-            result = render(wb, ws, user, body.state)
+            result = render(wb, ws, user, body.state, summary=body.kind == "summary")
             table = result.get("table")
             if result.get("unsupported") or not table:
                 raise HTTPException(422, "這張工作表沒有可以下載的資料")
@@ -1246,7 +1264,7 @@ def create_app(
                     "report": visit.workbook,
                     "view": visit.view_id,
                     "view_name": visit.view,
-                    "report_name": loaded.ir.workbook.name,
+                    "report_name": loaded.name,
                     "kind": visit.kind,
                     "time": visit.time.isoformat(),
                 }

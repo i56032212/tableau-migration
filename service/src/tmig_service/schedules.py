@@ -249,8 +249,10 @@ def store_reports(reports: ReportStore, site: SiteStore | None, fixtures: Path |
     published = {r.id for r in records}
     for directory in report_directories(fixtures) if fixtures is not None else []:
         if directory.name not in published:
+            ir = load_fixture_ir(directory)
+            # 給人看的名稱（警示與失敗通知的信、執行紀錄）是報表本身的名稱，不是目錄名稱
             items.append(
-                Report(directory, load_fixture_ir(directory), workbook_url_name(directory))
+                Report(directory, ir, workbook_url_name(directory), title=ir.workbook.name)
             )
     for record in records:
         directory = reports.directory(record)
@@ -314,7 +316,10 @@ class StoreJobs:
         from tmig_service.datasources import DatasourceStore
 
         key = (
-            tuple((r.id, r.latest.version, r.tableau_workbook) for r in self.reports.records()),
+            # 名稱也算：報表在站台管理中改名之後，信與執行紀錄用新的名稱
+            tuple(
+                (r.id, r.latest.version, r.tableau_workbook, r.name) for r in self.reports.records()
+            ),
             tuple((r.id, r.latest.version) for r in DatasourceStore(self.reports.root).records()),
             tuple(
                 (

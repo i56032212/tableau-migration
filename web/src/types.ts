@@ -176,6 +176,8 @@ export interface Action {
 export interface Worksheet {
   id: string;
   name: string;
+  /** 自訂的標題（各段文字，可以代入參數與欄位的值）；空的時標題就是工作表的名稱 */
+  title?: unknown[];
   datasource: string;
   filters: Filter[];
   /** 頁面架：每一頁是這個維度的一個值 */
@@ -602,6 +604,8 @@ export interface Me {
   login?: string;
   /** dev：可以切換的使用者 */
   users?: string[];
+  /** 已經驗證過身分、但這個帳號不能使用時的原因（例如 SSO 的帳號不在使用者目錄中）；這時 user 為 null */
+  denied?: string;
 }
 
 /** 桌面版開啟中的檔案 */

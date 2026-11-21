@@ -18,7 +18,8 @@ import pytest
 
 from tmig.data.executor import QueryResult, execute
 from tmig.ir import load_ir
-from tmig.render.vegalite import build_spec
+from tmig.planner.state import QueryState
+from tmig.render.vegalite import LABEL_SEPARATION, build_spec
 from tmig.sqlgen.query import pane_sql, worksheet_sql
 from tmig.verify.run import ensure_data
 
@@ -128,3 +129,47 @@ def test_unsupported_mark(ir) -> None:
     )
     assert rendered.spec is None
     assert rendered.unsupported == "標記類型 map 尚未支援"
+
+
+def test_view_without_marks_is_blank(ir) -> None:
+    """沒有任何標記（例如篩選之後沒有資料）：空白的檢視，不畫座標軸、表頭與格線（稽核 B33：原本畫出座標軸與
+    一個「0.000000」的刻度）；檢視器畫標題與背景用的資料仍然附上。"""
+    state = QueryState.model_validate(
+        {"filters": {"f_category": {"mode": "include", "values": ["沒有這個類別"]}}}
+    )
+    query = worksheet_sql(ir, "ws_sales_by_region", state)
+    result = execute(DEMO / "data" / "ds_orders.duckdb", query.sql)
+    assert result.rows == []
+    rendered = build_spec(ir, "ws_sales_by_region", query.columns, result)
+    assert rendered.spec is not None and rendered.rows == 0 and rendered.unsupported is None
+    spec = rendered.spec
+    assert spec["data"] == {"values": []}
+    assert not {"encoding", "layer", "vconcat", "hconcat", "facet"} & spec.keys()
+    assert spec["usermeta"]["name"] == "Sales by Region" and spec["usermeta"]["rows"] == 0
+    assert {"title_font", "title_color", "dimensions", "measures"} <= spec["usermeta"].keys()
+    assert "sizing" not in spec["usermeta"]
+    assert [e.message for e in validator().iter_errors(spec)] == []
+    # 有資料時照常畫出座標軸
+    full = worksheet_sql(ir, "ws_sales_by_region")
+    drawn = build_spec(
+        ir,
+        "ws_sales_by_region",
+        full.columns,
+        execute(DEMO / "data" / "ds_orders.duckdb", full.sql),
+    )
+    assert drawn.spec is not None and drawn.rows > 0 and "encoding" in drawn.spec
+
+
+def test_axis_labels_keep_a_gap(ir) -> None:
+    """相鄰的刻度文字至少相隔幾個像素，不到時 Vega 每隔一個省略（稽核 B32：Vega 的預設是 0，兩個文字只差
+    0.02 像素也都留著，看起來是「90,000100,000」）。"""
+    query = worksheet_sql(ir, "ws_sales_by_region")
+    rendered = build_spec(
+        ir,
+        "ws_sales_by_region",
+        query.columns,
+        execute(DEMO / "data" / "ds_orders.duckdb", query.sql),
+    )
+    assert rendered.spec is not None
+    assert rendered.spec["config"]["axis"]["labelSeparation"] == LABEL_SEPARATION
+    assert LABEL_SEPARATION >= 3

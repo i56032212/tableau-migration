@@ -2,7 +2,10 @@
 
 - 以訂閱者的身分查詢：列層級權限照套，權限（P3）也照套，沒有權限時這次訂閱失敗
 - 只在本機啟動一個查詢服務（internal 模式：只接受以隨機金鑰簽章的工作階段，沒有登入入口），
-  以 Chromium 開啟檢視器截圖與列印；與使用者看到的畫面相同
+  以 Chromium 開啟檢視器截圖與列印；與使用者看到的 view 相同，但不含檢視器的介面（工具列、每張工作表的
+  列數與「資料」切換）
+- PDF：訂閱的紙張與方向（預設 A4 直向）、邊界 10 公釐，view 縮放到一頁之內（與檢視器「匯出＞PDF」的
+  「符合一頁」相同）
 - view 的訂閱：該 dashboard 或工作表；整份報表的訂閱：每個 dashboard（沒有 dashboard 時為每張工作表）
 - 郵件：主旨、訊息與每個 view 的連結，圖片內嵌在內文（attach_image），PDF 合併成一個附件（attach_pdf）；
   view 沒有資料且訂閱設定為不寄送時不寄（send_if_view_empty）
@@ -36,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from email.message import EmailMessage
-from email.utils import make_msgid
+from email.utils import formatdate, make_msgid
 from html import escape
 from pathlib import Path
 from typing import Any, TypeVar
@@ -58,7 +61,9 @@ PAPER = {
     "Ledger": "Ledger",
     "Tabloid": "Tabloid",
 }
-"""Tableau 的紙張大小 → Chromium 支援的名稱；其他（含 Unspecified）用 A4。"""
+"""Tableau 的紙張大小 → 檢視器的頁面設定認得的名稱；其他（含 Unspecified）用 A4。"""
+PDF_MARGIN = 10
+"""PDF 的邊界（公釐）：與檢視器「頁面設定」的預設相同。"""
 VIEWPORT = {"width": 1400, "height": 1000}
 T = TypeVar("T")
 
@@ -140,7 +145,7 @@ def subscription_views(report: Report, view: str | None) -> list[tuple[str, str]
         return boards or sheets
     found = [item for item in boards + sheets if item[0] == view]
     if not found:
-        raise SubscriptionError(f"報表「{report.name}」沒有 view「{view}」")
+        raise SubscriptionError(f"報表「{report.label}」沒有 view「{view}」")
     return found[:1]
 
 
@@ -343,6 +348,9 @@ class Renderer:
         page.on("response", on_response)
         try:
             page.goto(self.base_url + path)
+            # 擷取的是檢視本身：檢視器的介面（每張工作表的列數、「資料」切換、切入的連結）不畫
+            # （web/src/styles.css 的 .capture；它們不占版面，圖表的大小不受影響）
+            page.evaluate("document.documentElement.classList.add('capture')")
             page.wait_for_selector(".dashboard, .single-sheet, main.error", timeout=60_000)
             if page.locator("main.error").count():
                 raise SubscriptionError(
@@ -360,9 +368,22 @@ class Renderer:
             if png:
                 result.png = target.screenshot()
             if pdf:
-                result.pdf = page.pdf(
-                    format=PAPER.get(paper or "", "A4"), landscape=landscape, print_background=True
+                # 與檢視器的「匯出＞PDF」相同的列印樣式（web/src/PageSetup.tsx）：紙張、方向、邊界，並把
+                # view 縮放到一頁之內。直接照畫面的大小印時，比紙寬的 dashboard 右邊會被裁掉
+                scale = page.evaluate(
+                    "setup => window.tmigPageSetup ? window.tmigPageSetup(setup) : null",
+                    {
+                        "paper": PAPER.get(paper or "", "A4"),
+                        "orientation": "landscape" if landscape else "portrait",
+                        "margin": PDF_MARGIN,
+                        "scaling": "page",
+                    },
                 )
+                if scale is None:
+                    raise SubscriptionError(
+                        "檢視器沒有列印的頁面設定（web/dist 太舊）；先執行 cd web && pnpm build"
+                    )
+                result.pdf = page.pdf(prefer_css_page_size=True, print_background=True)
         finally:
             page.remove_listener("response", on_response)
         return result
@@ -382,13 +403,19 @@ def merge_pdfs(parts: list[bytes]) -> bytes:
 # ---------------------------------------------------------------- 郵件
 
 
+def report_title(report: Report) -> str:
+    """郵件中的報表名稱：發布的報表是發布時填的名稱（不是報表檔裡的名稱），其餘是報表本身的名稱；
+    不用目錄名稱或報表 id。"""
+    return report.title or report.ir.workbook.name
+
+
 def build_message(
     job: Job, report: Report, rendered: list[Rendered], recipient: str, mail: MailSettings
 ) -> EmailMessage:
     sub = job.subscription
     assert sub is not None
     message = EmailMessage()
-    title = sub.subject or f"{report.ir.workbook.name}：{'、'.join(r.name for r in rendered)}"
+    title = sub.subject or f"{report_title(report)}：{'、'.join(r.name for r in rendered)}"
     message["Subject"] = title
     message["From"] = mail.sender
     message["To"] = recipient
@@ -414,12 +441,16 @@ def build_message(
     if sub.attach_pdf and pdfs:
         merged = pdfs[0] if len(pdfs) == 1 else merge_pdfs(pdfs)
         message.add_attachment(
-            merged, maintype="application", subtype="pdf", filename=f"{report.ir.workbook.name}.pdf"
+            merged, maintype="application", subtype="pdf", filename=f"{report_title(report)}.pdf"
         )
     return message
 
 
 def send_message(message: EmailMessage, mail: MailSettings) -> None:
+    """以 SMTP 寄出（訂閱、資料警示、失敗與暫停的通知都經過這裡）。Date 是郵件必要的標頭
+    （RFC 5322 3.6），smtplib 不會代填：沒有的話補上寄出的時間（含時區）。"""
+    if "Date" not in message:
+        message["Date"] = formatdate(localtime=True)
     if mail.use_ssl:
         client: smtplib.SMTP = smtplib.SMTP_SSL(
             mail.host, mail.port, timeout=mail.timeout, context=ssl.create_default_context()

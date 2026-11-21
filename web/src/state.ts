@@ -221,6 +221,15 @@ export function sourceActions(
   );
 }
 
+/**
+ * 工作表查詢完成之前顯示的標題：沒有自訂標題的工作表，標題就是工作表的名稱，可以先顯示；自訂標題要代入
+ * 參數與欄位的值，等查詢結果（先不顯示，回傳空字串）。不顯示工作表的 id。
+ */
+export function pendingTitle(ir: IR, worksheet: string): string {
+  const sheet = ir.worksheets.find((w) => w.id === worksheet);
+  return sheet && !(sheet.title?.length ?? 0) ? sheet.name : "";
+}
+
 export function sameMark(a: Mark, b: Mark): boolean {
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((k) => k in b && a[k] === b[k]);

@@ -325,3 +325,36 @@ def test_extract_job_refreshes_data(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert main(["schedule", "run", str(path), *common, "--job", "extract:t"]) == 0
     assert main(["schedule", "run", str(path), *common, "--job", "extract:none"]) == 1
     assert len(last_runs(tmp_path / "cli-state")) == 1
+
+
+def test_messages_name_the_report_by_its_title_not_its_id(tmp_path: Path) -> None:
+    """報表庫的報表（id 是 report_3 這類代號）：工作的對象與不能執行的原因用給人看的名稱（title：發布時填的
+    名稱），不用 id；只有 fixtures 目錄的指令列沒有 title，照舊用目錄名稱。"""
+    stored = Report(tmp_path / "store" / "v2", DEMO_IR, key="report_3", title="區域銷售")
+    assert (stored.name, stored.label) == ("report_3", "區域銷售")
+    schedules = ScheduleFile.model_validate(
+        {
+            "timezone": "Asia/Taipei",
+            "schedules": [
+                {"id": "s", "name": "每天", "frequency": {"kind": "daily", "start": "06:00:00"}}
+            ],
+            "extract_refreshes": [
+                {"id": "t", "schedule": "s", "target_kind": "workbook", "report": "report_3"}
+            ],
+            "subscriptions": [
+                {
+                    "id": "u",
+                    "user": "alice",
+                    "schedule": "s",
+                    "content_kind": "view",
+                    "report": "report_3",
+                    "view": "Nope",
+                }
+            ],
+        }
+    )
+    jobs = {j.id: j for j in plan_jobs(schedules, Catalog([stored]))}
+    assert [t.describe() for t in jobs["extract:t"].targets] == ["區域銷售／ds_orders"]
+    assert jobs["subscription:u"].problem == "報表「區域銷售」沒有 view「Nope」"
+    folder = Report(tmp_path / "sales", DEMO_IR)
+    assert (folder.name, folder.label) == ("sales", "sales")

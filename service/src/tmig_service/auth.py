@@ -591,14 +591,21 @@ def auth_router(auth: Authenticator) -> APIRouter:
 
     @router.get("/api/me")
     def me(request: Request) -> dict[str, Any]:
-        """目前的登入者與身分驗證模式；沒有登入時 user 為 null（檢視器依此顯示登入或切換使用者）。"""
+        """目前的登入者與身分驗證模式；沒有登入時 user 為 null（檢視器依此顯示登入或切換使用者）。
+        已經驗證過身分、但這個帳號不能使用（例如 SSO 的帳號不在使用者目錄中）時另外回傳 denied（原因）：
+        檢視器要說明帳號沒有權限，不能說成沒有登入。"""
+        denied: str | None = None
         try:
             identity = auth.identity(request)
         except HTTPException as exc:
             if exc.status_code not in (401, 403):
                 raise
             identity = None
+            if exc.status_code == 403:
+                denied = str(exc.detail)
         result: dict[str, Any] = {"mode": auth.mode, "user": user_json(identity)}
+        if denied is not None:
+            result["denied"] = denied
         if auth.mode == "oidc":
             result["login"] = "/auth/login"
         if auth.mode == "dev":

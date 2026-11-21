@@ -51,14 +51,17 @@ class Report:
     """檢視器網址中的報表 id（報表庫的報表）；None 時為目錄名稱（fixtures）。"""
     owner: str | None = None
     title: str | None = None
-    """畫面上的名稱（報表庫中的報表名稱）；None 時同 name。"""
+    """給人看的名稱（畫面、郵件、訊息）：報表庫的報表是發布時填的名稱（站台管理中可以改）；查詢服務與
+    報表庫模式的排程器對 fixtures 的報表填報表本身的名稱。None（只有 fixtures 目錄的指令列）時同 name。"""
 
     @property
     def name(self) -> str:
+        """報表 id（檢視器網址中的名稱，fixtures 的目錄名稱）：給程式與指令列對應用。"""
         return self.key or self.directory.name
 
     @property
     def label(self) -> str:
+        """訊息與清單中的名稱：title，沒有時是 name。"""
         return self.title or self.name
 
     def extract_datasources(self) -> list[str]:

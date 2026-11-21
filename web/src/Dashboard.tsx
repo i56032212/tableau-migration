@@ -17,6 +17,7 @@ import {
   parameterValue,
   runActions,
   keepMarks,
+  pendingTitle,
   setDrill,
   sourceActions,
   stateFor,
@@ -469,6 +470,7 @@ function ZoneContent({
         <WorksheetView
           workbook={workbook}
           worksheet={zone.worksheet!}
+          name={pendingTitle(ir, zone.worksheet!)}
           state={stateFor(ir, zone.worksheet!, view)}
           hideLegend={hideLegend}
           showTitle={zone.show_title !== false}

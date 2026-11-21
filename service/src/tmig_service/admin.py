@@ -46,6 +46,21 @@ from tmig_service.store import ReportRecord, ReportStore
 
 NAME_LIMIT = 255
 CAPABILITY = re.compile(r"^[A-Za-z]{1,64}$")
+_EMAIL_PART = r"[^@\s<>()\[\],;:\\\"]+"
+EMAIL = re.compile(rf"{_EMAIL_PART}@(?!\.)(?:{_EMAIL_PART})(?<!\.)")
+"""email 的樣子：一個 @、兩邊都有內容、沒有空白與分隔符號，網域不以點開頭或結尾。公司內部沒有點的網域
+（user@mailhost）也接受；只擋下明顯不是信箱的字串，不驗證信箱存不存在。"""
+
+
+def checked_email(value: str | None) -> str | None:
+    """站台管理中填的 email：去掉前後的空白，空的為 None；不像信箱的（例如 not-an-email）不接受——
+    訂閱與資料警示的信要寄到這裡，存進去之後才在寄信時失敗就太晚了。"""
+    text = (value or "").strip()
+    if not text:
+        return None
+    if len(text) > 254 or EMAIL.fullmatch(text) is None or ".." in text.partition("@")[2]:
+        raise SiteError(f"email「{text}」的格式不正確（要像 name@example.com）")
+    return text
 
 
 class ProjectCreate(BaseModel):
@@ -415,6 +430,10 @@ def admin_router(
     @router.post("/api/admin/users", status_code=201)
     def create_user(body: UserCreate, request: Request) -> dict[str, Any]:
         user = admin(request)
+        try:
+            email = checked_email(body.email)
+        except SiteError as exc:
+            raise _bad(str(exc)) from exc
 
         def apply(data: SiteData) -> None:
             if data.user(body.name, body.domain or None) is not None or (
@@ -429,7 +448,7 @@ def admin_router(
                     name=body.name.strip(),
                     full_name=body.full_name or None,
                     domain=body.domain or None,
-                    email=body.email or None,
+                    email=email,
                     site_role=body.site_role,
                     groups=_ordered(check_groups(data, body.groups)),
                 )
@@ -452,7 +471,7 @@ def admin_router(
             if body.full_name is not None:
                 updates["full_name"] = body.full_name or None
             if body.email is not None:
-                updates["email"] = body.email or None
+                updates["email"] = checked_email(body.email)
             if body.site_role is not None:
                 if body.site_role not in SITE_ROLES:
                     raise SiteError("站台角色不正確")

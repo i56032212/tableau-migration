@@ -152,3 +152,56 @@ def test_viewer_with_permissions(fixtures: Path) -> None:
         page.goto(f"{url}/w/secure/d/{board.id}")
         page.wait_for_selector("text=載入失敗")
         browser.close()
+
+
+def test_proxy_mode_explains_an_account_that_is_not_a_site_user(fixtures: Path) -> None:
+    """反向代理（SSO 閘道）模式：閘道已經驗證過身分、但帳號不在使用者目錄中時，畫面說明這個帳號沒有使用權限
+    並寫出帳號（稽核 A3：原本寫「沒有登入者：請經由公司的登入入口開啟這個網站」，讓人以為沒登入）；
+    真的沒有帶帳號（沒有經過登入入口）時才是沒有登入者。"""
+    import ipaddress
+
+    from playwright.sync_api import expect, sync_playwright
+
+    from tmig_service.auth import ProxySettings
+
+    settings = AuthSettings(
+        mode="proxy",
+        directory=DIRECTORY,
+        proxy=ProxySettings(
+            user_header="X-Forwarded-User",
+            trusted_proxies=[ipaddress.ip_network("127.0.0.1/32")],
+        ),
+    )
+    board = load_ir(fixtures / "secure" / "golden.ir.json").dashboards[0]
+    with running_server(fixtures, DIST, auth=settings) as url, sync_playwright() as p:
+        browser = p.chromium.launch()
+
+        def open_as(user: str | None) -> Any:
+            headers = {"X-Forwarded-User": user} if user else {}
+            context = browser.new_context(
+                viewport={"width": 1400, "height": 1000}, extra_http_headers=headers
+            )
+            page = context.new_page()
+            page.goto(f"{url}/w/secure/d/{board.id}")
+            return page
+
+        # 不在目錄中的帳號：說明帳號沒有權限
+        page = open_as("zed")
+        message = page.locator("main.error")
+        expect(message).to_contain_text("這個帳號沒有使用這個網站的權限")
+        expect(message).to_contain_text("帳號 zed 不在使用者目錄中")
+        expect(message).to_contain_text("請向站台管理員申請加入")
+        expect(message).not_to_contain_text("沒有登入者")
+        assert page.locator(".worksheet").count() == 0
+        # 沒有帶帳號：沒有登入者
+        page = open_as(None)
+        expect(page.locator("main.error")).to_have_text(
+            "沒有登入者：請經由公司的登入入口開啟這個網站"
+        )
+        # 目錄中的帳號：照常開啟，右上角是他的名稱
+        page = open_as("alice")
+        page.wait_for_function(
+            "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+        )
+        expect(page.locator(".userbar .user")).to_have_text("Alice Wang")
+        browser.close()

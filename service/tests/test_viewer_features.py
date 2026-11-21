@@ -1138,3 +1138,269 @@ def test_tooltip_commands_keep_only_and_select_by_category(server: str) -> None:
         assert "marks" not in renders.items[-1][1] and renders.items[-1][2]["rows"] == total
         assert errors == []
         browser.close()
+
+
+LOADED = "document.querySelectorAll('.worksheet[data-loading=\"true\"]').length === 0"
+ALL_FOUR = "document.querySelectorAll('.worksheet[data-loading=\"false\"]').length === 4"
+
+
+def test_multi_dropdown_floats_above_the_dashboard_and_closes(server: str) -> None:
+    """多選下拉的選單浮在 dashboard 上面，不被篩選區塊的高度裁切（稽核 B2：17 個值只露出 37 像素）；
+    點別的地方或按 Esc 收起來（B3），勾選時不收。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "篩選條件")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_selector(".worksheet")
+        page.wait_for_function(LOADED)
+        control = page.locator("fieldset.control", has_text="Sub-Category").first
+        button = control.locator("button.dropdown")
+        options = control.locator(".options")
+        expect(options).to_have_count(0)
+        button.click()
+        control.get_by_label("Phones").wait_for()
+        box = options.evaluate(
+            """e => {
+              const r = e.getBoundingClientRect();
+              const zone = e.closest('.zone-box').getBoundingClientRect();
+              const b = e.parentElement.querySelector('button.dropdown').getBoundingClientRect();
+              // 選單下緣那一點最上層的元素是不是選單自己（被區塊裁切時不是）
+              const top = document.elementFromPoint(r.left + r.width / 2, r.bottom - 8);
+              return { top: r.top, bottom: r.bottom, height: r.height, zone: zone.bottom,
+                       button: b.bottom, left: r.left, buttonLeft: b.left, onTop: e.contains(top) };
+            }"""
+        )
+        # 選單在按鈕正下方、超出篩選區塊，而且看得到（17 個值加搜尋框：高度遠超過區塊剩下的 40 像素）
+        assert box["top"] >= box["button"] and box["top"] - box["button"] < 4
+        assert abs(box["left"] - box["buttonLeft"]) < 1
+        assert box["bottom"] > box["zone"] + 100 and box["height"] >= 200
+        assert box["onTop"] is True
+        # 勾選：選單不收；點 dashboard 的其他地方：收起來
+        control.get_by_label("Phones").click()
+        page.wait_for_function(LOADED)
+        expect(options).to_be_visible()
+        page.locator(".worksheet-title").first.click()
+        expect(options).to_have_count(0)
+        # 再開啟，焦點在別處時按 Esc：收起來
+        button.click()
+        expect(options).to_be_visible()
+        page.locator("body").press("Escape")
+        expect(options).to_have_count(0)
+        # 按鈕本身仍然可以開關
+        button.click()
+        expect(options).to_be_visible()
+        button.click()
+        expect(options).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
+def test_drag_selects_the_marks_in_the_rectangle(server: str) -> None:
+    """框選（稽核 B24）：在圖上拖曳出方框，方框碰到的標記都選取（與點選相同，觸發篩選動作），不會把座標軸的
+    文字反白；按住 Ctrl 加選；框到空白處取消選取；框選之後點選照常。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    targets = {"ws_category_detail", "ws_segment_detail"}
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(ALL_FOUR)
+        page.wait_for_timeout(300)
+        picker = page.locator("[data-worksheet='ws_region_picker']")
+        selector = "svg path[aria-roledescription='bar']"
+
+        def bar(region: str) -> dict[str, float]:
+            found = picker.locator(f"{selector}[aria-label$='Region: {region}']").bounding_box()
+            assert found is not None
+            return {
+                "x": found["x"],
+                "y": found["y"],
+                "width": found["width"],
+                "height": found["height"],
+            }
+
+        def drag(start: tuple[float, float], end: tuple[float, float]) -> None:
+            page.mouse.move(*start)
+            page.mouse.down()
+            page.mouse.move((start[0] + end[0]) / 2, (start[1] + end[1]) / 2, steps=4)
+            page.mouse.move(*end, steps=4)
+
+        def selected(count: int) -> dict[str, tuple[Any, Any]]:
+            start = len(renders.items)
+            page.mouse.up()
+            renders.wait_for(page, targets, start)
+            page.wait_for_timeout(300)
+            expect(picker.locator(".selection")).to_contain_text(f"已選取 {count} 個標記")
+            return {w: (body, data) for w, body, data in renders.items[start:]}
+
+        central, east, south, west = (bar(r) for r in ("Central", "East", "South", "West"))
+        # 從 East 的長條中間拖到 South 的長條中間：兩個標記都碰到方框（Central、West 沒有）
+        drag(
+            (east["x"] + 6, east["y"] + east["height"] / 2),
+            (south["x"] + 40, south["y"] + south["height"] / 2),
+        )
+        # 拖曳中：畫出方框，沒有選到任何文字，也不顯示滑過標記的工具提示
+        expect(picker.locator(".select-overlay.passive rect")).to_have_count(1)
+        assert page.evaluate("String(window.getSelection())") == ""
+        assert page.evaluate("document.body.classList.contains('box-selecting')") is True
+        latest = selected(2)
+        for body, _ in latest.values():
+            assert list(body["actions"].values()) == [[{"f_region": "East"}, {"f_region": "South"}]]
+        assert latest["ws_segment_detail"][1]["rows"] > 0
+        expect(picker.locator(".select-overlay")).to_have_count(0)
+        assert page.evaluate("document.body.classList.contains('box-selecting')") is False
+        assert page.evaluate("String(window.getSelection())") == ""
+
+        # 按住 Ctrl 框選：加進原本的選取
+        page.keyboard.down("Control")
+        drag((west["x"] + 6, west["y"] + 4), (west["x"] + 60, west["y"] + west["height"] - 4))
+        latest = selected(3)
+        page.keyboard.up("Control")
+        assert list(latest["ws_category_detail"][0]["actions"].values()) == [
+            [{"f_region": "East"}, {"f_region": "South"}, {"f_region": "West"}]
+        ]
+
+        # 框到沒有標記的地方（最短的長條右邊的空白）：取消選取
+        start = len(renders.items)
+        drag(
+            (south["x"] + south["width"] + 60, south["y"] + 6),
+            (south["x"] + south["width"] + 90, south["y"] + south["height"] - 6),
+        )
+        page.mouse.up()
+        renders.wait_for(page, targets, start)
+        page.wait_for_timeout(300)
+        expect(picker.locator(".selection")).to_have_count(0)
+        assert renders.items[-1][1].get("actions", {}) == {}
+
+        # 框選之後點選照常（滑鼠只動了一兩個像素也算點選）
+        start = len(renders.items)
+        central = bar("Central")
+        page.mouse.move(central["x"] + 20, central["y"] + central["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(central["x"] + 21, central["y"] + central["height"] / 2 + 1)
+        page.mouse.up()
+        renders.wait_for(page, targets, start)
+        expect(picker.locator(".selection")).to_contain_text("已選取 1 個標記")
+        assert list(renders.items[-1][1]["actions"].values()) == [[{"f_region": "Central"}]]
+        assert errors == []
+        browser.close()
+
+
+def test_loading_title_is_the_sheet_name_and_empty_view_is_blank(server: str) -> None:
+    """查詢還沒回來時工作表的標題是工作表的名稱，不是內部的代號（稽核 B35：ws_region_picker）；
+    沒有資料的工作表（篩選動作的目標，還沒有選取）是空白的，不畫座標軸與「0.000000」（B33）。"""
+    from playwright.sync_api import Route, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    names = {w.id: w.name for w in ir.worksheets}
+    sheets = ["ws_region_picker", "ws_category_detail", "ws_segment_detail"]
+    sheets.append("ws_region_category_matrix")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        # 先扣住查詢的請求（還在「載入中…」），看完標題再放行
+        held: list[Route] = []
+        page.route("**/render", lambda route: held.append(route))
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        # 四張都在「載入中…」
+        page.wait_for_function("document.querySelectorAll('.worksheet .placeholder').length === 4")
+        titles = page.evaluate(
+            "Object.fromEntries([...document.querySelectorAll('.worksheet')].map(w =>"
+            " [w.dataset.worksheet, w.querySelector('.worksheet-title')?.textContent ?? null]))"
+        )
+        assert titles == {sheet: names[sheet] for sheet in sheets}
+        assert "ws_" not in page.locator(".dashboard").inner_text()
+        for route in held:
+            route.continue_()
+        page.wait_for_function(ALL_FOUR + " && !document.querySelector('[data-drawn=\"false\"]')")
+        detail = page.locator("[data-worksheet='ws_segment_detail']")
+        assert "0 列" in detail.locator(".worksheet-meta").inner_text()
+        assert detail.locator(".chart svg text").count() == 0
+        assert detail.locator(".chart svg .role-axis").count() == 0
+        # 有資料的工作表照常畫出座標軸
+        assert page.locator("[data-worksheet='ws_region_picker'] .chart svg .role-axis").count() > 0
+        assert errors == []
+        browser.close()
+
+
+def test_axis_tick_labels_do_not_run_together(server: str) -> None:
+    """連續座標軸的刻度文字之間留有空隙（稽核 B32：「90,000100,000」連成一串）。"""
+    from playwright.sync_api import sync_playwright
+
+    sheet = "ws_sub_category_sales"
+    renders = Renders()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.on("response", renders)
+        page.goto(f"{server}/w/superstore_features/s/{sheet}")
+        renders.wait_for(page, {sheet}, 0)
+        start = len(renders.items)
+        page.get_by_role("button", name="向下切入到 Product Name").click()
+        renders.wait_for(page, {sheet}, start)
+        page.wait_for_function(
+            "document.querySelector('.worksheet').dataset.loading === 'false'"
+            " && document.querySelector('.chart').dataset.drawn === 'true'"
+        )
+        page.wait_for_timeout(500)
+        labels = page.evaluate(
+            """() => [...document.querySelectorAll('.chart .frozen-host > svg .role-axis-label text')]
+              .filter(t => /^[0-9,]+$/.test(t.textContent) && t.__data__.opacity !== 0)
+              .map(t => { const r = t.getBoundingClientRect(); return [t.textContent, r.left, r.right]; })
+              .sort((a, b) => a[1] - b[1])"""
+        )
+        assert len(labels) >= 4 and labels[-1][0] == "100,000"
+        gaps = [after[1] - before[2] for before, after in itertools.pairwise(labels)]
+        assert min(gaps) >= 3, (labels, gaps)
+        browser.close()
+
+
+def test_print_and_capture_show_only_the_view(server: str) -> None:
+    """列印（匯出 PDF、訂閱的 PDF）與訂閱擷取的圖片只有檢視本身：不印工具列、每張工作表的列數與「資料」
+    切換、切入的連結，頁面的灰色底也不印（稽核 G6、C9）。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "篩選動作")
+    hidden = "items => items.every(e => getComputedStyle(e).display === 'none')"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_function(ALL_FOUR)
+        meta = page.locator(".worksheet-meta")
+        expect(meta.first).to_be_visible()
+        expect(page.locator(".toolbar")).to_be_visible()
+        # 訂閱擷取畫面時在 <html> 加上 capture
+        page.evaluate("document.documentElement.classList.add('capture')")
+        assert meta.evaluate_all(hidden)
+        page.evaluate("document.documentElement.classList.remove('capture')")
+        expect(meta.first).to_be_visible()
+        # 列印
+        page.emulate_media(media="print")
+        assert meta.evaluate_all(hidden)
+        expect(page.locator(".toolbar")).to_be_hidden()
+        background = page.evaluate(
+            "[getComputedStyle(document.documentElement).backgroundColor,"
+            " getComputedStyle(document.body).backgroundColor]"
+        )
+        assert background == ["rgb(255, 255, 255)", "rgb(255, 255, 255)"]
+        expect(page.locator(".dashboard")).to_be_visible()
+        browser.close()
