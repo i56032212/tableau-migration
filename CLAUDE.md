@@ -82,14 +82,15 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（ac93b7e，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2710 項通過、114 項略過
+- Windows 上的完整測試（392a424，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2735 項通過、114 項略過
   （其中 110 項需要 PostgreSQL、MySQL、Spark，在 Windows 上還沒跑過）；前端可以建置，結果與 Linux 上的相同。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
-- 2026-11-21 使用體驗稽核找到的程式錯誤已修（01f6a4c 桌面版與核心、baf7d8b 伺服器端、ac93b7e 桌面版裡的確認）；
-  沒修完的與「與 Tableau 不同」的項目在 `docs/backlog.md`
+- 2026-11-21 使用體驗稽核找到的程式錯誤已修（01f6a4c 桌面版與核心、baf7d8b 伺服器端、ac93b7e 桌面版裡的確認、
+  392a424 刪除可以復原、手機版面、畫圖的附註、框選與多行文字的列高）；修的時候看到還沒處理的，以及
+  「與 Tableau 不同」的項目在 `docs/backlog.md`
 - GitHub Actions 目前沒有在跑（使用者決定先不處理）；Windows 上的測試與安裝檔的建置在本機做
-- 桌面版安裝檔（ac93b7e）：2026-11-21 在 Windows 本機重建，引擎的冒煙測試通過；同一天在真正的視窗中驗證過版面、
-  功能表、拉 dashboard、這次修正的幾項與確認用的訊息方塊（以 WebView2 的除錯埠與 Win32 操作，見
+- 桌面版安裝檔（392a424）：2026-11-21 在 Windows 本機重建，引擎的冒煙測試通過；同一天在真正的視窗中驗證過版面、
+  功能表、拉 dashboard、這幾批修正的項目（含刪除後復原）與確認用的訊息方塊（以 WebView2 的除錯埠與 Win32 操作，見
   `docs/backlog.md`）。還沒有實際執行安裝檔，原生的選檔與存檔對話框也還沒驗證。建置的做法在 `desktop/README.md`；
   動到桌面版的流程後要在真正的視窗裡再驗證（瀏覽器裡的測試看不到外殼特有的行為）
 - `scripts/regen_ir.py`、`scripts/check_commit.py` 在 Linux 與 Windows 上都跑過
