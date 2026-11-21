@@ -284,7 +284,11 @@
       "mark": {
         "type": "rule",
         "color": "#d4d4d4",
-        "strokeWidth": 1
+        "strokeWidth": 1,
+        "x": {
+          "expr": "datum['__divider_rows']"
+        },
+        "x2": 0
       },
       "encoding": {
         "y": {
@@ -297,14 +301,6 @@
             "paddingOuter": 0
           },
           "bandPosition": 1
-        },
-        "x": {
-          "field": "__divider_rows",
-          "type": "quantitative",
-          "scale": null
-        },
-        "x2": {
-          "value": 0
         },
         "strokeOpacity": {
           "condition": {

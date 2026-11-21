@@ -10,6 +10,7 @@ import {
   type CatalogField,
   EDITOR_REF,
   type FilterIR,
+  formulaCaptions,
   formulaRef,
   isDate,
   isMeasure,
@@ -353,7 +354,12 @@ export function FilterDialog({
   };
 
   const shown = (domain ?? []).filter((v) => !search || display(v).toLowerCase().includes(search.toLowerCase()));
-  const topMeasures = measures.map((f) => ({ id: f.id, formula: measureFormula({ field: f.id, agg: f.level === "aggregate" ? null : (f.default_agg ?? "sum"), date: null, continuous: true, table_calc: null }, fields) }));
+  // 排名的依據：存的是公式（欄位以內部名稱參照，例如 [Calculation_1368…]），選單上顯示的是與膠囊相同的
+  // 寫法（SUM(Sales)、利潤率）
+  const topMeasures = measures.map((f) => {
+    const by: FieldUse = { field: f.id, agg: f.level === "aggregate" ? null : (f.default_agg ?? "sum"), date: null, continuous: true, table_calc: null };
+    return { id: f.id, formula: measureFormula(by, fields), label: pillLabel(by, fields, []) };
+  });
 
   return (
     <Modal title={`篩選［${fieldName}］`} onClose={onClose} wide>
@@ -522,11 +528,11 @@ export function FilterDialog({
                   {topMeasures.map((m) =>
                     m.formula ? (
                       <option key={m.id} value={m.formula}>
-                        {m.formula}
+                        {m.label}
                       </option>
                     ) : null,
                   )}
-                  {topBy && !topMeasures.some((m) => m.formula === topBy) && <option value={topBy}>{topBy}</option>}
+                  {topBy && !topMeasures.some((m) => m.formula === topBy) && <option value={topBy}>{formulaCaptions(topBy, fields)}</option>}
                 </select>
               </div>
             )}

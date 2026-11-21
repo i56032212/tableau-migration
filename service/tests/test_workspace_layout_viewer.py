@@ -401,3 +401,136 @@ def test_new_dashboard_takes_dropped_sheets_and_home_has_the_menu_bar(engine: st
         expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(2)
         assert errors == []
         browser.close()
+
+
+def test_sheet_tabs_delete_rename_and_scroll(engine: str) -> None:
+    """分頁列（2026-11-21 稽核）：連按兩下「還不是目前的」分頁會切過去並開始改名（原本只切換）；刪除目前的
+    工作表之後留在編輯器、開啟左邊的分頁（原本被丟到檢視器），刪除前說明不能復原；分頁很多時目前的分頁
+    捲進看得到的範圍（原本停在最左邊），按看得到的分頁時分頁列不跳動。"""
+    from playwright.sync_api import Dialog, Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def names() -> list[str]:
+        return [w["name"] for w in call(engine, "/api/workbooks/demo/ir")["worksheets"]]
+
+    def tab_box(page: Page) -> dict[str, Any]:
+        """目前的分頁在分頁列中的位置：是否完整在看得到的範圍內，與分頁列捲動的位置。"""
+        return page.locator(".sheet-tab-list").evaluate(
+            """box => {
+              const tab = box.querySelector('.sheet-tab.current');
+              const shown = box.getBoundingClientRect();
+              const at = tab ? tab.getBoundingClientRect() : null;
+              return {
+                name: tab ? tab.innerText : null,
+                visible: !!at && at.left >= shown.left - 1 && at.right <= shown.right + 1,
+                scroll: Math.round(box.scrollLeft),
+                overflow: box.scrollWidth > box.clientWidth,
+              };
+            }"""
+        )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        asked: list[str] = []
+        accept = [True]
+
+        def answer(dialog: Dialog) -> None:
+            asked.append(dialog.message)
+            if accept[0]:
+                dialog.accept()
+            else:
+                dialog.dismiss()
+
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", answer)
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+
+        # 連按兩下還不是目前的分頁：切過去，並進入改名（輸入框裡是原來的名稱）
+        sheet_tab(page, "Monthly Profit").dblclick()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_monthly_profit")
+        entry = page.locator(".sheet-tabs .renaming input")
+        expect(entry).to_have_value("Monthly Profit")
+        expect(entry).to_be_focused()
+        entry.fill("每月利潤")
+        entry.press("Enter")
+        expect(current_tab(page)).to_have_text("每月利潤")
+        settle(page)
+        assert "每月利潤" in names() and "Monthly Profit" not in names()
+        # 只按一下：切換分頁，不改名
+        sheet_tab(page, "Sales by Region").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        page.wait_for_timeout(900)  # 等第二下的時間過去
+        expect(page.locator(".sheet-tabs .renaming")).to_have_count(0)
+        expect(current_tab(page)).to_have_text("Sales by Region")
+
+        # 刪除目前的工作表：先確認（說明不能復原）；按取消不刪
+        for _ in range(2):
+            tool(page, "新增工作表").click()
+            page.wait_for_selector(".editor-canvas .placeholder")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        settle(page)
+        accept[0] = False
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_timeout(300)
+        assert asked[-1] == "刪除工作表「工作表 2」？刪除之後不能復原。"
+        assert "工作表 2" in names() and page.url == f"{engine}/w/demo/edit/ws_2"
+        # 按確定：刪掉之後留在編輯器，開啟左邊的分頁
+        accept[0] = True
+        tab_menu(page, current_tab(page), "刪除")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        expect(current_tab(page)).to_have_text("工作表 1")
+        expect(page.locator(".editor .menu-bar")).to_be_visible()
+        expect(sheet_tab(page, "工作表 2")).to_have_count(0)
+        assert "工作表 2" not in names()
+        # 刪除不是目前的分頁：留在原來的分頁
+        tool(page, "新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_2")
+        settle(page)
+        tab_menu(page, sheet_tab(page, "工作表 1"), "刪除")
+        expect(sheet_tab(page, "工作表 1")).to_have_count(0)
+        assert page.url == f"{engine}/w/demo/edit/ws_2"
+        expect(current_tab(page)).to_have_text("工作表 2")
+        # dashboard 還在用的工作表刪不掉：說明原因，留在原來的分頁
+        tab_menu(page, sheet_tab(page, "Sales by Region"), "刪除")
+        expect(page.locator(".toast")).to_contain_text("不能刪除")
+        assert "Sales by Region" in names() and page.url == f"{engine}/w/demo/edit/ws_2"
+
+        # 分頁很多：開啟最右邊的 dashboard，目前的分頁捲進看得到的範圍
+        for _ in range(40):
+            call(engine, "/api/edit/demo/worksheets", {})
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        expect(current_tab(page)).to_have_text("銷售總覽")
+        box = tab_box(page)
+        assert box["overflow"] and box["visible"] and box["scroll"] > 0, box
+        # 開啟中間的工作表（重新載入頁面）：也捲得到
+        page.goto(f"{engine}/w/demo/edit/ws_20")
+        settle(page)
+        box = tab_box(page)
+        assert box["name"] == "工作表 20" and box["visible"] and box["scroll"] > 0, box
+        # 按另一個看得到的分頁：切過去，分頁列留在原來的位置
+        sheet_tab(page, "工作表 15").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_15")
+        settle(page)
+        after = tab_box(page)
+        assert after["name"] == "工作表 15" and after["visible"], after
+        assert after["scroll"] == box["scroll"], (box, after)
+        # 新增工作表（加在所有工作表的最後、畫面之外）：捲過去
+        tool(page, "新增工作表").click()
+        page.wait_for_selector(".editor-canvas .placeholder")
+        settle(page)
+        latest = tab_box(page)
+        assert latest["visible"] and latest["scroll"] > after["scroll"], latest
+        assert errors == []
+        browser.close()

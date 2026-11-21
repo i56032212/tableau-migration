@@ -373,6 +373,9 @@ class _Builder:
         self.rows = list(ws.rows)
         self.columns = list(ws.columns)
         """畫出的欄列架（見 build_spec：沒有對應量值的 Measure Names 不畫）。"""
+        self.implied_axes: list[Axis] = []
+        """畫圖時補上的欄列架欄位（不在工作表的定義中）的標題設定：見 build_spec 中 Measure Values 在文字上、
+        欄列架上卻沒有 Measure Names 的處理。"""
         self.label_fields: dict[int, str] = {}
         """有自訂標籤文字的標記卡（id(Marks)）→ 資料中組好的標籤欄。"""
         self.label_count = 0
@@ -381,6 +384,8 @@ class _Builder:
         """換行的標籤欄、多個欄位組合的色彩欄的編號。"""
         self.drop_count = 0
         """下拉線圖層的編號。"""
+        self.trend_count = 0
+        """趨勢線圖層的編號：雙軸的兩個量值各有趨勢線時疊在同一張圖上，圖層的名稱不能相同。"""
         """標記標籤圖層的編號（圖層名稱與旗標欄各自不同）。"""
         self.text_styles: dict[int, TextStyle] = {}
         self.text_bases: dict[int, str] = {}
@@ -583,7 +588,8 @@ class _Builder:
 
     def axis_of(self, use: FieldUse, shelf: str) -> Axis | None:
         key = use_key(use)
-        return next((a for a in self.ws.axes if a.shelf == shelf and use_key(a.use) == key), None)
+        axes = [*self.ws.axes, *self.implied_axes]
+        return next((a for a in axes if a.shelf == shelf and use_key(a.use) == key), None)
 
     def axis_settings(
         self, encoding: dict[str, Any], use: FieldUse, shelf: Literal["rows", "columns"]
@@ -2220,7 +2226,12 @@ class _Builder:
             elif folded_scale is not None:
                 _names_scale(body, folded_scale)
             if marks.trend is not None:
-                _trend_lines(self, body, marks.trend, self.records_of(marks))
+                records = self.records_of(marks)
+                if folded and use.field != MEASURE_VALUES:
+                    # 長表中每列在每個 Measure Values 的量值重複一次：與標記相同只取一份（見
+                    # _first_fold_only），否則觀測數與 P 值是重複資料算出來的
+                    records = [r for r in records if not r.get("__mn_i")]
+                _trend_lines(self, body, marks.trend, records)
             kinds.append(kind)
             if pane is not None and pane.dual and charts:
                 channel = "y" if axis == "rows" else "x"
@@ -2614,6 +2625,19 @@ def build_spec(
     rows_meas = [u for u in builder.rows if builder.is_axis(u)]
     cols_dims = [u for u in builder.columns if not builder.is_axis(u)]
     cols_meas = [u for u in builder.columns if builder.is_axis(u)]
+    if long and _overprinted(ws, rows_dims, cols_dims, rows_meas, cols_meas):
+        # 文字表的文字是 Measure Values、欄列架上卻沒有 Measure Names：各量值的數字會畫在同一格、互相蓋住。
+        # 改成各量值各占一欄（列架上有標題而欄架上沒有時）或一列，依 Measure Values 卡的順序，不顯示標題
+        # （檢視中沒有 Measure Names 的標題）；位置的規則與編輯器自動加上 Measure Names 時相同
+        # （web/src/editor/model.ts 的 ensureMeasureNames）
+        spread = FieldUse(field=MEASURE_NAMES)
+        shelf: Literal["rows", "columns"] = "columns" if rows_dims and not cols_dims else "rows"
+        (builder.columns if shelf == "columns" else builder.rows).append(spread)
+        (cols_dims if shelf == "columns" else rows_dims).append(spread)
+        builder.implied_axes.append(Axis(use=spread, shelf=shelf, show=False))
+        builder.notes.append(
+            "Measure Values 在文字上、欄列架上沒有 Measure Names：各量值分開排列，不疊在同一格"
+        )
     composites: dict[str, list[FieldUse]] = {}
     if len(rows_dims) > 1:
         composites["rows_dim"] = rows_dims
@@ -3495,6 +3519,10 @@ def _header_divider(
         "type": "rule",
         "color": _css_color(divider.color),
         "strokeWidth": divider.width,
+        # 線的左端（像素）寫在標記上，不放在 encoding 的 x：圖層有連續的 x 時（即使不用比例尺），Vega-Lite
+        # 會把離散欄的寬度（width 的 step）丟掉、改用預設的 20 像素，欄維度的各欄擠在一起
+        "x": {"expr": f"datum['{flag}']"},
+        "x2": 0,
     }
     if divider.pattern != "solid":
         mark["strokeDash"] = _divider_dash(divider)
@@ -3505,8 +3533,6 @@ def _header_divider(
         "encoding": {
             # 線在這一列的尾端（band 的結束處）；不是邊界的列為長度 0 的線
             "y": {**position, "bandPosition": 1},
-            "x": {"field": flag, "type": "quantitative", "scale": None},
-            "x2": {"value": 0},
             "strokeOpacity": {
                 "condition": {"test": f"datum['{flag}'] < 0", "value": 1},
                 "value": 0,
@@ -3570,6 +3596,14 @@ def _trend_lines(
         )
         if color_ch is None or color_ch.name not in excluded:
             color_field = color["field"]
+    # 色彩是這張圖固定的值（雙軸的各量值以 Measure Names 上色，見 _color_datum）：趨勢線用這個值，與這個量值的
+    # 標記同色。量值的名稱是以 calculate 算出的常數欄位（不在資料列中），或直接寫成 datum
+    constant = _calculated_constant(body, color_field) if color_field is not None else None
+    fixed = (
+        color
+        if trend.by_color and isinstance(color, dict) and "datum" in color and "field" not in color
+        else None
+    )
     groups: dict[tuple[Any, ...], list[tuple[float, float, Any]]] = {}
     for record in records:
         if record.get(TOTAL):
@@ -3580,7 +3614,9 @@ def _trend_lines(
             continue
         key = tuple(record.get(k) for k in keys)
         if color_field is not None:
-            key += (record.get(color_field),)
+            key += (record.get(color_field) if constant is None else constant[0],)
+        elif fixed is not None:
+            key += (fixed["datum"],)
         groups.setdefault(key, []).append((number, float(value), raw))
     x_title, y_title = str(x.get("title") or ""), str(y.get("title") or "")
     rows: list[dict[str, Any]] = []
@@ -3661,6 +3697,8 @@ def _trend_lines(
     elif color_field is not None and isinstance(color, dict):
         # 與標記共用色彩刻度與圖例（同樣的欄位與設定，圖例合併成一個）
         line["color"] = copy.deepcopy(color)
+    elif fixed is not None:
+        line["color"] = copy.deepcopy(fixed)
     else:
         mark["color"] = TREND_COLOR
     if trend.tooltips:
@@ -3675,18 +3713,39 @@ def _trend_lines(
         line["tooltip"] = tips
     else:
         mark["tooltip"] = False
-    layers = [{"name": TREND, "data": {"values": rows}, "mark": mark, "encoding": line}]
+    # 圖層的名稱在同一張圖中不能重複（Vega 以標記的名稱建立資料集，同名時整張圖畫不出來）：雙軸的
+    # 兩個量值各有趨勢線時，第二條起加上編號
+    builder.trend_count += 1
+    name = TREND if builder.trend_count == 1 else f"{TREND}{builder.trend_count}"
+    layers = [{"name": name, "data": {"values": rows}, "mark": mark, "encoding": line}]
     if bands:
         for bound in ("low", "high"):
             layers.append(
                 {
-                    "name": f"{TREND}_{bound}",
+                    "name": f"{name}_{bound}",
                     "data": {"values": rows},
                     "mark": {**mark, "strokeDash": DASHES["dashed"]},
                     "encoding": {**line, "y": position(f"{TREND}_{bound}", y, "quantitative")},
                 }
             )
     _add_layers(body, layers)
+
+
+def _calculated_constant(node: dict[str, Any], field: str) -> tuple[Any] | None:
+    """圖（或它的主要圖層）上以 calculate 算出的常數欄位（見 _color_datum）的值；不是常數欄位時為 None。"""
+    for transform in node.get("transform", []):
+        if transform.get("as") == field and isinstance(transform.get("calculate"), str):
+            try:
+                return (json.loads(transform["calculate"]),)
+            except ValueError:
+                return None
+    for child in node.get("layer", []):
+        if str(child.get("name", "")).startswith((REF, DECO)):
+            continue
+        found = _calculated_constant(child, field)
+        if found is not None:
+            return found
+    return None
 
 
 def _date_number(value: Any) -> float | None:
@@ -6206,6 +6265,24 @@ def _dimension(ch: Channel) -> dict[str, Any]:
     if use.continuous and ch.datatype == "datetime":
         return {"field": ch.name, "type": "temporal", "scale": {"type": "utc"}, "title": ch.title}
     return {"field": ch.label, "type": "ordinal", "sort": None, "title": ch.title}
+
+
+def _overprinted(
+    ws: Worksheet,
+    rows_dims: list[FieldUse],
+    cols_dims: list[FieldUse],
+    rows_meas: list[FieldUse],
+    cols_meas: list[FieldUse],
+) -> bool:
+    """文字表的文字是 Measure Values，欄列架上卻沒有 Measure Names 把各量值分開：每一格有每個量值各一個
+    文字標記，畫在同一個位置。（Measure Names 只在色彩、詳細資料上時也一樣：它們不決定位置。）"""
+    if rows_meas or cols_meas or ws.panes or ws.marks.type not in ("automatic", "text"):
+        return False
+    if ws.marks.type == "automatic" and ws.marks.size is not None and not rows_dims + cols_dims:
+        return False  # 「自動」在這裡是樹狀圖（見 _infer_mark），不是文字表
+    if any(u.field == MEASURE_NAMES for u in rows_dims + cols_dims):
+        return False
+    return any(u.field == MEASURE_VALUES for u in ws.marks.label)
 
 
 def _infer_mark(

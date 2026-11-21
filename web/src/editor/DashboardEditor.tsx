@@ -5,6 +5,7 @@
 
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { errorText, fileUrl } from "../api";
 import { caseState, DashboardView } from "../Dashboard";
 import type { Button, Dashboard, Device, DeviceLayout, IR, Zone, ZoneStyle } from "../types";
 import { ActionsDialog } from "./ActionsDialog";
@@ -180,6 +181,8 @@ export function DashboardEditor({
     notify,
     (saved, previous) => {
       if (saved.name !== previous.name) onChanged();
+      // 圖片物件的圖片變了：選圖片的對話框列出的「報表中的圖片」跟著更新
+      if (usedImages(saved) !== usedImages(previous)) void reloadOutline();
     },
   );
   const [selected, setSelected] = useState<string | null>(null);
@@ -188,6 +191,8 @@ export function DashboardEditor({
   const [actionsOpen, setActionsOpen] = useState(false);
   // 編輯格式文字的文字物件（區塊 id）
   const [textZone, setTextZone] = useState<string | null>(null);
+  // 選圖片的對話框（Tableau 的「編輯圖片物件」）：zone 為 null 時是新增圖片物件，否則換掉那個區塊的圖片
+  const [imageDialog, setImageDialog] = useState<{ zone: string | null } | null>(null);
   const [zoom, setZoom] = useState<number | "fit">("fit");
   // 格線（Tableau 的「dashboard＞顯示格線」與「格線選項」）：畫面上的輔助線，顯示時浮動區塊的拖曳貼齊格線；
   // 是編輯器的設定（記在瀏覽器），不存進報表
@@ -486,10 +491,14 @@ export function DashboardEditor({
           </>
         )}
         {zone.kind === "image" && (
-          <label className="inline">
-            圖片
-            <input aria-label="圖片路徑" defaultValue={zone.image ?? ""} list="dash-images" onBlur={(e) => e.target.value && set({ image: e.target.value })} />
-          </label>
+          <div className="row image-prop">
+            <span className="image-name" title={zone.image ?? ""}>
+              {zone.image ? fileName(zone.image) : "（還沒有選圖片）"}
+            </span>
+            <button type="button" title="換成報表中的另一張圖片，或電腦上的圖片檔" onClick={() => setImageDialog({ zone: zone.id })}>
+              選擇圖片…
+            </button>
+          </div>
         )}
         {zone.kind === "web" && (
           <label className="inline" title="留空白時是空白的網頁物件，由網址動作載入（動作的「網址目標」）">
@@ -1048,7 +1057,7 @@ export function DashboardEditor({
           <button type="button" onClick={() => add(makeZone("title", {}, floating), { w: 400, h: 40 })}>
             標題
           </button>
-          <button type="button" onClick={() => add(makeZone("image", { image: outline.images[0] ?? "image.png" }, floating), { w: 200, h: 150 })}>
+          <button type="button" title="選一張圖片放到 dashboard 上（先選圖片，再加入圖片物件）" onClick={() => setImageDialog({ zone: null })}>
             圖片
           </button>
           <button type="button" onClick={() => add(makeZone("web", { url: "https://" }, floating), { w: 500, h: 400 })}>
@@ -1325,11 +1334,20 @@ export function DashboardEditor({
         </span>
         <span>縮放 {Math.round(scale * 100)}%</span>
       </StatusBar>
-      <datalist id="dash-images">
-        {outline.images.map((image) => (
-          <option key={image} value={image} />
-        ))}
-      </datalist>
+      {imageDialog && (
+        <ImageObjectDialog
+          workbook={workbook}
+          images={outline.images}
+          current={imageDialog.zone ? (findZone(dashboard, imageDialog.zone)?.zone.image ?? null) : null}
+          onClose={() => setImageDialog(null)}
+          onPick={(path) => {
+            // 選好圖片才加入圖片物件：畫面上不會有還沒有圖片（壞掉）的區塊
+            if (imageDialog.zone) change(imageDialog.zone, (z) => ({ ...z, image: path }));
+            else add(makeZone("image", { image: path }, floating), { w: 200, h: 150 });
+            setImageDialog(null);
+          }}
+        />
+      )}
       {notice && (
         <div className={`toast${notice.kind === "error" ? " error" : ""}`} role="status">
           {notice.text}
@@ -1366,6 +1384,147 @@ export function DashboardEditor({
 
 /** 「當作篩選器使用」產生的篩選動作名稱的結尾（Tableau 為「Filter N (generated)」）。 */
 const GENERATED = "（自動產生）";
+
+const IMAGE_ACCEPT = ".png,.jpg,.jpeg,.gif,.bmp,.webp,.svg";
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+
+const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+/** dashboard 的圖片物件用到的圖片（比較前後是否不同用）。 */
+function usedImages(dashboard: Dashboard): string {
+  const paths: string[] = [];
+  walkZones(dashboard.zones, (zone) => {
+    if (zone.kind === "image" && zone.image) paths.push(zone.image);
+  });
+  return paths.sort().join("\n");
+}
+
+/** 圖片物件的圖片（Tableau 的「編輯圖片物件」）：選報表中已有的圖片，或電腦上的圖片檔（按確定時存進報表）。
+ * 沒有選圖片不能按確定；取消時不加入圖片物件。 */
+function ImageObjectDialog({
+  workbook,
+  images,
+  current,
+  onClose,
+  onPick,
+}: {
+  workbook: string;
+  /** 報表中已經用到的圖片 */
+  images: string[];
+  /** 目前的圖片（換圖片時） */
+  current: string | null;
+  onClose: () => void;
+  onPick: (path: string) => void;
+}) {
+  const [existing, setExisting] = useState<string | null>(current && images.includes(current) ? current : null);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  const choose = (picked: File | null) => {
+    setError(null);
+    if (!picked) return;
+    if (picked.size > IMAGE_MAX_BYTES) {
+      setError(`${picked.name} 超過 ${IMAGE_MAX_BYTES / 1024 / 1024} MB`);
+      return;
+    }
+    setFile(picked);
+    setExisting(null);
+  };
+  const confirm = async () => {
+    if (!file) {
+      if (existing) onPick(existing);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const saved = await editApi.addImage(workbook, file.name, btoa(binary));
+      onPick(saved.path);
+    } catch (e) {
+      setError(`無法加入圖片：${errorText(e)}`);
+      setBusy(false);
+    }
+  };
+  const shown = preview ?? (existing ? fileUrl(workbook, existing) : null);
+  return (
+    <Modal title="編輯圖片物件" onClose={onClose}>
+      <div className="image-dialog">
+        <div className="row">
+          <button type="button" onClick={() => input.current?.click()}>
+            選擇檔案…
+          </button>
+          <span className="hint">{file ? file.name : "電腦上的圖片檔（PNG、JPG、GIF、BMP、WebP、SVG），按確定後存進報表"}</span>
+          <input
+            ref={input}
+            type="file"
+            aria-label="圖片檔"
+            accept={IMAGE_ACCEPT}
+            hidden
+            onChange={(e) => {
+              choose(e.target.files?.[0] ?? null);
+              e.target.value = "";
+            }}
+          />
+        </div>
+        {images.length > 0 && (
+          <fieldset>
+            <legend>報表中的圖片</legend>
+            <div className="image-choices" role="listbox" aria-label="報表中的圖片">
+              {images.map((image) => (
+                <button
+                  key={image}
+                  type="button"
+                  role="option"
+                  aria-selected={!file && existing === image}
+                  className={!file && existing === image ? "active" : undefined}
+                  title={image}
+                  onClick={() => {
+                    setFile(null);
+                    setExisting(image);
+                    setError(null);
+                  }}
+                >
+                  <img src={fileUrl(workbook, image)} alt="" />
+                  <span>{fileName(image)}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        )}
+        <div className="image-preview" aria-label="預覽">
+          {shown ? <img src={shown} alt={file ? file.name : fileName(existing ?? "")} /> : <span className="hint">還沒有選圖片</span>}
+        </div>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="dialog-actions">
+        <button type="button" className="primary" disabled={busy || (!file && !existing)} onClick={() => void confirm()}>
+          {busy ? "加入中…" : "確定"}
+        </button>
+        <button type="button" onClick={onClose}>
+          取消
+        </button>
+      </div>
+    </Modal>
+  );
+}
 
 /** 文字物件的格式文字（Tableau 的「編輯文字」）：粗體、斜體、底線、字級、顏色、對齊，可以插入參數的值。 */
 function ZoneTextDialog({

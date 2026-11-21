@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { errorText } from "./api";
 import { ConfirmDialog } from "./dialogs";
 import { saveFile } from "./exporter";
 import { Modal } from "./Server";
@@ -65,13 +66,14 @@ export function CrosstabDialog({
   const [error, setError] = useState<string | null>(null);
   const download = () => {
     setBusy(true);
+    setError(null);
     downloadSheet(workbook, sheet, stateFor(ir, sheet, view), "crosstab", format)
       .then(({ blob, name }) => saveFile(name, blob, desktop))
       .then((path) => {
         if (path) onDone(`已下載：${path}`);
         else onClose();
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e: unknown) => setError(`無法下載：${errorText(e)}`))
       .finally(() => setBusy(false));
   };
   return (
@@ -102,7 +104,11 @@ export function CrosstabDialog({
           </label>
         </fieldset>
         <p className="hint">與畫面上的篩選相同；數字與日期的格式、小計與總計照工作表的設定。</p>
-        {error && <p className="error">{error}</p>}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
       <div className="dialog-actions">
         <button type="button" className="primary" disabled={!sheet || busy} onClick={download}>
@@ -163,10 +169,12 @@ export function DataDialog({
     }
   }, [workbook, ir, sheet, view, tab]);
   const download = (kind: DownloadKind) => {
+    setError(null);
+    setNotice(null);
     downloadSheet(workbook, sheet, stateFor(ir, sheet, view), kind, "csv")
       .then(({ blob, name }) => saveFile(name, blob, desktop))
       .then((path) => path && setNotice(`已下載：${path}`))
-      .catch((e: Error) => setError(e.message));
+      .catch((e: unknown) => setError(`無法下載：${errorText(e)}`));
   };
   const headers = tab === "summary" ? (summary?.headers ?? []) : (full?.columns ?? []);
   const rows = tab === "summary" ? (summary?.rows ?? []) : (full?.rows ?? []);
@@ -203,7 +211,11 @@ export function DataDialog({
           </span>
         )}
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       {notice && <p className="success">{notice}</p>}
       {!loaded && !error && <p>載入中…</p>}
       {loaded && (

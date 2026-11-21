@@ -398,9 +398,17 @@ def test_default_dividers_are_rendered(tmp_path: Path, db: Path) -> None:
     [line] = [
         layer for layer in spec["layer"] if layer.get("name") == "__deco__divider_rows_header"
     ]
-    assert line["mark"] == {"type": "rule", "color": "#d4d4d4", "strokeWidth": 1}
+    # 線從改變的那一層的欄（資料列中的像素位置）畫到窗格的左緣；位置寫在標記上、不放在 encoding 的 x
+    # （圖層有連續的 x 時 Vega-Lite 會丟掉離散欄的寬度，見 test_row_header_dividers_keep_the_column_width）
+    assert line["mark"] == {
+        "type": "rule",
+        "color": "#d4d4d4",
+        "strokeWidth": 1,
+        "x": {"expr": "datum['__divider_rows']"},
+        "x2": 0,
+    }
     assert line["encoding"]["y"]["bandPosition"] == 1  # 線在這一列的尾端
-    assert line["encoding"]["x2"] == {"value": 0}
+    assert "x" not in line["encoding"] and "x2" not in line["encoding"]
 
     # 兩層：分隔 Region；只有一層時預設不畫
     spec = render(parse(tmp_path, banded()), db).spec
@@ -546,6 +554,31 @@ def test_banding_level_and_column_header_dividers(tmp_path: Path, db: Path) -> N
     assert "tickDash" not in axis and "gridDash" not in axis  # 實線不寫樣式
 
 
+def test_row_header_dividers_keep_the_column_width(tmp_path: Path, db: Path) -> None:
+    """兩層的列標題加上欄維度的文字表：欄寬是 width 的 step（依內容估計的寬度）。標題區域分隔線的位置
+    不能寫成 encoding 的連續 x——圖層裡只要有連續的 x（即使不用比例尺），Vega-Lite 就把 step 丟掉、每一欄
+    變成預設的 20 像素，各欄的數字疊在一起（2026-11-21 修 Measure Values 疊字時查到）。"""
+    table = worksheet(
+        "Table",
+        [REGION, CATEGORY, ORDER, SALES],
+        rows=f"({ref('none:Region:nk')} / {ref('none:Category:nk')})",
+        cols=ref("none:Order ID:nk"),
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+    )
+    spec = render(parse(tmp_path, table), db).spec
+    columns = spec["usermeta"]["sizing"]["columns"]
+    assert columns["count"] == 7 and columns["fixed"] and columns["step"] > 20
+    assert spec["width"] == {"step": columns["step"]}
+    main = main_encoding(spec)
+    assert main is not None and main["x"]["type"] == "ordinal"
+    names = [layer.get("name") for layer in spec["layer"]]
+    assert "__deco__divider_rows_header" in names  # 有標題區域的分隔線
+    for layer in spec["layer"]:
+        x = layer.get("encoding", {}).get("x")
+        # 主圖以外的圖層：x 是固定的像素位置（value）或沒有，不能是另一個欄位的座標
+        assert x is None or x is main["x"] or set(x) == {"value"}, layer.get("name")
+
+
 def test_divider_patterns(tmp_path: Path, db: Path) -> None:
     """分隔線的樣式（虛線、點線）：窗格與標題各自設定，沒有寫時為實線；窗格的線是格線、列標題的線是
     rule 標記、欄標題的線是刻度，樣式都跟著（線段的長度隨線寬放大）。"""
@@ -577,6 +610,8 @@ def test_divider_patterns(tmp_path: Path, db: Path) -> None:
         "type": "rule",
         "color": "#d4d4d4",
         "strokeWidth": 1,
+        "x": {"expr": "datum['__divider_rows']"},
+        "x2": 0,
         "strokeDash": [2, 1],
     }
     # 欄標題的分隔線（刻度）

@@ -18,6 +18,7 @@ import {
   defaultUse,
   drillPill,
   drillToggle,
+  ensureMeasureNames,
   firstMeasure,
   type FilterIR,
   GENERATED_LABELS,
@@ -272,7 +273,9 @@ export function useDropTarget(
           updated = { ...updated, measure_values: measures };
         }
         const [prepared, ready] = await editor.prepare(updated, use);
-        return insertUse(prepared, shelf, ready, index, card);
+        const placed = insertUse(prepared, shelf, ready, index, card);
+        // 與 Tableau 相同：檢視中沒有 Measure Names 時一併加上，各量值才不會疊在同一格
+        return item.field === MEASURE_VALUES ? ensureMeasureNames(placed, editor.fields) : placed;
       });
       return;
     }

@@ -2,7 +2,7 @@
 // 下方的分頁列（資料來源、工作表、dashboard、Story）與狀態列。各編輯器把自己的命令放進功能表與工具列。
 
 import type React from "react";
-import { createContext, useContext, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   addDatasource,
   closeDocument,
@@ -329,8 +329,56 @@ const NAME_LABELS: Record<SheetKind, string> = { worksheet: "工作表名稱", d
 
 type Patch = (value: Record<string, unknown>) => Record<string, unknown>;
 
+// 切換分頁時整個編輯器（連同分頁列）換成另一個分頁的並重新載入，分頁列是新的一份。下面兩件事要跨過這次更換，
+// 所以記在模組裡：分頁列捲到哪裡，以及連按兩下「還不是目前的」分頁時要改名的分頁。
+
+/** 分頁列橫向捲動的位置（每份報表各自記）：換了分頁之後分頁列留在原來的位置，不跳回最左邊。 */
+const tabScroll = new Map<string, number>();
+
+/** 連按兩下的第二下最多隔多久（毫秒）；要改名的要求在分頁列出現之前最多保留多久。 */
+const SECOND_CLICK_MS = 600;
+const RENAME_REQUEST_MS = 4000;
+
+let renameRequest: { workbook: string; tab: string; at: number } | null = null;
+const renameListeners = new Set<() => void>();
+
+/**
+ * 連按兩下還不是目前的分頁（Tableau：切到那個分頁並開始改名）。第一下已經切換分頁，原來的分頁按鈕不在了，
+ * 它的 dblclick 不會發生；所以第一下之後在視窗層級等第二下（mousedown 的 detail 為 2），等到了就記下要改名的
+ * 分頁，這一下的滑鼠事件結束後通知分頁列——新的分頁列還在載入時，出現後再開始改名。
+ */
+function awaitSecondClick(workbook: string, tab: string): void {
+  const stop = () => {
+    window.removeEventListener("mousedown", onDown, true);
+    window.clearTimeout(timer);
+  };
+  const onDown = (event: MouseEvent) => {
+    stop();
+    if (event.button !== 0 || event.detail !== 2) return;
+    const request = { workbook, tab, at: Date.now() };
+    renameRequest = request;
+    // 等這一下的 mouseup、click 都結束再開始改名：否則改名的輸入框剛取得焦點就被這一下搶走
+    window.addEventListener(
+      "mouseup",
+      () => window.setTimeout(() => renameRequest === request && renameListeners.forEach((notify) => notify()), 0),
+      { capture: true, once: true },
+    );
+  };
+  const timer = window.setTimeout(stop, SECOND_CLICK_MS);
+  window.addEventListener("mousedown", onDown, true);
+}
+
+/** 取出（並清除）這份報表還有效的改名要求。 */
+function takeRenameRequest(workbook: string): string | null {
+  const request = renameRequest;
+  if (!request || request.workbook !== workbook) return null;
+  renameRequest = null;
+  return Date.now() - request.at <= RENAME_REQUEST_MS ? request.tab : null;
+}
+
 /** 底部的分頁列：最左邊是資料來源，接著每張工作表、dashboard、Story 一個分頁，最後是三個新增的按鈕。
- * 按一下切換，連按兩下重新命名，按右鍵是這個分頁的命令。 */
+ * 按一下切換，連按兩下重新命名（還不是目前的分頁時先切過去），按右鍵是這個分頁的命令。分頁很多時
+ * 目前的分頁捲進看得到的範圍。 */
 export function SheetTabs({
   current,
   live,
@@ -360,6 +408,38 @@ export function SheetTabs({
   const isCurrent = (tab: SheetTab) => tab.kind === current.kind && tab.id === current.id;
   const tabs = ws.sheets.map((tab) => (live && isCurrent(tab) ? { ...tab, ...live } : tab));
   const source = datasource ?? (current.kind === "datasource" ? current.id : null) ?? ws.datasources[0]?.id ?? null;
+  const list = useRef<HTMLDivElement>(null);
+  const tabKeys = tabs.map(key).join("\n");
+
+  // 目前的分頁捲進分頁列看得到的範圍：載入時、切換分頁與分頁增減、改名之後。先回到上次捲到的位置，
+  // 目前的分頁已經看得到時分頁列不動
+  useLayoutEffect(() => {
+    const box = list.current;
+    if (!box) return;
+    box.scrollLeft = tabScroll.get(ws.workbook) ?? 0;
+    const tab = box.querySelector<HTMLElement>(".sheet-tab.current");
+    if (tab) {
+      const shown = box.getBoundingClientRect();
+      const at = tab.getBoundingClientRect();
+      if (at.left < shown.left) box.scrollLeft -= shown.left - at.left;
+      else if (at.right > shown.right) box.scrollLeft += Math.min(at.right - shown.right, at.left - shown.left);
+    }
+    tabScroll.set(ws.workbook, box.scrollLeft);
+  }, [ws.workbook, current.kind, current.id, tabKeys, renaming]);
+
+  // 連按兩下還不是目前的分頁：切過來之後開始改名（見 awaitSecondClick）
+  useEffect(() => {
+    const start = () => {
+      if (!renameRequest || renameRequest.workbook !== ws.workbook) return;
+      // 要改名的分頁還沒出現在這份分頁列（報表的定義還在重新載入）時先留著
+      if (!tabKeys.split("\n").includes(renameRequest.tab)) return;
+      const tab = takeRenameRequest(ws.workbook);
+      if (tab) setRenaming(tab);
+    };
+    start();
+    renameListeners.add(start);
+    return () => void renameListeners.delete(start);
+  }, [ws.workbook, tabKeys]);
 
   /** 改變一個分頁的定義：目前的分頁經過編輯器（可以復原），其他的直接存回。 */
   const patch = (tab: SheetTab, change: Patch, reload = true) => {
@@ -385,7 +465,11 @@ export function SheetTabs({
       })
       .catch((e: Error) => fail(e.message));
   const remove = (tab: SheetTab) => {
-    if (!window.confirm(`刪除${tab.kind === "worksheet" ? "工作表" : ` ${KIND_NAMES[tab.kind]}`}「${tab.name}」？`)) return;
+    // 刪除不在編輯的歷程裡（歷程是每個分頁各自的定義），Ctrl+Z 救不回來：先說清楚再刪
+    if (!window.confirm(`刪除${tab.kind === "worksheet" ? "工作表" : ` ${KIND_NAMES[tab.kind]}`}「${tab.name}」？刪除之後不能復原。`)) return;
+    // 刪除目前的分頁之後留在編輯器：開啟左邊的分頁（它是第一個時開啟右邊的；都沒有時開啟資料來源）
+    const at = tabs.findIndex((t) => key(t) === key(tab));
+    const neighbour = at < 0 ? null : (tabs[at - 1] ?? tabs[at + 1] ?? null);
     const removed =
       tab.kind === "worksheet"
         ? editApi.removeWorksheet(ws.workbook, tab.id)
@@ -394,8 +478,12 @@ export function SheetTabs({
           : editApi.removeStory(ws.workbook, tab.id);
     void removed
       .then(() => {
+        if (isCurrent(tab)) {
+          if (neighbour) ws.open(neighbour.kind, neighbour.id);
+          else if (source) ws.open("datasource", source);
+          else ws.view(tab.kind, null);
+        }
         ws.changed();
-        if (isCurrent(tab)) ws.view(tab.kind, null);
       })
       .catch((e: Error) => fail(e.message));
   };
@@ -440,7 +528,7 @@ export function SheetTabs({
         <Icon name="datasource" size={14} />
         <span className="sheet-tab-name">資料來源</span>
       </button>
-      <div className="sheet-tab-list">
+      <div className="sheet-tab-list" ref={list} onScroll={(e) => tabScroll.set(ws.workbook, e.currentTarget.scrollLeft)}>
         {tabs.map((tab) =>
           renaming === key(tab) ? (
             <span key={key(tab)} className={`sheet-tab tab-${tab.kind} renaming${isCurrent(tab) ? " current" : ""}`}>
@@ -475,7 +563,12 @@ export function SheetTabs({
               data-tab={key(tab)}
               title={`${KIND_NAMES[tab.kind]}：${tab.name}${tab.hidden ? "（隱藏）" : ""}`}
               style={tab.color ? { boxShadow: `inset 0 -3px 0 ${tab.color}` } : undefined}
-              onClick={() => !isCurrent(tab) && ws.open(tab.kind, tab.id)}
+              onClick={(e) => {
+                if (isCurrent(tab)) return;
+                // 連按兩下的第一下：切換分頁，第二下到了就改名
+                if (e.detail === 1) awaitSecondClick(ws.workbook, key(tab));
+                ws.open(tab.kind, tab.id);
+              }}
               onDoubleClick={() => setRenaming(key(tab))}
               onContextMenu={(e) => {
                 e.preventDefault();

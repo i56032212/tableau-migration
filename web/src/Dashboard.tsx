@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { fileUrl } from "./api";
+import { errorText, fileUrl } from "./api";
 import { isDesktop } from "./desktop";
 import { type ColorScale, discreteColor, rampBackground } from "./colorScale";
 import { FilterControl, HighlighterControl, ParameterControl, SetControl } from "./Controls";
@@ -305,7 +305,7 @@ export function DashboardView({ workbook, ir, dashboard: base, view, onView, onN
         const kind = button.export;
         void import("./exporter")
           .then(({ exportView }) => exportView(element, kind, dashboard.name, isDesktop()))
-          .catch((e: Error) => window.alert(`無法匯出：${e.message}`));
+          .catch((e: unknown) => window.alert(`無法匯出：${errorText(e)}`));
       }
     }
   };
@@ -560,7 +560,7 @@ function ZoneContent({
         </div>
       );
     case "image":
-      return <img className="zone-image" src={fileUrl(workbook, zone.image!)} alt="" />;
+      return <ZoneImage workbook={workbook} path={zone.image} />;
     case "web": {
       // 只嵌入 http(s) 網頁；沙箱中的網頁不能存取檢視器。網址動作載入的網址優先；
       // 沒有網址的網頁物件在動作載入之前是空白的
@@ -584,6 +584,16 @@ function ZoneContent({
     default:
       return null;
   }
+}
+
+/** 圖片區塊。報表中找不到這張圖片（或還沒有選圖片）時與 Tableau 相同是空的，不顯示瀏覽器的破圖示；
+ * 編輯器另外寫出找不到的檔名（見 styles.css 的 .dash-canvas .zone-image.missing）。 */
+function ZoneImage({ workbook, path }: { workbook: string; path: string | null | undefined }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  if (!path || failed === path) {
+    return <div className="zone-image missing" data-missing={path ? `找不到圖片：${path}` : "還沒有選圖片"} />;
+  }
+  return <img className="zone-image" src={fileUrl(workbook, path)} alt="" onError={() => setFailed(path)} />;
 }
 
 const EXPORT_LABELS = { pdf: "匯出 PDF", image: "匯出圖片", powerpoint: "匯出 PowerPoint" };

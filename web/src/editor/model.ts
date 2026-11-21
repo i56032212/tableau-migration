@@ -842,6 +842,27 @@ function tidyCards(sheet: SheetIR): SheetIR {
   };
 }
 
+/**
+ * Measure Values 放進檢視、檢視中卻沒有 Measure Names 時自動加上 Measure Names（Tableau 也會自動加上）：沒有它把
+ * 各量值分開，每個量值的標記會畫在同一個位置（文字表的數字疊在同一格）。加在架的最後，位置：
+ * - Measure Values 在標記卡上（文字表）：列架上有標題（維度、離散的量值）而欄架上沒有時加到欄架，其餘加到列架
+ *   （欄、列架上都有維度時加到列架，依 Tableau 說明文件〈Measure Values and Measure Names〉的例子——文件沒有寫明
+ *   各維度在哪個架上；其餘是推定的，見 README「已知限制與待驗證」。與 tmig.render.vegalite 補上 Measure Names
+ *   時的規則相同）
+ * - Measure Values 在列（欄）架上當座標軸：加到另一架（推定）
+ * 地圖不加。
+ */
+export function ensureMeasureNames(sheet: SheetIR, fields: Map<string, CatalogField>): SheetIR {
+  const views = [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks), ...sheet.panes.flatMap((p) => markUses(p.marks))];
+  if (!views.some((u) => u.field === MEASURE_VALUES) || views.some((u) => u.field === MEASURE_NAMES)) return sheet;
+  if (isMapSheet(sheet)) return sheet;
+  const header = (u: FieldUse) => !isSpecial(u) && !(isMeasure(u, fields) && u.continuous);
+  const axis = (uses: FieldUse[]) => uses.some((u) => u.field === MEASURE_VALUES);
+  const toColumns = axis(sheet.rows) || (!axis(sheet.columns) && sheet.rows.some(header) && !sheet.columns.some(header));
+  const names: FieldUse = { field: MEASURE_NAMES, agg: null, date: null, continuous: false, table_calc: null };
+  return toColumns ? { ...sheet, columns: [...sheet.columns, names] } : { ...sheet, rows: [...sheet.rows, names] };
+}
+
 /** 把詳細資料上的維度加到色彩（Tableau 色彩上的多個欄位：以欄位值的組合著色），或拿掉。 */
 export function toggleColorMore(sheet: SheetIR, card: Card, use: FieldUse): SheetIR {
   return updateCard(sheet, card, (m) => {
@@ -928,6 +949,18 @@ export const isNumeric = (field: CatalogField | undefined) =>
 /** Tableau 公式中的欄位參照（[Sales]）。 */
 export function formulaRef(field: CatalogField): string {
   return field.name.startsWith("[") ? field.name : `[${field.name}]`;
+}
+
+/** 公式中的欄位參照換成欄位顯示的名稱（給人看的寫法；存檔的公式用內部名稱）：計算欄位的內部名稱是
+ * [Calculation_1368…]，顯示成 [利潤率]。 */
+export function formulaCaptions(formula: string, fields: Map<string, CatalogField>): string {
+  let text = formula;
+  for (const field of fields.values()) {
+    const ref = formulaRef(field);
+    const shown = `[${field.caption.replace(/]/g, "]]")}]`;
+    if (ref !== shown && text.includes(ref)) text = text.split(ref).join(shown);
+  }
+  return text;
 }
 
 /** 量值的 Tableau 公式（Top N 篩選的依據）：SUM([Sales])；彙總的計算欄位直接參照。 */

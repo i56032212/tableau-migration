@@ -169,6 +169,18 @@ class ShapesBody(BaseModel):
     files: list[ShapeFile] = Field(min_length=1, max_length=SHAPE_UPLOAD_LIMIT)
 
 
+IMAGE_FOLDER = "Image"
+"""dashboard 的圖片物件選的圖片在報表的 files/ 下的資料夾（Tableau 的 .twbx 也放在 Image/）。"""
+
+
+class ImageBody(BaseModel):
+    """dashboard 的圖片物件選的圖片檔：檔名與內容（base64）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1)
+
+
 def shape_palettes(directory: Path) -> list[dict[str, Any]]:
     """報表可以用的自訂形狀調色盤（files/Shapes/ 與 .twbx／.twb 內嵌的圖片）。"""
     return [{"name": name, "images": images} for name, images in palettes(directory).items()]
@@ -186,19 +198,7 @@ def shape_upload(directory: Path, body: ShapesBody) -> list[str]:
         problem = shape_image_error(path)
         if problem is not None or any(c in name for c in '/\\:*?"<>|'):
             raise ValueError(problem or f"圖片的檔名不正確：{item.name}")
-        try:
-            content = base64.b64decode(item.content, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(f"圖片 {name} 的內容不是 base64") from exc
-        if not content or len(content) > MAX_SHAPE_BYTES:
-            raise ValueError(f"圖片 {name} 是空的或超過 {MAX_SHAPE_BYTES // 1024 // 1024} MB")
-        suffix = Path(name).suffix.lower()
-        if suffix == ".svg":
-            if b"<svg" not in content[:4096].lower():
-                raise ValueError(f"{name} 不是 SVG 圖片")
-        elif not content.startswith(IMAGE_SIGNATURES.get(suffix, ())):
-            raise ValueError(f"{name} 的內容不是 {suffix} 圖片")
-        written.append((path, content))
+        written.append((path, image_bytes(name, item.content)))
     for path, content in written:
         relative = member_path(path)
         assert relative is not None
@@ -206,6 +206,53 @@ def shape_upload(directory: Path, body: ShapesBody) -> list[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
     return [path for path, _ in written]
+
+
+def image_bytes(name: str, encoded: str) -> bytes:
+    """上傳的圖片（base64）的內容：不是 base64、空的、太大，或內容與副檔名不符時 ValueError。"""
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"圖片 {name} 的內容不是 base64") from exc
+    if not content or len(content) > MAX_SHAPE_BYTES:
+        raise ValueError(f"圖片 {name} 是空的或超過 {MAX_SHAPE_BYTES // 1024 // 1024} MB")
+    suffix = Path(name).suffix.lower()
+    if suffix == ".svg":
+        if b"<svg" not in content[:4096].lower():
+            raise ValueError(f"{name} 不是 SVG 圖片")
+    elif not content.startswith(IMAGE_SIGNATURES.get(suffix, ())):
+        raise ValueError(f"{name} 的內容不是 {suffix} 圖片")
+    return content
+
+
+def image_upload(directory: Path, body: ImageBody) -> str:
+    """dashboard 的圖片物件選的圖片檔寫進報表的 files/Image/；回傳圖片路徑（Image/<檔名>），存檔、發布時
+    跟著報表。報表裡已經有同名的圖片時：內容相同就用它，不同就另取檔名（logo (2).png），不蓋掉其他圖片物件
+    正在用的圖片。檔名或內容不正確時 ValueError。"""
+    name = body.name.strip()
+    stem, suffix = Path(name).stem, Path(name).suffix
+    if (
+        not stem
+        or name in (".", "..")
+        or any(c in name for c in '/\\:*?"<>|')
+        or suffix.lower() not in IMAGE_SUFFIXES
+    ):
+        raise ValueError(f"圖片的檔名不正確（要是 {'、'.join(IMAGE_SUFFIXES)} 檔）：{body.name}")
+    content = image_bytes(name, body.content)
+    numbered = 1
+    while True:
+        filename = name if numbered == 1 else f"{stem} ({numbered}){suffix}"
+        path = f"{IMAGE_FOLDER}/{filename}"
+        # 已有的圖片：報表的 files/ 與 .twbx 內的都算
+        existing = read_report_file(directory, path)
+        if existing is None:
+            target = directory / "files" / IMAGE_FOLDER / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            return path
+        if existing == content:
+            return path
+        numbered += 1
 
 
 def source_copies(
@@ -905,6 +952,17 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return {"added": added, "palettes": shape_palettes(loaded.directory)}
+
+    @router.post("/{workbook}/images")
+    def post_image(workbook: str, body: ImageBody, request: Request) -> dict[str, str]:
+        """dashboard 的圖片物件選的圖片檔：存進報表（files/Image/），回傳圖片區塊要寫的路徑。"""
+        loaded = workspace(request).get(workbook)
+        if loaded.published is not None:
+            raise HTTPException(409, "伺服器上的報表不能直接編輯")
+        try:
+            return {"path": image_upload(loaded.directory, body)}
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @router.post("/{workbook}/worksheets")
     def post_worksheet(workbook: str, body: NewWorksheetBody, request: Request) -> dict[str, Any]:

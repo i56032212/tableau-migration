@@ -347,6 +347,9 @@ export const editApi = {
       method: "POST",
       body: JSON.stringify({ palette, files }),
     }),
+  /** dashboard 的圖片物件選的圖片檔（content 為 base64）存進報表；回傳圖片區塊要寫的路徑 */
+  addImage: (workbook: string, name: string, content: string) =>
+    request<{ path: string }>(`${edit(workbook)}/images`, { method: "POST", body: JSON.stringify({ name, content }) }),
   /** 匯入另一份報表的工作表；worksheets 為 null 時整份匯入（含 dashboard、Story 與動作） */
   importSheets: (workbook: string, source: string, worksheets: string[] | null) =>
     request<{ worksheets: string[]; dashboards: string[]; stories: string[]; datasources: Record<string, string>; shared_parameters: string[] }>(

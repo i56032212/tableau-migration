@@ -190,7 +190,9 @@ FORECAST = (
 )
 
 
-def forecast_ir(tmp_path: Path, discrete: bool = False, mark: str = "Line") -> object:
+def forecast_ir(
+    tmp_path: Path, discrete: bool = False, mark: str = "Line", fill: str = "fill-missing"
+) -> object:
     name = "tmn:Order Date:ok" if discrete else "tmn:Order Date:qk"
     kind = "ordinal" if discrete else "quantitative"
     month = instance("[Order Date]", "Month-Trunc", f"[{name}]", kind)
@@ -211,7 +213,7 @@ def forecast_ir(tmp_path: Path, discrete: bool = False, mark: str = "Line") -> o
         cols=ref(name),
         mark=mark,
         encodings=f"<color column='{ref('none:Forecast Indicator:nk')}' />",
-        table_extra=FORECAST,
+        table_extra=FORECAST.replace("fill-type='fill-missing'", f"fill-type='{fill}'"),
     )
     return parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=sheet)))
 
@@ -244,6 +246,36 @@ def test_forecast_months(tmp_path: Path, db: Path) -> None:
     band = rendered.spec["layer"][0]
     assert band["name"].startswith("__deco_forecast") and band["mark"]["type"] == "area"
     assert any("指數平滑" in n for n in rendered.notes)
+
+
+def test_forecast_fills_missing_months_with_zeros(tmp_path: Path, db: Path) -> None:
+    """「以 0 填補缺少的值」（fill-type='fill-zero'）：中間沒有資料的月當成 0 再估計，不內插——估計的月份、
+    Forecast Indicator 與預測區間都與不勾選時一樣有，只是估計值不同。（2026-11-21 的稽核回報勾選後沒有預測：
+    查證是存檔完成之前就截圖，預測其實有畫出來；這裡把有缺月的資料固定下來。）"""
+    month, sales = "trunc_month(f_order_date)", "sum(f_sales)"
+
+    def estimates(fill: str) -> list[dict[str, object]]:
+        folder = tmp_path / fill
+        folder.mkdir()
+        ir = forecast_ir(folder, fill=fill)
+        assert ir.unsupported == [], [u.reason for u in ir.unsupported]  # type: ignore[attr-defined]
+        ws = ir.worksheets[0]  # type: ignore[attr-defined]
+        assert ws.forecast is not None and ws.forecast.fill_zeros is (fill == "fill-zero")
+        query = worksheet_sql(ir, ws.id)  # type: ignore[arg-type]
+        result = execute_query(db, query)
+        rendered = build_spec(ir, ws.id, query.columns, result)  # type: ignore[arg-type]
+        assert rendered.spec is not None
+        assert rendered.spec["layer"][0]["name"].startswith("__deco_forecast")
+        assert not any(note.startswith("預測（") for note in rendered.notes)  # 沒有估計不出來的量值
+        return [r for r in result.records() if r["f_forecast_indicator"] == ESTIMATE]
+
+    zeros, interpolated = estimates("fill-zero"), estimates("fill-missing")
+    expected = [dt.date(2024, 3, 1), dt.date(2024, 4, 1), dt.date(2024, 5, 1), dt.date(2024, 6, 1)]
+    assert [r[month] for r in zeros] == [r[month] for r in interpolated] == expected
+    for r in zeros:
+        assert r[LOW + sales] <= r[sales] <= r[HIGH + sales]  # type: ignore[operator]
+    # 缺的 9 個月是 0 而不是前後的值之間的直線：配適的序列不同，估計值也不同
+    assert [r[sales] for r in zeros] != pytest.approx([r[sales] for r in interpolated])
 
 
 def test_forecast_band_on_discrete_axis(tmp_path: Path, db: Path) -> None:

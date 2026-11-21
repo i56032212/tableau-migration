@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,11 @@ def scatter(trend: str, style: str = "", color: bool = True) -> str:
 
 def layer(spec: dict[str, Any], name: str = "__ref_trend") -> dict[str, Any]:
     return next(item for item in spec["layer"] if item.get("name") == name)
+
+
+def days(text: str) -> float:
+    """日期（ISO 8601）→ 1899-12-30 起的天數（趨勢線在時間軸上配適時的橫軸值）。"""
+    return (datetime.fromisoformat(text) - datetime(1899, 12, 30)).total_seconds() / 86400
 
 
 def test_models() -> None:
@@ -358,11 +364,6 @@ def test_trend_lines_on_time_axes(tmp_path: Path, db: Path) -> None:
     rows = trend["data"]["values"]
     assert [r["__ref_trend_x"] for r in rows] == sorted({v[x] for v in marks})
 
-    def days(text: str) -> float:
-        from datetime import datetime
-
-        return (datetime.fromisoformat(text) - datetime(1899, 12, 30)).total_seconds() / 86400
-
     slope, intercept = statistics.linear_regression(
         [days(v[x]) for v in marks], [v[y] for v in marks]
     )
@@ -385,3 +386,113 @@ def test_trend_lines_need_continuous_axes(tmp_path: Path, db: Path) -> None:
     )
     rendered = render(parse(tmp_path, bars), db)
     assert rendered.notes == ["趨勢線需要橫軸與縱軸都是連續的座標軸，未畫出"]
+
+
+def test_trend_lines_on_dual_axes(tmp_path: Path, db: Path) -> None:
+    """雙軸的兩個量值各有一條趨勢線（2026-11-21 稽核：兩個圖層都叫 __ref_trend，疊在同一張圖上時 Vega 回報
+    Duplicate data set name，整張圖畫不出來）：圖層的名稱各不相同；以 Measure Names 上色時，趨勢線與自己的
+    量值同色（量值的名稱是圖層上算出的常數，不在資料列中）。"""
+    color = f"<color column='{ref(':Measure Names')}' />"
+
+    def pane(pane_id: int, measure: str, index: str = "") -> str:
+        return (
+            f"<pane id='{pane_id}' y-axis-name='{ref(measure)}'{index}><view><breakdown value='auto' />"
+            f"</view><mark class='Line' /><encodings>{color}</encodings>{trendline()}</pane>"
+        )
+
+    sheet = worksheet(
+        "Dual",
+        [MONTH, SALES, PROFIT],
+        rows=f"({ref('sum:Sales:qk')} + {ref('sum:Profit:qk')})",
+        cols=ref("tmn:Order Date:qk"),
+        mark="Line",
+        encodings=color,
+        pane_extra=trendline(),
+        panes_extra=pane(2, "sum:Sales:qk") + pane(3, "sum:Profit:qk", " y-index='1'"),
+    )
+    ir = parse(tmp_path, sheet)
+    assert [p.marks.trend is not None for p in ir.worksheets[0].panes] == [True, True]
+    rendered = render(ir, db)
+    spec = rendered.spec
+    assert spec["resolve"]["scale"]["y"] == "independent"
+
+    def named(node: dict[str, Any]) -> list[dict[str, Any]]:
+        found = [node] if "name" in node and "mark" in node else []
+        return found + [item for child in node.get("layer", []) for item in named(child)]
+
+    trends = [item for item in named(spec) if item["name"].startswith("__ref_trend")]
+    assert [item["name"] for item in trends] == ["__ref_trend", "__ref_trend2"]
+    marks = spec["data"]["values"]
+    x = main_encoding(spec)["x"]["field"]  # type: ignore[index]
+    for trend, title, own in zip(trends, ("Sales", "Profit"), spec["layer"], strict=True):
+        assert trend in own["layer"]  # 各自疊在自己的量值上，用那個軸的刻度
+        y = main_encoding(own)["y"]  # type: ignore[index]
+        assert (y["title"], trend["encoding"]["y"]["title"]) == (title, title)
+        rows = trend["data"]["values"]
+        slope, intercept = statistics.linear_regression(
+            [days(v[x]) for v in marks], [v[y["field"]] for v in marks]
+        )
+        for r in rows:
+            assert r["__ref_trend_y"] == pytest.approx(slope * days(r["__ref_trend_x"]) + intercept)
+        # 與這個量值的標記同色：色彩是同一個欄位與比例尺，值是量值的名稱
+        assert trend["encoding"]["color"] == main_encoding(own)["color"]  # type: ignore[index]
+        assert {r["__mn_name"] for r in rows} == {title}
+    assert [m["group"] for m in spec["usermeta"]["trends"]] == [["Sales"], ["Profit"]]
+
+
+def test_trend_line_of_a_measure_beside_measure_values(tmp_path: Path, db: Path) -> None:
+    """Measure Values 與另一個量值疊成雙軸、都以 Measure Names 上色、各有趨勢線：另一個量值的趨勢線只以每個
+    標記一份資料配適（長表中每列在每個 Measure Values 的量值重複一次，照算的話觀測數與 P 值都不對），顏色與
+    它的標記相同（色彩是固定的 datum，不是欄位）；三條趨勢線的圖層名稱各不相同。"""
+    values = ref("Multiple Values")
+    names = f"<color column='{ref(':Measure Names')}' />"
+    average = instance("[Sales]", "Avg", "[avg:Sales:qk]", "quantitative")
+
+    def pane(pane_id: int, axis: str, index: str = "") -> str:
+        return (
+            f"<pane id='{pane_id}' y-axis-name='{axis}'{index}><view><breakdown value='auto' /></view>"
+            f"<mark class='Line' /><encodings>{names}</encodings>{trendline()}</pane>"
+        )
+
+    sheet = worksheet(
+        "Dual",
+        [MONTH, SALES, average, PROFIT],
+        rows=f"({values} + {ref('sum:Profit:qk')})",
+        cols=ref("tmn:Order Date:qk"),
+        mark="Line",
+        encodings=names,
+        pane_extra=trendline(),
+        panes_extra=pane(2, values) + pane(3, ref("sum:Profit:qk"), " y-index='1'"),
+        view_extra=(
+            f"<filter class='categorical' column='{ref(':Measure Names')}'>"
+            "<groupfilter function='union' user:op='manual'>"
+            f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref('sum:Sales:qk')}&quot;' />"
+            f"<groupfilter function='member' level='[:Measure Names]' member='&quot;{ref('avg:Sales:qk')}&quot;' />"
+            "</groupfilter></filter>"
+        ),
+    )
+    ir = parse(tmp_path, sheet)
+    assert ir.unsupported == []
+    spec = render(ir, db).spec
+    marks = spec["data"]["values"]
+    months = {v[main_encoding(spec)["x"]["field"]] for v in marks}  # type: ignore[index]
+    assert len(marks) == 2 * len(months)  # 長表：每個月在 Measure Values 的兩個量值各一列
+    models = {tuple(m["group"]): m for m in spec["usermeta"]["trends"]}
+    assert list(models) == [("Sales",), ("AVG(Sales)",), ("Profit",)]
+    assert {m["observations"] for m in models.values()} == {len(months)}  # Profit 不是兩倍
+
+    def named(node: dict[str, Any]) -> list[dict[str, Any]]:
+        found = [node] if "name" in node and "mark" in node else []
+        return found + [item for child in node.get("layer", []) for item in named(child)]
+
+    trends = [item for item in named(spec) if item["name"].startswith("__ref_trend")]
+    assert [item["name"] for item in trends] == ["__ref_trend", "__ref_trend2"]
+    folded, profit = trends
+    assert folded["encoding"]["color"]["field"] == "__mn"
+    assert {r["__mn"] for r in folded["data"]["values"]} == {"Sales", "AVG(Sales)"}
+    assert profit["encoding"]["color"] == {
+        "datum": "Profit",
+        "type": "nominal",
+        "title": "Measure Names",
+    }
+    assert "color" not in profit["mark"]

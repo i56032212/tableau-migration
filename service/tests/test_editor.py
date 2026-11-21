@@ -839,6 +839,47 @@ def test_desktop_export_writes_the_file(client: TestClient, tmp_path: Path) -> N
     assert garbage.status_code == 422
 
 
+def test_desktop_export_writes_downloaded_data_and_crosstab(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """檢視器下載的資料（CSV）與交叉資料表（CSV、Excel）也經 /api/desktop/export 寫到作者選的位置
+    （2026-11-21 稽核：副檔名的清單只有 .png、.pptx、.pdf，CSV 與 Excel 一律 422）。"""
+    import base64
+
+    for kind, extension in (
+        ("summary", "csv"),
+        ("underlying", "csv"),
+        ("crosstab", "csv"),
+        ("crosstab", "xlsx"),
+    ):
+        download = client.post(
+            "/api/workbooks/demo/worksheets/ws_sales_by_region/download",
+            json={"kind": kind, "format": extension, "state": {}},
+        )
+        assert download.status_code == 200, download.text
+        target = tmp_path / f"{kind}.{extension}"
+        response = client.post(
+            "/api/desktop/export",
+            json={"path": str(target), "content": base64.b64encode(download.content).decode()},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"path": str(target), "size": len(download.content)}
+        assert target.read_bytes() == download.content
+    with zipfile.ZipFile(tmp_path / "crosstab.xlsx") as archive:
+        assert "xl/workbook.xml" in archive.namelist()
+    # 副檔名大寫也接受；清單以外的仍然拒絕，訊息列出可以用的副檔名
+    upper = client.post(
+        "/api/desktop/export",
+        json={"path": str(tmp_path / "X.CSV"), "content": base64.b64encode(b"a,b\n").decode()},
+    )
+    assert upper.status_code == 200, upper.text
+    bad = client.post(
+        "/api/desktop/export",
+        json={"path": str(tmp_path / "x.txt"), "content": base64.b64encode(b"a").decode()},
+    )
+    assert bad.status_code == 422 and ".csv" in bad.json()["detail"]
+
+
 def test_geography_and_map_api(client: TestClient) -> None:
     """資料窗格指定地理角色後，Latitude／Longitude (generated) 在欄列架上的工作表畫成地圖；底圖與形狀
     以 /api/geo/<版本>/ 取得（不需登入，可以長期快取）。"""
@@ -1972,6 +2013,64 @@ def test_import_copies_source_files_only_inside_the_report(tmp_path: Path) -> No
     (target / "Data" / "Orders.csv").write_text("Region,Sales\nWest,2\n", encoding="utf-8")
     with pytest.raises(ValueError, match="內容不同"):
         source_copies(source, target, ["Data/Orders.csv"])
+
+
+def test_dashboard_image_upload(client: TestClient, tmp_path: Path) -> None:
+    """dashboard 的圖片物件選的圖片檔（POST /api/edit/<報表>/images）：存進報表的 files/Image/，回傳圖片
+    區塊要寫的路徑；檢視器讀得到，存成報表套件時跟著走。同名而內容不同的另取檔名，不蓋掉原來的；檔名或
+    內容不正確的不接受。（2026-11-21 稽核：圖片物件一加入就指向不存在的 image.png。）"""
+    import base64
+
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    other = b"\x89PNG\r\n\x1a\n" + b"1" * 32
+
+    def upload(name: str, content: bytes) -> Any:
+        body = {"name": name, "content": base64.b64encode(content).decode()}
+        return client.post("/api/edit/demo/images", json=body)
+
+    added = upload("logo.png", png)
+    assert added.status_code == 200, added.text
+    assert added.json() == {"path": "Image/logo.png"}
+    served = client.get("/api/workbooks/demo/files/Image/logo.png")
+    assert served.status_code == 200 and served.content == png
+    assert served.headers["content-type"] == "image/png"
+    # 同樣的圖片再傳一次：用同一個檔案；同名但內容不同：另取檔名，原來的不變
+    assert upload("logo.png", png).json() == {"path": "Image/logo.png"}
+    assert upload("logo.png", other).json() == {"path": "Image/logo (2).png"}
+    assert upload("logo.png", other).json() == {"path": "Image/logo (2).png"}
+    assert client.get("/api/workbooks/demo/files/Image/logo.png").content == png
+    assert client.get("/api/workbooks/demo/files/Image/logo%20(2).png").content == other
+    # 檔名會跳出資料夾、不是圖片、內容與副檔名不符、不是 base64 的不接受
+    for name, content in [
+        ("../logo.png", png),
+        ("a/logo.png", png),
+        ("logo.exe", png),
+        (".png", png),
+        ("logo.png", b"not an image"),
+        ("logo.svg", png),
+        ("logo.png", b""),
+    ]:
+        refused = upload(name, content)
+        assert refused.status_code == 422, name
+    garbage = client.post("/api/edit/demo/images", json={"name": "x.png", "content": "not base64!"})
+    assert garbage.status_code == 422
+    assert not (tmp_path / "logo.png").exists()
+
+    # 放進 dashboard 的圖片區塊：概要列出這張圖片，報表套件裡有它
+    board = client.get("/api/edit/demo/dashboards/db_ee909b0c").json()["dashboard"]
+    board["zones"].append(
+        {"id": "z900", "kind": "image", "x": 10, "y": 10, "w": 200, "h": 100, "image": "Image/logo (2).png",
+         "source_ref": "/editor"}
+    )  # fmt: skip
+    saved = client.put("/api/edit/demo/dashboards/db_ee909b0c", json={"dashboard": board})
+    assert saved.status_code == 200, saved.text
+    assert client.get("/api/edit/demo/outline").json()["images"] == ["Image/logo (2).png"]
+    target = tmp_path / "with-image.tmigx"
+    stored = client.post("/api/desktop/save", json={"workbook": "demo", "path": str(target)})
+    assert stored.status_code == 200, stored.text
+    assert stored.json()["files"] == ["Image/logo (2).png"] and stored.json()["missing_files"] == []
+    with zipfile.ZipFile(target) as archive:
+        assert archive.read("files/Image/logo (2).png") == other
 
 
 def test_custom_image_shapes(client: TestClient, tmp_path: Path) -> None:

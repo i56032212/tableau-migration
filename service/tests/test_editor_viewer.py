@@ -90,6 +90,17 @@ def call(base: str, path: str, body: dict[str, Any] | None = None) -> Any:
         return json.loads(response.read())
 
 
+MAIN_SVG = ".editor-canvas :is(.chart, .frozen-host) > svg"
+"""編輯器中工作表的圖（表格的標題凍結時另有幾份只露出標題的複本，在 .frozen 之下）。"""
+
+
+def call_bytes(base: str, path: str) -> bytes:
+    """GET 的原始內容（圖片等不是 JSON 的回應）。"""
+    request = urllib.request.Request(base + path, headers={TOKEN_HEADER: TOKEN})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+
 def test_edit_worksheet_in_viewer(engine: str, tmp_path: Path) -> None:
     from playwright.sync_api import Page, expect, sync_playwright
 
@@ -1295,7 +1306,7 @@ def test_pages_and_disaggregation(engine: str) -> None:
 def test_forecast_and_clusters_in_editor(engine: str) -> None:
     """分析：預測（預測選項：正好 6 個月、預測區間）在折線之後加上估計的月份與預測區間；叢集依量值分組並放到
     色彩上（叢集欄位以 Cluster N 顯示）。移除時一併移除色彩上的叢集欄位。"""
-    from playwright.sync_api import Page, sync_playwright
+    from playwright.sync_api import Page, expect, sync_playwright
 
     def settle(page: Page) -> None:
         page.wait_for_selector('.editor[data-saving="false"]')
@@ -1336,6 +1347,21 @@ def test_forecast_and_clusters_in_editor(engine: str) -> None:
         assert rendered["rows"] == before + 6
         assert any("指數平滑" in n for n in rendered["notes"])
         assert rendered["spec"]["layer"][0]["name"].startswith("__deco_forecast")
+        # 預測選項的「以 0 填補缺少的值」（2026-11-21 稽核回報勾了之後沒有預測：查證是存檔完成前就看畫面）：
+        # 勾選之後預測還在——估計的月份與預測區間都畫在圖上
+        page.get_by_role("button", name="預測 ✓").click()
+        dialog = page.locator(".forecast-dialog")
+        dialog.get_by_label("以 0 填補缺少的值").check()
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        settle(page)
+        assert sheet("ws_monthly_profit")["forecast"]["fill_zeros"] is True
+        filled = render("ws_monthly_profit")
+        assert filled["rows"] == before + 6
+        assert not [n for n in filled["notes"] if n.startswith("預測（")]
+        band = page.locator(".editor-canvas svg [class*='__deco_forecast']")
+        band.first.wait_for(state="attached")
+        expect(page.locator(".status-bar")).to_contain_text(f"{before + 6} 列")
         page.get_by_role("button", name="預測 ✓").click()
         page.locator(".forecast-dialog").get_by_role("button", name="移除預測").click()
         settle(page)
@@ -3700,5 +3726,515 @@ def test_dashboard_text_defaults_and_untitled_control(engine: str) -> None:
             "list => list.map((e) => getComputedStyle(e).display !== 'none')"
         )
         assert shown == [False, True]  # 第一個關掉了標題
+        assert errors == []
+        browser.close()
+
+
+def test_export_data_and_crosstab_in_desktop(engine: str, tmp_path: Path) -> None:
+    """桌面版匯出資料（CSV）與交叉資料表（Excel）：問位置後由本機引擎寫出檔案（2026-11-21 稽核：引擎只收
+    .png、.pptx、.pdf，這兩種一律失敗）；寫不出去時對話框裡說明原因。編輯器的「檢視資料」也能下載 CSV。"""
+    from playwright.sync_api import Dialog, Page, expect, sync_playwright
+
+    answers: list[str] = []
+
+    def answer(dialog: Dialog) -> None:
+        dialog.accept(answers.pop(0))
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", answer)
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/s/ws_sales_by_region")
+        page.wait_for_selector('.worksheet[data-loading="false"]')
+
+        # 資料：下載 CSV（摘要）
+        answers.append(str(tmp_path / "summary.csv"))
+        page.get_by_label("匯出").select_option("data")
+        dialog = page.get_by_role("dialog")
+        dialog.locator(".data-preview tbody tr").first.wait_for()
+        dialog.get_by_role("button", name="下載 CSV").click()
+        expect(dialog.locator(".success")).to_contain_text(str(tmp_path / "summary.csv"))
+        expect(dialog.locator(".error")).to_have_count(0)
+        summary = (tmp_path / "summary.csv").read_text(encoding="utf-8-sig").splitlines()
+        assert summary[0].split(",")[:2] == ["Region", "Category"] and len(summary) == 7
+        # 寫不出去（資料夾不存在）：對話框裡說明原因，不帶 HTTP 狀態碼；之前的成功訊息拿掉
+        answers.append(str(tmp_path / "nope" / "summary.csv"))
+        dialog.get_by_role("button", name="下載 CSV").click()
+        failed = dialog.get_by_role("alert")
+        expect(failed).to_have_text(f"無法下載：資料夾不存在：{tmp_path / 'nope'}")
+        expect(dialog.locator(".success")).to_have_count(0)
+        assert not (tmp_path / "nope").exists()
+        dialog.get_by_label("關閉").click()
+
+        # 交叉資料表：Excel
+        answers.append(str(tmp_path / "crosstab"))  # 沒有寫副檔名：補上 .xlsx
+        page.get_by_label("匯出").select_option("crosstab")
+        page.get_by_role("dialog").get_by_role("button", name="下載", exact=True).click()
+        expect(page.get_by_role("dialog")).to_have_count(0)
+        expect(page.get_by_text(f"已下載：{tmp_path / 'crosstab.xlsx'}")).to_be_visible()
+        with zipfile.ZipFile(tmp_path / "crosstab.xlsx") as archive:
+            assert "xl/workbook.xml" in archive.namelist() and archive.testzip() is None
+
+        # 編輯器的「檢視資料」：下載 CSV
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        answers.append(str(tmp_path / "view.csv"))
+        menubar(page, "分析", "檢視資料…")
+        dialog = page.get_by_role("dialog")
+        dialog.locator(".data-preview tbody tr").first.wait_for()
+        dialog.get_by_role("button", name="下載 CSV").click()
+        expect(dialog.locator(".success")).to_contain_text(str(tmp_path / "view.csv"))
+        # 同樣的列（數字是另一次查詢的浮點數加總，尾數可能不同，只比對維度）
+        view = (tmp_path / "view.csv").read_text(encoding="utf-8-sig").splitlines()
+        assert [line.split(",")[:2] for line in view] == [line.split(",")[:2] for line in summary]
+        assert errors == [] and answers == []
+        browser.close()
+
+
+def test_measure_values_adds_measure_names(engine: str) -> None:
+    """Measure Values 拖到標籤（2026-11-21 稽核：8 個量值的數字疊在同一格）：檢視中沒有 Measure Names 時自動
+    加上——列架上有維度而欄架上沒有時加到欄架，其餘加到列架（欄、列架上都有維度時加到列架，與 Tableau 說明
+    文件的例子相同）——每個量值各占一格。之後把 Measure Names 拿掉，畫出來的數字仍然各在各的位置（不顯示
+    標題）。Measure Values 放到座標軸上時 Measure Names 加到另一架。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def pills(page: Page, shelf: str) -> list[str]:
+        return [
+            t.replace("▾", "").strip()
+            for t in page.locator(f'[data-shelf="{shelf}"] .pill .pill-text').all_inner_texts()
+        ]
+
+    def sheet(worksheet: str) -> dict[str, Any]:
+        return call(engine, f"/api/edit/demo/worksheets/{worksheet}")["worksheet"]
+
+    def numbers(page: Page) -> list[tuple[float, float, float, float]]:
+        """檢視上每個數字（文字標記）的外框：左、上、右、下（凍結標題用的那幾份複本、多層列標題的文字
+        不算）。"""
+        marks = f"{MAIN_SVG} .mark-text.role-mark:not([class*='__deco']) text"
+        page.wait_for_selector(marks)
+        boxes = page.locator(marks).evaluate_all(
+            "nodes => nodes.map((n) => { const r = n.getBoundingClientRect();"
+            " return [r.left, r.top, r.right, r.bottom]; })"
+        )
+        return [(left, top, right, bottom) for left, top, right, bottom in boxes]
+
+    def overlapping(boxes: list[tuple[float, float, float, float]]) -> int:
+        """互相蓋到的數字有幾對（外框重疊超過 1 像素）。"""
+        count = 0
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1 :]:
+                wide = min(a[2], b[2]) - max(a[0], b[0])
+                tall = min(a[3], b[3]) - max(a[1], b[1])
+                count += wide > 1 and tall > 1
+        return count
+
+    def new_sheet(page: Page, number: int) -> str:
+        tool(page, "新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_{number}")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        return f"ws_{number}"
+
+    def drag(page: Page, field: str, target: str) -> None:
+        page.locator(f'.data-pane [data-field="{field}"]').drag_to(
+            page.locator(f'[data-drop="{target}"]')
+        )
+        settle(page)
+
+    def remove_pill(page: Page, shelf: str, name: str) -> None:
+        page.locator(f'[data-shelf="{shelf}"] .pill', has_text=name).click()
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text="移除").first.click()
+        settle(page)
+
+    def notes(worksheet: str) -> list[str]:
+        return call(engine, f"/api/workbooks/demo/worksheets/{worksheet}/render", {})["notes"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+
+        # 列架上有維度、欄架上沒有：Measure Names 加到欄架
+        ws = new_sheet(page, 1)
+        drag(page, "f_category", "rows")
+        drag(page, "measure_values", "marks.label")
+        assert pills(page, "rows") == ["Category"] and pills(page, "columns") == ["Measure Names"]
+        saved = sheet(ws)
+        assert [u["field"] for u in saved["columns"]] == ["measure_names"]
+        measures = len(saved["measure_values"])
+        assert measures > 2  # 資料源中所有的量值
+        shown = numbers(page)
+        assert len(shown) == 3 * measures and overlapping(shown) == 0  # 3 個類別，沒有疊在一起的
+        rendered = call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})
+        assert rendered["spec"]["encoding"]["x"]["axis"].get("labels") is not False  # 有欄標題
+        assert not any("Measure Names" in note for note in rendered["notes"])
+
+        # 把 Measure Names 拿掉（Tableau 可以這樣做）：數字仍然各占一格，只是沒有欄標題
+        remove_pill(page, "columns", "Measure Names")
+        assert pills(page, "columns") == [] and sheet(ws)["columns"] == []
+        spread = numbers(page)
+        assert len(spread) == 3 * measures and overlapping(spread) == 0
+        rendered = call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})
+        assert rendered["spec"]["encoding"]["x"]["axis"]["labels"] is False
+        assert any("Measure Names" in note for note in rendered["notes"])
+
+        # 欄、列架上都沒有維度：Measure Names 加到列架
+        ws = new_sheet(page, 2)
+        drag(page, "measure_values", "marks.label")
+        assert pills(page, "rows") == ["Measure Names"] and pills(page, "columns") == []
+        shown = numbers(page)
+        assert len(shown) == measures and overlapping(shown) == 0
+
+        # 欄、列架上都有維度：Measure Names 加到列架的最後（各類別之下每個量值一列），各欄不擠在一起
+        ws = new_sheet(page, 3)
+        drag(page, "f_category", "rows")
+        drag(page, "f_region", "columns")
+        drag(page, "measure_values", "marks.label")
+        assert pills(page, "rows") == ["Category", "Measure Names"]
+        assert pills(page, "columns") == ["Region"]
+        shown = numbers(page)
+        assert len(shown) == 3 * 4 * measures and overlapping(shown) == 0
+        assert len({round(box[2] / 10) for box in shown}) == 4  # 四個地區各一欄（數字靠右對齊）
+        # 拿掉 Measure Names：畫圖時一樣排在列的方向
+        remove_pill(page, "rows", "Measure Names")
+        assert pills(page, "rows") == ["Category"]
+        spread = numbers(page)
+        assert len(spread) == 3 * 4 * measures and overlapping(spread) == 0
+        assert len({round(box[1]) for box in spread}) == 3 * measures  # 每個類別之下每個量值一列
+        assert len({round(box[2] / 10) for box in spread}) == 4
+        assert any("Measure Names" in note for note in notes(ws))
+
+        # 只有欄架上有維度：Measure Names 加到列架
+        ws = new_sheet(page, 4)
+        drag(page, "f_region", "columns")
+        drag(page, "measure_values", "marks.label")
+        assert pills(page, "rows") == ["Measure Names"] and pills(page, "columns") == ["Region"]
+        shown = numbers(page)
+        assert len(shown) == 4 * measures and overlapping(shown) == 0
+
+        # Measure Values 放到列架（座標軸）：Measure Names 加到欄架，每個量值一根長條
+        ws = new_sheet(page, 5)
+        drag(page, "measure_values", "rows")
+        assert pills(page, "rows") == ["Measure Values"]
+        assert pills(page, "columns") == ["Measure Names"]
+        # 放到欄架：加到列架（已有的維度之後）
+        ws = new_sheet(page, 6)
+        drag(page, "f_category", "rows")
+        drag(page, "measure_values", "columns")
+        assert pills(page, "rows") == ["Category", "Measure Names"]
+        assert pills(page, "columns") == ["Measure Values"]
+
+        # 檢視中已經有 Measure Names（在色彩上）：不再加
+        ws = new_sheet(page, 7)
+        drag(page, "measure_names", "marks.color")
+        drag(page, "measure_values", "rows")
+        assert pills(page, "rows") == ["Measure Values"] and pills(page, "columns") == []
+        assert errors == []
+        browser.close()
+
+
+def test_dual_axis_with_trend_lines(engine: str) -> None:
+    """雙軸加趨勢線（2026-11-21 稽核：整張圖變成「查詢失敗：Duplicate data set name: "__ref_trend_pathgroup"」）：
+    連續的月份 × SUM(Sales)、SUM(Profit)，Profit 設成雙軸後加上趨勢線——圖照樣畫出來，兩個量值各一條趨勢線。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder', timeout=30000
+        )
+
+    def menu(page: Page, label: str) -> None:
+        page.locator(".popup-menu li[role=menuitem] > .menu-label", has_text=label).first.click()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle(page)
+        tool(page, "新增工作表").click()
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        page.wait_for_selector(".editor-canvas .placeholder")
+        page.locator('.data-pane [data-field="f_order_date"]').drag_to(
+            page.locator('[data-drop="columns"]')
+        )
+        settle(page)
+        page.locator('[data-shelf="columns"] .pill').click()
+        menu(page, "月（連續）")
+        settle(page)
+        for field in ("f_sales", "f_profit"):
+            page.locator(f'.data-pane [data-field="{field}"]').drag_to(
+                page.locator('[data-drop="rows"]')
+            )
+            settle(page)
+        page.locator('[data-shelf="rows"] .pill', has_text="SUM(Profit)").click()
+        menu(page, "雙軸")
+        settle(page)
+        menubar(page, "分析", "趨勢線…")
+        page.get_by_role("dialog").get_by_role("button", name="確定").click()
+        expect(page.get_by_role("dialog")).to_have_count(0)
+        settle(page)
+
+        # 圖畫出來了（不是錯誤訊息），兩條趨勢線各在自己的圖層
+        expect(page.locator(".editor-canvas .placeholder")).to_have_count(0)
+        expect(page.locator(".editor-canvas")).not_to_contain_text("查詢失敗")
+        page.wait_for_selector(f"{MAIN_SVG} .mark-line.role-mark path")
+        saved = call(engine, "/api/edit/demo/worksheets/ws_1")["worksheet"]
+        assert saved["marks"]["trend"] is not None and saved["panes"][0]["dual"] is True
+        rendered = call(engine, "/api/workbooks/demo/worksheets/ws_1/render", {})
+        assert rendered["unsupported"] is None
+        trends = rendered["spec"]["usermeta"]["trends"]
+        assert [t["group"] for t in trends] == [["Sales"], ["Profit"]]
+        # 畫面上：兩個量值的折線加上兩條趨勢線，趨勢線的顏色與自己的量值相同
+        strokes = page.locator(f"{MAIN_SVG} .mark-line.role-mark path").evaluate_all(
+            "nodes => nodes.map((n) => getComputedStyle(n).stroke)"
+        )
+        assert len(strokes) == 4 and len(set(strokes)) == 2, strokes
+        assert all(strokes.count(stroke) == 2 for stroke in strokes), strokes
+        assert errors == []
+        browser.close()
+
+
+def test_top_filter_lists_field_captions(engine: str) -> None:
+    """篩選對話框「頂部」的「依」（2026-11-21 稽核：計算欄位列出的是 [Calculation_1368…] 這種內部名稱）：
+    選單上是欄位的名稱（與膠囊相同的寫法），存檔的公式仍然用內部名稱；再開啟時顯示選的那一項。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_sub_category_profit")
+        settle(page)
+        before = len(
+            call(engine, "/api/edit/demo/worksheets/ws_sub_category_profit")["worksheet"]["filters"]
+        )
+        page.locator('.data-pane [data-field="f_sub_category"]').drag_to(
+            page.locator('[data-drop="filters"]')
+        )
+        dialog = page.locator(".filter-dialog")
+        dialog.locator(".value-list li").first.wait_for()
+        dialog.get_by_role("tab", name="頂部").click()
+        by = dialog.get_by_label("排名依據")
+        labels = by.locator("option").all_inner_texts()
+        assert labels[:3] == ["（選擇量值）", "SUM(Sales)", "SUM(Quantity)"]
+        assert "利潤率" in labels and "SUM(區域總銷售)" in labels
+        assert not [text for text in labels if "Calculation_" in text or "[" in text], labels
+        dialog.get_by_label("數量").fill("3")
+        by.select_option(label="利潤率")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        saved = call(engine, "/api/edit/demo/worksheets/ws_sub_category_profit")["worksheet"]
+        assert len(saved["filters"]) == before + 1
+        top = saved["filters"][-1]
+        assert (top["kind"], top["count"]) == ("top_n", 3)
+        assert top["by"] == "[Calculation_1368249927221915648]"  # 存的是公式（內部名稱）
+        rows = call(engine, "/api/workbooks/demo/worksheets/ws_sub_category_profit/render", {})
+        assert rows["unsupported"] is None and rows["rows"] <= 3
+
+        # 再開啟：選單停在「利潤率」
+        page.locator('[data-drop="filters"] .pill', has_text="Sub-Category").click()
+        page.locator(
+            ".popup-menu li[role=menuitem] > .menu-label", has_text="編輯篩選…"
+        ).first.click()
+        dialog = page.locator(".filter-dialog")
+        by = dialog.get_by_label("排名依據")
+        expect(by).to_have_value("[Calculation_1368249927221915648]")
+        assert by.locator("option:checked").inner_text() == "利潤率"
+        assert errors == []
+        browser.close()
+
+
+def test_dashboard_image_object_asks_for_an_image(engine: str, tmp_path: Path) -> None:
+    """dashboard 的「圖片」物件（2026-11-21 稽核：一按就加入一個指向 image.png 的壞圖，請求 404）：先開
+    「編輯圖片物件」選圖片——電腦上的檔案或報表中已有的圖片——按確定才加入；取消不加入。圖片存進報表，
+    存成報表套件時跟著走；找不到圖片的區塊不顯示破圖。"""
+    import struct
+    import zlib
+
+    from playwright.sync_api import Dialog, Page, expect, sync_playwright
+
+    def png(color: tuple[int, int, int]) -> bytes:
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            body = kind + data
+            return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+        rows = b"".join(b"\x00" + bytes(color) * 40 for _ in range(20))
+        header = struct.pack(">IIBBBBB", 40, 20, 8, 2, 0, 0, 0)
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(rows))
+            + chunk(b"IEND", b"")
+        )
+
+    logo, other = tmp_path / "logo.png", tmp_path / "other" / "logo.png"
+    other.parent.mkdir()
+    logo.write_bytes(png((200, 30, 30)))
+    other.write_bytes(png((30, 30, 200)))
+    (tmp_path / "notes.png").write_bytes(b"not an image")
+
+    def images() -> list[str | None]:
+        board = call(engine, "/api/edit/demo/dashboards/db_ee909b0c")["dashboard"]
+        found: list[str | None] = []
+
+        def walk(zones: list[dict[str, Any]]) -> None:
+            for zone in zones:
+                if zone["kind"] == "image":
+                    found.append(zone["image"])
+                walk(zone.get("children") or [])
+
+        walk(board["zones"])
+        return found
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        page.wait_for_load_state("networkidle")
+
+    target = tmp_path / "with-image.tmigx"
+
+    def answer(dialog: Dialog) -> None:
+        dialog.accept(str(target))
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        missing: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("dialog", answer)
+        page.on(
+            "response",
+            lambda r: missing.append(r.url) if r.status == 404 and "/files/" in r.url else None,
+        )
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        settle(page)
+        add = page.locator(".object-buttons").get_by_role("button", name="圖片", exact=True)
+
+        # 按「圖片」：先選圖片，還沒有加入任何區塊；沒有選圖片不能按確定；取消不加入
+        add.click()
+        dialog = page.get_by_role("dialog", name="編輯圖片物件")
+        confirm = dialog.get_by_role("button", name="確定")
+        expect(confirm).to_be_disabled()
+        assert images() == []
+        dialog.get_by_role("button", name="取消").click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assert images() == [] and page.locator(".dashboard .zone-image").count() == 0
+
+        # 選電腦上的圖片檔：按確定後存進報表、加入圖片物件，圖片顯示得出來
+        add.click()
+        dialog.get_by_label("圖片檔").set_input_files(str(logo))
+        expect(dialog.locator(".image-preview img")).to_be_visible()
+        confirm.click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assert images() == ["Image/logo.png"]
+        shown = page.locator(".dashboard img.zone-image")
+        expect(shown).to_have_count(1)
+        page.wait_for_function(
+            "(() => { const i = document.querySelector('.dashboard img.zone-image');"
+            " return i && i.complete && i.naturalWidth === 40; })()"
+        )
+
+        # 內容不是圖片的檔案：說明原因，不加入
+        add.click()
+        dialog.get_by_label("圖片檔").set_input_files(str(tmp_path / "notes.png"))
+        confirm.click()
+        expect(dialog.get_by_role("alert")).to_contain_text("無法加入圖片")
+        dialog.get_by_role("button", name="取消").click()
+        assert images() == ["Image/logo.png"]
+
+        # 再加一個：可以選報表中已有的圖片
+        add.click()
+        choice = dialog.get_by_role("option", name="logo.png")
+        choice.click()
+        expect(choice).to_have_attribute("aria-selected", "true")
+        confirm.click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assert images() == ["Image/logo.png", "Image/logo.png"]
+
+        # 版面配置的屬性：換成另一張同名、內容不同的圖片——另取檔名，不蓋掉另一個區塊用的圖片
+        side_tab(page, "版面配置")
+        props = page.locator(".zone-props")
+        expect(props.locator(".image-name")).to_have_text("logo.png")
+        props.get_by_role("button", name="選擇圖片…").click()
+        dialog.get_by_label("圖片檔").set_input_files(str(other))
+        confirm.click()
+        expect(dialog).to_have_count(0)
+        settle(page)
+        assert sorted(images()) == ["Image/logo (2).png", "Image/logo.png"]  # type: ignore[type-var]
+        expect(props.locator(".image-name")).to_have_text("logo (2).png")
+        assert call_bytes(engine, "/api/workbooks/demo/files/Image/logo.png") == logo.read_bytes()
+        assert (
+            call_bytes(engine, "/api/workbooks/demo/files/Image/logo%20(2).png")
+            == other.read_bytes()
+        )
+        assert missing == []
+
+        # 存成報表套件：兩張圖片都在裡面
+        tool_bar = page.locator(".ws-toolbar")
+        tool_bar.get_by_role("button", name="儲存", exact=True).click()
+        expect(page.locator(".toast")).to_contain_text("已儲存")
+        with zipfile.ZipFile(target) as archive:
+            assert {"files/Image/logo.png", "files/Image/logo (2).png"} <= set(archive.namelist())
+
+        # 報表中找不到的圖片（例如 .twb 指向的檔案不在了）：檢視時是空的，不是破圖；編輯器寫出檔名
+        board = call(engine, "/api/edit/demo/dashboards/db_ee909b0c")["dashboard"]
+
+        def repoint(zones: list[dict[str, Any]]) -> None:
+            for zone in zones:
+                if zone["kind"] == "image":
+                    zone["image"] = "Image/gone.png"
+                repoint(zone.get("children") or [])
+
+        repoint(board["zones"])
+        update = urllib.request.Request(
+            f"{engine}/api/edit/demo/dashboards/db_ee909b0c",
+            data=json.dumps({"dashboard": board}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(update, timeout=60) as response:
+            assert response.status == 200
+        page.goto(f"{engine}/w/demo/d/db_ee909b0c")
+        gone = page.locator(".dashboard .zone-image.missing")
+        expect(gone).to_have_count(2)
+        expect(page.locator(".dashboard img.zone-image")).to_have_count(0)
+        assert gone.first.evaluate("e => getComputedStyle(e, '::after').content") == "none"
+        page.goto(f"{engine}/w/demo/edit-d/db_ee909b0c")
+        settle(page)
+        gone = page.locator(".dash-canvas .zone-image.missing")
+        expect(gone).to_have_count(2)
+        label = gone.first.evaluate("e => getComputedStyle(e, '::after').content")
+        assert "找不到圖片：Image/gone.png" in label
         assert errors == []
         browser.close()

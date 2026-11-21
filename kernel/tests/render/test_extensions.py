@@ -54,6 +54,85 @@ def test_measure_values_text_table_is_folded() -> None:
     assert spec["encoding"]["text"]["field"] == "__mv_label"
 
 
+def test_measure_values_text_without_measure_names_is_not_overprinted() -> None:
+    """文字是 Measure Values、欄列架上沒有 Measure Names（2026-11-21 稽核：各量值的數字疊在同一格）：
+    各量值分開排列——列架上有維度而欄架上沒有時各占一欄，其餘各占一列——不顯示標題；數字與有 Measure Names
+    時相同。"""
+    from tmig.ir import FieldUse
+    from tmig.render.vegalite import main_encoding
+
+    ir = features()
+    source = next(w for w in ir.worksheets if w.id == "ws_segment_kpis")
+    reference = render_features("ws_segment_kpis")
+
+    def render(**changes: Any) -> tuple[dict[str, Any], list[str]]:
+        sheet = source.model_copy(update=changes)
+        edited = ir.model_copy(
+            update={"worksheets": [sheet if w.id == sheet.id else w for w in ir.worksheets]}
+        )
+        query = worksheet_sql(edited, sheet.id)
+        result = execute(FEATURES / "data" / "ds_orders.duckdb", query.sql)
+        rendered = build_spec(edited, sheet.id, query.columns, result)
+        assert rendered.spec is not None, rendered.unsupported
+        assert [e.message for e in validator().iter_errors(rendered.spec)] == []
+        return rendered.spec, rendered.notes
+
+    def cells(spec: dict[str, Any]) -> list[tuple[Any, Any]]:
+        """每個文字標記所在的格子（欄、列的位置）。"""
+        encoding = main_encoding(spec)
+        assert encoding is not None
+        x, y = encoding.get("x", {}).get("field"), encoding.get("y", {}).get("field")
+        return [(v.get(x), v.get(y)) for v in spec["data"]["values"]]
+
+    # 列架上有維度、欄架上沒有：Measure Names 拿掉之後各量值仍各占一欄，只是沒有欄標題
+    spec, notes = render(columns=[])
+    assert len(spec["data"]["values"]) == 12
+    assert len(set(cells(spec))) == 12  # 每一格只有一個數字
+    assert spec["encoding"]["x"]["field"] == "__mn"
+    assert spec["encoding"]["x"]["axis"]["labels"] is False
+    assert spec["encoding"]["text"]["field"] == "__mv_label"
+    assert [v["__mv_label"] for v in spec["data"]["values"]] == [
+        v["__mv_label"] for v in reference["data"]["values"]
+    ]
+    assert any("Measure Names" in note for note in notes)
+
+    # 欄列架上都沒有維度：各量值各占一列
+    spec, notes = render(rows=[], columns=[])
+    assert len(spec["data"]["values"]) == 4
+    assert len(set(cells(spec))) == 4
+    assert spec["encoding"]["y"]["field"] == "__mn" and "x" not in spec["encoding"]
+    assert spec["encoding"]["y"]["axis"]["labels"] is False
+
+    # 欄、列架上都有維度：各量值排在列的方向（每個客群之下每個量值一列），只有客群那一層有標題
+    region = FieldUse(field="f_region")
+    spec, notes = render(columns=[region])
+    regions = len({v[main_encoding(spec)["x"]["field"]] for v in spec["data"]["values"]})  # type: ignore[index]
+    assert len(spec["data"]["values"]) == 3 * regions * 4
+    assert len(set(cells(spec))) == 3 * regions * 4
+    rows = main_encoding(spec)["y"]  # type: ignore[index]
+    assert rows["field"] == "rows_dim" and rows["title"] == "Segment｜Measure Names"
+    headers = [
+        layer["name"] for layer in spec["layer"] if "__deco__header" in layer.get("name", "")
+    ]
+    assert headers == ["__deco__header0", "__deco__header0_title"]
+    assert any("Measure Names" in note for note in notes)
+    # 只有欄架上有維度：一樣排在列的方向
+    spec, _ = render(rows=[], columns=[region])
+    assert main_encoding(spec)["y"]["field"] == "__mn"  # type: ignore[index]
+    assert len(set(cells(spec))) == regions * 4
+
+    # Measure Names 只在色彩上不決定位置：一樣分開排列
+    names = FieldUse(field="measure_names")
+    spec, _ = render(columns=[], marks=source.marks.model_copy(update={"color": names}))
+    assert len(set(cells(spec))) == 12
+    assert spec["encoding"]["color"]["field"] == "__mn"
+
+    # 欄列架上有 Measure Names 時照原來的畫法，沒有附註
+    spec, notes = render()
+    assert spec["encoding"]["x"]["axis"].get("labels") is not False
+    assert not any("Measure Names" in note for note in notes)
+
+
 def test_measure_values_on_axis_with_measure_names_color() -> None:
     spec = render_features("ws_monthly_sales_vs_profit")
     assert spec["mark"]["type"] == "line"

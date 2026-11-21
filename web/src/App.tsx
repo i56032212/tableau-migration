@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AdminPage } from "./Admin";
 import { AlertButton } from "./Alerts";
-import { api } from "./api";
+import { api, errorText } from "./api";
 import { datasourceApi, DatasourcesPage } from "./Datasources";
 import { scheduleApi } from "./schedules";
 import { MySubscriptionsPage, SubscribeButton } from "./Subscribe";
@@ -802,7 +802,7 @@ function WorkbookPage({
               if (!element || (kind !== "image" && kind !== "powerpoint")) return;
               void exportView(element, kind, title, me.mode === "desktop")
                 .then((path) => path && toast(`已匯出：${path}`))
-                .catch((err: Error) => toast(`無法匯出：${err.message}`, "error"));
+                .catch((err: unknown) => toast(`無法匯出：${errorText(err)}`, "error"));
             }}
           >
             <option value="">匯出…</option>

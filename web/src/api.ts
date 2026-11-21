@@ -36,6 +36,12 @@ export class ApiError extends Error {
   }
 }
 
+/** 給使用者看的錯誤說明：API 的錯誤只取說明的文字（message 開頭的 HTTP 狀態碼是給開發者看的）。 */
+export function errorText(error: unknown): string {
+  if (error instanceof ApiError && typeof error.detail === "string" && error.detail) return error.detail;
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,

@@ -252,7 +252,7 @@ class CloseRequest(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    """匯出的圖片、PowerPoint 或 PDF：檢視器產生內容（base64），引擎寫到作者選的位置。"""
+    """匯出的圖片、PowerPoint、PDF、CSV 或 Excel：檢視器備好內容（base64），引擎寫到作者選的位置。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -260,7 +260,8 @@ class ExportRequest(BaseModel):
     content: str
 
 
-EXPORT_SUFFIXES = (".png", ".pptx", ".pdf")
+# 檢視器會存的檔案：畫面的圖片與簡報（exporter.ts），以及資料與交叉資料表的 CSV、Excel（ViewerTools.tsx）
+EXPORT_SUFFIXES = (".png", ".pptx", ".pdf", ".csv", ".xlsx")
 EXPORT_LIMIT = 200 * 1024 * 1024
 
 
