@@ -6,7 +6,7 @@
 
 ```
 desktop/
-├── src-tauri/        外殼（Tauri 2，Rust）：啟動本機引擎、主視窗、檔案選單、選檔與存檔對話框
+├── src-tauri/        外殼（Tauri 2，Rust）：啟動本機引擎、主視窗、選檔與存檔對話框（沒有原生選單，功能表列在頁面裡）
 ├── ui/index.html     引擎就緒前的啟動畫面
 └── engine/           本機引擎的打包：entry.py（進入點）、tmig-engine.spec（PyInstaller）、smoke.py（冒煙測試）
 ```
@@ -17,7 +17,8 @@ desktop/
    （安裝後是 `resources/engine/tmig-engine.exe`），從標準輸出讀第一行 JSON：`{"event":"ready","port":…,"token":…}`
 2. 主視窗開啟 `http://127.0.0.1:<埠號>/?token=<權杖>`；引擎把權杖換成 cookie，之後只接受帶權杖的本機請求
 3. 檢視器在桌面版模式（`/api/me` 的 mode 為 desktop）多了「開啟檔案…」「儲存」「另存新檔…」「關閉」；
-   外殼的檔案選單（Ctrl+O、Ctrl+S、Ctrl+Shift+S、Ctrl+W）呼叫檢視器的 `window.tmigDesktop`
+   功能表列在頁面裡（外殼沒有原生選單，與 Tableau Desktop 相同只有一排）；檔案指令的快捷鍵
+   （Ctrl+O、Ctrl+S、Ctrl+Shift+S、Ctrl+W）也由檢視器處理，呼叫 `window.tmigDesktop`
 4. 外殼結束時關閉引擎；外殼異常結束時標準輸入關閉，引擎也會自行結束
 5. 只執行一份：工作區只有一個，再次啟動時把已開著的視窗帶到前面，不會啟動第二個引擎
 

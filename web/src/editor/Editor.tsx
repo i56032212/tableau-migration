@@ -85,6 +85,7 @@ import {
   ToolMenuButton,
   useCreateSheet,
   useWorkspace,
+  helpMenu,
   windowMenu,
 } from "./Workspace";
 import { ShowMePanel } from "./ShowMe";
@@ -903,6 +904,7 @@ export function Editor({
     },
     serverMenu(ws),
     windowMenu(ws, current, done),
+    helpMenu(),
   ];
 
   return (

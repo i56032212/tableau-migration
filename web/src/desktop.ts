@@ -47,6 +47,30 @@ export function isDesktop(): boolean {
   return desktopMode;
 }
 
+/** 在桌面版的外殼中（有外殼提供的對話框與指令）；瀏覽器中開啟本機引擎時為 false。 */
+export function hasShell(): boolean {
+  return shell() !== undefined;
+}
+
+/** 結束桌面版（外殼會一併結束本機引擎）。 */
+export async function quitApp(): Promise<void> {
+  try {
+    await shell()?.core.invoke("quit_app");
+  } catch (e) {
+    toast(`無法結束：${(e as Error).message ?? e}`, "error");
+  }
+}
+
+/** 「關於」：桌面版的名稱與版本。 */
+export async function showAbout(): Promise<void> {
+  try {
+    const text = await shell()?.core.invoke<string>("about_text");
+    if (text) toast(text);
+  } catch (e) {
+    toast(`無法取得版本：${(e as Error).message ?? e}`, "error");
+  }
+}
+
 /** 選擇要開啟的檔案；取消時為 null。 */
 export async function pickOpenPath(): Promise<string | null> {
   const tauri = shell();
@@ -266,4 +290,38 @@ export function installMenuCommands(go: Go): void {
         .then(() => toast("已登出伺服器"))
         .catch((e: Error) => toast(`無法登出：${e.message}`, "error")),
   };
+  installShortcuts();
+}
+
+let shortcutsInstalled = false;
+
+/** 檔案指令的快捷鍵（原本由外殼的原生選單提供）：Ctrl+O 開啟、Ctrl+S 儲存、Ctrl+Shift+S 另存新檔、
+ * Ctrl+W 關閉報表。 */
+function installShortcuts(): void {
+  if (shortcutsInstalled) return;
+  shortcutsInstalled = true;
+  window.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const commands = (window as unknown as { tmigDesktop?: Record<string, () => Promise<void>> }).tmigDesktop;
+    if (!commands) return;
+    const key = event.key.toLowerCase();
+    const command =
+      key === "o" && !event.shiftKey
+        ? commands.open
+        : key === "s"
+          ? event.shiftKey
+            ? commands.saveAs
+            : commands.save
+          : key === "w" && !event.shiftKey
+            ? commands.close
+            : null;
+    if (!command) return;
+    event.preventDefault();
+    void command();
+  });
+}
+
+/** 登出伺服器（功能表共用）。 */
+export function signOutServer(): void {
+  void (window as unknown as { tmigDesktop?: Record<string, () => Promise<void>> }).tmigDesktop?.signOut();
 }

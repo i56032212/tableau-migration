@@ -23,6 +23,7 @@ import {
   ToolButton,
   useCreateSheet,
   useWorkspace,
+  helpMenu,
   windowMenu,
 } from "./Workspace";
 
@@ -174,6 +175,7 @@ export function StoryEditor({
     },
     serverMenu(ws),
     windowMenu(ws, tab, done),
+    helpMenu(),
   ];
 
   return (

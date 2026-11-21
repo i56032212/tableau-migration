@@ -105,8 +105,9 @@ function flow(placed: Zone, original: Zone): Zone {
   const crossStart = (z: { x: number; y: number }) => (horizontal ? z.y : z.x);
   const crossSpan = (z: { w: number; h: number }) => (horizontal ? z.h : z.w);
   const visible = original.children.filter((c) => !c.hidden);
-  // 原本的間距與內縮（沿用；子區塊重疊時為 0）
-  const sorted = [...visible].sort((a, b) => start(a) - start(b));
+  // 原本的間距與內縮（沿用；子區塊重疊時為 0）：新加入、還沒有大小的子區塊不算——它的位置是 0，算進去時
+  // 容器尾端的留白會變成整個容器（只有一個子區塊的容器再加入一個時，兩個的大小都成了 0）
+  const sorted = visible.filter((c) => c.w > 0 && c.h > 0).sort((a, b) => start(a) - start(b));
   const gaps: number[] = [];
   for (let i = 1; i < sorted.length; i++) gaps.push(start(sorted[i]) - (start(sorted[i - 1]) + span(sorted[i - 1])));
   const gap = gaps.length > 0 ? Math.max(0, gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]) : 0;

@@ -46,6 +46,7 @@ import {
   ToolButton,
   useCreateSheet,
   useWorkspace,
+  helpMenu,
   windowMenu,
 } from "./Workspace";
 
@@ -935,6 +936,7 @@ export function DashboardEditor({
     { label: "Story", items: [{ label: "新增 Story", action: () => create("story") }] },
     serverMenu(ws),
     windowMenu(ws, current, done),
+    helpMenu(),
   ];
 
   return (

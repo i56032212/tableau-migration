@@ -349,3 +349,55 @@ def test_workspace_arrangement(engine: str) -> None:
         expect(page.locator(".page > .toolbar")).to_be_visible()
         assert errors == []
         browser.close()
+
+
+def test_new_dashboard_takes_dropped_sheets_and_home_has_the_menu_bar(engine: str) -> None:
+    """新增的 dashboard：把兩張工作表拖進空白的畫布，兩張都有大小（第二張加入時，容器尾端的留白不能把
+    還沒有大小的新區塊算進去）。桌面版不在編輯器裡的頁面（報表清單）也有功能表列——外殼沒有原生選單，
+    檔案與伺服器的指令只在這一排；檔案指令的快捷鍵由頁面處理。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        def settle() -> None:
+            page.wait_for_selector('[data-saving="false"]')
+            page.wait_for_load_state("networkidle")
+
+        # 報表清單：功能表列有檔案與伺服器（說明只有在外殼中才有項目）
+        bar = page.locator(".menu-bar")
+        expect(bar.get_by_role("menuitem")).to_have_text(["檔案", "伺服器"])
+        expect(bar.get_by_role("button", name="完成")).to_have_count(0)
+        bar.get_by_role("menuitem", name="伺服器").click()
+        expect(page.locator(".popup-menu li[role=menuitem]")).to_have_text(
+            ["登入…", "從伺服器開啟…", "發布…", "發布資料源…", "登出"]
+        )
+        page.keyboard.press("Escape")
+        # 還沒開啟報表時按 Ctrl+S：提示先開啟一份報表（快捷鍵有作用）
+        page.keyboard.press("Control+s")
+        expect(page.get_by_text("請先開啟一份報表")).to_be_visible()
+
+        page.goto(f"{engine}/w/demo/edit/ws_sales_by_region")
+        settle()
+        page.locator(".sheet-tab-add").get_by_role("button", name="新增 dashboard").click()
+        page.wait_for_selector(".dash-editor")
+        settle()
+        box = page.locator(".dash-editor .dashboard").bounding_box()
+        assert box is not None
+        for sheet, at in (("ws_sales_by_region", 0.5), ("ws_monthly_profit", 0.8)):
+            page.locator(f'.dash-side [data-sheet="{sheet}"]').hover()
+            page.mouse.down()
+            page.mouse.move(box["x"] + box["width"] * at, box["y"] + box["height"] / 2, steps=12)
+            page.mouse.up()
+            settle()
+        sizes = page.locator(".dash-editor .dashboard [data-zone]").evaluate_all(
+            "nodes => nodes.map((n) => [n.getBoundingClientRect().width, n.getBoundingClientRect().height])"
+        )
+        assert len(sizes) == 2 and all(w > 100 and h > 100 for w, h in sizes), sizes
+        expect(page.locator(".dash-editor .dashboard [data-zone] .worksheet")).to_have_count(2)
+        assert errors == []
+        browser.close()

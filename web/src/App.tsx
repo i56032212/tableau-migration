@@ -50,7 +50,7 @@ import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
 import { DashboardEditor } from "./editor/DashboardEditor";
 import { Editor } from "./editor/Editor";
 import { StoryEditor } from "./editor/StoryEditor";
-import { DatasourceFrame, type TabKind, WorkspaceContext, type WorkspaceInfo } from "./editor/Workspace";
+import { DatasourceFrame, DesktopMenuBar, type TabKind, WorkspaceContext, type WorkspaceInfo } from "./editor/Workspace";
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { PageControl, pagesOf } from "./PageControl";
@@ -138,6 +138,8 @@ export function App() {
       {(me) => (
         <>
           {me.mode === "desktop" && <DesktopCommands />}
+          {/* 桌面版只有這一排功能表（外殼沒有原生選單）：編輯器有自己的，其他頁面用這一個 */}
+          {me.mode === "desktop" && !route.page.startsWith("edit") && <DesktopMenuBar navigate={navigate} />}
           {route.page === "home" ? (
             <Home me={me} />
           ) : route.page === "admin" ? (

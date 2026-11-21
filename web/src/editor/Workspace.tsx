@@ -3,7 +3,20 @@
 
 import type React from "react";
 import { createContext, useContext, useRef, useState } from "react";
-import { addDatasource, closeDocument, connectServer, newWorkbook, openDialog, openDocument, saveDocument, toast } from "../desktop";
+import {
+  addDatasource,
+  closeDocument,
+  connectServer,
+  hasShell,
+  newWorkbook,
+  openDialog,
+  openDocument,
+  quitApp,
+  saveDocument,
+  showAbout,
+  signOutServer,
+  toast,
+} from "../desktop";
 import { Modal } from "../Server";
 import type { Dashboard, Story } from "../types";
 import { editApi } from "./api";
@@ -75,8 +88,19 @@ export function fileMenu(ws: WorkspaceInfo, extra: MenuItem[] = []): MenuDef {
       SEPARATOR,
       { label: "報表清單", action: () => ws.navigate("/") },
       { label: "關閉", action: () => void closeDocument(ws.workbook, ws.navigate) },
+      ...quitItems(),
     ],
   };
+}
+
+/** 「結束」：只有在桌面版的外殼中才有。 */
+export function quitItems(): MenuItem[] {
+  return hasShell() ? [SEPARATOR, { label: "結束", action: () => void quitApp() }] : [];
+}
+
+/** 「說明」：關於（只有在桌面版的外殼中才有；沒有項目時功能表列不顯示這個功能表）。 */
+export function helpMenu(): MenuDef {
+  return { label: "說明", items: hasShell() ? [{ label: "關於報表桌面版", action: () => void showAbout() }] : [] };
 }
 
 /** 「資料」開頭共用的項目：新增資料源、連線到伺服器，以及各資料源的分頁。 */
@@ -103,8 +127,48 @@ export function serverMenu(ws: WorkspaceInfo): MenuDef {
       SEPARATOR,
       { label: "發布…", action: () => openDialog({ kind: "publish", workbook: ws.workbook }) },
       { label: "發布資料源…", action: () => openDialog({ kind: "publish-datasource", workbook: ws.workbook }) },
+      SEPARATOR,
+      { label: "登出", action: signOutServer },
     ],
   };
+}
+
+/** 桌面版中不在編輯器裡的頁面（報表清單、檢視）的功能表：檔案、伺服器、說明。桌面版只有這一排功能表
+ * （外殼沒有原生選單），所以每一頁都要有。儲存、發布等需要已開啟的報表，沒有時提示先開啟。 */
+export function DesktopMenuBar({ navigate }: { navigate: (to: string) => void }) {
+  const commands = () => (window as unknown as { tmigDesktop?: Record<string, () => Promise<void>> }).tmigDesktop;
+  const run = (name: string) => () => void commands()?.[name]?.();
+  const menus: MenuDef[] = [
+    {
+      label: "檔案",
+      items: [
+        { label: "新增報表（連線到資料）…", action: run("newWorkbook") },
+        { label: "新增報表（連線到伺服器）…", action: run("connectServer") },
+        { label: "開啟檔案…", action: run("open") },
+        SEPARATOR,
+        { label: "儲存", action: run("save") },
+        { label: "另存新檔…", action: run("saveAs") },
+        SEPARATOR,
+        { label: "報表清單", action: () => navigate("/") },
+        { label: "關閉", action: run("close") },
+        ...quitItems(),
+      ],
+    },
+    {
+      label: "伺服器",
+      items: [
+        { label: "登入…", action: run("signIn") },
+        { label: "從伺服器開啟…", action: run("openFromServer") },
+        SEPARATOR,
+        { label: "發布…", action: run("publish") },
+        { label: "發布資料源…", action: run("publishDatasource") },
+        SEPARATOR,
+        { label: "登出", action: run("signOut") },
+      ],
+    },
+    helpMenu(),
+  ];
+  return <MenuBar menus={menus} saving={false} />;
 }
 
 /** 「視窗」：完成編輯（回到檢視）與各分頁。 */
@@ -145,8 +209,9 @@ export function useCreateSheet(onError: (message: string) => void) {
 // ---------------------------------------------------------------- 功能表列
 
 /** 功能表列：按一下開啟選單，選單開著時滑到另一個功能表就換過去。右側是報表名稱、狀態與「完成」。 */
-export function MenuBar({ menus, saving, onDone }: { menus: MenuDef[]; saving: boolean; onDone: () => void }) {
-  const ws = useWorkspace();
+export function MenuBar({ menus, saving, onDone }: { menus: MenuDef[]; saving: boolean; onDone?: () => void }) {
+  // 編輯器之外（報表清單、檢視）沒有工作區的資訊，也沒有「完成」
+  const ws = useContext(WorkspaceContext);
   const [open, setOpen] = useState<{ index: number; anchor: DOMRect } | null>(null);
   // 選單開著時再按同一個功能表：選單先因為按在外面而關閉，接著的 click 不再打開
   const wasOpen = useRef(false);
@@ -178,16 +243,20 @@ export function MenuBar({ menus, saving, onDone }: { menus: MenuDef[]; saving: b
           </button>
         ))}
       </div>
-      <span className="menu-bar-title" title="報表">
-        {ws.name}
-      </span>
+      {ws && (
+        <span className="menu-bar-title" title="報表">
+          {ws.name}
+        </span>
+      )}
       <span className="spacer" />
-      {ws.unsupported > 0 && <span className="error">不支援 {ws.unsupported} 筆</span>}
+      {ws && ws.unsupported > 0 && <span className="error">不支援 {ws.unsupported} 筆</span>}
       {saving && <span className="hint">儲存中…</span>}
-      {ws.account}
-      <button type="button" className="primary" title="完成編輯，回到檢視" onClick={onDone}>
-        完成
-      </button>
+      {ws?.account}
+      {onDone && (
+        <button type="button" className="primary" title="完成編輯，回到檢視" onClick={onDone}>
+          完成
+        </button>
+      )}
       {open && shown[open.index] && (
         <PopupMenu
           key={open.index}
@@ -483,6 +552,7 @@ export function DatasourceFrame({ datasource, children }: { datasource: string; 
     { label: "Story", items: [{ label: "新增 Story", action: () => create("story") }] },
     serverMenu(ws),
     windowMenu(ws, current, done),
+    helpMenu(),
   ];
   return (
     <div className="workspace ds-workspace" data-datasource-workspace={datasource}>

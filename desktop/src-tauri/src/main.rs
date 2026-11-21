@@ -2,8 +2,9 @@
 //!
 //! - 啟動本機引擎（`tmig desktop serve`），從標準輸出讀第一行 JSON 取得埠號與權杖，
 //!   主視窗再載入引擎提供的檢視器；外殼結束時關閉引擎（引擎也會在標準輸入關閉時自行結束）
-//! - 檔案選單（開啟、儲存、另存新檔、關閉報表）與伺服器選單（登入、從伺服器開啟、發布、登出）
-//!   呼叫檢視器的 `window.tmigDesktop`，邏輯只在檢視器與本機引擎中寫一次
+//! - 沒有原生選單：功能表列在頁面裡（與 Tableau Desktop 相同只有一排），檔案與伺服器的指令、
+//!   快捷鍵（Ctrl+O、Ctrl+S、Ctrl+Shift+S、Ctrl+W）都由檢視器處理，邏輯只在檢視器與本機引擎中寫一次；
+//!   外殼只提供「結束」與「關於」（`quit_app`、`about_text`）
 //! - 選檔與存檔對話框由外殼提供（`pick_open_path`、`pick_data_path`、`pick_save_path`）
 //! - 引擎的記錄寫到應用程式的記錄資料夾（engine.log）
 //! - 只執行一份：工作區只有一個，第二份的引擎啟動時會清掉第一份開啟中的報表；
@@ -19,7 +20,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Deserialize;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -147,78 +147,19 @@ fn fail(app: &AppHandle, message: String) {
     app.exit(1);
 }
 
-fn build_menu(app: &AppHandle) -> tauri::Result<()> {
-    let file = SubmenuBuilder::new(app, "檔案")
-        .item(
-            &MenuItemBuilder::with_id("new_workbook", "新增報表（連線到資料）…")
-                .accelerator("CmdOrCtrl+N")
-                .build(app)?,
-        )
-        .item(&MenuItemBuilder::with_id("connect_server", "新增報表（連線到伺服器）…").build(app)?)
-        .item(&MenuItemBuilder::with_id("open", "開啟…").accelerator("CmdOrCtrl+O").build(app)?)
-        .item(&MenuItemBuilder::with_id("save", "儲存").accelerator("CmdOrCtrl+S").build(app)?)
-        .item(
-            &MenuItemBuilder::with_id("save_as", "另存新檔…")
-                .accelerator("CmdOrCtrl+Shift+S")
-                .build(app)?,
-        )
-        .item(&MenuItemBuilder::with_id("close", "關閉報表").accelerator("CmdOrCtrl+W").build(app)?)
-        .separator()
-        .item(&MenuItemBuilder::with_id("quit", "結束").build(app)?)
-        .build()?;
-    let server = SubmenuBuilder::new(app, "伺服器")
-        .item(&MenuItemBuilder::with_id("sign_in", "登入…").build(app)?)
-        .item(&MenuItemBuilder::with_id("open_server", "從伺服器開啟…").build(app)?)
-        .item(&MenuItemBuilder::with_id("publish", "發布到伺服器…").build(app)?)
-        .item(&MenuItemBuilder::with_id("publish_datasource", "發布資料源…").build(app)?)
-        .separator()
-        .item(&MenuItemBuilder::with_id("sign_out", "登出").build(app)?)
-        .build()?;
-    let view = SubmenuBuilder::new(app, "檢視")
-        .item(&MenuItemBuilder::with_id("home", "報表清單").build(app)?)
-        .item(&MenuItemBuilder::with_id("reload", "重新整理").accelerator("F5").build(app)?)
-        .build()?;
-    let help = SubmenuBuilder::new(app, "說明")
-        .item(&MenuItemBuilder::with_id("about", "關於報表桌面版").build(app)?)
-        .build()?;
-    let menu = MenuBuilder::new(app).items(&[&file, &server, &view, &help]).build()?;
-    app.set_menu(menu)?;
-    Ok(())
+/// 結束桌面版（先結束本機引擎）。功能表在頁面裡（外殼沒有原生選單，免得與頁面的功能表列重複成兩排），
+/// 由頁面的「檔案＞結束」呼叫。
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    stop_engine(&app);
+    app.exit(0);
 }
 
-fn menu_action(app: &AppHandle, id: &str) {
-    let script = match id {
-        "new_workbook" => "window.tmigDesktop && window.tmigDesktop.newWorkbook()",
-        "connect_server" => "window.tmigDesktop && window.tmigDesktop.connectServer()",
-        "open" => "window.tmigDesktop && window.tmigDesktop.open()",
-        "save" => "window.tmigDesktop && window.tmigDesktop.save()",
-        "save_as" => "window.tmigDesktop && window.tmigDesktop.saveAs()",
-        "close" => "window.tmigDesktop && window.tmigDesktop.close()",
-        "sign_in" => "window.tmigDesktop && window.tmigDesktop.signIn()",
-        "open_server" => "window.tmigDesktop && window.tmigDesktop.openFromServer()",
-        "publish" => "window.tmigDesktop && window.tmigDesktop.publish()",
-        "publish_datasource" => "window.tmigDesktop && window.tmigDesktop.publishDatasource()",
-        "sign_out" => "window.tmigDesktop && window.tmigDesktop.signOut()",
-        "home" => "window.location.assign('/')",
-        "reload" => "window.location.reload()",
-        "about" => {
-            let version = app.package_info().version.to_string();
-            app.dialog()
-                .message(format!("{TITLE} {version}\n開啟 Tableau 的 .twbx／.twb 與報表套件 .tmigx"))
-                .title(TITLE)
-                .show(|_| {});
-            return;
-        }
-        "quit" => {
-            stop_engine(app);
-            app.exit(0);
-            return;
-        }
-        _ => return,
-    };
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(script);
-    }
+/// 「說明＞關於」的文字：名稱與版本。
+#[tauri::command]
+fn about_text(app: AppHandle) -> String {
+    let version = app.package_info().version.to_string();
+    format!("{TITLE} {version}：開啟 Tableau 的 .twbx／.twb 與報表套件 .tmigx")
 }
 
 fn path_text(path: Option<tauri_plugin_dialog::FilePath>) -> Option<String> {
@@ -332,15 +273,15 @@ fn main() {
             pick_open_path,
             pick_data_path,
             pick_folder_path,
-            pick_save_path
+            pick_save_path,
+            quit_app,
+            about_text
         ])
         .setup(|app| {
             let handle = app.handle().clone();
-            build_menu(&handle)?;
             std::thread::spawn(move || launch(handle));
             Ok(())
         })
-        .on_menu_event(|app, event| menu_action(app, event.id().as_ref()))
         .build(tauri::generate_context!())
         .expect("無法啟動報表桌面版")
         .run(|app, event| {
