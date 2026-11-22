@@ -248,6 +248,7 @@
       "folders": [],
       "published": null,
       "geo": null,
+      "background_images": [],
       "source_ref": "/workbook/datasources/datasource[2]"
     }
   ],
@@ -513,6 +514,7 @@
       "page_history": null,
       "blends": [],
       "map": null,
+      "background_images_off": [],
       "controls": [],
       "drop_lines": null,
       "hidden": false,
@@ -722,6 +724,7 @@
       "page_history": null,
       "blends": [],
       "map": null,
+      "background_images_off": [],
       "controls": [],
       "drop_lines": null,
       "hidden": false,

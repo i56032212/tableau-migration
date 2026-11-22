@@ -773,11 +773,13 @@ def test_render_separates_warnings_from_informational_notes(client: TestClient) 
     只標示這一種）。預測估計不出來時要有原因——原本只有兩年的資料（預設忽略最後一期）時什麼都沒有說。"""
     caveat = "預測的估計值以平台的指數平滑計算（與 Tableau 相同的模型），可能與 Tableau 有些微差異"
 
-    def forecast(unit: str) -> dict[str, Any]:
+    def forecast(unit: str, agg: str = "sum") -> dict[str, Any]:
         """Monthly Profit（篩選成兩年的資料）的時間改成 unit、加上預測。"""
         ws = sheet(client, "ws_monthly_profit")
         ws["columns"][0]["date"]["unit"] = unit
-        ws["forecast"] = {"measures": [use("f_profit", agg="sum", continuous=True)]}
+        measure = use("f_profit", agg=agg, continuous=True)
+        ws["rows"] = [measure]
+        ws["forecast"] = {"measures": [measure]}
         put(client, ws)
         return render(client, "ws_monthly_profit")
 
@@ -785,11 +787,15 @@ def test_render_separates_warnings_from_informational_notes(client: TestClient) 
     monthly = forecast("month")
     assert monthly["notes"] == [caveat] and monthly["warnings"] == []
     assert monthly["describe"]["forecast"]["models"]
-    # 年：只有兩年，扣掉忽略的最後一期剩一期——沒有估計的值，warnings 說明原因
-    yearly = forecast("year")
+    # 年、AVG：只有兩年，扣掉忽略的最後一期剩一期——沒有估計的值，warnings 說明原因（SUM 時 Tableau 改以較細
+    # 的時間估計，見 test_forecast_granularity.py；這張工作表的情況文件沒有寫明，列為不支援）
+    yearly = forecast("year", "avg")
     assert yearly["rows"] == 2 and yearly["describe"]["forecast"]["models"] == []
     reason = "預測：扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"
     assert yearly["notes"] == [caveat, reason] and yearly["warnings"] == [reason]
+    assert (
+        "Tableau 在檢視中少於 9 年的資料、量值是 SUM 或 COUNT 時" in forecast("year")["unsupported"]
+    )
     # 沒有附註的工作表：兩者都是空的
     plain = render(client, "ws_sub_category_profit")
     assert plain["notes"] == [] and plain["warnings"] == []

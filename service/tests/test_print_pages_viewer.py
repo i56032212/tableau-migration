@@ -116,7 +116,10 @@ def open_sheet(page: Any, url: str, sheet: str) -> None:
 
 def print_with(page: Any, **options: Any) -> None:
     """匯出＞PDF（列印）：頁面設定填好之後按「列印」（瀏覽器的列印對話框換成記下有沒有呼叫）。"""
-    page.evaluate("window.__printed = false; window.print = () => { window.__printed = true; }")
+    # 包在函式裡：運算式的結果是函式時 Playwright 會呼叫它，__printed 一開始就是 true，等列印的那一步就沒有作用
+    page.evaluate(
+        "() => { window.__printed = false; window.print = () => { window.__printed = true; }; }"
+    )
     page.get_by_label("匯出").select_option("pdf")
     setup = page.locator(".page-setup")
     setup.get_by_label("紙張").select_option(options.get("paper", "A4"))

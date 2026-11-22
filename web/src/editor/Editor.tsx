@@ -9,6 +9,9 @@ import { Modal } from "../Server";
 import type { FieldUse, IR, Mark, Scalar } from "../types";
 import type { ViewerAccess } from "../viewerApi";
 import { DataDialog } from "../ViewerTools";
+import { MEASURE_NAMES_KEY } from "../headerDrag";
+import { type AnimationSetting, effectiveAnimation } from "../markAnimation";
+import { AnimationDialog, tidyWorkbookAnimation } from "./AnimationDialog";
 import { WorksheetView } from "../WorksheetView";
 import { EDITED_EVENT, type EditedDetail, editApi, sheetConflict, type StoredSheet } from "./api";
 import { type EditorContextValue, type EditorDialog, EditorContext, type FilterTarget, useEditor } from "./context";
@@ -16,6 +19,7 @@ import { ImportSheetsDialog } from "./ImportDialog";
 import { DescribeModelDialog } from "./DescribeDialogs";
 import { DataPane } from "./DataPane";
 import { Icon } from "./Icons";
+import { BackgroundImagesDialog } from "./BackgroundImagesDialog";
 import {
   AliasDialog,
   BinDialog,
@@ -54,6 +58,7 @@ import {
   type Catalog,
   type CatalogField,
   cardMarks,
+  clearSortOfKey,
   excludeNulls,
   fieldIndex,
   addMapLayer,
@@ -63,6 +68,7 @@ import {
   isSpecial,
   MEASURE_VALUES,
   markUses,
+  moveMeasures,
   moveMember,
   newTableCalc,
   nullAxisUses,
@@ -72,10 +78,11 @@ import {
   setAggregated,
   setSort,
   type SheetIR,
+  sortOfKey,
   swapAxes,
   tidySheet,
 } from "./model";
-import { FiltersShelf, MarksCard, type MenuItem, MeasureValuesCard, SEPARATOR, Shelf } from "./Shelves";
+import { FiltersShelf, MarksCard, type MenuItem, MeasureValuesCard, PopupMenu, SEPARATOR, Shelf } from "./Shelves";
 import {
   dataMenuItems,
   fileMenu,
@@ -494,6 +501,21 @@ export function Editor({
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
   const [dialog, setDialog] = useState<EditorDialog | null>(null);
+  // 檢視上標題的右鍵選單：哪個欄位（檢視上的欄位鍵）、在哪裡開
+  const [headerMenu, setHeaderMenu] = useState<{ key: string; anchor: DOMRect } | null>(null);
+  // 格式＞動畫：活頁簿預設（報表裡的）與對話框
+  const [bookAnimation, setBookAnimation] = useState<AnimationSetting | null>(null);
+  const [animationDialog, setAnimationDialog] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    editApi
+      .animation(workbook)
+      .then((value) => !cancelled && setBookAnimation(value))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [workbook]);
   // 這個視窗中複製過格式（可以貼到其他工作表）
   const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "info" | "error" } | null>(null);
@@ -942,6 +964,8 @@ export function Editor({
           },
         },
         { label: "篩選掉未知的位置", disabled: !mapSheet, checked: map.hide_unknown, action: () => changeMap({ hide_unknown: !map.hide_unknown }) },
+        SEPARATOR,
+        { label: "背景圖片…", action: () => setDialog({ kind: "background-images" }) },
         { label: "重設地圖（自動縮放）", disabled: !mapSheet || !map.viewport, action: () => changeMap({ viewport: null }) },
       ],
     },
@@ -949,6 +973,7 @@ export function Editor({
       label: "格式",
       items: [
         { label: "格式…", action: () => setDialog({ kind: "sheet-format" }) },
+        { label: "動畫…", action: () => setAnimationDialog(true) },
         SEPARATOR,
         {
           label: "複製格式",
@@ -1130,6 +1155,8 @@ export function Editor({
                   worksheet={sheet.id}
                   state={EMPTY_STATE}
                   revision={revision}
+                  // 標記的動畫（格式＞動畫）：欄列架、篩選、排序改變時標記移到新的位置
+                  animation={effectiveAnimation(bookAnimation, sheet.animation as AnimationSetting | null | undefined)}
                   onRendered={(response) => {
                     const mark = response.mark ?? null;
                     renderedTable.current = response.table;
@@ -1175,8 +1202,12 @@ export function Editor({
                     });
                   }}
                   tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
-                  // 拖曳標題或圖例的項目到另一個位置：這個欄位改成手動排序（與其他編輯相同可以復原）
-                  onHeaderMove={(move) => apply((s) => moveMember(s, move.key, move.values))}
+                  // 拖曳標題或圖例的項目到另一個位置：這個欄位改成手動排序（與其他編輯相同可以復原）；
+                  // Measure Names 改的是量值的順序（Measure Values 卡上的順序）
+                  onHeaderMove={(move) =>
+                    apply((s) => (move.key === MEASURE_NAMES_KEY ? moveMeasures(s, move.values) : moveMember(s, move.key, move.values)))
+                  }
+                  onHeaderMenu={(target) => setHeaderMenu({ key: target.key, anchor: new DOMRect(target.x, target.y, 0, 0) })}
                   onAnnotationMove={(index, dx, dy) =>
                     // 拖曳註解的文字：改變文字相對於標記或點的位置（區域的註解以對話框調整）
                     apply((s) => ({
@@ -1225,6 +1256,51 @@ export function Editor({
         )}
       </div>
       {filter && <FilterDialog target={filter} onClose={() => setFilter(null)} />}
+      {animationDialog && (
+        <AnimationDialog
+          workbook={bookAnimation}
+          sheet={(sheet.animation as AnimationSetting | null | undefined) ?? null}
+          sheetName={sheet.name}
+          onSave={(book, own) => {
+            if (JSON.stringify(book) !== JSON.stringify(tidyWorkbookAnimation(bookAnimation)))
+              void editApi
+                .saveAnimation(workbook, book)
+                .then((value) => {
+                  setBookAnimation(value);
+                  onChanged();
+                })
+                .catch((e: Error) => notify(e.message, "error"));
+            if (JSON.stringify(own) !== JSON.stringify(sheet.animation ?? null)) apply((s) => ({ ...s, animation: own }));
+          }}
+          onReset={() => {
+            void editApi
+              .saveAnimation(workbook, null, true)
+              .then((value) => {
+                setBookAnimation(value);
+                onChanged();
+                if (sheet.animation) apply((s) => ({ ...s, animation: null }));
+                notify("所有工作表的動畫改回預設", "info");
+              })
+              .catch((e: Error) => notify(e.message, "error"));
+          }}
+          onClose={() => setAnimationDialog(false)}
+        />
+      )}
+      {headerMenu && (
+        // 標題的右鍵選單（Tableau：在欄位上按右鍵選「清除排序」）：清除這個欄位的排序。Measure Names 的順序是
+        // Measure Values 卡上的順序，沒有可以清除的排序
+        <PopupMenu
+          anchor={headerMenu.anchor}
+          items={[
+            {
+              label: "清除排序",
+              disabled: headerMenu.key === MEASURE_NAMES_KEY || sortOfKey(sheet, headerMenu.key) === null,
+              action: () => apply((s) => clearSortOfKey(s, headerMenu.key)),
+            },
+          ]}
+          onClose={() => setHeaderMenu(null)}
+        />
+      )}
       {viewData && <ViewDataDialog workbook={workbook} sheet={shown} onClose={() => setViewData(false)} />}
       {calc !== undefined && (
         <CalcDialog
@@ -1249,6 +1325,7 @@ export function Editor({
       {dialog?.kind === "trend" && <TrendDialog card={dialog.card} onClose={() => setDialog(null)} />}
       {dialog?.kind === "forecast" && <ForecastDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
       {dialog?.kind === "cluster" && <ClusterDialog onClose={() => setDialog(null)} onSaved={() => void reloadCatalog()} />}
+      {dialog?.kind === "background-images" && <BackgroundImagesDialog onClose={() => setDialog(null)} />}
       {importing && (
         <ImportSheetsDialog
           workbook={workbook}

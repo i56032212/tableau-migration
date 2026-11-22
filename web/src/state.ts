@@ -36,6 +36,8 @@ export interface ViewState {
   drills?: Record<string, Record<string, number>>;
   /** 工具提示的「只保留」「排除」：工作表 id → 依序套用的選取 */
   kept?: Record<string, MarkSelection[]>;
+  /** 目前的故事點：記下了狀態（排序、欄列架、註解、座標軸等）的工作表查詢時由查詢服務套用 */
+  story?: { story: string; point: string; sheets: string[] };
 }
 
 /** 篩選狀態的欄位鍵，與查詢服務相同：f_region、year(f_order_date)、trunc_month(f_order_date)。 */
@@ -102,6 +104,7 @@ export function stateFor(ir: IR, worksheet: string, view: ViewState): QueryState
   if (drill && Object.keys(drill).length > 0) state.drill = drill;
   const kept = view.kept?.[worksheet];
   if (kept && kept.length > 0) state.marks = kept;
+  if (view.story?.sheets.includes(worksheet)) state.story = { story: view.story.story, point: view.story.point };
   // 集合動作：只帶這張工作表的資料源中的集合（其他資料源的集合不影響它）
   const sheet = ir.worksheets.find((w) => w.id === worksheet);
   const fields = new Set(ir.datasources.find((d) => d.id === sheet?.datasource)?.fields.map((f) => f.id) ?? []);

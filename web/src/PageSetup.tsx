@@ -1,10 +1,12 @@
-// 列印的頁面設定（Tableau 的「檔案＞頁面設定」）：紙張、方向、邊界、縮放，要不要印標題、說明與圖例，以及比一頁大的
-// 工作表怎麼分頁（在每頁中重複標題和圖例、在窗格邊界分頁）。設定記在瀏覽器（localStorage）；按「列印」時以 @page
-// 與列印用的樣式套用（單獨檢視的工作表另外分好頁，見 printPages.ts），再開啟瀏覽器的列印（可以另存 PDF）。
+// 列印的頁面設定（Tableau 的「檔案＞頁面設定」）：紙張、方向、邊界、縮放，要不要印標題、說明與圖例，比一頁大的
+// 工作表怎麼分頁（在每頁中重複標題和圖例、在窗格邊界分頁），以及用到頁面架的工作表印目前的頁面還是所有頁面。
+// 設定記在瀏覽器（localStorage）；按「列印」時以 @page 與列印用的樣式套用（單獨檢視的工作表另外分好頁，見
+// printPages.ts），再開啟瀏覽器的列印（可以另存 PDF）。
 
 import { useState } from "react";
 import { alreadyPaged, clearPages, paginateSheet } from "./printPages";
 import { Modal } from "./Server";
+import type { Scalar } from "./types";
 
 export interface PageSetup {
   paper: keyof typeof PAPERS | keyof typeof MORE_PAPERS;
@@ -26,6 +28,18 @@ export interface PageSetup {
   repeat: boolean;
   /** 在窗格邊界分頁（不在列、欄的中間分頁） */
   breakPanes: boolean;
+  /** 頁面架（Tableau 頁面設定的 Pages Shelf）：印目前的頁面，或依序印所有頁面 */
+  pagesShelf: "current" | "all";
+}
+
+/** 用到頁面架的工作表：列印所有頁面時一頁一頁切換（檢視器的 App 提供，不留在檢視的歷程裡）。 */
+export interface PagesPrinting {
+  /** 頁面架上各頁的值（與頁面控制項的順序相同） */
+  values: () => Promise<Scalar[]>;
+  /** 切換到這一頁；回傳 false 表示已經是這一頁（圖不會重畫） */
+  show: (value: Scalar) => boolean;
+  /** 印完回到原本的頁 */
+  restore: () => void;
 }
 
 /** 紙張的寬、高（公釐，直向） */
@@ -65,6 +79,7 @@ const DEFAULTS: PageSetup = {
   legends: true,
   repeat: true,
   breakPanes: true,
+  pagesShelf: "current",
 };
 
 export function loadPageSetup(): PageSetup {
@@ -128,6 +143,60 @@ export function printStyles(setup: PageSetup, scale: number): string {
 /** 最近一次套用的頁面設定：直接以瀏覽器列印（Ctrl+P）時沿用 */
 let lastSetup: PageSetup | null = null;
 
+/** 列印用的樣式寫進文件的 <style>（下次列印前換掉）。 */
+function writeStyles(setup: PageSetup, scale: number): void {
+  let style = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement("style");
+    style.id = STYLE_ID;
+    document.head.appendChild(style);
+  }
+  style.textContent = printStyles(setup, scale);
+  lastSetup = setup;
+}
+
+/** 每一頁最多等這麼久（毫秒）讓圖畫好 */
+const PAGE_WAIT = 30_000;
+
+/** 等工作表的圖再畫好一次（.chart 的 data-draws 改變、沒有在更新）；查詢失敗、等太久時照樣往下。 */
+async function nextDraw(sheet: HTMLElement, before: string | undefined): Promise<void> {
+  const deadline = Date.now() + PAGE_WAIT;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    const worksheet = sheet.querySelector<HTMLElement>(".worksheet");
+    const chart = sheet.querySelector<HTMLElement>(".worksheet > .worksheet-body > .chart");
+    if (worksheet?.dataset.updating === "true" || worksheet?.dataset.loading === "true") continue;
+    if (!chart) return; // 查詢失敗、未支援：沒有圖
+    if (chart.dataset.drawn === "true" && chart.dataset.draws !== before) return;
+  }
+}
+
+/**
+ * 頁面架的所有頁面：一頁一頁切換、等圖畫好之後分頁，接在一起（各頁的列印與「目前的頁面」相同），印完之前不重新分；
+ * 最後回到原本的頁。回傳印了幾頁（頁面架的頁數）。
+ */
+export async function paginateAllPages(setup: PageSetup, sheet: HTMLElement, pages: PagesPrinting): Promise<number> {
+  clearPages();
+  const [pageWidth, pageHeight] = printableSize(setup);
+  const values = await pages.values();
+  let scale = 1;
+  let printed = 0;
+  try {
+    for (const value of values) {
+      const before = sheet.querySelector<HTMLElement>(".worksheet > .worksheet-body > .chart")?.dataset.draws;
+      if (pages.show(value)) await nextDraw(sheet, before);
+      const paged = paginateSheet(sheet, { ...setup, pageWidth, pageHeight }, { append: printed > 0, hold: true });
+      if (!paged) continue;
+      scale = paged.scale;
+      printed++;
+    }
+  } finally {
+    pages.restore();
+  }
+  writeStyles(setup, scale);
+  return printed;
+}
+
 /**
  * 套用頁面設定，回傳縮放的比例。單獨檢視的工作表分頁印（整張工作表，包括在區塊內捲動時看不到的部分）；
  * dashboard 與 Story 整個縮放成一張。
@@ -138,14 +207,7 @@ export function applyPageSetup(setup: PageSetup, element: HTMLElement | null): n
   const paged = element?.matches(".single-sheet") ? paginateSheet(element, { ...setup, pageWidth, pageHeight }) : null;
   const box = element?.getBoundingClientRect();
   const scale = paged ? paged.scale : printScale(setup, box?.width ?? 0, box?.height ?? 0);
-  let style = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
-  if (!style) {
-    style = document.createElement("style");
-    style.id = STYLE_ID;
-    document.head.appendChild(style);
-  }
-  style.textContent = printStyles(setup, scale);
-  lastSetup = setup;
+  writeStyles(setup, scale);
   return scale;
 }
 
@@ -178,7 +240,16 @@ if (typeof window !== "undefined") {
   window.addEventListener("afterprint", () => clearPages());
 }
 
-export function PageSetupDialog({ target, onClose }: { target: () => HTMLElement | null; onClose: () => void }) {
+export function PageSetupDialog({
+  target,
+  onClose,
+  pages,
+}: {
+  target: () => HTMLElement | null;
+  onClose: () => void;
+  /** 單獨檢視的工作表用到頁面架時：可以印所有頁面 */
+  pages?: PagesPrinting | null;
+}) {
   const [setup, setSetup] = useState<PageSetup>(loadPageSetup);
   const set = (patch: Partial<PageSetup>) => setSetup((current) => ({ ...current, ...patch }));
   const print = () => {
@@ -187,8 +258,17 @@ export function PageSetupDialog({ target, onClose }: { target: () => HTMLElement
     } catch {
       // 不能用 localStorage 時只在這次列印有效
     }
-    applyPageSetup(setup, target());
+    const element = target();
     onClose();
+    if (pages && setup.pagesShelf === "all" && element?.matches(".single-sheet")) {
+      // 所有頁面：一頁一頁畫好、分頁之後才開啟列印（印完 afterprint 拿掉分好的頁）
+      document.documentElement.classList.add("tmig-printing-pages");
+      void paginateAllPages(setup, element, pages)
+        .then(() => window.print())
+        .finally(() => document.documentElement.classList.remove("tmig-printing-pages"));
+      return;
+    }
+    applyPageSetup(setup, element);
     // 等對話框關閉後再開啟列印
     window.setTimeout(() => window.print(), 50);
   };
@@ -303,6 +383,17 @@ export function PageSetupDialog({ target, onClose }: { target: () => HTMLElement
             <input type="checkbox" checked={setup.breakPanes} onChange={(e) => set({ breakPanes: e.target.checked })} /> 在窗格邊界分頁
           </label>
         </fieldset>
+        {pages && (
+          <fieldset>
+            <legend>頁面架</legend>
+            <label className="inline">
+              <input type="radio" name="pages-shelf" checked={setup.pagesShelf !== "all"} onChange={() => set({ pagesShelf: "current" })} /> 目前的頁面
+            </label>
+            <label className="inline" title="依序印頁面架上的每一頁">
+              <input type="radio" name="pages-shelf" checked={setup.pagesShelf === "all"} onChange={() => set({ pagesShelf: "all" })} /> 所有頁面
+            </label>
+          </fieldset>
+        )}
         <div className="dialog-actions">
           <button type="button" className="primary" onClick={print}>
             列印

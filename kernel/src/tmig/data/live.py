@@ -130,7 +130,11 @@ def execute_rows(
             con.execute(f"CREATE VIEW {target} AS SELECT * FROM {ident(alias)}")
         for guard in query.guards:
             check_guard(guard, _run(con, guard.sql).rows)
-        return finish(query, _coerce(_run(con, query.sql), query.columns))
+        return finish(
+            query,
+            _coerce(_run(con, query.sql), query.columns),
+            lambda q: execute_rows(q, executor, tables),
+        )
     finally:
         con.close()
 
@@ -251,7 +255,11 @@ def _execute_split(
             except Exception as exc:
                 raise ExecutionError(f"來源資料庫執行失敗（{name}）：{exc}") from exc
             con.register(name, table)
-        return finish(query, _coerce(_run(con, plan.local_sql), query.columns))
+        return finish(
+            query,
+            _coerce(_run(con, plan.local_sql), query.columns),
+            lambda q: execute_live(q, executor, tables),
+        )
     finally:
         con.close()
 

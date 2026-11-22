@@ -3,8 +3,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
 import { api, fileUrl } from "./api";
-import { type HeaderMove, startHeaderDrag } from "./headerDrag";
+import { headerAtPoint, type HeaderMove, type HeaderTarget, startHeaderDrag } from "./headerDrag";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
+import { animateMarks, type MarkAnimation, type MarkKey, type MarkSnapshot, motionAllowed, type RunningAnimation, snapshotMarks } from "./markAnimation";
 import { prepareShapeImages, shapeImage, type ShapeLegend } from "./shapeImages";
 import { nextSelection, sameMark } from "./state";
 import { bundledFontsReady } from "./fonts";
@@ -71,6 +72,10 @@ interface Props {
   onAnnotationMove?: (index: number, dx: number, dy: number) => void;
   /** 編輯器：在檢視上拖曳離散的標題或圖例的項目到另一個位置（手動排序，見 headerDrag.ts）；沒有傳入時不能拖曳 */
   onHeaderMove?: (move: HeaderMove) => void;
+  /** 編輯器：在可以拖曳排序的標題或圖例的項目上按右鍵（標題的選單，例如「清除排序」）；x、y 是視窗座標 */
+  onHeaderMenu?: (target: HeaderTarget & { x: number; y: number }) => void;
+  /** 標記的動畫（格式＞動畫，見 markAnimation.ts）：查詢的結果改變時標記移到新的位置；null、省略時不做 */
+  animation?: MarkAnimation | null;
   /**
    * 畫圖的附註（左下角的標示）：warnings（預設，檢視器）只在有「沒有畫出來、算不出來或畫得不同」的附註時標示、
    * 只列出它們；all（編輯器）連單純的說明也列出；none 不標示（工具提示中的工作表）
@@ -80,6 +85,11 @@ interface Props {
 
 /** 停止平移、縮放之後多久以新的範圍重新繪製（毫秒） */
 const VIEWPORT_DELAY = 600;
+/**
+ * 檢視更新（重新查詢、重畫：例如地圖要等更細的底圖下載）超過這麼久（毫秒）才顯示「更新中」、不再接受滑鼠操作。
+ * 選取標記等很快就畫好的重畫不閃一下。
+ */
+const UPDATING_DELAY = 300;
 
 /** 滑過標記時的工具提示：位置（視窗座標）、Vega 算好的欄位與值、標記的維度值。 */
 interface Tip {
@@ -1010,6 +1020,8 @@ export function WorksheetView({
   pinAbove,
   onAnnotationMove,
   onHeaderMove,
+  onHeaderMenu,
+  animation,
   showNotes = "warnings",
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -1023,6 +1035,13 @@ export function WorksheetView({
   const onHeaderMoveRef = useRef(onHeaderMove);
   onHeaderMoveRef.current = onHeaderMove;
   const sortable = onHeaderMove !== undefined;
+  const onHeaderMenuRef = useRef(onHeaderMenu);
+  onHeaderMenuRef.current = onHeaderMenu;
+  const headerMenus = onHeaderMenu !== undefined;
+  // 動畫：重畫之前記下的標記（查詢結果改變之後的新圖從這裡移過去）
+  const animationRef = useRef(animation ?? null);
+  animationRef.current = animation ?? null;
+  const marksBefore = useRef<{ response: RenderResponse; marks: MarkSnapshot } | null>(null);
   const onKeepRef = useRef(onKeep);
   onKeepRef.current = onKeep;
   const canKeep = onKeep !== undefined;
@@ -1066,6 +1085,8 @@ export function WorksheetView({
   const [response, setResponse] = useState<RenderResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // 圖正在畫（embed 開始到畫好，地圖的形狀、底圖下載完之前）：與查詢中一樣是「檢視更新中」
+  const [drawing, setDrawing] = useState(false);
   const [showTable, setShowTable] = useState(false);
   // 區塊的大小改變、要重新決定列是填滿還是保持標準的列高時遞增（重畫）
   const [relayout, setRelayout] = useState(0);
@@ -1083,6 +1104,8 @@ export function WorksheetView({
       .then((result) => {
         if (cancelled) return;
         setResponse(result);
+        // 查詢回來到新的圖畫好之前也是更新中（與 setResponse 一起更新，「更新中」不會在兩者之間閃掉）
+        setDrawing(Boolean(result.spec));
         setError(null);
         onRendered?.(result);
       })
@@ -1101,7 +1124,10 @@ export function WorksheetView({
 
   useEffect(() => {
     const element = chartRef.current;
-    if (!element || !response?.spec || showTable) return;
+    if (!element || !response?.spec || showTable) {
+      setDrawing(false);
+      return;
+    }
     let view: Result | null = null;
     let disposed = false;
     let leaveTimer: number | undefined;
@@ -1111,6 +1137,14 @@ export function WorksheetView({
     const ownFrom = Array.isArray(original.data?.values) ? original.data.values.length : 0;
     const dimensions = (original.usermeta?.dimensions ?? {}) as Record<string, string>;
     const measures = (original.usermeta?.measures ?? {}) as Record<string, string>;
+    /** 標記的身分（動畫）：圖層、標記的維度值與 Measure Names 的位置——重畫前後相同的就是同一個標記 */
+    const keyOf: MarkKey = (item) => {
+      const row = item?.datum?.__row;
+      const record = typeof row === "number" ? records[row] : undefined;
+      if (!record) return null;
+      return `${item.mark?.name ?? ""}|${JSON.stringify(markOf(record, dimensions))}|${String(record.__mn_i ?? "")}`;
+    };
+    let running: RunningAnimation | null = null;
     const spec = structuredClone(original) as Spec;
     if (hideLegend)
       visitSpecs(spec, (node) => {
@@ -1207,6 +1241,7 @@ export function WorksheetView({
     };
     // 畫好之前（例如地圖的形狀還在下載）標記為未完成：匯出、訂閱的截圖等它完成
     element.dataset.drawn = "false";
+    setDrawing(true);
     // 地圖：投影改成可以平移、縮放（mapZoom）
     let zoomed = false;
     const patch = (vg: any) => {
@@ -1237,6 +1272,16 @@ export function WorksheetView({
       if (started) annotationDrag.current = true;
     };
     if (sortable) element.addEventListener("mousedown", headerDown);
+    /** 標題的右鍵選單（編輯器）：按在可以拖曳排序的標題、圖例的項目上時才開，其他地方照瀏覽器的 */
+    const headerMenu = (event: MouseEvent) => {
+      const svg = element.querySelector<SVGSVGElement>(":scope > svg, :scope > .frozen-host > svg");
+      if (!svg || !view) return;
+      const target = headerAtPoint(element, svg, spec, records, dimensions, event.clientX, event.clientY);
+      if (!target) return;
+      event.preventDefault();
+      onHeaderMenuRef.current?.({ ...target, x: event.clientX, y: event.clientY });
+    };
+    if (headerMenus) element.addEventListener("contextmenu", headerMenu);
     // 自訂的圖片形狀：先載入圖片（並套用顏色）填進資料列，再畫圖
     prepareShapeImages(spec, workbook)
       .catch(() => undefined)
@@ -1296,17 +1341,29 @@ export function WorksheetView({
         }
       })
       .then(async (result) => {
+        // 動畫：查詢的結果改變時（篩選、排序、頁面、參數、動作…），重畫之前記下的標記移到新的位置；選取、醒目
+        // 提示等原因重畫時不動
+        // （這張圖已經被下一張取代時不取走：下一張從原本記下的標記移過去）
+        if (!disposed) {
+          const previous = marksBefore.current;
+          marksBefore.current = null;
+          if (previous && previous.response !== response && animationRef.current)
+            running = animateMarks(element, previous.marks, keyOf, animationRef.current);
+        }
         // 上下捲動而寬度填滿：捲軸出現之後照剩下的寬度重排，右邊的字不被捲軸蓋住
         if (scroll.y && !scroll.x && !disposed) await fitBesideScrollbar(element, result, spec.width === "container");
         // 重疊的標記標籤隱藏之後才算畫好（匯出、訂閱的截圖等它）
         if ((spec.params ?? []).some((p: Spec) => p.name === LABEL_HIDDEN)) await cullLabels(result);
         element.dataset.drawn = "true";
+        // 畫好的次數：列印所有頁面時等下一張圖畫好（PageSetup.tsx）
+        element.dataset.draws = String(Number(element.dataset.draws ?? 0) + 1);
         if (disposed) {
           result.finalize();
           return;
         }
         view = result;
         viewRef.current = result;
+        setDrawing(false);
         setZoomable(zoomed);
         element.dataset.zoomable = zoomed ? "true" : "false";
         if (zoomed) {
@@ -1423,11 +1480,16 @@ export function WorksheetView({
       })
       .catch((err: unknown) => {
         element.dataset.drawn = "true";
+        setDrawing(false);
         setError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       disposed = true;
+      // 動畫：進行中的停下；記下這張圖的標記，下一張圖（查詢結果改變時）從這裡移過去
+      running?.cancel();
+      if (animationRef.current && view && motionAllowed()) marksBefore.current = { response, marks: snapshotMarks(element, keyOf) };
       element.removeEventListener("mousedown", headerDown);
+      element.removeEventListener("contextmenu", headerMenu);
       window.clearTimeout(leaveTimer);
       window.clearTimeout(viewTimer);
       window.clearTimeout(hoverTimer);
@@ -1438,7 +1500,7 @@ export function WorksheetView({
       viewRef.current = null;
       setTip(null);
     };
-  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable, sortable, relayout]);
+  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable, sortable, headerMenus, relayout]);
 
   // 地圖的選取工具（矩形、半徑、套索）：選了工具之後在圖上拖曳，範圍內的標記都選取
   const [tool, setTool] = useState<SelectTool | null>(null);
@@ -1561,6 +1623,19 @@ export function WorksheetView({
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
   };
+
+  // 檢視更新中（重新查詢、或新的圖還沒畫好）：與 Tableau 處理互動時相同，畫面上標示正在更新，更新完之前不接受
+  // 滑鼠操作（框選、點選落在還沒畫好的圖上什麼都選不到）。很快就好的更新（選取標記之後重畫）不顯示
+  const busy = (loading || drawing) && response !== null && !error;
+  const [updating, setUpdating] = useState(false);
+  useEffect(() => {
+    if (!busy) {
+      setUpdating(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setUpdating(true), UPDATING_DELAY);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
 
   // 釘住的工具提示：資料重新查詢、按 Esc（見下面的取消選取）或點別的地方時放開
   useEffect(() => setPin(null), [response]);
@@ -1694,6 +1769,7 @@ export function WorksheetView({
       className="worksheet"
       data-worksheet={worksheet}
       data-loading={loading ? "true" : "false"}
+      data-updating={busy ? "true" : "false"}
       data-interactive={interactive ? "true" : undefined}
       style={{ background: usermeta.background }}
     >
@@ -1805,6 +1881,14 @@ export function WorksheetView({
         {nulls > 0 && !error && !showTable && !response?.unsupported && <NullIndicator count={nulls} actions={nullActions} />}
         {showNotes !== "none" && !error && !showTable && !response?.unsupported && <NotesIndicator warnings={warnings} others={otherNotes} />}
         {loading && !response && <div className="placeholder">載入中…</div>}
+        {updating && busy && !showTable && (
+          <div className="view-updating" role="status" aria-live="polite" onMouseDown={(e) => e.preventDefault()}>
+            <span className="view-updating-label">
+              <span className="spinner" aria-hidden="true" />
+              更新中…
+            </span>
+          </div>
+        )}
       </div>
       {response?.caption && (showCaption ?? response.caption_shown === true) && (
         <div className="worksheet-caption" role="note" aria-label="說明">

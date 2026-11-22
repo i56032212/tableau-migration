@@ -83,6 +83,7 @@ from tmig.natural import natural_key
 from tmig.planner.state import use_key
 from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
+from tmig.render.background import background_layers
 from tmig.render.colors import (
     SHAPE_PATHS,
     VEGA_SHAPES,
@@ -448,6 +449,9 @@ class _Builder:
         """工作表的資料列（色彩的範圍與各值的顏色依它決定）。"""
         self.measure_names: dict[Scalar, Any] = {}
         """Measure Names：量值的欄位鍵 → 顯示名稱（指定給量值的顏色依它對應）。"""
+        self.sort_values: dict[str, dict[tuple[str, Any], set[Any]]] = {}
+        """依欄位的值排序的維度（見 _sort_values）：維度鍵 → 成員（value_key）→ 查詢算出的排序值；
+        圖例依它排列（legend_order）。"""
         self.extent = DEFAULT_EXTENT
         """圖的大小（像素，工作表在 dashboard 上的區塊）：樹狀圖依它的寬高比排列，標籤依它換行。"""
 
@@ -1216,6 +1220,11 @@ class _Builder:
             )
             by_label = {label: image for label, _, image in members}
             images = [by_label.get(r.get(ch.label)) for r in records]
+            # 圖例依欄位的排序排列（與形狀的比例尺相同，見 common），各成員的形狀不變
+            order = self.legend_order(ch, records, [label for label, _, _ in members])
+            if order is not None:
+                place = {label: i for i, label in enumerate(order)}
+                members.sort(key=lambda member: place[member[0]])
             entries: list[dict[str, Any]] = [
                 {"label": label, "image": image}
                 if image is not None
@@ -2209,19 +2218,17 @@ class _Builder:
             # 與 Tableau 相同，線的兩端與轉折是圓的（粗的線最明顯，例如啞鈴圖）
             vl_mark.update(strokeCap="round", strokeJoin="round")
 
-    def legend_in_sort_order(
-        self,
-        encoding: dict[str, Any],
-        marks: Marks,
-        ch: Channel,
-        scale: dict[str, Any],
-        records: list[dict[str, Any]],
-    ) -> None:
-        """色彩欄位有手動或字母順序的排序（工作表的排序，沒有時為欄位預設的排序）時，圖例依這個順序排列，
-        堆疊的長條與區域也依它堆疊：Tableau 的排序說明寫在圖例上排序（拖曳圖例的項目）也改變標記的順序
+    def legend_order(
+        self, ch: Channel, records: list[dict[str, Any]], labels: list[Any]
+    ) -> list[Any] | None:
+        """圖例（色彩、形狀）的成員依欄位的排序（工作表的排序，沒有時為欄位預設的排序）排列：Tableau 的圖例
+        列出成員的順序與欄位的排序相同，在圖例上排序（拖曳圖例的項目）也改變標記的順序
         （https://help.tableau.com/v2021.2/pro/desktop/en-us/sortgroup_sorting_computed_howto.htm ，2026-11-22
-        查閱）。各成員的顏色不變（domain 與 range 一起重排）；堆疊的方向與沒有排序時相同（圖例的第一項在
-        基線那一端，見 README「已知限制與待驗證」）。依欄位的值排序時圖例仍依成員排列（尚未支援）。"""
+        查閱）。labels：依成員排列（由小到大）的顯示值；回傳重排後的顯示值，不必重排時為 None。
+
+        手動排序依排好的成員；遞減的字母順序反過來；依欄位的值排序依查詢在這個維度層級算出的排序值
+        （與表頭的順序相同，見 tmig.sqlgen.query 的 __sort 欄；Null 在最後，同值時依成員）。巢狀排序且
+        各窗格的順序不同（同一個成員有不同的排序值）時沒有單一的順序，依成員排列。"""
         sort = next((s for s in self.ws.sorts if s.field == ch.use.field), None)
         found = self.fields.get(ch.use.field)
         default = found.default_sort if found is not None else None
@@ -2234,19 +2241,48 @@ class _Builder:
             if default is not None
             else []
         )
-        if kind not in ("manual", "alphabetic") or (kind == "alphabetic" and order == "asc"):
-            return
+        if kind == "alphabetic":
+            return list(reversed(labels)) if order == "desc" else None
+        if kind not in ("manual", "by_field"):
+            return None
         raw: dict[Any, Any] = {}
         for record in records:
             raw.setdefault(record.get(ch.label), record.get(ch.name))
-        pairs = list(zip(scale["domain"], scale["range"], strict=True))
-        if kind == "alphabetic":
-            pairs.reverse()  # domain 已依成員排列（由小到大）
-        else:
+        if kind == "manual":
             place = {value_key(value): i for i, value in enumerate(manual)}
-            pairs.sort(key=lambda pair: place.get(value_key(raw.get(pair[0])), len(place)))
-        scale["domain"] = [label for label, _ in pairs]
-        scale["range"] = [color for _, color in pairs]
+            return sorted(
+                labels, key=lambda label: place.get(value_key(raw.get(label)), len(place))
+            )
+        members = self.sort_values.get(use_key(ch.use))
+        if members is None or any(len(values) > 1 for values in members.values()):
+            return None
+        value = {
+            label: next(iter(members.get(value_key(raw.get(label))) or {None})) for label in labels
+        }
+        ranked = sorted(
+            (label for label in labels if value[label] is not None),
+            key=lambda label: member_order(value[label]),
+            reverse=order == "desc",
+        )
+        return ranked + [label for label in labels if value[label] is None]
+
+    def legend_in_sort_order(
+        self,
+        encoding: dict[str, Any],
+        marks: Marks,
+        ch: Channel,
+        scale: dict[str, Any],
+        records: list[dict[str, Any]],
+    ) -> None:
+        """色彩欄位有排序時，圖例依這個順序排列（legend_order），堆疊的長條與區域也依它堆疊。各成員的顏色
+        不變（domain 與 range 一起重排）；堆疊的方向與沒有排序時相同（圖例的第一項在基線那一端，見 README
+        「已知限制與待驗證」）。"""
+        labels = self.legend_order(ch, records, list(scale["domain"]))
+        if labels is None:
+            return
+        colors = dict(zip(scale["domain"], scale["range"], strict=True))
+        scale["domain"] = labels
+        scale["range"] = [colors[label] for label in labels]
         if marks.type in ("bar", "area") and "order" not in encoding:
             index = {label: i for i, label in enumerate(scale["domain"])}
             for record in records:
@@ -2313,16 +2349,18 @@ class _Builder:
             ch = self.ch(marks.shape)
             shape: dict[str, Any] = {"field": ch.label, "type": "nominal", "title": ch.title}
             encoding["shape"] = shape
-            # 指定的形狀與 Tableau 預設形狀調色盤的順序（成員依原值排序，不隨工作表的排序改變）
+            # 指定的形狀與 Tableau 預設形狀調色盤的順序（成員依原值排序，不隨工作表的排序改變）；
+            # 圖例依欄位的排序排列，各成員的形狀不變（domain 與 range 一起重排，與色彩相同）
+            records = self.records_of(marks)
             shapes = shape_scale(
                 marks.shape_assignments,
-                (
-                    (r.get(ch.label), r.get(ch.name))
-                    for r in self.records_of(marks)
-                    if not r.get(TOTAL)
-                ),
+                ((r.get(ch.label), r.get(ch.name)) for r in records if not r.get(TOTAL)),
             )
             if shapes is not None:
+                labels = self.legend_order(ch, records, list(shapes["domain"]))
+                if labels is not None:
+                    paths = dict(zip(shapes["domain"], shapes["range"], strict=True))
+                    shapes = {"domain": labels, "range": [paths[label] for label in labels]}
                 shape["scale"] = shapes
         for use in marks.detail:
             ch = self.ch(use)
@@ -2736,6 +2774,7 @@ def build_spec(
     unpadded = result
     result = pad_result(ir, ws, columns, result, parameters, builder.notes)
     values = _records(channels, result, ws.null_text)
+    builder.sort_values = _sort_values(channels, result)
     if COLUMN_ORDER in result.columns:
         at = result.columns.index(COLUMN_ORDER)
         for record, row in zip(values, result.rows, strict=True):
@@ -3230,6 +3269,10 @@ def build_spec(
                     else (builder.header_extent(dims, shelf) if dims else None)
                 )
                 _banding(spec, enc, channel, values, style.banding, extent, len(dims))
+    images = next((d.background_images for d in ir.datasources if d.id == ws.datasource), [])
+    if images and map_plan is None:
+        # 背景圖片（地圖＞背景圖片）畫在最下層
+        background_layers(spec, ws, images, channels, values, builder.notes)
     frame = ws.pane_border or ws.cell_border
     if frame is not None and map_plan is None:
         # 外框：窗格（沒有時為儲存格）的框線畫在整個檢視的四周
@@ -4810,6 +4853,25 @@ def title_values(
             trunc = use.date.unit if use.date is not None else None
             fmt = value_format(ws, fields[use.field], use)
             texts[key] = format_value(value, column.datatype, fmt, trunc)
+    # Measure Names、Measure Values（推定，見 title_sql）：一個量值時是它的名稱與值，多個時是 *
+    if queries.measure_names is not None:
+        aliases = {use_key(a.use): a.label for a in ws.measure_aliases}
+        shown_names = list(
+            dict.fromkeys(
+                aliases.get(use_key(u), caption(fields[u.field], u, ws))
+                for u in queries.measure_names
+                if u.field in fields
+            )
+        )
+        if len(shown_names) > 1:
+            texts[MEASURE_NAMES] = MULTIPLE_VALUES
+        elif shown_names:
+            texts[MEASURE_NAMES] = shown_names[0]
+    if queries.measure_values is not None:
+        if len(queries.measure_values) > 1:
+            texts[MEASURE_VALUES] = MULTIPLE_VALUES
+        elif queries.measure_values and use_key(queries.measure_values[0]) in texts:
+            texts[MEASURE_VALUES] = texts[use_key(queries.measure_values[0])]
     return texts
 
 
@@ -4977,6 +5039,31 @@ def _records(
                 )
         records.append(record)
     return records
+
+
+SORT_COLUMN = "__sort("
+"""查詢輸出的排序值欄（__sort(維度鍵)，見 tmig.sqlgen.query）：依欄位的值排序的維度在這個維度層級的值。"""
+
+
+def _sort_values(
+    channels: dict[str, Channel], result: QueryResult
+) -> dict[str, dict[tuple[str, Any], set[Any]]]:
+    """查詢結果中依欄位的值排序的維度：維度鍵 → 成員（value_key）→ 排序值。巢狀排序時同一個成員在各窗格
+    的值可能不同，全部記下；顯示遺漏的值補上的列（沒有排序值）不算。"""
+    found: dict[str, dict[tuple[str, Any], set[Any]]] = {}
+    for at, column in enumerate(result.columns):
+        if not (column.startswith(SORT_COLUMN) and column.endswith(")")):
+            continue
+        key = column[len(SORT_COLUMN) : -1]
+        if key not in channels or key not in result.columns:
+            continue
+        member = result.columns.index(key)
+        values = found.setdefault(key, {})
+        for row in result.rows:
+            entry = values.setdefault(value_key(row[member]), set())
+            if row[at] is not None:
+                entry.add(_json_value(row[at]))
+    return found
 
 
 COMPUTATION_NAMES = {

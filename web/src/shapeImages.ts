@@ -88,6 +88,62 @@ function tint(source: string, color: string): Promise<string | null> {
   return found;
 }
 
+/** 背景圖片的圖層（usermeta.background_images）：圖層資料中的圖片路徑欄、網址欄與是否左右、上下翻轉 */
+interface BackgroundFields {
+  image: string;
+  url: string;
+  flip_x: boolean;
+  flip_y: boolean;
+}
+
+const flipped = new Map<string, Promise<string | null>>();
+
+/** 圖片左右（flipX）或上下（flipY）翻轉後的 data URL：背景圖片對應的值與座標軸的方向相反時（Tableau 畫出顛倒的圖片）。 */
+function flip(source: string, flipX: boolean, flipY: boolean): Promise<string | null> {
+  const key = `${flipX}|${flipY}|${source}`;
+  let found = flipped.get(key);
+  if (!found) {
+    found = new Promise<string | null>((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth || 1;
+        canvas.height = image.naturalHeight || 1;
+        const context = canvas.getContext("2d");
+        if (!context) return resolve(null);
+        context.translate(flipX ? canvas.width : 0, flipY ? canvas.height : 0);
+        context.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+        context.drawImage(image, 0, 0);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      image.onerror = () => resolve(null);
+      image.src = source;
+    });
+    flipped.set(key, found);
+  }
+  return found;
+}
+
+/** 載入背景圖片（地圖＞背景圖片），填進它的圖層的網址欄；載入不了的圖片不畫（與 Tableau 找不到圖片時相同）。 */
+async function prepareBackgroundImages(spec: Spec, workbook: string): Promise<void> {
+  const fields = spec.usermeta?.background_images as BackgroundFields[] | undefined;
+  if (!fields || fields.length === 0) return;
+  const jobs: Promise<void>[] = [];
+  eachRecord(spec, (record) => {
+    for (const field of fields) {
+      const path = record[field.image];
+      if (typeof path !== "string") continue;
+      jobs.push(
+        load(fileUrl(workbook, path)).then(async (source) => {
+          const url = source && (field.flip_x || field.flip_y) ? await flip(source, field.flip_x, field.flip_y) : source;
+          record[field.url] = url;
+        }),
+      );
+    }
+  });
+  await Promise.all(jobs);
+}
+
 /** 報表中一張形狀圖片的 data URL（color 不是 null 時套用這個顏色）；載入不了時為 null。 */
 export async function shapeImage(workbook: string, path: string, color: string | null = null): Promise<string | null> {
   const source = await load(fileUrl(workbook, path));
@@ -109,6 +165,7 @@ function eachRecord(spec: Spec, visit: (record: Record<string, unknown>) => void
  * （規格中圖片形狀的點是看不見的，沒有圖片時要讓它顯示）。
  */
 export async function prepareShapeImages(spec: Spec, workbook: string): Promise<void> {
+  await prepareBackgroundImages(spec, workbook);
   const fields = spec.usermeta?.shape_images as ShapeFields[] | undefined;
   if (!fields || fields.length === 0) return;
   const jobs: Promise<void>[] = [];

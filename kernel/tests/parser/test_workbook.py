@@ -364,12 +364,12 @@ def test_group_calcs_and_sets(tmp_path: Path) -> None:
         "集合「Top Customers」：結構不明",
     ]
     assert field(ir, "[Region (group)]").calc is not None
-    # 合併欄位沒有組成欄位：無法轉換；合併集合等其他群組：沒有工作表使用時略過
+    # 合併欄位沒有組成欄位：無法轉換；認不得的群組：沒有工作表使用時略過（合併集合見 test_combined_sets.py）
     combined = "<group name='[Combined]' name-style='unqualified' user:ui-builder='nest-group' />"
     other = "<group name='[Other]' name-style='unqualified' user:ui-builder='mystery' />"
     ir = parse(tmp_path, b.workbook(b.extract_datasource(columns=columns, extra=combined + other)))
     assert "合併欄位「Combined」的組成欄位（）無法辨識" in reasons(ir)
-    assert any("合併集合等群組" in u.reason for u in ir.ignored)
+    assert any("認不得的群組" in u.reason for u in ir.ignored)
 
 
 # ---------------------------------------------------------------- 參數

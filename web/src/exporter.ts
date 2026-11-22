@@ -1,6 +1,9 @@
 // 匯出（Tableau 的「匯出影像」「匯出為 PowerPoint」與 dashboard 的匯出按鈕）：把畫面上的 dashboard、工作表或
 // Story 畫成 PNG（複製 DOM、內嵌計算後的樣式與圖片，放進 SVG 的 foreignObject 後畫到 canvas），PowerPoint 是
 // 一張投影片放這張圖。不需要外部套件：PPTX 以不壓縮的 zip 寫出。
+// 在區塊內捲動的工作表：單獨檢視的工作表匯出整張（與列印相同，看不到的列、欄也畫出來；推定）；dashboard 與 Story
+// 照畫面上的樣子（Tableau 的 dashboard 匯出的是看得到的部分），各區塊捲到哪裡就畫哪一段、捲動時固定的標題照畫面上
+// 的位置。捲軸不畫。
 
 /** 內嵌樣式時略過的屬性（與版面無關或會讓輸出變大）。 */
 const SKIP = new Set(["transition", "animation", "cursor", "will-change", "pointer-events"]);
@@ -41,16 +44,83 @@ async function dataUrl(url: string): Promise<string | null> {
   }
 }
 
-/** 畫面上的一個區塊 → PNG。scale 為解析度的倍數。 */
-export async function elementToPng(element: HTMLElement, scale = 2): Promise<{ blob: Blob; width: number; height: number }> {
-  // 含框線的大小（scrollWidth 不含框線）；內容超出時（例如捲動的工作表）取內容的大小
-  const width = Math.ceil(Math.max(element.scrollWidth, element.offsetWidth));
-  const height = Math.ceil(Math.max(element.scrollHeight, element.offsetHeight));
+/** canvas 的上限（Chromium 單邊 32767、面積約 2.68 億像素；留一些餘裕） */
+const CANVAS_SIDE = 16384;
+const CANVAS_AREA = 2 ** 27;
+
+/**
+ * 複本裡在區塊內捲動的圖（.chart）：whole 時展開成整張圖的大小（圖的區塊到 element 之間的每一層都加上超出的寬高；
+ * 固定標題的複本之後拿掉），回傳展開了多少。不是 whole 時照畫面上捲到的位置：圖往左上移、固定標題的複本放在
+ * 畫面上的位置。兩者都不畫捲軸。
+ */
+function settleScrolling(element: HTMLElement, clone: HTMLElement, whole: boolean): [number, number] {
+  const charts = Array.from(element.querySelectorAll<HTMLElement>(".chart"));
+  const copies = Array.from(clone.querySelectorAll<HTMLElement>(".chart"));
+  let grown: [number, number] = [0, 0];
+  charts.forEach((chart, i) => {
+    const copy = copies[i];
+    if (!copy) return;
+    copy.style.overflow = "hidden";
+    const extraX = chart.scrollWidth - chart.clientWidth;
+    const extraY = chart.scrollHeight - chart.clientHeight;
+    if (extraX <= 1 && extraY <= 1) return;
+    if (whole && grown[0] === 0 && grown[1] === 0) {
+      // 整張：從圖的區塊往上到 element，每一層照原本的大小加上超出的部分（內嵌的樣式是算好的像素）
+      const dx = Math.max(0, extraX);
+      const dy = Math.max(0, extraY);
+      let source: HTMLElement | null = chart;
+      let target: HTMLElement | null = copy;
+      while (source && target) {
+        if (dx > 1) Object.assign(target.style, { width: `${source.offsetWidth + dx}px`, maxWidth: "none", flex: "0 0 auto" });
+        if (dy > 1) Object.assign(target.style, { height: `${source.offsetHeight + dy}px`, maxHeight: "none", flex: "0 0 auto" });
+        if (source === element) break;
+        source = source.parentElement;
+        target = target.parentElement;
+      }
+      grown = [dx > 1 ? dx : 0, dy > 1 ? dy : 0];
+      return;
+    }
+    if (chart.scrollLeft <= 0 && chart.scrollTop <= 0) return;
+    // 畫面上的樣子：圖（或包著它的 .frozen-host）往左上移，固定標題的複本放到畫面上的位置（不再靠 sticky）
+    const area = chart.getBoundingClientRect();
+    const left = area.left + chart.clientLeft;
+    const top = area.top + chart.clientTop;
+    const layers = Array.from(chart.querySelectorAll<HTMLElement>(".frozen"));
+    const layerCopies = Array.from(copy.querySelectorAll<HTMLElement>(".frozen"));
+    copy.style.position = "relative";
+    layers.forEach((layer, j) => {
+      const twin = layerCopies[j];
+      if (!twin) return;
+      const box = layer.getBoundingClientRect();
+      Object.assign(twin.style, { position: "absolute", left: `${box.left - left}px`, top: `${box.top - top}px`, margin: "0" });
+      twin.classList.replace("frozen", "frozen-shown");
+      copy.appendChild(twin);
+    });
+    const content = copy.firstElementChild as HTMLElement | null;
+    if (content) Object.assign(content.style, { marginLeft: `${-chart.scrollLeft}px`, marginTop: `${-chart.scrollTop}px` });
+  });
+  return grown;
+}
+
+/**
+ * 畫面上的一個區塊 → PNG。scale 為解析度的倍數（太大時縮小到 canvas 放得下）。whole：區塊裡在捲動的圖整張畫出來
+ * （單獨檢視的工作表）；否則照畫面上的樣子（dashboard、Story）。
+ */
+export async function elementToPng(
+  element: HTMLElement,
+  scale = 2,
+  whole = element.matches(".single-sheet"),
+): Promise<{ blob: Blob; width: number; height: number }> {
   const clone = element.cloneNode(true) as HTMLElement;
   inlineStyles(element, clone);
-  // 捲動時固定標題的複本、浮動的選單與提示不畫
+  const [grownX, grownY] = settleScrolling(element, clone, whole);
+  // 含框線的大小（scrollWidth 不含框線）；內容超出時取內容的大小
+  const width = Math.ceil(Math.max(element.scrollWidth, element.offsetWidth) + grownX);
+  const height = Math.ceil(Math.max(element.scrollHeight, element.offsetHeight) + grownY);
+  scale = Math.min(scale, CANVAS_SIDE / width, CANVAS_SIDE / height, Math.sqrt(CANVAS_AREA / (width * height)));
+  // 捲動時固定標題的複本（照畫面的樣子畫的除外）、浮動的選單與提示不畫
   // 檢視器的介面（列數、資料切換、選取的提示）也不畫
-  clone.querySelectorAll(".frozen, .worksheet-overlay, .worksheet-meta, .action-menu, .popup-menu").forEach((e) => e.remove());
+  clone.querySelectorAll(".frozen, .worksheet-overlay, .worksheet-meta, .action-menu, .popup-menu, .view-updating").forEach((e) => e.remove());
   // 圖片（.twbx 內的圖片、圖片按鈕）換成 data URL：SVG 中的圖片不會另外載入
   const images = Array.from(clone.querySelectorAll("img"));
   await Promise.all(
@@ -76,8 +146,8 @@ export async function elementToPng(element: HTMLElement, scale = 2): Promise<{ b
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   await loaded;
   const canvas = document.createElement("canvas");
-  canvas.width = width * scale;
-  canvas.height = height * scale;
+  canvas.width = Math.max(1, Math.floor(width * scale));
+  canvas.height = Math.max(1, Math.floor(height * scale));
   const context = canvas.getContext("2d");
   if (!context) throw new Error("瀏覽器不支援 canvas");
   context.fillStyle = getComputedStyle(element).backgroundColor || "#ffffff";

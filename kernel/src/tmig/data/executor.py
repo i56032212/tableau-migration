@@ -102,7 +102,9 @@ def execute_query(
         tables = stage_tables(query, lambda stage: _local_stage(folder, stage))
     for guard in query.guards:
         check_guard(guard, execute(db_path, guard.sql).rows)
-    return finish(query, execute(db_path, query.sql, tables))
+    return finish(
+        query, execute(db_path, query.sql, tables), lambda q: execute_query(db_path, q, tables)
+    )
 
 
 def _local_stage(folder: Path, stage: BlendStage) -> QueryResult:
@@ -153,13 +155,28 @@ def result_table(columns: list[OutputColumn], result: QueryResult) -> pa.Table:
     return pa.Table.from_arrays(arrays, names=list(result.columns))
 
 
-def finish(query: WorksheetSql, result: QueryResult) -> QueryResult:
-    """查詢之後的分析：叢集編號、預測的估計值與預測區間（tmig.planner.analytics）。"""
+def finish(
+    query: WorksheetSql,
+    result: QueryResult,
+    run: Callable[[WorksheetSql], QueryResult] | None = None,
+) -> QueryResult:
+    """查詢之後的分析：叢集編號、預測的估計值與預測區間（tmig.planner.analytics）。run：以同樣的方式執行
+    另一個查詢（預測以較細的時間估計時的查詢）。預測要以 Tableau 文件沒有寫明的方式計算時列為不支援。"""
     if query.analytics is None:
         return result
-    from tmig.planner.analytics import apply
+    from tmig.planner.analytics import UnsupportedForecast, apply
 
-    columns, rows = apply(query.analytics, list(result.columns), list(result.rows))
+    def fetch(other: WorksheetSql) -> tuple[list[str], list[tuple[Any, ...]]]:
+        assert run is not None
+        found = run(other)
+        return list(found.columns), list(found.rows)
+
+    try:
+        columns, rows = apply(
+            query.analytics, list(result.columns), list(result.rows), fetch if run else None
+        )
+    except UnsupportedForecast as exc:
+        raise QueryError(str(exc), unsupported=True) from exc
     return QueryResult(columns=columns, rows=rows)
 
 

@@ -47,6 +47,7 @@ from tmig.edit import (
     replace_story,
     replace_worksheet,
     reserving,
+    set_background_images,
     set_datasource_filters,
     set_geo_defaults,
     set_geography,
@@ -89,7 +90,15 @@ from tmig.ir import (
     Worksheet,
     has_local_data,
 )
-from tmig.ir.models import SHAPE_FOLDER, GeoAlias, GeoRole, Scalar, SetRule, shape_image_error
+from tmig.ir.models import (
+    SHAPE_FOLDER,
+    Animation,
+    GeoAlias,
+    GeoRole,
+    Scalar,
+    SetRule,
+    shape_image_error,
+)
 from tmig.merge import import_from
 from tmig.package import SOURCES, member_path, read_report_file, shape_images
 from tmig.planner.dynamic import parameter_values
@@ -377,6 +386,13 @@ class GeographyBody(BaseModel):
     aliases: list[GeoAlias] | None = None
 
 
+class BackgroundImagesBody(BaseModel):
+    """資料源的背景圖片（地圖＞背景圖片）：整份取代；沒有 id 的是新增的圖片。"""
+
+    model_config = ConfigDict(extra="forbid")
+    images: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+
+
 class GeoDefaultsBody(BaseModel):
     """編輯位置的預設國家、州（空的表示不指定）。"""
 
@@ -401,6 +417,14 @@ class ParameterBody(BaseModel):
 class DashboardBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dashboard: dict[str, Any]
+
+
+class AnimationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    animation: Animation | None = None
+    """活頁簿預設的動畫（格式＞動畫的「活頁簿預設」）；None 為關"""
+    reset_sheets: bool = False
+    """全部重設：各工作表的設定拿掉（沿用活頁簿的預設）"""
 
 
 class NewDashboardBody(BaseModel):
@@ -1286,6 +1310,19 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         )
         return {"ok": True}
 
+    @router.put("/{workbook}/datasources/{datasource}/background-images")
+    def put_background_images(
+        workbook: str, datasource: str, body: BackgroundImagesBody, request: Request
+    ) -> dict[str, Any]:
+        """背景圖片（地圖＞背景圖片）：資料源的圖片清單；回傳存下的圖片（新增的圖片配發了 id）。"""
+
+        def change(ir: IR) -> tuple[IR, list[dict[str, Any]]]:
+            updated = set_background_images(ir, datasource, body.images)
+            ds = next(d for d in updated.datasources if d.id == datasource)
+            return updated, [i.model_dump(mode="json") for i in ds.background_images]
+
+        return {"images": edit(request, workbook, change)}
+
     @router.put("/{workbook}/datasources/{datasource}/geography")
     def put_geo_defaults(
         workbook: str, datasource: str, body: GeoDefaultsBody, request: Request
@@ -1317,6 +1354,29 @@ def editor_router(on_change: Callable[[str], None] | None = None) -> APIRouter:
         if board is None:
             raise HTTPException(404, f"找不到 dashboard「{dashboard}」")
         return {"dashboard": board.model_dump(mode="json")}
+
+    @router.get("/{workbook}/animation")
+    def get_animation(workbook: str, request: Request) -> dict[str, Any]:
+        """活頁簿預設的動畫（格式＞動畫）。"""
+        animation = workspace(request).get(workbook).ir.workbook.animation
+        return {"animation": animation.model_dump(mode="json") if animation else None}
+
+    @router.put("/{workbook}/animation")
+    def put_animation(workbook: str, body: AnimationBody, request: Request) -> dict[str, Any]:
+        """換掉活頁簿預設的動畫；reset_sheets 時各工作表的動畫設定也拿掉（格式＞動畫的「全部重設」）。
+        不在編輯器的工作表歷程裡（與欄位的預設屬性相同，不能以復原取消）。"""
+
+        def change(ir: IR) -> tuple[IR, Animation | None]:
+            book = ir.workbook.model_copy(update={"animation": body.animation})
+            sheets = (
+                [w.model_copy(update={"animation": None}) for w in ir.worksheets]
+                if body.reset_sheets
+                else ir.worksheets
+            )
+            return ir.model_copy(update={"workbook": book, "worksheets": sheets}), body.animation
+
+        animation = edit(request, workbook, change)
+        return {"animation": animation.model_dump(mode="json") if animation else None}
 
     @router.put("/{workbook}/dashboards/{dashboard}")
     def put_dashboard(

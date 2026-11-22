@@ -1005,10 +1005,12 @@ def test_dashboard_objects(server: str) -> None:
         toggle.click()
         page.wait_for_function("!document.querySelector(\"[data-zone='z12']\")")
 
-        # 匯出 PDF：以瀏覽器列印
-        page.evaluate("window.print = () => { window.__printed = true; }")
+        # 匯出 PDF：以瀏覽器列印（換掉列印的運算式包在函式裡，見 test_editor_viewer 的列印）
+        page.evaluate(
+            "() => { window.__printed = false; window.print = () => { window.__printed = true; }; }"
+        )
         page.locator("[data-zone='z8'] button").click()
-        assert page.evaluate("window.__printed") is True
+        page.wait_for_function("window.__printed === true")
 
         # 圖片按鈕切換到工作表，文字按鈕切換到 dashboard
         page.locator("[data-zone='z7'] button").click()

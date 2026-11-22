@@ -88,10 +88,32 @@ export interface CatalogHierarchy {
   fields: string[];
 }
 
+/** 背景圖片（地圖＞背景圖片）：左右、上下的邊對應 X、Y 欄位的值（IR 的 BackgroundImage） */
+export interface BackgroundImageIR {
+  /** 新增的圖片沒有 id（存檔時配發） */
+  id?: string;
+  name: string;
+  /** 報表中的圖片檔（Image/…） */
+  image: string;
+  x: string;
+  left: number;
+  right: number;
+  y: string;
+  top: number;
+  bottom: number;
+  washout: number;
+  lock_aspect: boolean;
+  show_entire: boolean;
+  conditions: { field: FieldUse; value: Scalar }[];
+  source_ref?: string;
+}
+
 export interface CatalogDatasource {
   id: string;
   caption: string;
   fields: CatalogField[];
+  /** 背景圖片 */
+  background_images?: BackgroundImageIR[];
   hierarchies?: CatalogHierarchy[];
   /** 資料窗格的資料夾 */
   folders?: CatalogFolder[];
@@ -1010,6 +1032,31 @@ export function moveMember(sheet: SheetIR, key: string, values: Scalar[]): Sheet
   const saved = current?.kind === "manual" ? current.manual_values : [];
   const rest = saved.filter((v) => !values.some((w) => w === v));
   return setSort(sheet, use.field, { kind: "manual", order: "asc", by: null, nested: false, manual_values: [...values, ...rest] });
+}
+
+/**
+ * 在檢視上拖曳 Measure Names 的標題或圖例的項目：量值的順序（Measure Values 卡上的順序，也就是檢視中 Measure Names
+ * 的順序；解析 Tableau 檔時 Measure Names 的手動排序就是這個順序）。order 是拖曳之後各量值原本的位置；不在裡面的
+ * （例如這張圖沒有畫出來的）接在後面。
+ */
+export function moveMeasures(sheet: SheetIR, order: Scalar[]): SheetIR {
+  const picked = order.filter((i): i is number => typeof i === "number" && Number.isInteger(i) && i >= 0 && i < sheet.measure_values.length);
+  if (picked.length === 0) return sheet;
+  const rest = sheet.measure_values.filter((_, i) => !picked.includes(i));
+  const next = [...picked.map((i) => sheet.measure_values[i]), ...rest];
+  return next.every((u, i) => u === sheet.measure_values[i]) ? sheet : { ...sheet, measure_values: next };
+}
+
+/** 檢視上的這個欄位（key 是檢視上的欄位鍵）有沒有排序。 */
+export function sortOfKey(sheet: SheetIR, key: string): SortIR | null {
+  const use = useOfKey(sheet, key);
+  return use ? (sheet.sorts.find((s) => s.field === use.field) ?? null) : null;
+}
+
+/** 清除檢視上這個欄位（欄位鍵）的排序（標題的右鍵選單「清除排序」）。 */
+export function clearSortOfKey(sheet: SheetIR, key: string): SheetIR {
+  const use = useOfKey(sheet, key);
+  return use && sheet.sorts.some((s) => s.field === use.field) ? setSort(sheet, use.field, null) : sheet;
 }
 
 export const isNumeric = (field: CatalogField | undefined) =>

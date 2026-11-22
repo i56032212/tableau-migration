@@ -78,6 +78,16 @@ class TooltipMark(BaseModel):
     mark: dict[str, Scalar] = Field(description="滑過的標記：來源工作表的欄位鍵 → 值")
 
 
+class StoryRef(BaseModel):
+    """在 Story 的故事點中顯示：故事點記下的工作表狀態（排序、欄列架、註解、座標軸與地圖的範圍，見
+    tmig.story）套用到這張工作表。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    story: str = Field(min_length=1, description="Story 的 id")
+    point: str = Field(min_length=1, description="故事點的 id")
+
+
 class MarkSelection(BaseModel):
     """工具提示的命令按鈕：只保留（keep）或排除（exclude）選取的標記，等同以標記的維度值篩選這張工作表。"""
 
@@ -131,6 +141,10 @@ class QueryState(BaseModel):
         default_factory=list,
         max_length=50,
         description="工具提示的「只保留」「排除」：依序套用在這張工作表上（各自是一個維度篩選）",
+    )
+    story: StoryRef | None = Field(
+        default=None,
+        description="在故事點中顯示（見 StoryRef）：查詢與繪圖套用故事點記下的工作表狀態",
     )
 
 

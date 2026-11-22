@@ -1,5 +1,7 @@
 // IR v0.3 中檢視器會用到的部分（完整定義見 kernel/schema/ir-0.3.schema.json）
 
+import type { AnimationSetting } from "./markAnimation";
+
 export type Scalar = string | number | boolean | null;
 
 export interface DateDerivation {
@@ -179,6 +181,8 @@ export interface Action {
 export interface Worksheet {
   id: string;
   name: string;
+  /** 這張工作表的動畫（格式＞動畫；沒有設定的項目沿用活頁簿的預設，見 markAnimation.ts） */
+  animation?: AnimationSetting | null;
   /** 自訂的標題（各段文字，可以代入參數與欄位的值）；空的時標題就是工作表的名稱 */
   title?: unknown[];
   datasource: string;
@@ -375,6 +379,13 @@ export interface StoryFilter {
   values: Scalar[];
   min?: Scalar;
   max?: Scalar;
+  /** range：範圍之外也保留 Null 值；null 或省略表示與工作表的篩選相同 */
+  include_null?: boolean | null;
+}
+
+/** 故事點記下的工作表狀態（排序、欄列架、註解、座標軸與地圖的範圍）：由查詢服務套用（QueryState.story） */
+export interface StorySheet {
+  worksheet: string;
 }
 
 /** 故事點上的文字物件：浮在故事點內容上的說明文字（位置與大小為像素） */
@@ -419,6 +430,10 @@ export interface StoryPoint {
   texts?: Record<string, ZoneTextRun[]>;
   /** 故事點上的文字物件 */
   notes?: StoryNote[];
+  /** 故事點記下的頁面架目前的頁：工作表 id → 頁面欄位的值 */
+  pages?: Record<string, Scalar>;
+  /** 故事點記下的工作表狀態 */
+  sheets?: StorySheet[];
 }
 
 export interface Story {
@@ -438,7 +453,8 @@ export interface Story {
 
 export interface IR {
   ir_version: string;
-  workbook: { id: string; name: string };
+  /** animation：活頁簿預設的動畫（格式＞動畫）；沒有時為關 */
+  workbook: { id: string; name: string; animation?: AnimationSetting | null };
   datasources: Datasource[];
   parameters: Parameter[];
   worksheets: Worksheet[];
@@ -493,6 +509,8 @@ export interface QueryState {
   viewport?: { west: number; south: number; east: number; north: number } | null;
   /** 工具提示的「只保留」「排除」：依序套用在這張工作表上 */
   marks?: MarkSelection[];
+  /** 在故事點中顯示：查詢服務套用故事點記下的工作表狀態 */
+  story?: { story: string; point: string };
 }
 
 /** 工具提示的命令按鈕：只保留或排除選取的標記 */

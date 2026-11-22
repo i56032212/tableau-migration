@@ -1,8 +1,9 @@
 // 在檢視上拖曳標題或圖例的項目排序（Tableau：「select a header in a viz or on a legend and drag it to the correct
 // location」，放下的位置以一條粗黑線標示）：編輯器裡按住離散的列標題、欄標題或色彩（形狀）圖例的項目拖到另一個
 // 位置，這個欄位的排序改成手動，順序是畫面上的順序、拖曳的成員移到放下的位置。
-// 認得的標題：單一維度的座標軸標籤、多層的列標題與欄標題（每一層）、多層欄標題合併成一個標籤時的最內層，以及
-// 類別的圖例；分格（facet）的標題與 Measure Names 不能拖曳。
+// 認得的標題：單一維度的座標軸標籤、多層的列標題與欄標題（每一層）、多層欄標題合併成一個標籤時的最內層、
+// 類別的圖例，以及分格（窗格）的標題。Measure Names 的標題與圖例項目改的是量值的順序（Measure Values 卡上的
+// 順序，見 HeaderMove 的 key）。
 
 import type { Scalar } from "./types";
 
@@ -11,14 +12,30 @@ const SEPARATOR = "｜";
 /** 按下之後移動超過這麼多像素才算拖曳（只是點一下不改排序） */
 const THRESHOLD = 4;
 
+/** Measure Names 的資料欄（tmig.render.vegalite 的 _fold：量值的名稱；__mn_i 是它在 Measure Values 卡上的位置） */
+const MEASURE_NAMES_COLUMN = "__mn";
+const MEASURE_INDEX_COLUMN = "__mn_i";
+/** Measure Names 的欄位鍵：拖曳它的標題時 HeaderMove 的 key */
+export const MEASURE_NAMES_KEY = "measure_names";
+
 export interface HeaderMove {
-  /** 欄位鍵（usermeta.dimensions 的值，例如 f_region、year(f_order_date)） */
+  /**
+   * 欄位鍵（usermeta.dimensions 的值，例如 f_region、year(f_order_date)）；Measure Names 時是 measure_names，
+   * 成員是量值在 Measure Values 卡上的位置（0 起算）
+   */
   key: string;
   /** 拖曳的成員 */
   value: Scalar;
   /** 拖曳之後這個欄位的成員順序：畫面上的順序，拖曳的成員移到放下的位置 */
   values: Scalar[];
   where: "rows" | "columns" | "legend";
+}
+
+/** 檢視上指標所在的標題（右鍵選單用）：哪個欄位、在哪裡。 */
+export interface HeaderTarget {
+  key: string;
+  value: Scalar;
+  where: HeaderMove["where"];
 }
 
 interface Header {
@@ -52,6 +69,46 @@ function columnOf(field: unknown, dimensions: Record<string, string>): string | 
 
 const shown = (record: Record<string, unknown>, column: string) => String(record[`${column}_label`] ?? record[column] ?? "");
 
+/** 資料列中這個資料欄的成員：Measure Names 是量值在 Measure Values 卡上的位置（名稱可能重複、也可能有別名）。 */
+const memberOf = (record: Record<string, unknown>, column: string): Scalar =>
+  ((column === MEASURE_NAMES_COLUMN ? record[MEASURE_INDEX_COLUMN] : record[column]) ?? null) as Scalar;
+
+/** 可以拖曳的維度：usermeta.dimensions 加上 Measure Names（資料是 Measure Values 的長表時）。 */
+function draggableDimensions(records: Records, dimensions: Record<string, string>): Record<string, string> {
+  return records.some((r) => r && MEASURE_NAMES_COLUMN in r && MEASURE_INDEX_COLUMN in r)
+    ? { ...dimensions, [MEASURE_NAMES_COLUMN]: MEASURE_NAMES_KEY }
+    : dimensions;
+}
+
+/** 分格的篩選（tmig.render.vegalite 的 _all_equal：datum["c1"] === "Central" && …）→ 各資料欄與值。 */
+function filterPairs(filter: unknown): [string, Scalar][] | null {
+  if (typeof filter !== "string") return null;
+  const pairs: [string, Scalar][] = [];
+  for (const part of filter.split(" && ")) {
+    const found = /^datum\[("(?:[^"\\]|\\.)*")\] === (.+)$/.exec(part.trim());
+    if (!found) return null;
+    try {
+      pairs.push([JSON.parse(found[1]) as string, JSON.parse(found[2]) as Scalar]);
+    } catch {
+      return null;
+    }
+  }
+  return pairs.length > 0 ? pairs : null;
+}
+
+/** 分格的圖（hconcat、vconcat）中第 path 格的規格，與同一排的各格。 */
+function paneOf(spec: Spec, path: number[]): { pane: Spec; siblings: Spec[] } | null {
+  let node: Spec = spec;
+  let siblings: Spec[] = [];
+  for (const index of path) {
+    const list = (node.hconcat ?? node.vconcat ?? node.concat) as Spec[] | undefined;
+    if (!Array.isArray(list) || !list[index]) return null;
+    siblings = list;
+    node = list[index];
+  }
+  return { pane: node, siblings };
+}
+
 /**
  * 多層標題（rows_dim、cols_dim 是各層的標籤以 SEPARATOR 串起來）的第 level 層是哪個資料欄：每一筆資料的第 level
  * 段都與它的標籤相同的那一欄。
@@ -74,7 +131,8 @@ interface SceneItem {
 const itemOf = (element: Element) => (element as unknown as { __data__?: SceneItem }).__data__;
 
 /** 檢視上可以拖曳的標題與圖例項目。 */
-export function headersOf(svg: SVGSVGElement, spec: Spec, records: Records, dimensions: Record<string, string>): Header[] {
+export function headersOf(svg: SVGSVGElement, spec: Spec, records: Records, viewDimensions: Record<string, string>): Header[] {
+  const dimensions = draggableDimensions(records, viewDimensions);
   const encoding = mainEncoding(spec);
   const out: Header[] = [];
   const levels = new Map<string, string | null>();
@@ -85,7 +143,7 @@ export function headersOf(svg: SVGSVGElement, spec: Spec, records: Records, dime
   };
   const rawOf = (column: string, label: unknown, composite?: string) => {
     const record = records.find((r) => r && (composite ? r[composite] === label : shown(r, column) === String(label) || r[column] === label));
-    return record ? ((record[column] ?? null) as Scalar) : undefined;
+    return record ? memberOf(record, column) : undefined;
   };
 
   // 座標軸的標籤：單一維度（c0_label），或多層合併成一個標籤（只拖曳最內層）
@@ -125,11 +183,44 @@ export function headersOf(svg: SVGSVGElement, spec: Spec, records: Records, dime
       out.push({
         element,
         key: dimensions[column],
-        value: (datum[column] ?? null) as Scalar,
+        value: memberOf(datum, column),
         where: composite === "rows_dim" ? "rows" : "columns",
         axis: composite === "rows_dim" ? "y" : "x",
         group: parts.slice(0, level).join(SEPARATOR),
       });
+    });
+  });
+
+  // 分格（窗格）的標題：每一格是 hconcat、vconcat 中的一張圖，標題是它的 title、篩選是這一格的成員
+  // （tmig.render.vegalite 的 small multiples）。場景圖中標題往上是這一格的群組（concat_0_group、
+  // concat_0_concat_1_group…），依名稱中的編號找出規格中的那一格；同一排各格不同的維度就是標題的維度
+  svg.querySelectorAll("g.role-title-text > text").forEach((element) => {
+    if (!element.textContent?.trim()) return;
+    let group = itemOf(element)?.mark?.group as SceneItem | undefined;
+    let name = "";
+    for (let depth = 0; group && depth < 4 && !name; depth++) {
+      const mark = group.mark as { name?: string; group?: SceneItem } | undefined;
+      if (mark?.name && /^(?:concat_\d+_)+group$/.test(mark.name)) name = mark.name;
+      group = mark?.group;
+    }
+    if (!name) return;
+    const path = Array.from(name.matchAll(/concat_(\d+)/g), (m) => Number(m[1]));
+    const found = paneOf(spec, path);
+    const pairs = found ? filterPairs(found.pane.transform?.[0]?.filter) : null;
+    if (!found || !pairs || found.siblings.length < 2) return;
+    const others = found.siblings.filter((s) => s !== found.pane).map((s) => new Map(filterPairs(s.transform?.[0]?.filter) ?? []));
+    // 這一排各格不同的維度（欄的分格只看欄的維度，列的只看列的）；有好幾個時拖曳最內層，外層相同的是一組
+    const varying = pairs.filter(([column, value]) => others.some((o) => o.has(column) && o.get(column) !== value));
+    const last = varying[varying.length - 1];
+    if (!last || !(last[0] in dimensions)) return;
+    const rows = found.pane.title?.orient === "left";
+    out.push({
+      element,
+      key: dimensions[last[0]],
+      value: last[1],
+      where: rows ? "rows" : "columns",
+      axis: rows ? "y" : "x",
+      group: `facet:${JSON.stringify(varying.slice(0, -1))}`,
     });
   });
 
@@ -202,6 +293,21 @@ function headerAt(chart: HTMLElement, svg: SVGSVGElement, headers: Header[], x: 
     }) ?? null;
   }
   return headers.find((h) => within(h.element.getBoundingClientRect())) ?? null;
+}
+
+/** 指標下的標題（右鍵選單）：可以拖曳的標題、圖例的項目才算；沒有時為 null。 */
+export function headerAtPoint(
+  chart: HTMLElement,
+  svg: SVGSVGElement,
+  spec: Spec,
+  records: Records,
+  dimensions: Record<string, string>,
+  x: number,
+  y: number,
+): HeaderTarget | null {
+  const headers = headersOf(svg, spec, records, dimensions);
+  const hit = headers.length > 0 ? headerAt(chart, svg, headers, x, y) : null;
+  return hit ? { key: hit.key, value: hit.value, where: hit.where } : null;
 }
 
 /**

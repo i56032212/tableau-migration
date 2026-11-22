@@ -7,17 +7,26 @@
   重複到 k 個叢集
 - 叢集數自動時以 Calinski-Harabasz 指標取第一個局部最大值（2 到 25 個叢集）
 - 量值是 Null 的標記不分叢集（Not Clustered）
+- 維度（類別變數）以 ATTR 在檢視的詳細程度彙總；超過 25 個值的類別變數不用，ATTR 是 * 的標記不分叢集
+
+類別變數怎麼換成距離，Tableau 2021.2 的說明文件沒有寫；Tableau 的產品經理在部落格說明以多重對應分析
+（MCA）把類別換成數值的距離（https://boraberan.wordpress.com/2016/07/19/understanding-clustering-in-tableau-10/
+，2026-11-23 查閱）。這裡以指標矩陣的對應分析取各標記的主座標（全部非零的維度，即類別之間的卡方距離），
+每個維度再與量值一樣做最小–最大正規化（推定：保留幾個維度、要不要正規化都沒有文件）。
 
 Tableau 的叢集編號規則沒有公開：依分割產生的順序編號（叢集 1 是最先的一半）。
 """
 
 from __future__ import annotations
 
+from collections.abc import Hashable, Sequence
 from typing import Any
 
 import numpy as np
 
 MAX_AUTO = 25
+MAX_CATEGORIES = 25
+"""類別變數最多幾個值：超過時 Tableau 不用它分叢集（說明文件「Find Clusters in Data」）。"""
 
 
 def scale(points: np.ndarray) -> np.ndarray:
@@ -140,9 +149,43 @@ def describe(values: list[list[float]], labels: list[int]) -> dict[str, Any]:
     }
 
 
-def cluster(values: list[list[float]], k: int | None = None) -> list[int]:
-    """各標記的叢集編號（1 起算）；k 為 None 時自動決定叢集數。"""
+def mca(categories: Sequence[Sequence[Hashable]]) -> np.ndarray:
+    """類別變數 → 多重對應分析的列主座標（每個標記一列，全部非零的維度）。
+
+    指標矩陣 Z（n 個標記 × 各變數的各個值）的對應分析：S = (Z − 1·cᵀ) / √(Q·n_j)，c_j = n_j / n，
+    Q 為變數數、n_j 為值 j 的標記數；S = UΣVᵀ，主座標 F = √n·UΣ。兩個標記的主座標的歐氏距離即指標矩陣
+    各列的卡方距離。"""
+    n = len(categories)
+    width = len(categories[0]) if n else 0
+    if n == 0 or width == 0:
+        return np.zeros((n, 0))
+    columns: list[np.ndarray] = []
+    for v in range(width):
+        values = [row[v] for row in categories]
+        for value in dict.fromkeys(values):
+            columns.append(np.array([1.0 if x == value else 0.0 for x in values]))
+    z = np.column_stack(columns)
+    counts = z.sum(axis=0)
+    s = (z - counts / n) / np.sqrt(width * counts)
+    u, sigma, _ = np.linalg.svd(s, full_matrices=False)
+    keep = sigma > 1e-9 * max(float(sigma.max(initial=0.0)), 1.0)
+    return np.sqrt(n) * u[:, keep] * sigma[keep]
+
+
+def cluster(
+    values: list[list[float]],
+    k: int | None = None,
+    categories: Sequence[Sequence[Hashable]] | None = None,
+) -> list[int]:
+    """各標記的叢集編號（1 起算）；k 為 None 時自動決定叢集數。categories：各標記的類別變數的值
+    （以 MCA 換成數值，見 mca）。"""
+    if not values:
+        return []
     points = scale(np.asarray(values, dtype=float))
+    if categories:
+        coordinates = mca(categories)
+        if coordinates.shape[1]:
+            points = np.hstack([points, scale(coordinates)])
     n = len(points)
     if n == 0:
         return []

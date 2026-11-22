@@ -1008,8 +1008,11 @@ def test_edit_dashboard_and_story(engine: str) -> None:
             == "rgb(238, 243, 248)"
         )
 
-        # 列印的頁面設定：紙張、方向與縮放寫成列印用的樣式，再開啟瀏覽器的列印
-        page.evaluate("window.print = () => { window.__printed = true; }")
+        # 列印的頁面設定：紙張、方向與縮放寫成列印用的樣式，再開啟瀏覽器的列印。換掉列印的運算式包在函式裡：
+        # 運算式的結果是函式時 Playwright 會呼叫它，__printed 一開始就是 true，等列印的那一步就沒有作用
+        page.evaluate(
+            "() => { window.__printed = false; window.print = () => { window.__printed = true; }; }"
+        )
         page.get_by_label("匯出").select_option("pdf")
         setup = page.locator(".page-setup")
         setup.get_by_label("紙張").select_option("A3")

@@ -1,8 +1,9 @@
 // 桌面版編輯器的 API（/api/edit）：資料窗格、工作表、計算欄位與篩選的可選值。
 
+import type { AnimationSetting } from "../markAnimation";
 import { ApiError, request as send } from "../api";
 import type { Action, Dashboard, Domain, FieldUse, MemberAlias, Scalar, Story } from "../types";
-import type { Catalog, CatalogField, CatalogHierarchy, FilterIR, GeoAlias, GeoRole, SetRuleIR, SheetIR } from "./model";
+import type { BackgroundImageIR, Catalog, CatalogField, CatalogHierarchy, FilterIR, GeoAlias, GeoRole, SetRuleIR, SheetIR } from "./model";
 
 const edit = (workbook: string) => `/api/edit/${encodeURIComponent(workbook)}`;
 const part = encodeURIComponent;
@@ -127,6 +128,15 @@ export interface Outline {
 
 export const editApi = {
   outline: (workbook: string) => request<Outline>(`${edit(workbook)}/outline`),
+  /** 活頁簿預設的動畫（格式＞動畫） */
+  animation: (workbook: string) =>
+    request<{ animation: AnimationSetting | null }>(`${edit(workbook)}/animation`).then((r) => r.animation),
+  /** 換掉活頁簿預設的動畫；resetSheets 時各工作表的設定也拿掉（全部重設） */
+  saveAnimation: (workbook: string, animation: AnimationSetting | null, resetSheets = false) =>
+    request<{ animation: AnimationSetting | null }>(`${edit(workbook)}/animation`, {
+      method: "PUT",
+      body: JSON.stringify({ animation, reset_sheets: resetSheets }),
+    }).then((r) => r.animation),
   dashboard: (workbook: string, dashboard: string) =>
     request<{ dashboard: Dashboard }>(`${edit(workbook)}/dashboards/${part(dashboard)}`).then((r) => r.dashboard),
   saveDashboard: (workbook: string, dashboard: Dashboard) =>
@@ -386,6 +396,12 @@ export const editApi = {
     request<{ ok: boolean }>(`${edit(workbook)}/datasources/${part(datasource)}/geography`, {
       method: "PUT",
       body: JSON.stringify({ country, state }),
+    }),
+  /** 背景圖片（地圖＞背景圖片）：資料源的圖片整份取代；回傳存下的圖片（新增的配發了 id） */
+  saveBackgroundImages: (workbook: string, datasource: string, images: BackgroundImageIR[]) =>
+    request<{ images: BackgroundImageIR[] }>(`${edit(workbook)}/datasources/${part(datasource)}/background-images`, {
+      method: "PUT",
+      body: JSON.stringify({ images }),
     }),
   /** 欄位目前的不重複值（含 LOD 的計算欄位），轉成參數的型別：動態參數的目前值與允許值 */
   fieldValues: (workbook: string, field: string, datatype?: string | null) =>

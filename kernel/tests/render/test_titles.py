@@ -122,15 +122,17 @@ def test_date_part_in_title(tmp_path: Path, db: Path) -> None:
 
 
 def test_unsupported_title_values(tmp_path: Path) -> None:
-    """Measure Names 不是資料源的欄位，標題中的值尚不支援（Table Calculation 與量值篩選見
+    """產生的緯度經度不是資料源的欄位，Tableau 在標題中怎麼產生位置沒有文件，標題中的值尚不支援
+    （Measure Names／Values 見 test_title_measure_names.py，Table Calculation 與量值篩選見
     test_title_values.py）。"""
-    names = f"[{DS}].[:Measure Names]"
-    sheet = worksheet("KPI", [REGION, SALES], rows=ref("none:Region:nk"), cols=names)
-    ir = parse(tmp_path, titled(sheet, f"Measures &lt;{names}&gt;"))
+    latitude = f"[{DS}].[Latitude (generated)]"
+    sheet = worksheet("KPI", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
+    ir = parse(tmp_path, titled(sheet, f"Center &lt;{latitude}&gt;"))
     assert [u.reason for u in ir.unsupported] == [
-        "工作表「KPI」的標題用到「Measure Names」的值，尚不支援"
+        "工作表「KPI」的標題用到「Latitude (generated)」的值：Tableau 在標題（整張工作表）中怎麼"
+        "產生位置沒有文件，尚不支援"
     ]
-    assert ir.worksheets[0].title == [TextRun(text="Measures ")]
+    assert ir.worksheets[0].title == [TextRun(text="Center ")]
 
 
 def test_dimension_in_view_follows_measure_filters(tmp_path: Path, db: Path) -> None:

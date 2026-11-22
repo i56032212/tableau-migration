@@ -180,7 +180,8 @@ def test_discrete_colors_follow_assignments_then_palette(tmp_path: Path, db: Pat
 
 def test_legend_follows_manual_and_alphabetic_sorts(tmp_path: Path, db: Path) -> None:
     """色彩欄位有手動排序（例如在檢視或圖例上拖曳成員）或遞減的字母排序時，圖例依這個順序排列、堆疊的長條
-    依它堆疊，各成員的顏色不變（Tableau：在圖例上排序也改變標記的順序）。依欄位的值排序時仍依成員排列。"""
+    依它堆疊，各成員的顏色不變（Tableau：在圖例上排序也改變標記的順序）。依欄位的值排序見
+    test_legend_sort_order.py。"""
     ir = parse_styled(tmp_path, colored_bars())
     ws = ir.worksheets[0]
     region = ws.rows[0].field
@@ -205,9 +206,6 @@ def test_legend_follows_manual_and_alphabetic_sorts(tmp_path: Path, db: Path) ->
     descending = color_scale(with_sort(Sort(field=region, kind="alphabetic", order="desc")))
     assert descending["domain"] == ["West", "South", "North", "East"]
     assert descending["range"] == [colors[label] for label in descending["domain"]]
-
-    by_field = with_sort(Sort(field=region, kind="by_field", order="desc", by=ws.columns[0]))
-    assert color_scale(by_field)["domain"] == ["East", "North", "South", "West"]
 
 
 def test_measure_names_colors(tmp_path: Path, db: Path) -> None:

@@ -9,6 +9,7 @@ from lxml import etree
 
 from tmig.formula.analyze import Analyzer
 from tmig.ir.models import (
+    BackgroundImage,
     CalcLevel,
     Connection,
     DataField,
@@ -82,6 +83,10 @@ class DsState:
     """地理設定（預設的國家、州）。"""
     definitions: dict[str, Any] = field(default_factory=dict)
     """來源欄位還沒解析的群組、數值分組（欄位 id → 定義）：分析公式前再對應（resolve_definitions）。"""
+    background_images: list[BackgroundImage] = field(default_factory=list)
+    """背景圖片（<mapped-images>，見 tmig.parser.background）。"""
+    image_names: dict[str, str] = field(default_factory=dict)
+    """背景圖片的 Tableau 名稱（例如 [MappedImage1]）→ IR id：工作表停用的圖片以它對應。"""
 
     def add_field(self, data_field: DataField) -> None:
         self.fields.append(data_field)

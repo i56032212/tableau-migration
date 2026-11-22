@@ -61,8 +61,8 @@ class PackageInfo:
 
 
 def image_paths(ir: IR) -> list[str]:
-    """報表用到的圖片：圖片區塊、圖片按鈕（含切換按鈕隱藏時的圖片）與自訂的圖片形狀。"""
-    paths: set[str] = set()
+    """報表用到的圖片：圖片區塊、圖片按鈕（含切換按鈕隱藏時的圖片）、自訂的圖片形狀與背景圖片。"""
+    paths: set[str] = {image.image for ds in ir.datasources for image in ds.background_images}
     for dashboard in ir.dashboards:
         for zone in iter_zones(dashboard.zones):
             if zone.image:

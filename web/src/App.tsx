@@ -33,6 +33,7 @@ import {
   toast,
 } from "./desktop";
 import { exportView } from "./exporter";
+import { animationFor } from "./markAnimation";
 import {
   DesktopTokensButton,
   Modal,
@@ -43,7 +44,7 @@ import {
   VersionsButton,
 } from "./Server";
 import { SessionGate, UserBar } from "./Session";
-import { keepMarks, pendingTitle, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
+import { fieldKey, keepMarks, pendingTitle, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import { DatasourceView } from "./DatasourceView";
 import { ConnectServerDialog } from "./editor/ConnectServer";
 import { ChooseTableDialog, DatasourceEditor } from "./editor/DatasourceEditor";
@@ -54,7 +55,7 @@ import { DatasourceFrame, DesktopMenuBar, type TabKind, WorkspaceContext, type W
 import { StoryView } from "./Story";
 import type { CaseInfo, DatasourceSummary, IR, Me, WorkbookSummary } from "./types";
 import { PageControl, pagesOf } from "./PageControl";
-import { PageSetupDialog } from "./PageSetup";
+import { PageSetupDialog, type PagesPrinting } from "./PageSetup";
 import { SheetControls } from "./SheetControls";
 import { WorksheetView } from "./WorksheetView";
 
@@ -609,6 +610,10 @@ function WorkbookPage({
   }, [workbook, viewId, known]);
   // 換到另一個檢視：手機上展開的工具收起來，畫面留給檢視
   useEffect(() => setToolsOpen(false), [workbook, viewId]);
+  // 列印頁面架的所有頁面時一頁一頁切換：最新的檢視狀態，與開始列印之前的（印完回到它）
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const printingFrom = useRef<ViewState | null>(null);
 
   if (error) return <main className="error">載入失敗：{error}</main>;
   if (!ir || !view) return <main>載入中…</main>;
@@ -643,6 +648,35 @@ function WorkbookPage({
   const stories = ir.stories ?? [];
   const dashboard = route.page === "dashboard" ? ir.dashboards.find((d) => d.id === route.dashboard) : undefined;
   const worksheet = route.page === "sheet" ? ir.worksheets.find((w) => w.id === route.worksheet) : undefined;
+  // 頁面架的「所有頁面」列印（頁面設定）：各頁的值與頁面控制項相同；切換不留在檢視的歷程裡，印完回到原本的頁
+  const pagesUse = worksheet?.pages ?? null;
+  const pagesPrinting: PagesPrinting | null =
+    worksheet && pagesUse
+      ? {
+          values: async () => {
+            printingFrom.current = viewRef.current;
+            const domain = await api.domain(workbook, fieldKey(pagesUse), "values");
+            return domain.kind === "values" ? domain.values : [];
+          },
+          show: (value) => {
+            const current = viewRef.current;
+            if (!current) return false;
+            const shown = current.pages && worksheet.id in current.pages ? current.pages[worksheet.id] : (worksheet.page ?? null);
+            if (JSON.stringify(shown) === JSON.stringify(value)) return false;
+            const next = { ...current, pages: { ...(current.pages ?? {}), [worksheet.id]: value } };
+            viewRef.current = next;
+            setView(next);
+            return true;
+          },
+          restore: () => {
+            const original = printingFrom.current;
+            printingFrom.current = null;
+            if (!original) return;
+            viewRef.current = original;
+            setView(original);
+          },
+        }
+      : null;
   const editing = route.page === "edit" && me.mode === "desktop" ? route.worksheet : null;
   const editingDashboard = route.page === "edit-dashboard" && me.mode === "desktop" ? route.dashboard : null;
   const editingStory = route.page === "edit-story" && me.mode === "desktop" ? route.story : null;
@@ -978,6 +1012,7 @@ function WorkbookPage({
         <PageSetupDialog
           target={() => document.querySelector<HTMLElement>(".page .dashboard, .page .single-sheet, .page .story")}
           onClose={() => setDialog(null)}
+          pages={pagesPrinting}
         />
       )}
       {dialog === "crosstab" && (dashboard || worksheet) && (
@@ -1089,6 +1124,7 @@ function WorkbookPage({
               name={pendingTitle(ir, worksheet.id)}
               state={stateFor(ir, worksheet.id, view)}
               revision={refresh}
+              animation={animationFor(ir, worksheet.id)}
               onDrill={(key, delta) => changeView(setDrill(view, worksheet.id, key, delta))}
               tooltipState={(target, mark) => tooltipStateFor(ir, worksheet.id, target, view, mark)}
               onKeep={(mode, marks) => changeView(keepMarks(view, worksheet.id, mode, marks))}

@@ -1071,6 +1071,41 @@ class GeoSettings(IRModel):
     state: str | None = Field(default=None, description="預設的州、省（地名）")
 
 
+class ImageCondition(IRModel):
+    """背景圖片的條件（背景圖片對話框「選項」的「只在下列條件成立時顯示圖片」）：檢視中這個欄位有這個值。"""
+
+    field: FieldUse = Field(description="條件的欄位（維度）")
+    value: Scalar
+
+
+class BackgroundImage(IRModel):
+    """背景圖片（地圖＞背景圖片）：畫在標記之下的圖片，左右、上下的邊對應 X、Y 欄位的值。工作表的欄架上有
+    X 欄位、列架上有 Y 欄位（連續）時顯示，工作表可以停用（Worksheet.background_images_off）。"""
+
+    id: Id
+    name: str = Field(min_length=1, description="圖片的名稱（對話框中的名稱）")
+    image: str = Field(
+        min_length=1, description="圖片檔在報表中的路徑（.twbx 內的 Image/…，或報表套件的 files/）"
+    )
+    x: Id = Field(description="對應到圖片左右的欄位")
+    left: float
+    right: float
+    y: Id = Field(description="對應到圖片上下的欄位")
+    top: float
+    bottom: float
+    washout: float = Field(default=0, ge=0, le=1, description="淡化：0 為原色，1 為全白")
+    lock_aspect: bool = Field(
+        default=True, description="鎖定外觀比例：圖片保持原本的寬高比（在對應的範圍內置中）"
+    )
+    show_entire: bool = Field(
+        default=False, description="一律顯示整張圖片：座標軸的自動範圍包含整張圖片"
+    )
+    conditions: list[ImageCondition] = Field(
+        default_factory=list, description="都成立時才顯示；空的表示一律顯示"
+    )
+    source_ref: SourceRef
+
+
 class Datasource(IRModel):
     id: Id
     name: str = Field(min_length=1, description="Tableau 內部名稱")
@@ -1089,6 +1124,9 @@ class Datasource(IRModel):
         default=None, description="來自 Published Data Source（已併入）；嵌入報表的資料源為 None"
     )
     geo: GeoSettings | None = Field(default=None, description="地理設定（編輯位置）")
+    background_images: list[BackgroundImage] = Field(
+        default_factory=list, description="背景圖片（地圖＞背景圖片）"
+    )
     source_ref: SourceRef
 
     @model_validator(mode="after")
@@ -1706,7 +1744,14 @@ class ClusterSpec(IRModel):
     公式為 0 的整數欄位，查詢之後才填入叢集編號（1 起算；量值是 Null 的標記為 0「不分叢集」）。"""
 
     field: Id = Field(description="叢集欄位")
-    measures: list[FieldUse] = Field(min_length=1, description="分析的量值（都在檢視中）")
+    measures: list[FieldUse] = Field(
+        min_length=1,
+        description="分析的量值（都在檢視中；取消彙總量值時是不彙總的量值，每一列資料一個標記）",
+    )
+    categories: list[FieldUse] = Field(
+        default_factory=list,
+        description="分析的維度（類別變數）：以 ATTR 在檢視的詳細程度彙總，可以不在檢視中",
+    )
     count: int | None = Field(default=None, ge=1, description="叢集數；None 為自動")
 
 
@@ -2225,6 +2270,27 @@ class MapOptions(IRModel):
     )
 
 
+class Animation(IRModel):
+    """標記的動畫（Tableau 2020.1 起的「格式＞動畫」）：篩選、排序、頁面等改變時標記移到新的位置。活頁簿的預設
+    與每張工作表各自的設定；工作表上沒有設定的項目（None）沿用活頁簿的預設。"""
+
+    on: bool | None = Field(
+        default=None, description="開或關（.twb 的 animation-on：ao-on、ao-off）"
+    )
+    duration: float | None = Field(
+        default=None, ge=0, le=10, description="持續時間（秒，.twb 的 animation-duration）"
+    )
+    style: Literal["simultaneous", "sequential"] | None = Field(
+        default=None,
+        description="simultaneous＝同時（as-synced），sequential＝依序（as-phased：淡出、移動、淡入）",
+    )
+
+
+def _unset(value: object) -> bool:
+    """沒有設定（None）的選用欄位不寫進 JSON：golden IR 與舊的 IR 檔不因新欄位而改變。"""
+    return value is None
+
+
 class Worksheet(IRModel):
     id: Id
     name: str = Field(min_length=1)
@@ -2393,6 +2459,10 @@ class Worksheet(IRModel):
     map: MapOptions | None = Field(
         default=None, description="地圖的底圖設定；None 為預設（Light 樣式）"
     )
+    background_images_off: list[Id] = Field(
+        default_factory=list,
+        description="這張工作表停用的背景圖片（資料源的 BackgroundImage.id；背景圖片對話框中取消勾選的）",
+    )
     controls: list[SheetControl] = Field(
         default_factory=list,
         description="工作表上顯示的篩選與參數控制項（顯示篩選、顯示參數）",
@@ -2461,6 +2531,11 @@ class Worksheet(IRModel):
         default=None,
         description="堆疊標記（分析＞堆疊標記）：on＝一律堆疊（折線、圓點等也依標記卡上的維度累加），"
         "off＝不堆疊（長條與區域從 0 畫起、互相重疊）；None 為自動（長條與區域堆疊）",
+    )
+    animation: Animation | None = Field(
+        default=None,
+        exclude_if=_unset,
+        description="這張工作表的動畫（格式＞動畫的「選取的工作表」）；None 與沒有設定的項目沿用活頁簿的預設",
     )
     source_ref: SourceRef
 
@@ -2754,13 +2829,19 @@ class StoryFilter(IRModel):
     values: list[Scalar] = Field(default_factory=list)
     min: Scalar = None
     max: Scalar = None
+    include_null: bool | None = Field(
+        default=None,
+        description="range：範圍之外也保留 Null 值（Tableau 的 in-range-or-null）；None 表示與工作表的篩選相同",
+    )
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         if self.mode == "range" and self.values:
             raise ValueError("mode 為 range 時 values 必須為空")
-        if self.mode != "range" and (self.min is not None or self.max is not None):
-            raise ValueError("只有 mode 為 range 時可以指定 min、max")
+        if self.mode != "range" and (
+            self.min is not None or self.max is not None or self.include_null is not None
+        ):
+            raise ValueError("只有 mode 為 range 時可以指定 min、max 與 include_null")
         return self
 
 
@@ -2794,6 +2875,48 @@ class StorySelection(IRModel):
     marks: list[Mark] = Field(min_length=1)
 
 
+class StorySheet(IRModel):
+    """故事點記下的工作表狀態（篩選、選取、參數與頁之外的差異）：排序、從欄列架上移除的欄位、註解、
+    座標軸（範圍、標題、文字方向）與地圖的顯示範圍。檢視故事點時套用在工作表目前的定義上
+    （tmig.story.apply_story_sheet）：Tableau 的故事點與原本的工作表相連，工作表之後的修改也反映在
+    故事點上。"""
+
+    worksheet: Id
+    sorts: list[Sort] = Field(
+        default_factory=list, description="故事點改過的排序：取代工作表上同一個欄位的排序"
+    )
+    cleared_sorts: list[Id] = Field(
+        default_factory=list,
+        description="故事點清除的欄列架排序（從座標軸、工具列的排序，即巢狀排序）的欄位",
+    )
+    removed_rows: list[FieldUse] = Field(
+        default_factory=list, description="故事點從列架上移除的欄位"
+    )
+    removed_columns: list[FieldUse] = Field(
+        default_factory=list, description="故事點從欄架上移除的欄位"
+    )
+    annotations: list[Annotation] | None = Field(
+        default=None,
+        description="故事點中的註解（工作表的註解加上故事點新增、修改與刪除的）；None 表示與工作表相同",
+    )
+    axes: list[Axis] = Field(
+        default_factory=list,
+        description="故事點改過的座標軸設定（範圍、標題、文字方向）：取代工作表上同一個欄位、同一個架的",
+    )
+    viewport: MapViewport | None = Field(
+        default=None, description="地圖平移、縮放後記下的顯示範圍；None 表示與工作表相同"
+    )
+    null_indicator: bool | None = Field(
+        default=None,
+        description="「N 個 Null」的指示器（Worksheet.null_indicator）；None 表示與工作表相同",
+    )
+    cleared_actions: list[Id] = Field(
+        default_factory=list,
+        description="故事點中顯示所有值的篩選動作：工作表上這個動作的篩選不套用存檔時的值（沒有選取時"
+        "顯示所有的值；在故事點上選取標記時照常篩選）",
+    )
+
+
 class StoryPoint(IRModel):
     """故事點：顯示一個 dashboard 或工作表，以及與其預設狀態不同的篩選與選取。
 
@@ -2815,6 +2938,13 @@ class StoryPoint(IRModel):
     )
     notes: list[StoryNote] = Field(
         default_factory=list, description="故事點上的文字物件（浮在內容上的說明文字）"
+    )
+    pages: dict[Id, Scalar] = Field(
+        default_factory=dict, description="故事點記下的頁面架目前的頁：工作表 id → 頁面欄位的值"
+    )
+    sheets: list[StorySheet] = Field(
+        default_factory=list,
+        description="故事點記下的工作表狀態（排序、欄列架、註解、座標軸與地圖的範圍）",
     )
 
     @model_validator(mode="after")
@@ -2852,6 +2982,11 @@ class Workbook(IRModel):
     id: Id
     name: str = Field(min_length=1)
     tableau_version: str | None = None
+    animation: Animation | None = Field(
+        default=None,
+        exclude_if=_unset,
+        description="活頁簿預設的動畫（格式＞動畫的「活頁簿預設」）；None 為關",
+    )
     source_ref: SourceRef
 
 

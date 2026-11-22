@@ -97,6 +97,7 @@ from tmig.sqlgen.query import (
     visual_totals,
     worksheet_sql,
 )
+from tmig.story import StoryStateError, apply_story
 from tmig.verify.cases import CasesError, case_state, load_cases
 from tmig.verify.run import ensure_data, load_fixture_ir
 from tmig_service.access import Authorizer, Grant, PermissionsSource, Rights, viewer_ir
@@ -383,6 +384,14 @@ def controlled_fields(ir: IR) -> set[str]:
         if f.id in set_fields and f.set is not None
     }
     return found | {ws.pages.field for ws in ir.worksheets if ws.pages is not None}
+
+
+def story_ir(ir: IR, worksheet: str, state: QueryState) -> IR:
+    """在故事點中顯示時（state.story），工作表套用故事點記下的狀態（tmig.story）。"""
+    try:
+        return apply_story(ir, worksheet, state.story)
+    except StoryStateError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 def viz_tooltips(ir: IR, sheet: Worksheet, grant: Grant) -> list[dict[str, Any]]:
@@ -905,6 +914,8 @@ def create_app(
         state = state or QueryState()
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
+        # 故事點中顯示：套用故事點記下的排序、欄列架、註解、座標軸與地圖的範圍
+        ir = story_ir(ir, ws, state)
         target = next((w for w in ir.worksheets if w.id == ws), None)
         # 階層的切入：以切入後的欄、列架查詢與繪製；切入的控制項依存檔的工作表
         drill = drill_info(ir, target, state.drill) if target is not None else []
@@ -1183,7 +1194,7 @@ def create_app(
         state = state or QueryState()
         if state.today is None:
             state = state.model_copy(update={"today": as_of(loaded.directory)})
-        ir = apply_drill(loaded.ir, ws, state.drill)
+        ir = apply_drill(story_ir(loaded.ir, ws, state), ws, state.drill)
         try:
             query = underlying_query(worksheet_sql(ir, ws, state, user), limit + 1)
         except StateError as exc:

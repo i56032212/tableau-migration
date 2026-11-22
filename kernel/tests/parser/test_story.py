@@ -291,8 +291,9 @@ def test_unsupported_story_states(tmp_path: Path) -> None:
     ir = parse(tmp_path, story_workbook(story(points)))
     assert reasons(ir) == [
         "Story「Tour」的故事點「Gone」顯示的「Deleted Sheet」無法移轉",
-        "Story「Tour」的故事點「Range」記下的篩選條件尚不支援",
-        "Story「Tour」的故事點「Sort」記下的狀態 <sort>尚不支援",
+        # 量值的範圍篩選（彙總）不能由故事點改變；排序缺少欄位（排序本身見 test_story_states.py）
+        "Story「Tour」的故事點「Range」記下的篩選尚不支援",
+        "Story「Tour」的故事點「Sort」記下的排序的欄位（缺少欄位）尚不支援",
         "Story「Tour」的故事點「Ghost」記下的工作表「Ghost」的狀態尚不支援",
         "Story「Tour」的故事點「Param」記下的狀態 <parameter-value>尚不支援",
     ]

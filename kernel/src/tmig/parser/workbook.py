@@ -352,6 +352,7 @@ class WorkbookParser:
                 folders=state.folders,
                 published=state.published,
                 geo=state.geo,
+                background_images=state.background_images,
                 source_ref=state.element.getroottree().getpath(state.element),
             )
             for state in ctx.datasources.values()

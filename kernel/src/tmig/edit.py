@@ -94,6 +94,7 @@ def catalog(ir: IR) -> dict[str, Any]:
                 "folders": [f.model_dump(mode="json") for f in ds.folders],
                 "settings": ds.settings.model_dump(mode="json"),
                 "geo": ds.geo.model_dump(mode="json") if ds.geo is not None else None,
+                "background_images": [i.model_dump(mode="json") for i in ds.background_images],
             }
             for ds in ir.datasources
         ],
@@ -208,6 +209,65 @@ def set_geo_defaults(ir: IR, datasource: str, country: str | None, state: str | 
     state = (state or "").strip() or None
     geo = GeoSettings(country=country, state=state) if country or state else None
     return _replace_datasource(ir, ds.model_copy(update={"geo": geo}))
+
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg")
+"""背景圖片可以用的圖片檔（與 dashboard 的圖片物件相同）。"""
+
+
+def set_background_images(ir: IR, datasource: str, images: list[dict[str, Any]]) -> IR:
+    """背景圖片（地圖＞背景圖片）：資料源的圖片整份取代。沒有 id 的是新增的圖片（配發 id）；X、Y 是數值欄位
+    （或地圖的緯度、經度），圖片檔是報表中的路徑（例如 Image/floor.png，以 /images 加入），左右、上下的值
+    不能相同，條件的欄位是資料源中的維度。各工作表停用的圖片中已經刪除的一併拿掉。"""
+    from tmig.ir.models import GENERATED_FIELDS, BackgroundImage
+    from tmig.package import member_path
+
+    ds = _datasource(ir, datasource)
+    by_id = {f.id: f for f in ds.fields}
+    parsed: list[BackgroundImage] = []
+    working = ir
+    for raw in images:
+        item = dict(raw)
+        if not item.get("id"):
+            item["id"] = _unique_id(working, "bg_" + _slug(str(item.get("name") or "image")))
+        item.setdefault("source_ref", EDITOR_REF)
+        try:
+            image = BackgroundImage.model_validate(item)
+        except ValidationError as exc:
+            raise EditError(
+                f"背景圖片「{item.get('name') or ''}」不正確：{_first_error(exc)}"
+            ) from exc
+        if member_path(image.image) is None or not image.image.lower().endswith(IMAGE_SUFFIXES):
+            raise EditError(f"背景圖片「{image.name}」的圖片檔 {image.image} 不正確")
+        for axis, field_id in (("X", image.x), ("Y", image.y)):
+            found = by_id.get(field_id)
+            if field_id not in GENERATED_FIELDS and (
+                found is None or found.datatype not in ("integer", "real")
+            ):
+                raise EditError(f"背景圖片「{image.name}」的 {axis} 欄位必須是數值欄位")
+        if image.left == image.right or image.top == image.bottom:
+            raise EditError(f"背景圖片「{image.name}」左右（上下）的值不能相同")
+        for condition in image.conditions:
+            found = by_id.get(condition.field.field)
+            if found is None or found.role != "dimension":
+                raise EditError(f"背景圖片「{image.name}」的條件必須是資料源中的維度")
+        parsed.append(image)
+        working = _replace_datasource(
+            working, ds.model_copy(update={"background_images": list(parsed)})
+        )
+    if len({i.id for i in parsed}) != len(parsed):
+        raise EditError("背景圖片的 id 重複")
+    kept = {i.id for i in parsed}
+    updated = _replace_datasource(ir, ds.model_copy(update={"background_images": parsed}))
+    sheets = [
+        w.model_copy(
+            update={"background_images_off": [i for i in w.background_images_off if i in kept]}
+        )
+        if w.datasource == datasource and any(i not in kept for i in w.background_images_off)
+        else w
+        for w in updated.worksheets
+    ]
+    return _validated(updated.model_copy(update={"worksheets": sheets}), "背景圖片不正確")
 
 
 def check_formula(

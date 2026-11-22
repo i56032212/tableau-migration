@@ -29,6 +29,7 @@ from tmig.census.model import (
     WorksheetInfo,
 )
 from tmig.parser.connections import FILE_CLASSES, INTEGRATED_AUTH, NO_AUTH, initial_sql_users
+from tmig.parser.datasource import combined_set_references
 from tmig.parser.refs import parse_instance, qualified_parts, shelf_operators
 from tmig.parser.twbx import (
     attr,
@@ -319,12 +320,14 @@ def _datasource(ds: etree._Element) -> tuple[DatasourceInfo, list[FormulaInfo], 
         field_count=len(columns),
         calc_count=sum(classes_used.values()),
         # 篩選動作、排除選取、工具提示產生的隱藏群組（user:auto-column）已在擴充階段支援；
-        # 使用者篩選（identity-set）與集合（filter-group）也已支援，剩下合併欄位等其他群組
+        # 使用者篩選（identity-set）、集合（filter-group、在檢視上選取標記建立的 lasso-group）與
+        # 兩個集合的合併集合也已支援，剩下合併欄位等其他群組
         groups_or_sets=sum(
             1
             for g in children(ds, "group")
             if attr(g, "auto-column") is None
-            and attr(g, "ui-builder") not in ("identity-set", "filter-group")
+            and attr(g, "ui-builder") not in ("identity-set", "filter-group", "lasso-group")
+            and not (attr(g, "ui-builder") is None and combined_set_references(g) is not None)
         ),
         user_filters=user_filters,
         datasource_filters=len(ds_filters),

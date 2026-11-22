@@ -65,6 +65,35 @@ PAPER = {
 PDF_MARGIN = 10
 """PDF 的邊界（公釐）：與檢視器「頁面設定」的預設相同。"""
 VIEWPORT = {"width": 1400, "height": 1000}
+MAX_CAPTURE = 16000
+"""訂閱的圖片最大的寬、高（像素）：整張工作表比這個大時，超出的部分不畫。"""
+OVERFLOW_SCRIPT = """() => {
+  const chart = document.querySelector('.single-sheet .worksheet > .worksheet-body > .chart');
+  return chart ? [chart.scrollWidth - chart.clientWidth, chart.scrollHeight - chart.clientHeight] : [0, 0];
+}"""
+"""單獨檢視的工作表在區塊內捲動時，圖超出區塊多少（寬、高）。"""
+EXPAND_SCRIPT = """([dx, dy]) => {
+  const sheet = document.querySelector('.single-sheet');
+  if (!sheet) return null;
+  const style = sheet.getAttribute('style');
+  sheet.style.width = `${sheet.offsetWidth + dx}px`;
+  sheet.style.maxWidth = 'none';
+  sheet.style.height = `${sheet.offsetHeight + dy}px`;
+  return style;
+}"""
+"""單獨檢視的工作表（固定的大小）加上圖超出的寬高；回傳原本的 style 屬性。"""
+RESTORE_SCRIPT = """(style) => {
+  const sheet = document.querySelector('.single-sheet');
+  if (!sheet) return;
+  if (style === null) sheet.removeAttribute('style');
+  else sheet.setAttribute('style', style);
+}"""
+DRAWN_SCRIPT = (
+    "(() => { const items = Array.from(document.querySelectorAll('.worksheet'));"
+    " return items.length > 0 && items.every(e => e.dataset.loading === 'false')"
+    " && !document.querySelector('[data-drawn=\"false\"]'); })()"
+)
+"""每張工作表都查詢完、畫好（地圖的形狀從 /api/geo/ 下載後才畫好）。"""
 T = TypeVar("T")
 
 
@@ -357,16 +386,11 @@ class Renderer:
                     f"無法開啟 view「{name}」：{page.locator('main.error').inner_text()}"
                 )
             # 每張工作表都查詢完、畫好（地圖的形狀從 /api/geo/ 下載後才畫好）
-            page.wait_for_function(
-                "(() => { const items = Array.from(document.querySelectorAll('.worksheet'));"
-                " return items.length > 0 && items.every(e => e.dataset.loading === 'false')"
-                " && !document.querySelector('[data-drawn=\"false\"]'); })()",
-                timeout=120_000,
-            )
+            page.wait_for_function(DRAWN_SCRIPT, timeout=120_000)
             page.wait_for_timeout(300)
             target = page.locator(".dashboard") if "/d/" in path else page.locator(".single-sheet")
             if png:
-                result.png = target.screenshot()
+                result.png = self._png(page, target, whole="/d/" not in path)
             if pdf:
                 # 與檢視器的「匯出＞PDF」相同的列印樣式（web/src/PageSetup.tsx）：紙張、方向、邊界，並把
                 # view 縮放到一頁之內。直接照畫面的大小印時，比紙寬的 dashboard 右邊會被裁掉
@@ -387,6 +411,30 @@ class Renderer:
         finally:
             page.remove_listener("response", on_response)
         return result
+
+    @staticmethod
+    def _png(page: Any, target: Any, whole: bool) -> bytes:
+        """view 的圖片。單獨的工作表在區塊內捲動時（標準大小放不下）：工作表與視窗暫時加大到放得下整張圖再截圖
+        （與訂閱的 PDF、檢視器匯出的圖片相同是整張工作表；推定），之後還原。dashboard 照畫面上的樣子（Tableau 的
+        dashboard 匯出的是看得到的部分）。"""
+        extra = page.evaluate(OVERFLOW_SCRIPT) if whole else None
+        if not extra or (extra[0] <= 1 and extra[1] <= 1):
+            return target.screenshot()
+        size = page.viewport_size or VIEWPORT
+        dx = min(max(0, int(extra[0]) + 1), MAX_CAPTURE - size["width"])
+        dy = min(max(0, int(extra[1]) + 1), MAX_CAPTURE - size["height"])
+        style = page.evaluate(EXPAND_SCRIPT, [dx, dy])
+        page.set_viewport_size({"width": size["width"] + dx, "height": size["height"] + dy})
+        try:
+            # 區塊變大之後圖可能重畫（填滿區塊的列、捲軸不見之後的寬度）：等它畫好
+            page.wait_for_timeout(300)
+            page.wait_for_function(DRAWN_SCRIPT, timeout=120_000)
+            return target.screenshot()
+        finally:
+            page.evaluate(RESTORE_SCRIPT, style)
+            page.set_viewport_size(size)
+            page.wait_for_timeout(300)
+            page.wait_for_function(DRAWN_SCRIPT, timeout=120_000)
 
 
 def merge_pdfs(parts: list[bytes]) -> bytes:

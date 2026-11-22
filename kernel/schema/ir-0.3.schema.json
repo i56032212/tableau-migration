@@ -331,6 +331,59 @@
       "title": "AllowedRange",
       "type": "object"
     },
+    "Animation": {
+      "additionalProperties": false,
+      "description": "標記的動畫（Tableau 2020.1 起的「格式＞動畫」）：篩選、排序、頁面等改變時標記移到新的位置。活頁簿的預設\n與每張工作表各自的設定；工作表上沒有設定的項目（None）沿用活頁簿的預設。",
+      "properties": {
+        "on": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "開或關（.twb 的 animation-on：ao-on、ao-off）",
+          "title": "On"
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "持續時間（秒，.twb 的 animation-duration）",
+          "title": "Duration"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "enum": [
+                "simultaneous",
+                "sequential"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "simultaneous＝同時（as-synced），sequential＝依序（as-phased：淡出、移動、淡入）",
+          "title": "Style"
+        }
+      },
+      "title": "Animation",
+      "type": "object"
+    },
     "Annotation": {
       "additionalProperties": false,
       "description": "註解（Tableau 的「註解」：標記、點、區域）：圖上的文字，只影響圖表，不影響數字。\n\n標記與點的註解在 point 的位置畫一條線到文字（offset 為文字相對於位置的像素）；區域的註解在\ntop_left 到 bottom_right 的方框中顯示文字。",
@@ -784,6 +837,106 @@
         "shelf"
       ],
       "title": "Axis",
+      "type": "object"
+    },
+    "BackgroundImage": {
+      "additionalProperties": false,
+      "description": "背景圖片（地圖＞背景圖片）：畫在標記之下的圖片，左右、上下的邊對應 X、Y 欄位的值。工作表的欄架上有\nX 欄位、列架上有 Y 欄位（連續）時顯示，工作表可以停用（Worksheet.background_images_off）。",
+      "properties": {
+        "id": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "圖片的名稱（對話框中的名稱）",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "image": {
+          "description": "圖片檔在報表中的路徑（.twbx 內的 Image/…，或報表套件的 files/）",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "x": {
+          "description": "對應到圖片左右的欄位",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "X",
+          "type": "string"
+        },
+        "left": {
+          "title": "Left",
+          "type": "number"
+        },
+        "right": {
+          "title": "Right",
+          "type": "number"
+        },
+        "y": {
+          "description": "對應到圖片上下的欄位",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Y",
+          "type": "string"
+        },
+        "top": {
+          "title": "Top",
+          "type": "number"
+        },
+        "bottom": {
+          "title": "Bottom",
+          "type": "number"
+        },
+        "washout": {
+          "default": 0,
+          "description": "淡化：0 為原色，1 為全白",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Washout",
+          "type": "number"
+        },
+        "lock_aspect": {
+          "default": true,
+          "description": "鎖定外觀比例：圖片保持原本的寬高比（在對應的範圍內置中）",
+          "title": "Lock Aspect",
+          "type": "boolean"
+        },
+        "show_entire": {
+          "default": false,
+          "description": "一律顯示整張圖片：座標軸的自動範圍包含整張圖片",
+          "title": "Show Entire",
+          "type": "boolean"
+        },
+        "conditions": {
+          "description": "都成立時才顯示；空的表示一律顯示",
+          "items": {
+            "$ref": "#/$defs/ImageCondition"
+          },
+          "title": "Conditions",
+          "type": "array"
+        },
+        "source_ref": {
+          "description": "此實體在 .twb 中的 XPath",
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "image",
+        "x",
+        "left",
+        "right",
+        "y",
+        "top",
+        "bottom",
+        "source_ref"
+      ],
+      "title": "BackgroundImage",
       "type": "object"
     },
     "Banding": {
@@ -1257,12 +1410,20 @@
           "type": "string"
         },
         "measures": {
-          "description": "分析的量值（都在檢視中）",
+          "description": "分析的量值（都在檢視中；取消彙總量值時是不彙總的量值，每一列資料一個標記）",
           "items": {
             "$ref": "#/$defs/FieldUse"
           },
           "minItems": 1,
           "title": "Measures",
+          "type": "array"
+        },
+        "categories": {
+          "description": "分析的維度（類別變數）：以 ATTR 在檢視的詳細程度彙總，可以不在檢視中",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Categories",
           "type": "array"
         },
         "count": {
@@ -2182,6 +2343,14 @@
           ],
           "default": null,
           "description": "地理設定（編輯位置）"
+        },
+        "background_images": {
+          "description": "背景圖片（地圖＞背景圖片）",
+          "items": {
+            "$ref": "#/$defs/BackgroundImage"
+          },
+          "title": "Background Images",
+          "type": "array"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
@@ -3534,6 +3703,42 @@
         }
       },
       "title": "HighlightAction",
+      "type": "object"
+    },
+    "ImageCondition": {
+      "additionalProperties": false,
+      "description": "背景圖片的條件（背景圖片對話框「選項」的「只在下列條件成立時顯示圖片」）：檢視中這個欄位有這個值。",
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/FieldUse",
+          "description": "條件的欄位（維度）"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "field",
+        "value"
+      ],
+      "title": "ImageCondition",
       "type": "object"
     },
     "JoinCondition": {
@@ -7126,6 +7331,19 @@
           ],
           "default": null,
           "title": "Max"
+        },
+        "include_null": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "range：範圍之外也保留 Null 值（Tableau 的 in-range-or-null）；None 表示與工作表的篩選相同",
+          "title": "Include Null"
         }
       },
       "required": [
@@ -7412,6 +7630,43 @@
           },
           "title": "Notes",
           "type": "array"
+        },
+        "pages": {
+          "description": "故事點記下的頁面架目前的頁：工作表 id → 頁面欄位的值",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]{0,63}$": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "propertyNames": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元"
+          },
+          "title": "Pages",
+          "type": "object"
+        },
+        "sheets": {
+          "description": "故事點記下的工作表狀態（排序、欄列架、註解、座標軸與地圖的範圍）",
+          "items": {
+            "$ref": "#/$defs/StorySheet"
+          },
+          "title": "Sheets",
+          "type": "array"
         }
       },
       "required": [
@@ -7463,6 +7718,116 @@
         "marks"
       ],
       "title": "StorySelection",
+      "type": "object"
+    },
+    "StorySheet": {
+      "additionalProperties": false,
+      "description": "故事點記下的工作表狀態（篩選、選取、參數與頁之外的差異）：排序、從欄列架上移除的欄位、註解、\n座標軸（範圍、標題、文字方向）與地圖的顯示範圍。檢視故事點時套用在工作表目前的定義上\n（tmig.story.apply_story_sheet）：Tableau 的故事點與原本的工作表相連，工作表之後的修改也反映在\n故事點上。",
+      "properties": {
+        "worksheet": {
+          "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Worksheet",
+          "type": "string"
+        },
+        "sorts": {
+          "description": "故事點改過的排序：取代工作表上同一個欄位的排序",
+          "items": {
+            "$ref": "#/$defs/Sort"
+          },
+          "title": "Sorts",
+          "type": "array"
+        },
+        "cleared_sorts": {
+          "description": "故事點清除的欄列架排序（從座標軸、工具列的排序，即巢狀排序）的欄位",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Cleared Sorts",
+          "type": "array"
+        },
+        "removed_rows": {
+          "description": "故事點從列架上移除的欄位",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Removed Rows",
+          "type": "array"
+        },
+        "removed_columns": {
+          "description": "故事點從欄架上移除的欄位",
+          "items": {
+            "$ref": "#/$defs/FieldUse"
+          },
+          "title": "Removed Columns",
+          "type": "array"
+        },
+        "annotations": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Annotation"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "故事點中的註解（工作表的註解加上故事點新增、修改與刪除的）；None 表示與工作表相同",
+          "title": "Annotations"
+        },
+        "axes": {
+          "description": "故事點改過的座標軸設定（範圍、標題、文字方向）：取代工作表上同一個欄位、同一個架的",
+          "items": {
+            "$ref": "#/$defs/Axis"
+          },
+          "title": "Axes",
+          "type": "array"
+        },
+        "viewport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MapViewport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "地圖平移、縮放後記下的顯示範圍；None 表示與工作表相同"
+        },
+        "null_indicator": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "「N 個 Null」的指示器（Worksheet.null_indicator）；None 表示與工作表相同",
+          "title": "Null Indicator"
+        },
+        "cleared_actions": {
+          "description": "故事點中顯示所有值的篩選動作：工作表上這個動作的篩選不套用存檔時的值（沒有選取時顯示所有的值；在故事點上選取標記時照常篩選）",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Cleared Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "worksheet"
+      ],
+      "title": "StorySheet",
       "type": "object"
     },
     "TableCalc": {
@@ -8644,6 +9009,18 @@
           "default": null,
           "title": "Tableau Version"
         },
+        "animation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "活頁簿預設的動畫（格式＞動畫的「活頁簿預設」）；None 為關"
+        },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",
           "minLength": 1,
@@ -9185,6 +9562,16 @@
           "default": null,
           "description": "地圖的底圖設定；None 為預設（Light 樣式）"
         },
+        "background_images_off": {
+          "description": "這張工作表停用的背景圖片（資料源的 BackgroundImage.id；背景圖片對話框中取消勾選的）",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Background Images Off",
+          "type": "array"
+        },
         "controls": {
           "description": "工作表上顯示的篩選與參數控制項（顯示篩選、顯示參數）",
           "items": {
@@ -9349,6 +9736,18 @@
           "default": null,
           "description": "堆疊標記（分析＞堆疊標記）：on＝一律堆疊（折線、圓點等也依標記卡上的維度累加），off＝不堆疊（長條與區域從 0 畫起、互相重疊）；None 為自動（長條與區域堆疊）",
           "title": "Stack"
+        },
+        "animation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "這張工作表的動畫（格式＞動畫的「選取的工作表」）；None 與沒有設定的項目沿用活頁簿的預設"
         },
         "source_ref": {
           "description": "此實體在 .twb 中的 XPath",

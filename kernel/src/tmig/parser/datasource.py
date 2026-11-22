@@ -5,6 +5,7 @@ from __future__ import annotations
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Literal
 
 from lxml import etree
 
@@ -31,6 +32,7 @@ from tmig.ir.models import (
     FieldBin,
     FieldFolder,
     FieldGroup,
+    FieldSet,
     FieldUse,
     FileColumn,
     FileConnection,
@@ -51,6 +53,7 @@ from tmig.ir.models import (
     ProjectRelation,
     PublishedSource,
     Relation,
+    SetCombined,
     SourceColumn,
     SqlRelation,
     TableRelation,
@@ -61,6 +64,7 @@ from tmig.ir.models import (
 )
 from tmig.ir.scope import DatasourceScope, ForeignSource
 from tmig.ir.setformula import level_expr
+from tmig.parser.background import background_images
 from tmig.parser.colors import color_encodings, parse_color, parse_shapes, shape_encodings
 from tmig.parser.connections import DIALECTS, EXECUTABLE, live_connection, parse_relation
 from tmig.parser.context import DATATYPES, DsState, ParseContext
@@ -131,6 +135,7 @@ DS_CHILDREN = frozenset(
         "aliases",
         "connection",
         "layout",
+        "mapped-images",
         "semantic-values",
         "group",
         "style",
@@ -435,6 +440,7 @@ class DatasourceParser:
         }
         self._filters(state)
         self._default_marks(state)
+        state.background_images = background_images(ctx, state, child(el, "mapped-images"))
         for model in children(self.el, "analytic-model"):
             name = child(child(model, "name"), "field")
             if name is not None and name.get("name"):
@@ -1184,6 +1190,7 @@ class DatasourceParser:
                 name = f"{TABLE_ID_PREFIX}[{object_id.replace(']', ']]')}]"
                 self._add_table_count(state, name, obj.get("caption"), obj)
 
+        combined_sets: list[etree._Element] = []
         for group in children(self.el, "group"):
             auto = attr(group, "auto-column")
             if auto in ("sheet_link", "include", "exclude"):
@@ -1194,13 +1201,88 @@ class DatasourceParser:
             if attr(group, "ui-builder") == "identity-set":
                 self._add_identity_set(state, group)
                 continue
-            if attr(group, "ui-builder") == "filter-group":
+            if attr(group, "ui-builder") in ("filter-group", "lasso-group"):
+                # filter-group：集合對話框建立的集合；lasso-group：在檢視上選取標記建立的集合（固定成員）
                 self._add_set(state, group)
                 continue
             if attr(group, "ui-builder") == "nest-group":
                 self._add_combined(state, group)
                 continue
-            ctx.ignore(group, "合併集合等群組（工作表若有使用會另列為不支援）")
+            if attr(group, "ui-builder") is None and combined_set_references(group):
+                combined_sets.append(group)  # 來源的集合可能寫在後面：全部的集合解析完再處理
+                continue
+            ctx.ignore(group, "認不得的群組（工作表若有使用會另列為不支援）")
+        self._add_combined_sets(state, combined_sets)
+
+    def _add_combined_sets(self, state: DsState, groups: list[etree._Element]) -> None:
+        """合併集合（Tableau 的「建立合併集合」）：<group delimiter=','>
+        <groupfilter function='union'|'intersection'|'except'> 之下兩個
+        <groupfilter function='reference' field='[集合]'>（寫法取自 GitHub 上公開的 .twb）。union 為兩個集合的
+        所有成員、intersection 為共同的成員、except 為第一個集合中不在第二個集合的成員；轉成布林公式（與編輯器
+        建立的合併集合相同）。來源也可以是合併集合：依序解析到沒有進展為止。"""
+        pending = list(groups)
+        while pending:
+            remaining = [g for g in pending if not self._add_combined_set(state, g)]
+            if len(remaining) == len(pending):
+                break
+            pending = remaining
+        for group in pending:
+            caption = group.get("caption") or strip_brackets(group.get("name", ""))
+            missing = [
+                r
+                for r in combined_set_references(group) or []
+                if (found := state.by_name.get(r)) is None or found.set is None
+            ]
+            self.ctx.flag(
+                group, f"合併集合「{caption}」的來源集合（{'、'.join(missing)}）無法移轉或不是集合"
+            )
+
+    def _add_combined_set(self, state: DsState, group: etree._Element) -> bool:
+        """一個合併集合；來源的集合還不存在時回傳 False（稍後再試）。"""
+        name = group.get("name", "")
+        caption = group.get("caption") or strip_brackets(name)
+        root = child(group, "groupfilter")
+        refs = combined_set_references(group)
+        assert root is not None and refs is not None
+        sources = [state.by_name.get(r) for r in refs]
+        if any(s is None or s.set is None for s in sources):
+            return False
+        left, right = sources
+        assert left is not None and right is not None and left.set is not None
+        assert right.set is not None
+        if left.id == right.id or left.set.levels != right.set.levels:
+            self.ctx.flag(
+                group, f"合併集合「{caption}」的兩個集合（{refs[0]}、{refs[1]}）不在同一個維度上"
+            )
+            return True
+        if left.id in state.identity_sets or right.id in state.identity_sets:
+            self.ctx.flag(group, f"合併集合「{caption}」的來源是使用者篩選，v0 不支援")
+            return True
+        function = root.get("function")
+        op = COMBINED_OPS[function or ""]
+        formula = {
+            "union": f"{left.name} OR {right.name}",
+            "intersect": f"{left.name} AND {right.name}",
+            "left_only": f"{left.name} AND NOT {right.name}",
+        }[op]
+        data_field = DataField(
+            id=self.ctx.ids.make("f", caption, name),
+            name=name,
+            caption=caption,
+            role="dimension",
+            datatype="boolean",
+            column=None,
+            calc=Calc(formula=formula),
+            set=FieldSet(
+                levels=list(left.set.levels),
+                rule=SetCombined(kind="combined", left=left.id, right=right.id, op=op),
+            ),
+            aliases=list(IN_OUT),
+            source_ref=xpath(group),
+        )
+        state.add_field(data_field)
+        state.set_fields.add(data_field.id)
+        return True
 
     def _add_combined(self, state: DsState, group: etree._Element) -> None:
         """合併欄位（Combined Field）：多個維度的值組合成一個維度，成員與 Tableau 相同寫成「值, 值」
@@ -1536,6 +1618,32 @@ class DatasourceParser:
 
 
 GROUP_KINDS = {"categorical-bin": "群組", "bin": "數值分組"}
+COMBINED_OPS: dict[str, Literal["union", "intersect", "left_only"]] = {
+    "union": "union",
+    "intersection": "intersect",
+    "except": "left_only",
+}
+"""合併集合的 groupfilter 函式 → SetCombined.op（except 是第一個集合扣掉第二個）。"""
+COMBINED_GROUP_ATTRS = frozenset({"caption", "name", "name-style", "delimiter", "hidden"})
+
+
+def combined_set_references(group: etree._Element) -> list[str] | None:
+    """合併集合的兩個來源集合：<groupfilter function='union'|'intersection'|'except'> 之下剛好兩個
+    <groupfilter function='reference' field=…>；其他寫法（例如不同維度的集合以 crossjoin 組合）回傳 None。"""
+    if any(etree.QName(a).localname not in COMBINED_GROUP_ATTRS for a in group.attrib):
+        return None
+    roots = children(group, "groupfilter")
+    if len(roots) != 1 or set(roots[0].attrib) != {"function"}:
+        return None
+    if roots[0].get("function") not in COMBINED_OPS or len(children(roots[0])) != 2:
+        return None
+    parts = children(roots[0], "groupfilter")
+    if len(parts) != 2 or any(
+        p.get("function") != "reference" or set(p.attrib) != {"function", "field"} or children(p)
+        for p in parts
+    ):
+        return None
+    return [p.get("field", "") for p in parts]
 
 
 def _month(raw: str) -> int | None:

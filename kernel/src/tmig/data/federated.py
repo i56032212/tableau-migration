@@ -318,7 +318,11 @@ def execute_federated(
             con.register(name, table)
         for guard in query.guards:
             check_guard(guard, _run(con, guard.sql).rows)
-        return finish(query, _run(con, query.sql))
+        return finish(
+            query,
+            _run(con, query.sql),
+            lambda q: execute_federated(q, database, connection, fetch, cache, tables),
+        )
     finally:
         con.close()
 

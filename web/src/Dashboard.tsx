@@ -42,6 +42,7 @@ import type {
   ZoneTextRun,
 } from "./types";
 import type { ShapeLegend } from "./shapeImages";
+import { animationFor } from "./markAnimation";
 import { type MarkEvent, ShapeLegendView, visitSpecs, WorksheetView } from "./WorksheetView";
 
 // Vega 預設的類別色（與 Vega-Lite 的 nominal 顏色相同）
@@ -476,6 +477,7 @@ function ZoneContent({
         <WorksheetView
           workbook={workbook}
           worksheet={zone.worksheet!}
+          animation={animationFor(ir, zone.worksheet!)}
           name={pendingTitle(ir, zone.worksheet!)}
           state={stateFor(ir, zone.worksheet!, view)}
           hideLegend={hideLegend}
@@ -681,7 +683,8 @@ function Legend({ workbook, response, kind }: { workbook: string; response: Rend
   if (kind !== "color" || color.type !== "nominal") {
     return <div className="legend"><div className="legend-title">{color.title}</div></div>;
   }
-  const values: string[] = [];
+  // 依比例尺的順序（欄位的排序，與工作表上的圖例相同）；比例尺沒有的值接在後面，依資料的順序
+  const values: string[] = (scale?.domain ?? []).map(String);
   for (const row of rows) {
     const label = String(row[field]);
     if (!values.includes(label)) values.push(label);

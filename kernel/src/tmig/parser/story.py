@@ -1,18 +1,22 @@
 """Story（故事）：<dashboard type='storyboard'> 中依序切換的故事點。
 
 每個故事點顯示一個 dashboard 或工作表（captured-sheet），並記下與工作表預設狀態不同的地方：
-篩選動作的選取、工作表篩選的值與選取的標記。擷取故事點時記在 <capturedDeltas>；擷取後又改過、
-沒有按「更新」時，改過的狀態記在 <currentDeltas>，開啟報表時顯示的是它。寫法取自公開報表
-（ASIA Cup Match Overview、Practice Activity Number 4、Assignment 4）。認不得的狀態列為不支援
-（故事點會顯示成不同的畫面，不能默默略過）。
+篩選動作的選取、工作表篩選的值（成員、所有的值、範圍）、選取的標記、參數值與改過的文字物件；排序、
+欄列架、註解、格式與頁面架目前的頁見 tmig.parser.story_sheet。擷取故事點時記在 <capturedDeltas>；
+擷取後又改過、沒有按「更新」時，改過的狀態記在 <currentDeltas>，開啟報表時顯示的是它。寫法取自公開報表
+（ASIA Cup Match Overview、Practice Activity Number 4、Assignment 4 與 GitHub 上公開的 .twb）。認不得的
+狀態列為不支援（故事點會顯示成不同的畫面，不能默默略過）。
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from lxml import etree
 
 from tmig.ir.integrity import iter_zones
 from tmig.ir.models import (
+    SPECIAL_FIELDS,
     Action,
     Dashboard,
     FieldUse,
@@ -31,6 +35,7 @@ from tmig.ir.models import (
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.dashboard import _runs, _size, formatted_content
 from tmig.parser.fields import instance_key, use_from_instance
+from tmig.parser.story_sheet import INCLUDED_NULL, SORT_TAGS, SheetDelta
 from tmig.parser.twbx import child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
@@ -56,6 +61,11 @@ class StoryParser:
         self.dashboards = {d.name: d.id for d in dashboards}
         self.boards = {d.id: d for d in dashboards}
         self.actions = {a.name: a.id for a in actions}
+        self.elements = {
+            w.get("name", ""): w
+            for w in children(child(ctx.package.root, "worksheets"), "worksheet")
+        }
+        """工作表名稱 → <worksheet>（故事點的排序、註解與格式套在工作表原本的寫法上）。"""
 
     def parse(self) -> Story | None:
         ctx, el = self.ctx, self.el
@@ -125,21 +135,59 @@ class StoryParser:
             if tag != "worksheet":
                 self._unsupported(sheet_el, label, f"狀態 <{tag}>")
                 continue
-            sheet = self.ctx.sheets.get(sheet_el.get("name", ""))
-            if sheet is None:
-                self._unsupported(sheet_el, label, f"工作表「{sheet_el.get('name')}」的狀態")
-                continue
-            for item in children(sheet_el):
-                tag = local_name(item)
-                if tag == "filter":
-                    self._filter(item, sheet, point, label)
-                elif tag == "selection-collection":
-                    self._selection(item, sheet, point, label)
-                elif tag == "highlight":
-                    self.ctx.ignore(item, "故事點記下的醒目提示（只影響醒目提示，不影響數字）")
-                else:
-                    self._unsupported(item, label, f"狀態 <{tag}>")
+            self._worksheet(sheet_el, point, label)
         return point
+
+    def _worksheet(self, sheet_el: etree._Element, point: StoryPoint, label: str) -> None:
+        """一張工作表的差異：篩選、選取、醒目提示，以及排序、欄列架、註解、格式與頁（SheetDelta）。"""
+        name = sheet_el.get("name", "")
+        sheet = self.ctx.sheets.get(name)
+        worksheet = self.sheets_by_id.get(sheet.id) if sheet is not None else None
+        element = self.elements.get(name)
+        if sheet is None or worksheet is None or element is None:
+            self._unsupported(sheet_el, label, f"工作表「{name}」的狀態")
+            return
+        delta = SheetDelta(
+            self.ctx,
+            sheet,
+            worksheet,
+            element,
+            lambda item, what: self._unsupported(item, label, what),
+        )
+        # 其他差異用到的欄位實例先登記
+        for item in children(sheet_el, "datasource-dependencies"):
+            delta.dependencies(item)
+        state = delta.state()
+        for item in children(sheet_el):
+            tag = local_name(item)
+            if tag == "datasource-dependencies":
+                continue
+            if tag == "filter":
+                self._filter(item, state, point, label, delta)
+            elif tag == "selection-collection":
+                self._selection(item, state, point, label)
+            elif tag == "highlight":
+                self.ctx.ignore(item, "故事點記下的醒目提示（只影響醒目提示，不影響數字）")
+            elif tag in SORT_TAGS:
+                delta.sort(item)
+            elif tag == "shelf-sort-deltas":
+                delta.clear_sorts(item)
+            elif tag in ("rows", "cols"):
+                delta.shelf(item)
+            elif tag == "annotations":
+                delta.annotation_deltas(item)
+            elif tag == "style":
+                delta.style(item, child(self.ctx.package.root, "style"))
+            elif tag == "current-page":
+                delta.current_page(item)
+            else:
+                self._unsupported(item, label, f"狀態 <{tag}>")
+        found = delta.result()
+        if found is not None:
+            point.sheets.append(found)
+        paged, page = delta.page
+        if paged:
+            point.pages[worksheet.id] = page
 
     def _parameters(self, element: etree._Element, point: StoryPoint, label: str) -> None:
         """故事點記下的參數值：<datasource name='Parameters'><column name='[Parameter 1]' value='…'/>。"""
@@ -178,17 +226,41 @@ class StoryParser:
     def _unsupported(self, element: etree._Element, label: str, what: str) -> None:
         self.ctx.flag(element, f"Story「{self.name}」的故事點「{label}」記下的{what}尚不支援")
 
-    def _members(self, group: etree._Element | None) -> list[etree._Element] | None:
-        """groupfilter 的成員：單一 member，或由 member 組成的 union；其他寫法回傳 None。"""
+    def _tuples(self, group: etree._Element | None) -> list[list[etree._Element]] | None:
+        """groupfilter 的成員組合：member、由它們組成的 union，與 crossjoin（各部分的每一種組合，例如兩個
+        欄位的篩選動作）；每個組合是各層級的 <groupfilter function='member'>。其他寫法回傳 None。"""
         if group is None:
             return None
-        if group.get("function") == "member":
-            return [group]
-        if group.get("function") == "union":
-            items = children(group, "groupfilter")
-            if items and all(g.get("function") == "member" for g in items):
-                return items
-        return None
+        function = group.get("function")
+        if function == "member":
+            return [[group]]
+        parts = children(group, "groupfilter")
+        if not parts or function not in ("union", "crossjoin"):
+            return None
+        result: list[list[etree._Element]] = [] if function == "union" else [[]]
+        for part in parts:
+            found = self._tuples(part)
+            if found is None:
+                return None
+            if function == "union":
+                result += found
+            else:
+                result = [r + f for r in result for f in found]
+        return result
+
+    @staticmethod
+    def _all(group: etree._Element | None) -> bool:
+        """所有的值：level-members，或由它們組成的 crossjoin（多個欄位的篩選動作沒有選取）。"""
+        if group is None:
+            return False
+        if group.get("function") == "level-members":
+            return True
+        parts = children(group, "groupfilter")
+        return (
+            group.get("function") == "crossjoin"
+            and bool(parts)
+            and all(p.get("function") == "level-members" for p in parts)
+        )
 
     def _level(self, sheet: SheetState, level: str) -> FieldUse | None:
         """groupfilter 的 level（[Region]，或欄位實例 [none:Region:nk]）→ 欄位使用。"""
@@ -202,6 +274,8 @@ class StoryParser:
         return FieldUse(field=data_field.id) if data_field is not None else None
 
     def _value(self, sheet: SheetState, use: FieldUse, text: str | None) -> Scalar:
+        if use.field in SPECIAL_FIELDS:
+            raise LiteralError(f"{use.field} 沒有成員的值")
         if use.date is not None and use.date.kind == "part":
             return parse_literal(text, "integer")
         return parse_literal(text, sheet.ds.field_by_id(use.field).datatype)
@@ -223,40 +297,160 @@ class StoryParser:
         return found.pop() if len(found) == 1 else None
 
     def _filter(
-        self, element: etree._Element, sheet: SheetState, point: StoryPoint, label: str
+        self,
+        element: etree._Element,
+        sheet: SheetState,
+        point: StoryPoint,
+        label: str,
+        delta: SheetDelta,
     ) -> None:
-        members = self._members(child(element, "groupfilter"))
-        if members is None:
+        """記下的篩選：成員（保留或排除）、所有的值、範圍，與篩選動作的選取。"""
+        if element.get("delta-type") is not None:
+            self._unsupported(element, label, f"篩選的變更（{element.get('delta-type')}）")
+            return
+        if element.get("class") == "quantitative":
+            self._range(element, sheet, point, label)
+            return
+        group = child(element, "groupfilter")
+        nodes = list(group.iter("groupfilter")) if group is not None else []
+        action_name = next((g.get(UI_ACTION) for g in nodes if g.get(UI_ACTION)), None)
+        if (
+            action_name is None
+            and sheet.ds.auto_groups.get(instance_key(element.get("column", ""))) == "sheet_link"
+        ):
+            # 篩選動作的欄位（Action (…)）沒有寫動作的名稱：依寫入這張工作表同樣欄位的動作
+            action_name = ""
+        if action_name is not None:
+            self._action_filter(element, group, action_name, sheet, point, label, delta)
+            return
+        use = self._level(sheet, element.get("column", ""))
+        if use is None or use.agg is not None or use.table_calc is not None:
+            self._unsupported(element, label, "篩選")
+            return
+        mode: Literal["include", "exclude"] = "include"
+        tuples: list[list[etree._Element]] | None = []
+        if self._all(group):
+            mode = "exclude"  # 所有的值：排除空清單
+        elif group is not None and group.get("function") == "except":
+            # 排除：except(level-members, 成員)
+            parts = children(group, "groupfilter")
+            mode = "exclude"
+            tuples = (
+                self._tuples(parts[1])
+                if len(parts) == 2 and parts[0].get("function") == "level-members"
+                else None
+            )
+        else:
+            tuples = self._tuples(group)
+        if tuples is None or any(len(t) != 1 for t in tuples):
             self._unsupported(element, label, "篩選條件")
             return
-        action_name = next((m.get(UI_ACTION) for m in members if m.get(UI_ACTION)), None)
         try:
-            if action_name is not None:
-                levels = [self._level(sheet, m.get("level", "")) for m in members]
-                uses = [u for u in levels if u is not None]
-                action = (
-                    self._action(action_name, sheet, uses) if len(uses) == len(levels) else None
-                )
-                if action is None:
-                    self._unsupported(element, label, "篩選動作")
-                    return
-                marks: list[Mark] = []
-                for member, use in zip(members, uses, strict=True):
-                    mark = {use_key(use): self._value(sheet, use, member.get("member"))}
-                    if mark not in marks:
-                        marks.append(mark)
-                self._add_action(element, point, StoryAction(action=action, marks=marks), label)
-                return
-            use = self._level(sheet, element.get("column", ""))
-            if use is None or use.agg is not None or use.table_calc is not None:
-                self._unsupported(element, label, "篩選")
-                return
-            values = [self._value(sheet, use, m.get("member")) for m in members]
+            values = [self._value(sheet, use, t[0].get("member")) for t in tuples]
         except LiteralError:
             self._unsupported(element, label, "篩選的值")
             return
+        point.filters.append(StoryFilter(worksheet=sheet.id, field=use, mode=mode, values=values))
+
+    def _action_filter(
+        self,
+        element: etree._Element,
+        group: etree._Element | None,
+        name: str,
+        sheet: SheetState,
+        point: StoryPoint,
+        label: str,
+        delta: SheetDelta,
+    ) -> None:
+        """篩選動作的篩選：選取的標記（成員的組合），或所有的值（沒有選取）。"""
+        if group is not None and self._all(group):
+            levels = [self._level(sheet, g.get("level", "")) for g in group.iter("groupfilter")]
+            uses = [u for u in levels if u is not None]
+            action = self._action(name, sheet, uses)
+            # 所有的值（沒有選取）：工作表上這個動作的篩選存檔時有值的話，故事點中改成所有的值
+            # （StorySheet.cleared_actions）；存檔時就是所有的值時不必記
+            worksheet = self.sheets_by_id.get(sheet.id)
+            saved = next(
+                (
+                    f
+                    for f in (worksheet.filters if worksheet is not None else [])
+                    if isinstance(f, TupleFilter) and f.action == action
+                ),
+                None,
+            )
+            if saved is None:
+                # 工作表上沒有這個動作的篩選：所有的值就是不篩選，畫面相同
+                self.ctx.ignore(
+                    element, "故事點記下的篩選動作沒有選取，工作表上也沒有這個篩選：略過"
+                )
+            elif (
+                not (saved.mode == "all" or (saved.mode == "exclude" and not saved.tuples))
+                and action is not None
+                and action not in delta.cleared_actions
+            ):
+                delta.cleared_actions.append(action)
+            return
+        tuples = self._tuples(group)
+        if not tuples:
+            self._unsupported(element, label, "篩選動作")
+            return
+        levels = [self._level(sheet, m.get("level", "")) for m in tuples[0]]
+        uses = [u for u in levels if u is not None]
+        action = self._action(name, sheet, uses) if len(uses) == len(levels) else None
+        if action is None:
+            self._unsupported(element, label, "篩選動作")
+            return
+        marks: list[Mark] = []
+        try:
+            for members in tuples:
+                mark: Mark = {}
+                for member in members:
+                    use = self._level(sheet, member.get("level", ""))
+                    if use is None:
+                        self._unsupported(element, label, "篩選動作")
+                        return
+                    mark[use_key(use)] = self._value(sheet, use, member.get("member"))
+                if mark not in marks:
+                    marks.append(mark)
+        except LiteralError:
+            self._unsupported(element, label, "篩選動作的值")
+            return
+        self._add_action(element, point, StoryAction(action=action, marks=marks), label)
+
+    def _range(
+        self, element: etree._Element, sheet: SheetState, point: StoryPoint, label: str
+    ) -> None:
+        """範圍篩選（<filter class='quantitative' included-values=…><min>…<max>…）：維度（含連續的日期）
+        的範圍；量值（彙總）的篩選與檢視者的篩選相同，不能由故事點改變，列為不支援。"""
+        use = self._level(sheet, element.get("column", ""))
+        if use is None or use.agg is not None or use.table_calc is not None:
+            self._unsupported(element, label, "篩選")
+            return
+        included = element.get("included-values")
+        if included == "all":
+            point.filters.append(
+                StoryFilter(worksheet=sheet.id, field=use, mode="exclude", values=[])
+            )
+            return
+        low, high = child(element, "min"), child(element, "max")
+        if included not in INCLUDED_NULL or (low is None and high is None):
+            self._unsupported(element, label, f"範圍篩選（{included}）")
+            return
+        try:
+            start = self._value(sheet, use, text_of(low)) if low is not None else None
+            end = self._value(sheet, use, text_of(high)) if high is not None else None
+        except LiteralError:
+            self._unsupported(element, label, "範圍篩選的值")
+            return
         point.filters.append(
-            StoryFilter(worksheet=sheet.id, field=use, mode="include", values=values)
+            StoryFilter(
+                worksheet=sheet.id,
+                field=use,
+                mode="range",
+                min=start,
+                max=end,
+                include_null=INCLUDED_NULL[included],
+            )
         )
 
     def _add_action(
@@ -272,30 +466,79 @@ class StoryParser:
     def _selection(
         self, element: etree._Element, sheet: SheetState, point: StoryPoint, label: str
     ) -> None:
-        if any(local_name(e) == "tuple-selection" for e in element.iter()):
-            self._unsupported(element, label, "選取（值組合）")
-            return
+        """記下的選取：<tuple-selection>（標記的欄位與值）或 <node-selection>（標題的成員）；只選取座標軸
+        （沒有成員）時不選取標記。"""
         marks: list[Mark] = []
-        for node in descendants(element, "node-reference"):
-            refs = [text_of(f) for f in children(child(node, "fields"), "field")]
-            buckets = [text_of(b) for b in children(child(node, "multibucket"), "bucket")]
+        for node in children(element):
+            tag = local_name(node)
+            found = (
+                self._tuple_marks(node, sheet)
+                if tag == "tuple-selection"
+                else self._node_marks(node, sheet)
+                if tag == "node-selection"
+                else None
+            )
+            if found is None:
+                self._unsupported(element, label, "選取")
+                return
+            marks += [m for m in found if m not in marks]
+        if marks:
+            point.selections.append(StorySelection(worksheet=sheet.id, marks=marks))
+
+    def _tuple_marks(self, node: etree._Element, sheet: SheetState) -> list[Mark] | None:
+        """<tuple-selection><tuple-reference>：欄位（<columns>）與值（<tuple>）；標記以其中的維度表示
+        （量值與連續的欄位不用來找標記，與標記的註解相同）。"""
+        marks: list[Mark] = []
+        for reference in children(node, "tuple-reference"):
+            columns = children(child(child(reference, "tuple-descriptor"), "columns"), "field")
+            values = children(child(reference, "tuple"), "value")
+            if not columns or len(columns) != len(values):
+                return None
+            mark: Mark = {}
+            for column, value in zip(columns, values, strict=True):
+                use = self._level(sheet, text_of(column))
+                if use is None:
+                    return None
+                if (
+                    use.agg is not None
+                    or use.table_calc is not None
+                    or use.continuous
+                    or use.field in SPECIAL_FIELDS
+                ):
+                    continue
+                try:
+                    mark[use_key(use)] = self._value(sheet, use, text_of(value))
+                except LiteralError:
+                    return None
+            if not mark:
+                return None
+            if mark not in marks:
+                marks.append(mark)
+        return marks
+
+    def _node_marks(self, node: etree._Element, sheet: SheetState) -> list[Mark] | None:
+        """<node-selection>：標題的成員（<node-reference> 的欄位與值）。"""
+        marks: list[Mark] = []
+        for reference in descendants(node, "node-reference"):
+            refs = [text_of(f) for f in children(child(reference, "fields"), "field")]
+            buckets = [text_of(b) for b in children(child(reference, "multibucket"), "bucket")]
+            if not refs and child(reference, "axis") is not None:
+                self.ctx.ignore(reference, "故事點記下的座標軸選取（不選取標記）")
+                continue
             levels = [self._level(sheet, ref) for ref in refs]
             uses = [u for u in levels if u is not None]
             if not refs or len(refs) != len(buckets) or len(uses) != len(levels):
-                self._unsupported(element, label, "選取")
-                return
+                return None
             try:
                 mark: Mark = {
                     use_key(use): self._value(sheet, use, bucket)
                     for use, bucket in zip(uses, buckets, strict=True)
                 }
             except LiteralError:
-                self._unsupported(element, label, "選取的值")
-                return
+                return None
             if mark not in marks:
                 marks.append(mark)
-        if marks:
-            point.selections.append(StorySelection(worksheet=sheet.id, marks=marks))
+        return marks
 
 
 __all__ = ["StoryParser"]

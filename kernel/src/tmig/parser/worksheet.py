@@ -75,6 +75,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.ir.scope import calc_references
+from tmig.parser.background import disabled_images
 from tmig.parser.colors import (
     color_encodings,
     hex_color,
@@ -566,7 +567,7 @@ class SheetParser:
             # 預測沒有開啟（或不支援）時，選了預測結果的膠囊沒有值可以顯示
             self.ctx.flag(table, "預測結果（趨勢、精度等）用在沒有預測的工作表上，v0 不支援")
             return None
-        cluster = self._cluster_spec(card_uses)
+        cluster = self._cluster_spec(card_uses, disaggregated)
         with self._blend_scope():
             formats = self._formats(child(table, "style"), [*rows, *cols])
         sheet_formats = worksheet_formats(
@@ -632,6 +633,7 @@ class SheetParser:
             pages=page_use,
             page=page,
             map=options,
+            background_images_off=disabled_images(child(table, "style"), ds),
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -805,7 +807,16 @@ class SheetParser:
             )
             return None
         if element.get("auto-forecast-agg") == "false":
-            self.ctx.flag(element, "預測的「彙總依據」不是檢視的時間細度，v0 不支援")
+            # Tableau 2021.2 說明文件（forecast_options.htm、forecast_how_it_works.htm）：以指定的（較細的）
+            # 時間細度估計、再彙總回檢視的時間細度，忽略的最後幾期是估計的細度。估計與彙總回去的做法與「自動」
+            # 改用較細的細度時相同（tmig.planner.analytics 的 _refined_forecast），但 .twb 中指定的細度的寫法
+            # 沒有樣本，無法得知指定了哪一個細度
+            self.ctx.flag(
+                element,
+                f"工作表「{self.name}」的預測選項指定了「彙總依據」（不是「自動」）：Tableau 以指定的時間細度"
+                "估計、再彙總回檢視的時間細度；.twb 中指定的細度的寫法沒有樣本（無法得知指定了哪一個細度），"
+                "尚不支援",
+            )
             return None
         components = {
             "ets-none": "none",
@@ -842,8 +853,10 @@ class SheetParser:
             bands=element.get("show-prediction-bands") != "false",
         )
 
-    def _cluster_spec(self, card_uses: list[FieldUse]) -> ClusterSpec | None:
-        """叢集的設定（資料源中的 <analytic-model>）：分析的量值都要在檢視中。"""
+    def _cluster_spec(self, card_uses: list[FieldUse], disaggregated: bool) -> ClusterSpec | None:
+        """叢集的設定（資料源中的 <analytic-model>）：分析的量值都要在檢視中；維度是類別變數（以 ATTR 在
+        檢視的詳細程度彙總，可以不在檢視中）。取消彙總量值時（is-dissagregate）每一列資料是一個標記，分析的
+        是每一列的值（不彙總的量值，[none:Sales:qk]）。"""
         if self.cluster is None:
             return None
         assert self.ds is not None
@@ -856,8 +869,13 @@ class SheetParser:
         if spec is None or spec.get("class") != "cluster-specifications":
             self.ctx.flag(model, f"分析模型 {name} 不是叢集，v0 不支援")
             return None
-        if text_of(child(spec, "is-dissagregate")) == "true":
-            self.ctx.flag(spec, "取消彙總的叢集（每一列資料分叢集）v0 不支援")
+        if (text_of(child(spec, "is-dissagregate")) == "true") != disaggregated:
+            # 叢集建立時的「彙總量值」與檢視目前的不同：Tableau 怎麼重新分群沒有文件
+            state = "取消彙總" if disaggregated else "彙總"
+            self.ctx.flag(
+                spec,
+                f"工作表「{self.name}」的叢集建立時的「彙總量值」設定與檢視目前的（{state}）不同，尚不支援",
+            )
             return None
         if children(child(spec, "lod-fields"), "field") or children(
             child(spec, "filter-fields"), "field"
@@ -865,23 +883,33 @@ class SheetParser:
             self.ctx.flag(spec, "叢集的詳細程度或篩選欄位 v0 不支援")
             return None
         measures: list[FieldUse] = []
+        categories: list[FieldUse] = []
         for item in children(child(spec, "analysis-fields"), "field"):
             use = self._use(item.get("name"), spec, "叢集的分析欄位")
             if use is None:
                 return None
-            if not self._is_measure(use):
-                self.ctx.flag(spec, "叢集的分析欄位是維度（以對應分析分群）v0 不支援")
+            if use.field in SPECIAL_FIELDS or use.table_calc is not None:
+                self.ctx.flag(spec, f"叢集的分析欄位「{self._caption_of(use)}」尚不支援")
                 return None
+            numeric = self._is_measure(use) and use.agg != "attr"
+            if not numeric and disaggregated and use.agg is None and use.date is None:
+                # 取消彙總量值：不彙總的量值（每一列的值）
+                numeric = self._field(use.field).role == "measure"
+            if not numeric:
+                # 維度（類別變數）：Tableau 以 ATTR 在檢視的詳細程度彙總
+                categories.append(use.model_copy(update={"agg": None, "continuous": False}))
+                continue
             if use not in card_uses:
                 self.ctx.flag(spec, f"叢集的分析量值 {item.get('name')} 不在檢視中，v0 不支援")
                 return None
             measures.append(use)
         if not measures:
-            self.ctx.flag(spec, "叢集沒有分析的量值")
+            what = "只有維度（類別變數）" if categories else "沒有分析的量值"
+            self.ctx.flag(spec, f"工作表「{self.name}」的叢集{what}，尚不支援")
             return None
         text = text_of(child(spec, "number-of-desired-clusters"))
         count = int(text) if text.isdigit() and int(text) > 0 else None
-        return ClusterSpec(field=field_id, measures=measures, count=count)
+        return ClusterSpec(field=field_id, measures=measures, categories=categories, count=count)
 
     def _secondary_use(self, name: str, ref: str) -> FieldUse | str:
         """次要資料源（Data Blending）的欄位：彙總的量值（可以套用 Table Calculation）或以 ATTR 彙總的維度，
@@ -1189,6 +1217,21 @@ class SheetParser:
             return None
         return resolved
 
+    def _shown_use(self, ref: str | None, anchor: etree._Element, what: str) -> FieldUse | None:
+        """欄列架與標記卡上的欄位。集合直接放在架上（沒有 IN/OUT 的欄位實例）是 Tableau 的「顯示集合中的
+        成員」：列出集合所在維度的成員（並自動加上集合的篩選，見
+        https://help.tableau.com/v2021.2/pro/desktop/en-us/sortgroup_sets_create.htm ，2026-11-23 查閱），
+        不是 In／Out；尚不支援（當成 In／Out 會把成員合成一列，數字不同）。"""
+        assert self.ds is not None
+        key = instance_key(ref or "")
+        found = self.ds.by_name.get(key) if key not in self.instances else None
+        if found is not None and found.set is not None:
+            self.ctx.flag(
+                anchor, f"{what}：集合「{found.caption}」以成員顯示（顯示集合中的成員）v0 不支援"
+            )
+            return None
+        return self._use(ref, anchor, what)
+
     # ------------------------------------------------------------ 欄列架與標記
 
     def _shelf(self, element: etree._Element | None) -> list[FieldUse]:
@@ -1201,7 +1244,7 @@ class SheetParser:
         # 「+」連接同一架上的多個量值（各自一個軸，或以 y-index 組成雙軸）
         uses: list[FieldUse] = []
         for ref in refs:
-            use = self._use(ref, element, f"{local_name(element)} 架")
+            use = self._shown_use(ref, element, f"{local_name(element)} 架")
             if use is not None:
                 uses.append(use)
         return uses
@@ -1465,7 +1508,7 @@ class SheetParser:
             if tag not in ENCODINGS:
                 self.ctx.flag(enc, f"標記編碼 <{tag}> v0 不支援")
                 continue
-            use = self._use(enc.get("column"), enc, f"標記編碼 {tag}")
+            use = self._shown_use(enc.get("column"), enc, f"標記編碼 {tag}")
             if use is None:
                 continue
             if tag in singles:
@@ -2001,7 +2044,8 @@ class SheetParser:
 
         標題中的欄位值與 Tableau 相同，以整張工作表計算（量值是全部資料的彙總，維度只有一個值時顯示它、
         多個值時顯示 *；Table Calculation 取檢視中各標記的值，見 tmig.sqlgen.query 的 title_sql）；
-        Measure Names、Measure Values 與產生的地理欄位（不是資料源的欄位）的值尚不支援。"""
+        Measure Names、Measure Values 依它們涵蓋的量值（推定，見 title_sql）。產生的緯度經度不支援：
+        Tableau 在去掉所有維度的詳細程度上怎麼產生位置沒有文件。"""
         formatted = child(child(layout, "title"), "formatted-text")
         if formatted is None:
             return []
@@ -2009,11 +2053,15 @@ class SheetParser:
         runs: list[TextRun] = []
         for run in self._text_runs(formatted, what):
             use = run.use
-            if use is not None and use.field in SPECIAL_FIELDS:
+            if use is not None and use.field in GENERATED_FIELDS:
                 from tmig.render.names import SPECIAL_NAMES
 
                 name = SPECIAL_NAMES.get(use.field, use.field)
-                self.ctx.flag(formatted, f"{what}用到「{name}」的值，尚不支援")
+                self.ctx.flag(
+                    formatted,
+                    f"{what}用到「{name}」的值：Tableau 在標題（整張工作表）中怎麼產生位置沒有文件，"
+                    "尚不支援",
+                )
                 continue
             runs.append(run)
         return [] if runs == [TextRun(text=self.name)] else runs

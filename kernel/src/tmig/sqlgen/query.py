@@ -15,7 +15,9 @@
 
 LOD 的彙總語意：彙總的參數若只含 LOD（不含列層級欄位），在「檢視維度 ∪ LOD 維度」的組合上
 去重後再彙總（例如 AVG({INCLUDE [Order ID] : SUM([Profit])}) 是各訂單的平均）；
-若同時含列層級欄位，LOD 值併到每一列後逐列彙總。
+若同時含列層級欄位，LOD 值併到每一列後逐列彙總。LOD 的維度中的 FIXED（世代分析的
+{FIXED [First Order Month] : COUNTD([Customer ID])}）先算好併回每一列，用到它的 LOD 再依併好的值分組
+（見 WorksheetQuery._dimension_lod）。
 """
 
 from __future__ import annotations
@@ -42,9 +44,12 @@ from tmig.formula.functions import PRIMARY, lookup
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
+from tmig.formula.unparse import to_formula
 from tmig.ir.models import (
+    GENERATED_FIELDS,
     IR,
     MEASURE_NAMES,
+    MEASURE_VALUES,
     PERCENTILES,
     SPECIAL_FIELDS,
     Calc,
@@ -75,7 +80,7 @@ from tmig.ir.models import (
 from tmig.ir.scope import DatasourceScope, ForeignSource
 from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
 from tmig.natural import natural_sql
-from tmig.planner.analytics import Analytics, ClusterPlan, ForecastPlan
+from tmig.planner.analytics import Analytics, ClusterPlan, Finer, ForecastPlan
 from tmig.planner.identity import Identity
 from tmig.planner.state import (
     EffectiveState,
@@ -157,6 +162,8 @@ STAGES = {
 VALUE_COL = "__v"
 ROW_ID = "__row_id"
 """取消彙總量值時每一列資料的編號：併入彙總的層級，每一列各是一個標記（完全相同的列也不合併）。"""
+CLUSTER_PREFIX = "__cluster:"
+"""叢集的類別變數（不在檢視中的維度，ATTR）的輸出欄名前綴：只給叢集用，不畫出、不匯出。"""
 PUSHDOWN_BOUNDARY = 6
 """這一段以前可以交給來源資料庫；之後一律在 DuckDB 執行。"""
 
@@ -195,6 +202,8 @@ class LodSpec:
     """外層的 LOD（巢狀時）：內層的 INCLUDE／EXCLUDE 相對於外層的維度，不是檢視的維度。"""
     inner: dict[Lod, LodSpec] = field(default_factory=dict)
     """運算式中的內層 LOD（同一個 LOD 用在不同的外層時各算一次）。"""
+    deps: list[LodSpec] = field(default_factory=list)
+    """維度中的 LOD（只能是 FIXED，見 WorksheetQuery._lod_spec）：要先併回每一列，這個 LOD 才能依它分組。"""
 
     def in_fixed(self) -> bool:
         """自己或外層有 FIXED：與 FIXED 一起在維度篩選前計算。"""
@@ -891,14 +900,37 @@ class WorksheetQuery:
                 self.lods[lod] = self._lod_spec(lod, None)
 
     def _lod_spec(self, lod: Lod, outer: LodSpec | None) -> LodSpec:
-        for dim in lod.dims:
-            if self.lods_in(dim):
-                raise QueryError("LOD 的維度本身含 LOD，尚不支援", unsupported=True)
-        spec = LodSpec(lod, f"__lod_{self._lod_count}", outer)
+        deps = [self._dimension_lod(found) for dim in lod.dims for found in self.lods_in(dim)]
+        spec = LodSpec(
+            lod, f"__lod_{self._lod_count}", outer, deps=list({d.col: d for d in deps}.values())
+        )
         self._lod_count += 1
         for inner in self.lods_in(lod.expr):
             if inner not in spec.inner:
                 spec.inner[inner] = self._lod_spec(inner, spec)
+        return spec
+
+    def _dimension_lod(self, lod: Lod) -> LodSpec:
+        """LOD 的維度中的 LOD（世代分析：{FIXED [First Order Month] : COUNTD([Customer ID])}，其中
+        [First Order Month] 是 {FIXED [Customer ID] : MIN(DATETRUNC('month', [Order Date]))}）。
+
+        Tableau 2021.2 說明文件：LOD 的維度可以是「任何結果是維度的運算式」；FIXED 的結果可以是維度，
+        INCLUDE／EXCLUDE 的結果一律是量值。FIXED 與檢視、外層的維度都無關（以內容篩選後的資料計算），所以
+        當作一個獨立的 LOD：在整個查詢中先算好併回每一列，用到它的 LOD 再依併好的值分組（見 _attach）。
+        INCLUDE／EXCLUDE 當維度時相對於哪些維度沒有文件，列為不支援。"""
+        if lod.kind != "fixed":
+            kind = "INCLUDE" if lod.kind == "include" else "EXCLUDE"
+            raise QueryError(
+                f"LOD 的維度中有 {kind} 的 LOD 運算式「{self.readable(to_formula(lod))}」"
+                "（Tableau 的 INCLUDE／EXCLUDE 的結果是量值，不是維度），尚不支援",
+                unsupported=True,
+            )
+        spec = self.lods.get(lod)
+        if spec is None:
+            if self.blend is not None:
+                self.blend.check_lod(lod)
+            spec = self._lod_spec(lod, None)
+            self.lods[lod] = spec
         return spec
 
     def _all_lods(self) -> list[LodSpec]:
@@ -973,6 +1005,9 @@ class WorksheetQuery:
                     raise QueryError("表計算的自訂排序順序要以彙總的量值排序")
                 key = use_key(tc.sort.by)
                 measures.append(self._measure(tc.sort.by, key, output=False, index=len(measures)))
+        # 叢集的類別變數（不在檢視中的維度）：ATTR 在檢視的詳細程度，另外輸出（見 analytics_plan）
+        categories = self._cluster_categories(dims, len(measures))
+        measures += categories
         self._measure_cols = {m.key: m for m in measures}
         sorts = {s.field: s for s in ws.sorts}
         for m in measures:
@@ -1139,6 +1174,10 @@ class WorksheetQuery:
             if m.output:
                 outputs.append(f"{ident(m.col)} AS {ident(m.key)}")
                 columns.append(OutputColumn(m.key, "measure", self.datatype(m.node), m.use))
+        for m in categories:
+            # 不畫出、不匯出（「__」開頭、role 為 sort），只給叢集用
+            outputs.append(f"{ident(m.col)} AS {ident(m.key)}")
+            columns.append(OutputColumn(m.key, "sort", self.datatype(m.node), m.use))
         for d in dims:
             if d.key in sort_cols:
                 name = f"__sort({d.key})"
@@ -1629,6 +1668,29 @@ class WorksheetQuery:
             is_tc=is_tc,
         )
 
+    def _cluster_categories(self, dims: list[Dim], index: int) -> list[Measure]:
+        """叢集的類別變數中不在檢視中的維度：與 Tableau 相同以 ATTR 在檢視的詳細程度彙總（各標記只有一個值
+        時是那個值，否則是 *，這裡是 Null；見 tmig.planner.analytics）。在檢視中的維度直接用它的欄。"""
+        cluster = self.worksheet.cluster
+        if cluster is None:
+            return []
+        shown = {d.key for d in dims}
+        found: list[Measure] = []
+        for use in cluster.categories:
+            if use_key(use) in shown:
+                continue
+            attr = use.model_copy(update={"agg": "attr"})
+            key = f"{CLUSTER_PREFIX}{use_key(attr)}"
+            if any(m.key == key for m in found):
+                continue
+            node = Call(0, "ATTR", (self.dim_node(use),))
+            found.append(
+                Measure(
+                    key, attr, node, None, output=False, col=f"__m{index + len(found)}", is_tc=False
+                )
+            )
+        return found
+
     def _secondary_calc(self, tc: TableCalc, primary: Node) -> Node:
         """次要計算：主要計算的結果（先依它自己的計算方向算成欄位：__PRIMARY__）再做一次表計算。
         合計百分比是「值 ÷ 範圍內各值的總和」（WINDOW_SUM），其餘與快速表計算相同的寫法。"""
@@ -2089,11 +2151,11 @@ class WorksheetQuery:
     def _attach(
         self, specs: list[LodSpec], source: str, name: str, stage: int, view_dims: list[Dim] | None
     ) -> str:
-        """計算一組 LOD，併回每一列。巢狀時分層：內層先併回，外層再以併好的資料計算。"""
+        """計算一組 LOD，併回每一列。巢狀時分層：內層與維度中的 LOD 先併回，外層再以併好的資料計算。"""
         layers: list[list[LodSpec]] = []
         depth: dict[str, int] = {}
-        for spec in specs:  # 內層在外層之前
-            inner = [depth[s.col] for s in spec.inner.values() if s.col in depth]
+        for spec in specs:  # 內層與維度中的 LOD 在前
+            inner = [depth[s.col] for s in [*spec.inner.values(), *spec.deps] if s.col in depth]
             depth[spec.col] = max(inner, default=-1) + 1
             if depth[spec.col] == len(layers):
                 layers.append([])
@@ -3412,15 +3474,28 @@ def worksheet_sql(
     """detail：總計與小計的查詢（totals_sql）中原本的工作表（Data Blending 的連結依原本的檢視）。"""
     ws = _find_worksheet(ir, worksheet)
     query = WorksheetQuery(ir, worksheet, state, user, detail if ws.blends else None).build()
-    query.analytics = analytics_plan(ir, ws, query.columns)
+    query.analytics = analytics_plan(ir, ws, query.columns, state, user)
     return query
 
 
 TIME_UNITS = ("year", "quarter", "month", "week", "day", "hour")
 
 
-def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analytics | None:
-    """叢集與預測：查詢結果中的欄位（叢集欄位、分析的量值、時間維度、預測的量值與其他維度）。"""
+def _hidden_category(columns: list[OutputColumn], use: FieldUse) -> str | None:
+    """叢集的類別變數不在檢視中時另外輸出的欄（ATTR，見 WorksheetQuery._cluster_categories）。"""
+    key = f"{CLUSTER_PREFIX}{use_key(use.model_copy(update={'agg': 'attr'}))}"
+    return key if any(c.key == key for c in columns) else None
+
+
+def analytics_plan(
+    ir: IR,
+    ws: Worksheet,
+    columns: list[OutputColumn],
+    state: QueryState | None = None,
+    user: Identity | None = None,
+) -> Analytics | None:
+    """叢集與預測：查詢結果中的欄位（叢集欄位、分析的量值、時間維度、預測的量值與其他維度）。
+    state、user：預測以較細的時間估計時另外的查詢用（與工作表相同的篩選狀態與身分）。"""
     if ws.cluster is None and ws.forecast is None:
         return None
     shown = [c for c in columns if c.use is not None and c.role != "sort"]
@@ -3447,12 +3522,29 @@ def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analyt
             ),
             None,
         )
-        measures = [column_of(m, "measure") for m in ws.cluster.measures]
+        # 取消彙總量值時，不彙總的量值在查詢結果中是維度的欄（每一列一個標記）
+        measures = [
+            column_of(m, "measure") or (column_of(m, "dimension") if ws.disaggregated else None)
+            for m in ws.cluster.measures
+        ]
+        categories = [
+            column_of(c, "dimension") or _hidden_category(columns, c) for c in ws.cluster.categories
+        ]
         if found is not None:
-            if any(m is None for m in measures):
-                raise QueryError("叢集的分析量值不在查詢結果中", unsupported=True)
+            if any(m is None for m in [*measures, *categories]):
+                raise QueryError("叢集的分析欄位不在查詢結果中", unsupported=True)
+            fields = {f.id: f for d in ir.datasources for f in d.fields}
             plan.cluster = ClusterPlan(
-                found, [m for m in measures if m is not None], ws.cluster.count
+                found,
+                [m for m in measures if m is not None],
+                ws.cluster.count,
+                categories=[c for c in categories if c is not None],
+                # 與 Tableau 的叢集對話框相同稱為 ATTR(Category)
+                captions={
+                    key: pill_name(use.model_copy(update={"agg": "attr"}), fields, ws.table_calcs)
+                    for use, key in zip(ws.cluster.categories, categories, strict=True)
+                    if key is not None
+                },
             )
     forecast = ws.forecast
     if forecast is not None:
@@ -3519,7 +3611,92 @@ def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analyt
                 if key is not None
             },
         )
+        series_columns = [c for c in dims if c.key in series]
+        _plan_finer(ir, ws, plan.forecast, time, wanted, series_columns, state, user)
     return plan
+
+
+FINER_UNITS = {"year": "quarter", "quarter": "month", "week": "day"}
+"""預測選「自動」時 Tableau 改用的較細細度中平台照做的（見 tmig.planner.analytics）。"""
+REFINABLE = frozenset({"year", "year_number", "quarter", "week", "day", "hour"})
+"""Tableau 會改以較細的時間估計的細度（說明文件的 Getting More Data；月沒有）。"""
+
+
+def _plan_finer(
+    ir: IR,
+    ws: Worksheet,
+    plan: ForecastPlan,
+    time: OutputColumn,
+    wanted: list[FieldUse],
+    series: list[OutputColumn],
+    state: QueryState | None,
+    user: Identity | None,
+) -> None:
+    """預測選「自動」時以較細的時間估計（見 tmig.planner.analytics）：SUM、COUNT 的量值，較細的查詢（維度、
+    篩選與工作表相同，時間換成較細的細度），與需要時不能照做的原因。是否真的需要依查詢結果的期數決定。"""
+    plan.worksheet = ws.name
+    plan.additive = [
+        key
+        for use, key in zip(wanted, plan.measures, strict=True)
+        if use.agg in ("sum", "count") and use.table_calc is None and use.forecast is None
+    ]
+    if not plan.additive or plan.unit not in REFINABLE:
+        return
+    reasons: list[str] = []
+    if len(plan.additive) != len(plan.measures):
+        reasons.append("有的量值不是 SUM 或 COUNT（同一張工作表混用時 Tableau 怎麼估計沒有寫）")
+    if plan.results:
+        reasons.append("用到預測結果（趨勢、精度等）")
+    if ws.blends:
+        reasons.append("用到 Data Blending")
+    if ws.pages is not None:
+        reasons.append("用到頁面架")
+    if any(f.stage in ("measure", "table_calc") for f in ws.filters):
+        reasons.append("有量值或 Table Calculation 的篩選（在較細的層級篩選的結果可能不同）")
+    classifier = WorksheetQuery(ir, ws.id, state, user)
+    if any(
+        lod.kind != "fixed"
+        for use in wanted
+        for lod in classifier.lods_in(classifier.measure_node(use))
+    ):
+        reasons.append("量值中有 INCLUDE／EXCLUDE LOD（相對於檢視的維度）")
+    date = time.use.date if time.use is not None else None
+    if plan.unit in FINER_UNITS and not reasons and time.use is not None and date is not None:
+        finer = FINER_UNITS[plan.unit]
+        fine_use = time.use.model_copy(update={"date": date.model_copy(update={"unit": finer})})
+        marks = Marks(
+            type=ws.marks.type, detail=[c.use for c in series if c.use is not None], label=wanted
+        )
+        fine_ws = ws.model_copy(
+            update={
+                "rows": [fine_use],
+                "columns": [],
+                "marks": marks,
+                "panes": [],
+                "measure_values": [],
+                "measure_aliases": [],
+                "sorts": [],
+                "reference_lines": [],
+                "totals": [],
+                "subtotals": [],
+                "visual_totals": [],
+                "percentages": None,
+                "title": [],
+                "forecast": None,
+                "cluster": None,
+            }
+        )
+        sub = ir.model_copy(
+            update={"worksheets": [fine_ws if w.id == ws.id else w for w in ir.worksheets]}
+        )
+        try:
+            query = worksheet_sql(sub, ws.id, state, user)
+        except QueryError as exc:
+            reasons.append(f"較細的查詢無法產生（{exc}）")
+        else:
+            plan.finer = Finer(finer, use_key(fine_use), query)
+    if reasons:
+        plan.blocker = "、".join(reasons)
 
 
 def pane_sql(
@@ -3996,6 +4173,12 @@ class TitleQueries:
     table_calcs: list[str] = field(default_factory=list)
     """標題中的 Table Calculation（欄位鍵）：取工作表查詢結果中各標記的值（依檢視的計算方向計算）；
     各標記的值都相同時顯示它，不同時 Tableau 顯示範圍（寫法未確認，見 tmig.render.vegalite.title_values）。"""
+    measure_names: list[FieldUse] | None = None
+    """標題中的 Measure Names 涵蓋的量值（Measure Values 卡上的，沒有時是欄列架上的量值）：與維度相同，
+    只有一個時顯示它的名稱、多個時顯示 *（推定）。標題中沒有 Measure Names 時為 None。"""
+    measure_values: list[FieldUse] | None = None
+    """標題中的 Measure Values 涵蓋的量值（Measure Values 卡上的）：只有一個時與其他量值相同，顯示它在
+    全部資料的彙總（已併入 measures 的查詢）；多個時顯示 *（推定）。標題中沒有時為 None。"""
 
 
 def title_sql(
@@ -4015,6 +4198,10 @@ def title_sql(
     與量值篩選、Table Calculation 篩選一起使用時只計算通過篩選（顯示）的標記：marks 為工作表的查詢結果，
     量值與不在檢視中的維度限定在這些標記的維度組合（與總計的做法相同，見 totals_sql；推定）。marks 為
     None（例如盤點只產生 SQL、不執行）時不限定。
+
+    Measure Names、Measure Values（推定：Tableau 的說明文件沒有寫它們在標題中的值）：Measure Names 與維度
+    相同，涵蓋的量值只有一個時是它的名稱、多個時是 *；Measure Values 只有一個量值時是那個量值（全部資料的
+    彙總），多個時是 *。產生的緯度經度不支援（解析時已列為不支援）。
     """
     ws = _find_worksheet(ir, worksheet)
     uses: list[FieldUse] = []
@@ -4023,12 +4210,29 @@ def title_sql(
             uses.append(run.use)
     if not uses:
         return None
-    special = [u for u in uses if u.field in SPECIAL_FIELDS]
-    if special:
-        raise QueryError(
-            f"標題中「{pill_name(special[0], {}, ws.table_calcs)}」的值尚不支援", unsupported=True
-        )
     classifier = WorksheetQuery(ir, worksheet, state, user)
+    generated = [u for u in uses if u.field in GENERATED_FIELDS]
+    if generated:
+        raise QueryError(
+            f"標題中「{pill_name(generated[0], {}, ws.table_calcs)}」的值：Tableau 在標題（整張工作表）"
+            "中怎麼產生位置沒有文件，尚不支援",
+            unsupported=True,
+        )
+    names: list[FieldUse] | None = None
+    values: list[FieldUse] | None = None
+    if any(u.field == MEASURE_NAMES for u in uses):
+        names = list(ws.measure_values) or [
+            u
+            for u in [*ws.rows, *ws.columns]
+            if u.field not in SPECIAL_FIELDS and classifier.is_measure(u)
+        ]
+    if any(u.field == MEASURE_VALUES for u in uses):
+        values = list(ws.measure_values)
+        if len(values) == 1 and values[0] not in uses:
+            uses.append(values[0])
+    uses = [u for u in uses if u.field not in SPECIAL_FIELDS]
+    if not uses:
+        return TitleQueries(None, {}, measure_names=names, measure_values=values)
     calcs = [u for u in uses if u.table_calc is not None or classifier.level(u.field) == "tc"]
     shown = {c.key for c in main.columns if c.role == "measure"}
     missing = [u for u in calcs if use_key(u) not in shown]
@@ -4052,7 +4256,7 @@ def title_sql(
             )
         if marks is not None and not marks.rows:
             # 沒有標記通過篩選：標題中沒有值
-            return TitleQueries(None, {}, from_main, table_calcs)
+            return TitleQueries(None, {}, from_main, table_calcs, names, values)
         # 量值篩選改以通過篩選的標記的維度組合限定（篩選本身在去掉維度的層級沒有意義）
         filters = [f for f in filters if f.id not in late] + [_marks_filter(ws, main, marks)]
     empty = Marks(type=ws.marks.type)
@@ -4086,7 +4290,7 @@ def title_sql(
     dimension_queries = {
         use_key(u): query_for(base.model_copy(update={"rows": [u]})) for u in dimensions
     }
-    return TitleQueries(measures_query, dimension_queries, from_main, table_calcs)
+    return TitleQueries(measures_query, dimension_queries, from_main, table_calcs, names, values)
 
 
 __all__ = [

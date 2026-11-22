@@ -356,8 +356,21 @@ def forecast(found: Fit, horizon: int, confidence: float = 0.95) -> ForecastResu
             high.append(float(values[h - 1] + width))
         return ForecastResult(values, low, high, found.model)
     # 乘法的模型：模擬（固定的亂數種子，結果每次相同）
+    paths = simulate(found, horizon)
+    tail = (1 - confidence) / 2
+    low = [float(v) for v in np.quantile(paths, tail, axis=0)]
+    high = [float(v) for v in np.quantile(paths, 1 - tail, axis=0)]
+    return ForecastResult(values, low, high, found.model)
+
+
+def simulate(found: Fit, horizon: int, draws: int = 2000) -> np.ndarray:
+    """模擬之後 horizon 期的值（draws 條路徑 × horizon 期）：每期的誤差取常態分布（標準差為估計的
+    一步預測誤差），依模型更新水準、趨勢與季節。固定的亂數種子，結果每次相同。乘法的模型與彙總回檢視的
+    預測（見 tmig.planner.analytics）以它計算預測區間。"""
+    sigma = math.sqrt(found.sse / max(found.n, 1))
+    alpha, beta, gamma = found.params
     rng = np.random.default_rng(20211)
-    paths = np.zeros((2000, horizon))
+    paths = np.zeros((draws, horizon))
     for p in range(paths.shape[0]):
         level, trend, seasons = found.level, found.trend, list(found.seasons)
         for h in range(horizon):
@@ -387,10 +400,7 @@ def forecast(found: Fit, horizon: int, confidence: float = 0.95) -> ForecastResu
             elif found.model.season == "additive":
                 seasons[t % found.period] = gamma * (value - base) + (1 - gamma) * season
             level = new_level
-    tail = (1 - confidence) / 2
-    low = [float(v) for v in np.quantile(paths, tail, axis=0)]
-    high = [float(v) for v in np.quantile(paths, 1 - tail, axis=0)]
-    return ForecastResult(values, low, high, found.model)
+    return paths
 
 
 # ---------------------------------------------------------------- 預測結果與描述預測的摘要

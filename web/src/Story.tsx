@@ -3,17 +3,25 @@ import { useEffect, useMemo, useState } from "react";
 import { DashboardView } from "./Dashboard";
 import { fieldKey, keepMarks, pendingTitle, setDrill, stateFor, tooltipStateFor, type ViewState } from "./state";
 import type { CaseInfo, Dashboard, FilterValue, IR, Story, StoryPoint, Zone } from "./types";
+import { animationFor } from "./markAnimation";
 import { WorksheetView } from "./WorksheetView";
 
-/** 故事點的狀態：記下的篩選取代同一欄位的篩選（套在篩選組合之上），篩選動作與選取以記下的標記為準。 */
-export function pointState(point: StoryPoint, base: ViewState): ViewState {
+/**
+ * 故事點的狀態：記下的篩選取代同一欄位的篩選（套在篩選組合之上），篩選動作與選取以記下的標記為準，頁面架
+ * 目前的頁取代存檔時的頁；記下了排序、欄列架、註解、座標軸等的工作表，查詢時帶著故事點（story：Story 的 id）。
+ */
+export function pointState(point: StoryPoint, base: ViewState, story?: string): ViewState {
   const sheetFilters: Record<string, Record<string, FilterValue>> = {};
   for (const [sheet, filters] of Object.entries(base.sheetFilters)) sheetFilters[sheet] = { ...filters };
   for (const f of point.filters) {
     // 範圍（滑桿、日期範圍）以最小值與最大值記下，其餘是保留或排除的值
-    const value: FilterValue = f.mode === "range" ? { min: f.min ?? null, max: f.max ?? null } : { mode: f.mode, values: f.values };
+    const value: FilterValue =
+      f.mode === "range"
+        ? { min: f.min ?? null, max: f.max ?? null, ...(f.include_null != null ? { include_null: f.include_null } : {}) }
+        : { mode: f.mode, values: f.values };
     sheetFilters[f.worksheet] = { ...(sheetFilters[f.worksheet] ?? {}), [fieldKey(f.field)]: value };
   }
+  const sheets = (point.sheets ?? []).map((s) => s.worksheet);
   return {
     ...base,
     sheetFilters,
@@ -21,6 +29,8 @@ export function pointState(point: StoryPoint, base: ViewState): ViewState {
     parameters: { ...base.parameters, ...(point.parameters ?? {}) },
     actions: Object.fromEntries(point.actions.map((a) => [a.action, a.marks])),
     selections: Object.fromEntries(point.selections.map((s) => [s.worksheet, s.marks])),
+    ...(point.pages && Object.keys(point.pages).length > 0 ? { pages: { ...(base.pages ?? {}), ...point.pages } } : {}),
+    ...(story && sheets.length > 0 ? { story: { story, point: point.id, sheets } } : {}),
   };
 }
 
@@ -41,12 +51,13 @@ export function pointDashboard(point: StoryPoint, dashboard: Dashboard): Dashboa
 
 /**
  * 把目前的檢視狀態記成故事點的狀態（Tableau 故事點的「更新」）：類別篩選的選取、範圍篩選（滑桿、日期範圍）的
- * 起訖、參數值、篩選動作的選取與醒目顯示的標記。記不下來的篩選回傳在 skipped 中（欄位鍵）。
+ * 起訖、參數值、篩選動作的選取、醒目顯示的標記與頁面架目前的頁。記不下來的篩選回傳在 skipped 中（欄位鍵）。
+ * 從 Tableau 開啟的故事點記下的排序、欄列架、註解等（StoryPoint.sheets）不變。
  */
 export function capturePoint(
   ir: IR,
   view: ViewState,
-): { state: Pick<StoryPoint, "filters" | "actions" | "selections" | "parameters">; skipped: string[] } {
+): { state: Pick<StoryPoint, "filters" | "actions" | "selections" | "parameters" | "pages">; skipped: string[] } {
   const filters: StoryPoint["filters"] = [];
   const skipped: string[] = [];
   for (const [sheetId, values] of Object.entries(view.sheetFilters)) {
@@ -69,7 +80,10 @@ export function capturePoint(
   const selections = Object.entries(view.selections)
     .filter(([, marks]) => marks.length > 0)
     .map(([worksheet, marks]) => ({ worksheet, marks }));
-  return { state: { filters, actions, selections, parameters: { ...view.parameters } }, skipped };
+  const pages = Object.fromEntries(
+    Object.entries(view.pages ?? {}).filter(([sheet]) => ir.worksheets.some((w) => w.id === sheet && w.pages)),
+  );
+  return { state: { filters, actions, selections, parameters: { ...view.parameters }, pages }, skipped };
 }
 
 function initialIndex(story: Story): number {
@@ -98,7 +112,7 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView
   const [index, setIndex] = useState(() => initialIndex(story));
   useEffect(() => setIndex(initialIndex(story)), [story]);
   const point = story.points[Math.min(index, story.points.length - 1)];
-  const captured = useMemo(() => pointState(point, base), [point, base]);
+  const captured = useMemo(() => pointState(point, base, story.id), [point, base, story.id]);
   // 在故事點上的操作：只對同一個故事點（與同一個篩選組合）有效，切換後立刻回到記下的狀態
   const [changed, setChanged] = useState<{ point: StoryPoint; base: ViewState; view: ViewState } | null>(null);
   const view = changed && changed.point === point && changed.base === base ? changed.view : captured;
@@ -182,6 +196,7 @@ export function StoryView({ workbook, ir, story, base, cases, onNavigate, onView
             <WorksheetView
               workbook={workbook}
               worksheet={worksheet.id}
+              animation={animationFor(ir, worksheet.id)}
               name={pendingTitle(ir, worksheet.id)}
               state={stateFor(ir, worksheet.id, view)}
               selected={view.selections[worksheet.id]}

@@ -7,26 +7,43 @@
 
 | 功能 | 現況 | 備註 |
 | --- | --- | --- |
-| 動畫 | 沒有 | 標記的轉場（Tableau 2020.1 起） |
+| 動畫：解析 .twb 的設定 | 部分 | 檢視器與編輯器的動畫、「格式＞動畫…」、IR 的欄位（`Workbook.animation`、`Worksheet.animation`）都有了（2026-11-23）；解析器還不讀 .twb 的設定，從 Tableau 開啟的報表都是關。寫法與規則見表格下面 |
 | 活頁簿佈景主題（Default、Smooth 等） | 沒有 | 需要實際的 .twb 樣本；目前可以把一張工作表的格式套到其他工作表 |
-| 自訂地理編碼、背景圖片 | 沒有 | |
+| 自訂地理編碼 | 沒有 | |
 | 擴充功能（Extension）物件 | 沒有 | 開啟 Tableau 檔時列入 unsupported |
 | 預存程序當作資料表 | 沒有 | 開啟 Tableau 檔時列入 unsupported；先看盤點中有沒有報表用到 |
 | Explain Data（資料解釋） | 沒有 | |
 | Ask Data、指標（Metrics）、集合（Collections） | 沒有 | 伺服器上的功能 |
 | 書籤（.tbm） | 部分 | 不解析 .tbm；以「匯入工作表…」從來源報表匯入，效果相同 |
-| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：WMS／Mapbox 底圖、萃取的抽樣（要在來源資料庫取樣，等有引擎的環境再做）、依欄位的值排序時圖例的順序、形狀圖例的排序 |
+| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：WMS／Mapbox 底圖、萃取的抽樣（要在來源資料庫取樣，等有引擎的環境再做）、叢集對話框加入維度（類別變數；IR 與編輯 API 已支援） |
+
+**動畫的 .twb 寫法與解析規則**（寫法取自 GitHub 上的公開報表，2026-11-23：2020.3、2021.3、2023.2、2024.1、2025.2 存的
+檔案）：
+
+- 活頁簿預設在 `/workbook/style` 下、各工作表在 `/workbook/worksheets/worksheet/table/style` 下的
+  `<style-rule element='animation'>`（常寫成 `_.fcp.MarkAnimation.true...style-rule`），裡面的 `<format>`：
+  `animation-on`（`ao-on`／`ao-off`）、`animation-duration`（秒，看過 0.001、0.2、0.3、0.5、1、10）、`animation-style`
+  （`as-synced`＝同時、`as-phased`＝依序）。工作表上沒有寫的項目沿用活頁簿預設（`Animation` 的 None）
+- 活頁簿預設的開關：有生效的 `animation-on` 就照它；沒有時，`document-format-change-manifest` 有
+  `AnimationOnByDefault`（不帶前置或 `_.fcp.AnimationOnByDefault.true...`）的檔案是開（2025.2 的公開報表只寫了
+  這個旗標、沒有 style-rule），沒有這個旗標的舊檔案是關。`_.fcp.AnimationOnByDefault.false...format attr='animation-on'
+  value='ao-on'` 是給舊版讀的替代內容（與開的結果相同），照解析器的慣例略過
+- 注意：示範報表（`fixtures/superstore_demo`，`scripts/build_demo_fixture.py` 產生）的 manifest 有
+  `<AnimationOnByDefault />`、沒有 style-rule——照上面的規則是開，解析之後所有用示範報表的端到端測試都會播放動畫
+  （量位置的測試會不穩定）。補解析時先讓示範報表寫上 `animation-on='ao-off'`（或在測試中關掉），並重新產生 golden IR
 
 ## 二、開啟 Tableau 檔時還不支援的寫法
 
 解析時列入 `unsupported`，報表進人工佇列（完整的清單在 README「已知限制與待驗證」最後的「尚未支援」）：
 
 - `SCRIPT_*`、`MODEL_*`；`RAWSQL_*` 在萃取與檔案上（與 `RAWSQL_SPATIAL`）
-- LOD 的維度本身含 LOD；Relationship 模型中含 LOD、又要以半連接套用的篩選
+- LOD 的維度中的 INCLUDE／EXCLUDE；Relationship 模型中含 LOD、又要以半連接套用的篩選
 - Data Blending：同一個彙總混用兩個資料源的欄位、同一個 LOD 混用兩個資料源的欄位、次要資料源的內容篩選
-- 預測指定的彙總依據（`auto-forecast-agg='false'`）、取消彙總的叢集、標題中的 Measure Names／Values
-- 故事點記下的其他狀態（排序、欄列架的變更、註解）
-- 合併集合的 XML 寫法（公開報表中還沒看到）、尚未併入 .tdsx 的 Published Data Source、舊版的 .tde 萃取
+- 預測指定的彙總依據（`auto-forecast-agg='false'`：.twb 中指定細度的寫法沒有樣本）、預測改用較細細度時文件沒有寫明的
+  情況、只以維度分群的叢集、標題中產生的緯度經度
+- 故事點在欄列架上新增的欄位、量值（彙總）的範圍篩選與 Top N 篩選的變更、篩選的刪除
+- 顯示集合中的成員（集合直接放在架上）、不同維度的集合組合成的合併集合；地圖、分格與多個座標軸的檢視上的背景圖片
+- 尚未併入 .tdsx 的 Published Data Source、舊版的 .tde 萃取
 - 要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線（要改用列層級權限重寫）
 
 另有一類**不會**列入 `unsupported`：編輯器裡可以設定，但 .twb 中的寫法沒有樣本、解析器不認得，從 Tableau 開啟的
@@ -95,6 +112,11 @@
    跨資料表計算的細節（路徑上的資料表、Null 的標記）、次要資料源的條件與 Top N 篩選，都要拿真實的報表或 Tableau 的
    數字對過；`RAWSQL_*` 的 PostgreSQL、MySQL 測試還沒在有引擎的環境跑過；列印的分頁只看過 Chromium 產生的 PDF，
    沒有在桌面版視窗的列印對話框與實際的印表機上試過
+9. **補 Tableau 缺口第二批（2026-11-23）推定與待比對的部分**：預測以較細的細度估計再加總回來（年→季、季→月、週→日）
+   還沒有與 Tableau 的數字比對，預測區間的模擬是推定的；以維度（類別變數）分群的換算（多重對應分析）與 Tableau 比對；
+   LOD 的維度含 FIXED 的世代分析以真實報表比對（PostgreSQL、MySQL 的測試還沒在有引擎的環境跑過）；故事點 style 差異的
+   合併、edited 註解、clear-shelf-sort 只清巢狀排序；背景圖片的預設選項、淡化、鎖定比例、顛倒與條件的成立方式；
+   都要拿 Tableau 的畫面或數字對過
 
 ## 使用體驗稽核（2026-11-21）
 
@@ -339,9 +361,6 @@
   - 查詢錯誤裡仍照原樣的：資料庫執行時的錯誤訊息（SQL 的內部欄名，500 的說明）、「內部錯誤：…」、篩選狀態的錯誤
     （「無法辨識的欄位鍵…」「參數「…」不存在」用 id）、關聯計算的公式原文、IR 驗證的錯誤（「工作表上的篩選
     flt_x 不能屬於 datasource 階段」）、找不到工作表／欄位時的 id、資料源摘要裡篩選說明的參數 id 與公式原文
-  - 在區塊內捲動的工作表（標準大小放不下、列高保持的都一樣）：圖片、PowerPoint 與訂閱的圖片只輸出區塊裡最上面
-    看得到的那一段（不管捲到哪裡），顯示捲軸的瀏覽器裡捲軸也畫進圖片。列印與 PDF 已改成整張分頁印（2026-11-22，
-    Tableau Desktop 的列印把比一頁大的檢視分成多頁：https://help.tableau.com/v2021.2/pro/desktop/en-us/printing.htm ）
   - 右下角的訊息（例如匯出圖片之後的「已匯出：….png」）還在畫面上時列印，訊息也印進去（列印樣式沒有藏 `.toast`；
     單張工作表分頁印之後不會，dashboard 與 Story 仍會）
 - 補列印分頁、在檢視上拖曳標題排序與「N 個 Null」指示器的「篩選資料」（2026-11-22）時看到、沒有處理的：
@@ -349,16 +368,18 @@
     堆疊跟著排序（`tmig.render.vegalite` 的 `legend_in_sort_order`）。還沒有的：依欄位的值排序時圖例的順序、形狀
     圖例的順序；堆疊的方向沿用沒有排序時的（圖例的第一項在基線那一端），Tableau 說明中「圖例最下面的是最下面的
     標記」指位置還是前後沒有確認
-  - 分頁印時，多層列標題的外層成員只寫在各組的第一列：某一頁從組的中間開始時那一頁沒有外層的名稱
-  - 頁面架的「列印所有頁面」沒有；dashboard 裡在區塊內捲動的工作表列印時仍只印看得到的那一段
-  - 分格（facet）的標題與 Measure Names 不能在檢視上拖曳排序；欄、列標題的右鍵「清除排序」沒有（工具列有）
   - 分頁只以 Chromium 產生的 PDF 驗證；桌面版視窗（WebView2）的列印對話框、實際的印表機都沒有實測
-  - 地圖「只保留」之後重畫時要等更細的底圖下載，這段時間裡框選什麼都選不到（畫面上還是舊的地圖，也沒有「正在
-    重畫」的提示）。是 `test_maps_in_editor` 在電腦忙時失敗一次查出來的；測試已改成等新的地圖畫好，產品的行為沒有改
+- 補拖曳排序（續）、列印與匯出（續）、檢視更新中與動畫（2026-11-23）時看到、沒有處理的：
+  - 分頁印時，多層**欄**標題的外層成員在某一頁從組的中間開始時那一頁沒有名稱（列標題已補上）
+  - 頁面架的「所有頁面」只有頁面設定的「列印」做得到（Ctrl+P 印目前的頁），各頁之間沒有標示是哪一頁；dashboard
+    上的頁面控制項不支援所有頁面
+  - 「更新中…」沒有停止的按鈕（Tableau 的對話框可以停下、之後復原或繼續）
+  - 動畫：折線、區域與座標軸不動（Tableau 會動）；檢視器沒有「重播」按鈕（2021.4 起）與個人的「啟用動畫」設定；
+    dashboard 上多張工作表各自播放，沒有一起
 
 **與 Tableau 差最多的（桌面版）**
 
-- 檢視、各架、標題、座標軸、標記、圖例、dashboard 區塊都沒有右鍵選單
+- 檢視、各架、座標軸、標記、dashboard 區塊都沒有右鍵選單（可以拖曳排序的標題與圖例項目只有「清除排序」）
 - 「顯示篩選」「顯示參數」在編輯器裡不出現控制項，要到檢視器才看得到
 - dashboard 並排的版面不能用拖的排：沒有落點預覽、邊界拖不動、區塊搬不動
 - 計算欄位編輯器沒有自動完成、函式清單與著色，欄位拖不進去

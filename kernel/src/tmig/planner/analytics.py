@@ -3,13 +3,25 @@
 工作表的 SQL 照常查詢（叢集欄位是常數 0、Forecast Indicator 是常數 "Actual"），執行後依
 WorksheetSql.analytics 的計畫補上叢集編號、預測的估計值與預測區間。每條執行路徑（萃取、Live）都在
 執行器的最後呼叫 apply()。
+
+預測選「自動」時 Tableau 會改以較細的時間估計（Tableau 2021.2 說明文件「How Forecasting Works in Tableau」的
+Getting More Data，https://help.tableau.com/v2021.2/pro/desktop/en-us/forecast_how_it_works.htm ，2026-11-23
+查閱）：檢視中少於 9 年的資料時以季估計、再彙總回年（還不夠時以月），少於 9 季時以月、少於 9 週時以日、
+少於 9 日時以時、少於 9 小時以分、少於 9 分以秒；只在量值是 SUM 或 COUNT 時可以。估計的細度上「忽略最後幾期」
+（說明文件「Set Options for Forecast」，forecast_options.htm）：檢視的最後一期可能是實際值與預測值的彙總。
+文件寫明的部分照做（見 _refinement）：年→季、季→月、週→日，各條時間序列都完整到檢視的最後一期，且不論怎麼
+數期數（算不算沒有資料的期、忽略的最後幾期）都少於 9 期；估計值依 SUM、COUNT 加總回檢視的期，預測區間以
+模擬計算（說明文件：彙總的預測以模擬計算區間；模擬的方法沒有公開，推定）。文件沒有寫明的情況（期數的算法
+影響結果、最後一期不完整、年以季估計仍少於 9 季時是否改以月、日→時等）列為不支援，不給出可能不同的數字。
 """
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import datetime as dt
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +41,10 @@ class ClusterPlan:
     measures: list[str]
     """分析的量值的輸出欄名。"""
     count: int | None = None
+    categories: list[str] = field(default_factory=list)
+    """分析的維度（類別變數）的輸出欄名：檢視中的維度，或另外輸出的 ATTR（Null 為 * 或沒有值）。"""
+    captions: dict[str, str] = field(default_factory=dict)
+    """類別變數的輸出欄名 → 膠囊上的寫法：附註裡這樣稱呼，不寫輸出欄名。"""
 
 
 @dataclass
@@ -51,6 +67,32 @@ class ForecastPlan:
     bases: dict[str, str] = field(default_factory=dict)
     """量值的輸出欄名 → 它預測的量值（不含結果類型）的欄位鍵：同一個量值以幾種結果類型出現時只估計一次，
     描述預測也只列一次。"""
+    additive: list[str] = field(default_factory=list)
+    """彙總是 SUM 或 COUNT 的量值（輸出欄名）：Tableau 只為它們取得較細的資料（見模組說明）。"""
+    worksheet: str = ""
+    """工作表的名稱（不支援時的說明用）。"""
+    finer: Finer | None = None
+    """以較細的時間估計時另外的查詢（年→季、季→月、週→日；其他細度為 None）。"""
+    blocker: str | None = None
+    """需要以較細的時間估計時不能照做的原因（例如用到預測結果、量值篩選；見 tmig.sqlgen.query）。"""
+
+
+@dataclass
+class Finer:
+    """以較細的時間估計：查詢（tmig.sqlgen.query.WorksheetSql，維度、篩選與工作表相同，時間換成較細的
+    細度）與結果中時間的輸出欄名。"""
+
+    unit: str
+    time: str
+    query: Any
+
+
+class UnsupportedForecast(ValueError):
+    """預測需要以 Tableau 文件沒有寫明的方式計算：列為不支援（執行器轉成 QueryError）。"""
+
+
+Fetch = Callable[[Any], tuple[list[str], list[tuple[Any, ...]]]]
+"""執行另一個查詢（WorksheetSql）：回傳欄名與資料列。"""
 
 
 @dataclass
@@ -63,17 +105,26 @@ class Analytics:
 
 
 def apply(
-    analytics: Analytics | None, columns: list[str], rows: list[tuple[Any, ...]]
+    analytics: Analytics | None,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    fetch: Fetch | None = None,
 ) -> tuple[list[str], list[tuple[Any, ...]]]:
-    """依計畫補上叢集與預測；沒有計畫時原樣回傳。"""
+    """依計畫補上叢集與預測；沒有計畫時原樣回傳。fetch：執行以較細的時間估計的查詢（ForecastPlan.finer）；
+    None 時需要它的預測列為不支援。"""
     if analytics is None:
         return columns, rows
     if analytics.cluster is not None:
         rows = _clusters(analytics.cluster, columns, rows, analytics.details)
     if analytics.forecast is not None:
-        columns, rows = _forecast(
-            analytics.forecast, columns, rows, analytics.notes, analytics.details
-        )
+        plan = analytics.forecast
+        finer = _refinement(plan, columns, rows, fetch)
+        if finer is not None:
+            columns, rows = _refined_forecast(
+                plan, columns, rows, finer, analytics.notes, analytics.details
+            )
+        else:
+            columns, rows = _forecast(plan, columns, rows, analytics.notes, analytics.details)
     return columns, rows
 
 
@@ -86,18 +137,37 @@ def _clusters(
     rows: list[tuple[Any, ...]],
     details: dict[str, Any] | None = None,
 ) -> list[tuple[Any, ...]]:
-    from tmig.planner.cluster import cluster, describe
+    """叢集編號。量值是 Null 的標記不分叢集（Tableau 說明文件）；類別變數超過 25 個值時不用它（同上，
+    描述叢集中列在 ignored），ATTR 是 *（這裡是 Null）的標記不分叢集（同上；真的沒有值的 Null 也一樣，
+    推定）。"""
+    from tmig.planner.cluster import MAX_CATEGORIES, cluster, describe
 
     at = columns.index(plan.column)
     measures = [columns.index(m) for m in plan.measures]
-    valid = [i for i, row in enumerate(rows) if all(_number(row[j]) is not None for j in measures)]
+    categories: list[int] = []
+    ignored: list[str] = []
+    for name in plan.categories:
+        j = columns.index(name)
+        if len({row[j] for row in rows if row[j] is not None}) > MAX_CATEGORIES:
+            ignored.append(plan.captions.get(name, name))
+            continue
+        categories.append(j)
+    valid = [
+        i
+        for i, row in enumerate(rows)
+        if all(_number(row[j]) is not None for j in measures)
+        and all(row[j] is not None for j in categories)
+    ]
     values = [[float(rows[i][j]) for j in measures] for i in valid]
-    labels = cluster(values, plan.count)
+    groups = [[rows[i][j] for j in categories] for i in valid] if categories else None
+    labels = cluster(values, plan.count, groups)
     if details is not None:
-        # 描述叢集：變數、沒有分到叢集的標記數（量值是 Null）與各叢集的摘要
+        # 描述叢集：變數、沒有分到叢集的標記數（量值是 Null、類別是 *）與各叢集的摘要（量值的部分）
         details["cluster"] = {
             **describe(values, labels),
             "measures": plan.measures,
+            "categories": [plan.captions.get(columns[j], columns[j]) for j in categories],
+            "ignored": ignored,
             "column": plan.column,
             "unclustered": len(rows) - len(valid),
             "automatic": plan.count is None,
@@ -265,6 +335,282 @@ def _forecast(
             "models": models,
         }
     return out_columns, ordered
+
+
+# ---------------------------------------------------------------- 以較細的時間估計（「自動」）
+
+MIN_PERIODS = 9
+"""檢視中少於這麼多期時 Tableau 改以較細的時間估計（說明文件的 Getting More Data）。"""
+FINER_NAMES = {
+    "year": "季（還不夠時以月）",
+    "year_number": "季（還不夠時以月）",
+    "quarter": "月",
+    "week": "日",
+    "day": "小時",
+    "hour": "分鐘",
+}
+"""檢視的細度 → Tableau 改用的細度（說明文件）。月沒有較細的估計。"""
+SUB_PERIODS = {"year": 4, "quarter": 3, "week": 7}
+"""平台照做的細度（年→季、季→月、週→日）：檢視的一期有幾個較細的期。"""
+COUNT_WORDS = {
+    "year": "年",
+    "year_number": "年",
+    "quarter": "季",
+    "month": "個月",
+    "week": "週",
+    "day": "天",
+    "hour": "小時",
+}
+
+
+def _series_times(
+    rows: list[tuple[Any, ...]], time_at: int, series_at: list[int]
+) -> dict[tuple[Any, ...], set[Any]]:
+    """各條時間序列（其他維度的值）有資料的期。"""
+    groups: dict[tuple[Any, ...], set[Any]] = {}
+    for row in rows:
+        if row[time_at] is not None:
+            groups.setdefault(tuple(row[j] for j in series_at), set()).add(row[time_at])
+    return groups
+
+
+def _view_periods(first: Any, unit: str) -> Callable[[Any], Any]:
+    """較細的期 → 它所在的檢視的期（檢視的期從 first 起依 unit 排列；週依資料源的週起始日，所以從檢視的
+    第一期往後數，不另外截斷）。"""
+    starts = [first]
+
+    def of(value: Any) -> Any:
+        if value < starts[0]:
+            return None
+        while starts[-1] <= value:
+            starts.append(_step(starts[-1], unit, 1))
+        return starts[bisect.bisect_right(starts, value) - 1]
+
+    return of
+
+
+def _refinement(
+    plan: ForecastPlan,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    fetch: Fetch | None,
+) -> tuple[list[str], list[tuple[Any, ...]]] | None:
+    """Tableau 是否改以較細的時間估計（見模組說明）：不會時 None；會、且文件寫明了做法時回傳較細的查詢結果；
+    做法沒有寫明時 UnsupportedForecast（說明工作表、細度與期數）。
+
+    期數的算法沒有寫（算不算沒有資料的期、忽略的最後幾期、各條時間序列還是整個檢視）：最少的算法也不少於
+    9 期時不會改；最多的算法也少於 9 期時一定會改；之間的列為不支援。"""
+    if not plan.additive or plan.unit not in FINER_NAMES:
+        return None
+    settings = plan.settings or Forecast(measures=[])
+    time_at = columns.index(plan.time)
+    series_at = [columns.index(s) for s in plan.series]
+    groups = _series_times(rows, time_at, series_at)
+    if not groups:
+        return None
+    ignore = max(settings.ignore_last, 0)
+    fewest = max(min(len(times) for times in groups.values()) - ignore, 0)
+    everything = [t for times in groups.values() for t in times]
+    spans = [len(_timeline(min(times), max(times), plan.unit)) for times in groups.values()]
+    most = max([*spans, len(_timeline(min(everything), max(everything), plan.unit))])
+    if fewest >= MIN_PERIODS:
+        return None
+    word = COUNT_WORDS[plan.unit]
+    where = f"工作表「{plan.worksheet}」的預測" if plan.worksheet else "預測"
+    rule = (
+        f"Tableau 在檢視中少於 {MIN_PERIODS} {word}的資料、量值是 SUM 或 COUNT 時改以"
+        f"{FINER_NAMES[plan.unit]}估計再彙總回來"
+    )
+    if most >= MIN_PERIODS:
+        raise UnsupportedForecast(
+            f"{where}：檢視中的時間序列有 {fewest} 到 {most} {word}的資料（依是否算入沒有資料的期、"
+            f"忽略的最後 {ignore} 期而不同）；{rule}，說明文件沒有寫怎麼數期數，尚不支援"
+        )
+    head = f"{where}：檢視中只有 {most} {word}的資料，{rule}"
+    if plan.unit not in SUB_PERIODS:
+        raise UnsupportedForecast(f"{head}；以{FINER_NAMES[plan.unit]}估計尚不支援")
+    if plan.blocker is not None:
+        raise UnsupportedForecast(f"{head}；{plan.blocker}，尚不支援")
+    if plan.finer is None or fetch is None:
+        raise UnsupportedForecast(f"{head}；這裡不能另外查詢較細的資料，尚不支援")
+    fine_columns, fine_rows = fetch(plan.finer.query)
+    fine_at = fine_columns.index(plan.finer.time)
+    fine_series = [fine_columns.index(s) for s in plan.series]
+    fine_groups = _series_times(fine_rows, fine_at, fine_series)
+    if plan.unit == "year" and fine_groups:
+        quarters = max(min(len(times) for times in fine_groups.values()) - ignore, 0)
+        if quarters < MIN_PERIODS:
+            raise UnsupportedForecast(
+                f"{head}；以季估計也只有 {quarters} 季：說明文件說資料仍不夠時改以月估計，沒有寫明"
+                "怎樣算不夠，尚不支援"
+            )
+    view_of = _view_periods(min(everything), plan.unit)
+    for times in fine_groups.values():
+        last = max(times)
+        if view_of(_step(last, plan.finer.unit, 1)) == view_of(last):
+            raise UnsupportedForecast(
+                f"{head}；最後一{word[-1]}（{_iso(view_of(last))} 起）的資料只到 {_iso(last)}，"
+                "說明文件沒有寫以較細的時間估計時怎麼處理不完整的最後一期，尚不支援"
+            )
+    return fine_columns, fine_rows
+
+
+def _iso(value: Any) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _refined_forecast(
+    plan: ForecastPlan,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    fine: tuple[list[str], list[tuple[Any, ...]]],
+    notes: list[str],
+    details: dict[str, Any] | None = None,
+) -> tuple[list[str], list[tuple[Any, ...]]]:
+    """以較細的時間估計再加總回檢視的期（SUM、COUNT）：每條時間序列以較細的期配適模型（忽略的最後幾期是較細
+    的期），之後的期數是檢視的期數 × 每期的較細期數；檢視的一期是其中實際的較細期的值加上估計的較細期的
+    估計值（含忽略的最後幾期的檢視的期，成為估計的期）。預測區間以模擬的路徑同樣加總後取分位數（推定）。"""
+    import numpy as np
+
+    from tmig.planner.forecast import (
+        AUTO_LENGTH,
+        SEASONS,
+        ForecastError,
+        Model,
+        best_fit,
+        forecast,
+        simulate,
+    )
+
+    assert plan.finer is not None
+    settings = plan.settings or Forecast(measures=[])
+    unit, fine_unit = plan.unit, plan.finer.unit
+    fine_columns, fine_rows = fine
+    time_at = columns.index(plan.time)
+    measures = [columns.index(m) for m in plan.measures]
+    series_at = [columns.index(s) for s in plan.series]
+    indicator_at = columns.index(plan.indicator) if plan.indicator in columns else None
+    fine_at = fine_columns.index(plan.finer.time)
+    fine_measures = [fine_columns.index(m) for m in plan.measures]
+    fine_series = [fine_columns.index(s) for s in plan.series]
+    extra = [p + m for m in plan.measures for p in (LOW, HIGH)]
+    width = len(columns)
+    result: list[tuple[Any, ...]] = [(*row, *([None] * len(extra))) for row in rows]
+    groups: dict[tuple[Any, ...], list[int]] = {}
+    for i, row in enumerate(rows):
+        groups.setdefault(tuple(row[j] for j in series_at), []).append(i)
+    fine_groups: dict[tuple[Any, ...], dict[Any, tuple[Any, ...]]] = {}
+    for row in fine_rows:
+        if row[fine_at] is not None:
+            fine_groups.setdefault(tuple(row[j] for j in fine_series), {})[row[fine_at]] = row
+    dated_all = [row[time_at] for row in rows if row[time_at] is not None]
+    view_of = _view_periods(min(dated_all), unit)
+    period = SEASONS.get(fine_unit, 1)
+    seasonal = settings.model != "auto_no_season" and period > 1
+    custom = (
+        Model(settings.trend or "none", settings.season or "none")
+        if settings.model == "custom"
+        else None
+    )
+    tail = (1 - settings.confidence) / 2
+    appended: dict[int, list[tuple[Any, ...]]] = {}
+    models: list[dict[str, Any]] = []
+    too_short = 0
+    for key, members in groups.items():
+        dated = sorted(
+            (i for i in members if rows[i][time_at] is not None), key=lambda i: rows[i][time_at]
+        )
+        found_rows = fine_groups.get(key, {})
+        if not dated or len(found_rows) < 2:
+            too_short += 1
+            continue
+        times = sorted(found_rows)
+        timeline = _timeline(times[0], times[-1], fine_unit)
+        trim = min(max(settings.ignore_last, 0), len(timeline) - 1)
+        fitted_times = timeline[: len(timeline) - trim]
+        ahead = _horizon(settings, unit, rows[dated[-1]][time_at], AUTO_LENGTH) * SUB_PERIODS[unit]
+        future = [_step(timeline[-1], fine_unit, k) for k in range(1, ahead + 1)]
+        estimated = [*timeline[len(timeline) - trim :], *future]
+        horizon = len(estimated)
+        owner = [view_of(t) for t in estimated]
+        periods = list(dict.fromkeys(owner))
+        positions = {v: [h for h, o in enumerate(owner) if o == v] for v in periods}
+        skipped = set(estimated)
+        estimates: list[list[float | None] | None] = []
+        bands: list[tuple[list[float], list[float]] | None] = []
+        for column, j in zip(plan.measures, fine_measures, strict=True):
+            values = [_number(found_rows[t][j]) if t in found_rows else None for t in fitted_times]
+            series = _fill(values, settings.fill_zeros)
+            if series is None:
+                estimates.append(None)
+                bands.append(None)
+                continue
+            try:
+                fitted = best_fit(series, period, seasonal, custom)
+            except ForecastError as exc:
+                _note(notes, f"預測（{plan.captions.get(column, column)}）：{exc}")
+                estimates.append(None)
+                bands.append(None)
+                continue
+            predicted = forecast(fitted, horizon, settings.confidence)
+            paths = simulate(fitted, horizon)
+            # 檢視的一期：其中實際的較細期（不是估計的期）的值，加上估計的較細期的估計值
+            actual = dict.fromkeys(periods, 0.0)
+            for t, row in found_rows.items():
+                v = view_of(t)
+                if t not in skipped and v in actual:
+                    actual[v] += _number(row[j]) or 0.0
+            totals = [actual[v] + sum(predicted.values[h] for h in positions[v]) for v in periods]
+            simulated = np.stack(
+                [actual[v] + paths[:, positions[v]].sum(axis=1) for v in periods], axis=1
+            )
+            low = [float(x) for x in np.quantile(simulated, tail, axis=0)]
+            high = [float(x) for x in np.quantile(simulated, 1 - tail, axis=0)]
+            estimates.append([float(v) for v in totals])
+            bands.append((low, high))
+            models.append(
+                _model_details(key, column, fitted, predicted, horizon, fitted_times, estimated)
+            )
+        if all(e is None for e in estimates):
+            too_short += 1
+            continue
+        index = {rows[i][time_at]: i for i in dated}
+        new_rows = appended.setdefault(max(members), [])
+        for h, v in enumerate(periods):
+            i = index.get(v)
+            if i is not None:
+                result[i] = _estimate_row(
+                    result[i], measures, estimates, bands, h, indicator_at, width, len(measures)
+                )
+                continue
+            added: list[Any] = [None] * (width + len(extra))
+            for s, j in zip(key, series_at, strict=True):
+                added[j] = s
+            added[time_at] = v
+            new_rows.append(
+                _estimate_row(
+                    tuple(added), measures, estimates, bands, h, indicator_at, width, len(measures)
+                )
+            )
+    ordered: list[tuple[Any, ...]] = []
+    for i, row in enumerate(result):
+        ordered.append(row)
+        ordered.extend(appended.get(i, []))
+    if too_short:
+        which = "" if too_short == len(groups) else f"有 {too_short} 條時間序列"
+        _note(notes, f"預測：{which}資料不到兩期，估計不出來")
+    if details is not None:
+        details["forecast"] = {
+            "time": plan.time,
+            "unit": fine_unit,
+            "view_unit": unit,
+            "series": plan.series,
+            "ignore_last": max(settings.ignore_last, 0),
+            "confidence": settings.confidence,
+            "seasonal": seasonal,
+            "models": models,
+        }
+    return [*columns, *extra], ordered
 
 
 def _note(notes: list[str], text: str) -> None:

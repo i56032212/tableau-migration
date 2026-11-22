@@ -389,9 +389,22 @@ def check_references(ir: IR) -> list[str]:
         ):
             errors.append(f"{where}.count：參數「{flt.count.parameter}」不存在")
 
+    images_by_ds: dict[str, set[str]] = {}
     for ds in ir.datasources:
         for flt in ds.filters:
             check_filter(flt, ds.id, f"datasources[{ds.id}].filters[{flt.id}]", None)
+        # 背景圖片：X、Y 與條件的欄位在這個資料源中（地圖的 Latitude／Longitude (generated) 也可以）
+        images_by_ds[ds.id] = set()
+        for image in ds.background_images:
+            where = f"datasources[{ds.id}].background_images[{image.id}]"
+            if image.id in images_by_ds[ds.id]:
+                errors.append(f"{where}：id 重複")
+            images_by_ds[ds.id].add(image.id)
+            for name, field_id in (("x", image.x), ("y", image.y)):
+                if field_id not in GENERATED_FIELDS:
+                    check_use(FieldUse(field=field_id), ds.id, f"{where}.{name}", None)
+            for condition in image.conditions:
+                check_use(condition.field, ds.id, f"{where}.conditions", None)
 
     all_fields = {f.id: f for ds in ir.datasources for f in ds.fields}
     for param in ir.parameters:
@@ -412,6 +425,9 @@ def check_references(ir: IR) -> list[str]:
         if ws.datasource not in fields_by_ds:
             errors.append(f"{base}.datasource：資料源「{ws.datasource}」不存在")
             continue
+        for image_id in ws.background_images_off:
+            if image_id not in images_by_ds.get(ws.datasource, set()):
+                errors.append(f"{base}.background_images_off：背景圖片「{image_id}」不在資料源中")
         tcs = {tc.id for tc in ws.table_calcs}
         blended: set[str] = set()
         for n, blend in enumerate(ws.blends):
@@ -484,6 +500,8 @@ def check_references(ir: IR) -> list[str]:
             )
             for i, use in enumerate(ws.cluster.measures):
                 check_use(use, ws.datasource, f"{base}.cluster.measures[{i}]", tcs, extra=blended)
+            for i, use in enumerate(ws.cluster.categories):
+                check_use(use, ws.datasource, f"{base}.cluster.categories[{i}]", None)
         if ws.forecast is not None:
             for i, use in enumerate(ws.forecast.measures):
                 check_use(use, ws.datasource, f"{base}.forecast.measures[{i}]", tcs, extra=blended)
@@ -636,5 +654,31 @@ def check_references(ir: IR) -> list[str]:
             for zid in point.texts:
                 if zid not in zone_ids:
                     errors.append(f"{where}.texts：區塊「{zid}」不在故事點的 dashboard 上")
+            for wid in point.pages:
+                if wid not in sheets:
+                    errors.append(f"{where}.pages：工作表「{wid}」不存在")
+                elif sheets[wid].pages is None:
+                    errors.append(f"{where}.pages：工作表「{wid}」沒有頁面架")
+            seen: set[str] = set()
+            for state in point.sheets:
+                sheet = sheets.get(state.worksheet)
+                if sheet is None:
+                    errors.append(f"{where}.sheets：工作表「{state.worksheet}」不存在")
+                    continue
+                if state.worksheet in seen:
+                    errors.append(f"{where}.sheets：工作表「{state.worksheet}」重複")
+                seen.add(state.worksheet)
+                at = f"{where}.sheets[{state.worksheet}]"
+                calcs = {tc.id for tc in sheet.table_calcs}
+                for sort in state.sorts:
+                    check_use(FieldUse(field=sort.field), sheet.datasource, f"{at}.sorts", None)
+                    if sort.by is not None:
+                        check_use(sort.by, sheet.datasource, f"{at}.sorts", calcs)
+                for fid in state.cleared_sorts:
+                    check_use(FieldUse(field=fid), sheet.datasource, f"{at}.cleared_sorts", None)
+                for use in [*state.removed_rows, *state.removed_columns]:
+                    check_use(use, sheet.datasource, f"{at}.removed", calcs, special=True)
+                for axis in state.axes:
+                    check_use(axis.use, sheet.datasource, f"{at}.axes", calcs, special=True)
 
     return errors
