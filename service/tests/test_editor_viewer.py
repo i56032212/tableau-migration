@@ -3539,18 +3539,21 @@ def test_render_notes_are_shown(engine: str) -> None:
         )
         urllib.request.urlopen(request, timeout=60).close()
 
-    def forecast(unit: str) -> dict[str, Any]:
-        """Monthly Profit 的時間改成 unit、加上預測；回傳 render 的回應。"""
+    def forecast(unit: str, agg: str = "sum") -> dict[str, Any]:
+        """Monthly Profit 的時間改成 unit、量值改成 agg(Profit)、加上預測；回傳 render 的回應。"""
         body = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
         body["columns"][0]["date"]["unit"] = unit
-        body["forecast"] = {"measures": [{"field": "f_profit", "agg": "sum"}]}
+        body["rows"][0]["agg"] = agg
+        body["forecast"] = {"measures": [{"field": "f_profit", "agg": agg}]}
         put(body)
         return call(engine, "/api/workbooks/demo/worksheets/ws_monthly_profit/render", {})
 
     caveat = "預測的估計值以平台的指數平滑計算（與 Tableau 相同的模型），可能與 Tableau 有些微差異"
     reason = "預測：扣掉忽略的最後 1 期之後，資料不到兩期，估計不出來"
-    # 年：只有兩年的資料，估計不出來——回應的附註有原因，warnings 只有原因（不含計算方式的說明）
-    failed = forecast("year")
+    # 年、AVG：只有兩年的資料，估計不出來——回應的附註有原因，warnings 只有原因（不含計算方式的說明）。SUM 時
+    # Tableau 改以較細的時間估計（見 kernel/tests/sqlgen/test_forecast_granularity.py），這張工作表的情況說明文件
+    # 沒有寫明，列為不支援，所以用 AVG
+    failed = forecast("year", "avg")
     assert failed["rows"] == 2 and failed["notes"] == [caveat, reason]
     assert failed["warnings"] == [reason]
 
@@ -4582,10 +4585,12 @@ def test_render_notes_name_things_as_on_screen(engine: str) -> None:
     # Monthly Profit：兩年的資料估計不了自訂的模型（趨勢：加法）
     monthly = call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
     monthly["columns"][0]["date"]["unit"] = "year"
-    monthly["forecast"] = {"measures": [{"field": "f_profit", "agg": "sum"}], "ignore_last": 0}
+    # AVG：SUM 的年預測在資料少時 Tableau 改以較細的時間估計（這裡的情況說明文件沒有寫明，列為不支援）
+    monthly["rows"][0]["agg"] = "avg"
+    monthly["forecast"] = {"measures": [{"field": "f_profit", "agg": "avg"}], "ignore_last": 0}
     monthly["forecast"] |= {"model": "custom", "trend": "additive", "season": "none"}
     put(monthly)
-    forecast_note = "預測（SUM(Profit)）：資料不足以估計自訂的模型（趨勢：加法、季節：無）"
+    forecast_note = "預測（AVG(Profit)）：資料不足以估計自訂的模型（趨勢：加法、季節：無）"
     assert forecast_note in notes_of("ws_monthly_profit")
 
     with sync_playwright() as p:
@@ -4611,7 +4616,7 @@ def test_render_notes_name_things_as_on_screen(engine: str) -> None:
         settle(page)
         pills = page.locator('[data-shelf="rows"] .pill .pill-text').all_inner_texts()
         pill = pills[0].replace("▾", "").strip()
-        assert pill == "SUM(Profit)"
+        assert pill == "AVG(Profit)"
         page.locator(".editor .notes-indicator").get_by_role("button").click()
         shown = listed.all_inner_texts()
         assert forecast_note in shown and f"（{pill}）" in forecast_note

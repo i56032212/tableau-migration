@@ -304,6 +304,7 @@ def test_cases(client: TestClient) -> None:
         "tooltip": None,
         "viewport": None,
         "marks": [],
+        "story": None,
     }
 
 
