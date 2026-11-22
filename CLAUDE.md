@@ -82,7 +82,7 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（a050f0c，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2852 項通過、140 項略過
+- Windows 上的完整測試（57bfc48，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2852 項通過、140 項略過
   （都是需要 PostgreSQL、MySQL、Spark、Trino、BigQuery 或認證管理員的，在 Windows 上還沒跑過）；前端可以建置。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
 - 2026-11-21 使用體驗稽核找到的程式錯誤已修（01f6a4c 桌面版與核心、baf7d8b 伺服器端、ac93b7e 桌面版裡的確認、
