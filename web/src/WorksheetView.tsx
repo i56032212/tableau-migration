@@ -1774,12 +1774,14 @@ export function WorksheetView({
       )}
       {response?.summary_shown && response.table && !hideLegend && <SummaryCard table={response.table} marks={selected ?? pin?.marks ?? []} />}
       {pin ? (
+        // 釘住的工具提示與滑過時的相同，連工具提示中的工作表（Viz in Tooltip）也一樣：以點選的那個標記篩選
+        // （觸控的裝置上沒有滑過，只看得到釘住的這一個）。框選多個標記時沒有單一的標記，不顯示工作表
         <VizTooltip
           tip={pin.tip}
-          mark={null}
-          sheets={[]}
+          mark={pin.tip.mark}
+          sheets={tooltipSheets}
           workbook={workbook}
-          stateFor={() => ({ filters: {}, parameters: {} })}
+          stateFor={(target, mark) => tooltipStateRef.current?.(target, mark) ?? { filters: {}, parameters: {} }}
           pinned={{
             count: pin.marks.length,
             commands: tipData.current.commands,

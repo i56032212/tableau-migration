@@ -86,8 +86,10 @@ def test_preview_one_logical_table_at_a_time(model_ir: IR) -> None:
         assert preview.table == table.id
         owners = {f.table for f in ds.fields if f.id in {c.field for c in preview.columns}}
         assert owners <= {table.id, None}, table.id
-    with pytest.raises(QueryError, match="沒有資料表"):
+    # 錯誤訊息顯示給使用者：不寫資料表的 id
+    with pytest.raises(QueryError, match="沒有這張資料表") as caught:
         preview_sql(model_ir, ds.id, "nope")
+    assert "nope" not in str(caught.value)
 
 
 def test_datasource_summary_of_an_extract() -> None:

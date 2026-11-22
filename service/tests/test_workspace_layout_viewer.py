@@ -1031,3 +1031,143 @@ def test_editor_follows_engine_changes_to_the_open_sheet(engine: str) -> None:
         no_error()
         assert fields(sheet(rate["id"])["rows"]) == [(ratio, "sum")]
         browser.close()
+
+
+def test_undo_keys_belong_to_the_open_dialog(engine: str) -> None:
+    """開著對話框、或焦點在可以輸入的地方（格式文字的方塊）時，Ctrl+Z、Ctrl+Y 是那個方塊自己的復原，不動對話框
+    後面的東西。
+
+    原本編輯器的 Ctrl+Z、Ctrl+Y 只略過 input、textarea、select：在標題、工具提示、標籤、說明、註解、文字物件的
+    格式文字方塊（contenteditable）裡打字後按 Ctrl+Z，後面的工作表（dashboard、Story）被退回一步、打的字卻還在；
+    最近一步是刪除分頁時，被刪的分頁放回來、編輯器換到那個分頁，對話框連同輸入的內容不見。焦點不在輸入的地方
+    （對話框的標題列）時也一樣。現在這些情形編輯的歷程與刪除分頁的紀錄都不動，方塊裡打的字照瀏覽器自己的
+    復原、重做；關掉對話框之後 Ctrl+Z 照常復原。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.workspace[data-saving="false"], .ds-workspace')
+        page.wait_for_selector(
+            '.editor .worksheet[data-loading="false"], .editor-canvas .placeholder, '
+            ".dash-editor .dash-canvas, .story-editor .story-preview, .ds-workspace .ws-scroll",
+            timeout=30000,
+        )
+
+    def ir() -> dict[str, Any]:
+        return call(engine, "/api/workbooks/demo/ir")
+
+    def rows() -> list[str]:
+        sheet = next(w for w in ir()["worksheets"] if w["id"] == "ws_monthly_profit")
+        return [u["field"] for u in sheet["rows"]]
+
+    call(engine, "/api/edit/demo/worksheets", {})  # 「工作表 1」：等一下刪除它
+    story = call(engine, "/api/edit/demo/stories", {"name": "故事"})["story"]
+    board = ir()["dashboards"][0]["id"]
+    original = rows()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        dialog = page.locator(".modal-backdrop")
+        box = dialog.locator("[contenteditable='true']").first
+
+        def press(keys: str) -> None:
+            page.keyboard.press(keys)
+            page.wait_for_timeout(700)  # 原本會送出存檔、換分頁：等它發生
+
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+
+        # 工作表：交換欄與列（歷程裡的一步），開啟「標題…」，在格式文字的方塊裡打字
+        tool(page, "交換").click()
+        settle(page)
+        swapped = rows()
+        assert swapped != original
+        menubar(page, "工作表", "標題…")
+        expect(dialog).to_have_count(1)
+        box.click()
+        page.keyboard.type("abc")
+        expect(box).to_contain_text("abc")
+        # Ctrl+Z：復原的是方塊裡打的字，後面的工作表不動；Ctrl+Y 把字放回來
+        press("Control+z")
+        assert rows() == swapped
+        expect(box).not_to_contain_text("abc")
+        expect(dialog).to_have_count(1)
+        press("Control+y")
+        assert rows() == swapped
+        expect(box).to_contain_text("abc")
+        # 焦點在對話框裡不能輸入的地方：也不動後面的工作表
+        dialog.locator(".modal header h2").click()
+        assert page.evaluate("!document.activeElement.isContentEditable")
+        press("Control+z")
+        press("Control+y")
+        assert rows() == swapped
+        expect(tool(page, "重做")).to_be_disabled()
+
+        # 最近一步是刪除別的分頁：對話框裡按 Ctrl+Z 不會把它放回來，人還在原來的分頁、對話框還開著
+        dialog.get_by_role("button", name="取消").click()
+        expect(dialog).to_have_count(0)
+        tab_menu(page, sheet_tab(page, "工作表 1"), "刪除")
+        expect(sheet_tab(page, "工作表 1")).to_have_count(0)
+        settle(page)
+        menubar(page, "工作表", "標題…")
+        box.click()
+        page.keyboard.type("x")
+        press("Control+z")
+        assert "工作表 1" not in [w["name"] for w in ir()["worksheets"]]
+        assert page.url == f"{engine}/w/demo/edit/ws_monthly_profit"
+        expect(dialog).to_have_count(1)
+        # 關掉對話框之後 Ctrl+Z 照常：先復原那次刪除（編輯器開啟放回來的分頁）
+        dialog.get_by_role("button", name="取消").click()
+        expect(dialog).to_have_count(0)
+        press("Control+z")
+        page.wait_for_url(f"{engine}/w/demo/edit/ws_1")
+        settle(page)
+        assert "工作表 1" in [w["name"] for w in ir()["worksheets"]] and rows() == swapped
+
+        # dashboard：加一個文字物件（歷程裡的一步），在「編輯文字…」的方塊裡按 Ctrl+Z——文字物件還在
+        def texts() -> int:
+            data = call(engine, f"/api/edit/demo/dashboards/{board}")["dashboard"]
+            return json.dumps(data, ensure_ascii=False).count('"kind": "text"')
+
+        page.goto(f"{engine}/w/demo/edit-d/{board}")
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        before = texts()
+        page.locator(".dash-editor").get_by_role("button", name="文字", exact=True).click()
+        side_tab(page, "版面配置")  # 選取的區塊（剛加上的文字物件）的屬性
+        page.get_by_role("button", name="編輯文字…").click()
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        assert texts() == before + 1
+        expect(dialog).to_have_count(1)
+        box.click()
+        page.keyboard.type("說明")
+        press("Control+z")
+        assert texts() == before + 1
+        expect(dialog).to_have_count(1)
+        dialog.get_by_role("button", name="取消").click()
+        expect(dialog).to_have_count(0)
+        page.evaluate("document.activeElement.blur()")  # 焦點離開屬性的輸入框
+        press("Control+z")
+        page.wait_for_selector('.dash-editor[data-saving="false"]')
+        assert texts() == before
+
+        # Story：加一個文字物件（開啟它的對話框），在方塊裡按 Ctrl+Z——文字物件還在
+        def notes() -> int:
+            data = call(engine, f"/api/edit/demo/stories/{story['id']}")["story"]
+            return sum(len(point.get("notes") or []) for point in data["points"])
+
+        page.goto(f"{engine}/w/demo/edit-story/{story['id']}")
+        page.wait_for_selector(".story-editor .story-preview")
+        page.get_by_role("button", name="＋ 文字物件").click()
+        expect(dialog).to_have_count(1)
+        page.wait_for_selector('.workspace[data-saving="false"]')
+        assert notes() == 1
+        box.click()
+        page.keyboard.type("補充")
+        press("Control+z")
+        assert notes() == 1
+        expect(dialog).to_have_count(1)
+        assert errors == []
+        browser.close()

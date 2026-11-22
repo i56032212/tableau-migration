@@ -795,6 +795,43 @@ def test_render_separates_warnings_from_informational_notes(client: TestClient) 
     assert plain["notes"] == [] and plain["warnings"] == []
 
 
+def test_query_errors_name_things_as_on_screen(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """查詢錯誤的文字（編輯器的錯誤提示、檢視器上「尚不支援」的原因、附註）以畫面上的寫法稱呼東西：篩選是
+    它的欄位、公式是公式編輯器上的寫法（原本是「條件篩選 flt_broken 的公式…」）。資料庫執行時的錯誤訊息
+    （裡面是 SQL 的內部欄名，例如 sum(f_sales)）不寫進附註。"""
+    from tmig.data.executor import ExecutionError
+
+    ws = blank(client, rows=[use("f_region")], columns=[use("f_sales", agg="sum", continuous=True)])
+    broken = {
+        "kind": "condition",
+        "id": "flt_broken",
+        "field": use("f_region"),
+        "stage": "dimension",
+        "condition": "SUM([Sales]) >",
+        "mode": "all",
+        "values": [],
+        "group": None,
+        "source_ref": "/editor",
+    }
+    put(client, {**ws, "filters": [broken]})
+    refused = client.post("/api/workbooks/demo/worksheets/ws_sales_by_region/render")
+    assert refused.status_code == 422
+    detail = refused.json()["detail"]
+    assert detail.startswith("條件篩選「Region」的公式「SUM([Sales]) >」："), detail
+    assert "flt_" not in detail
+
+    # 顯示空的列：成員查不到時的附註只寫「查詢執行失敗」
+    def failing(*args: Any, **kwargs: Any) -> None:
+        raise ExecutionError('SQL 執行失敗：Binder Error: column "sum(f_sales)" not found')
+
+    put(client, {**ws, "filters": [], "show_empty": ["rows"]})
+    monkeypatch.setattr("tmig_service.app.empty_headers_sql", failing)
+    shown = render(client, "ws_sales_by_region")
+    assert shown["notes"] == ["顯示空的列：查不到成員（查詢執行失敗）"]
+
+
 def test_hierarchies_api(client: TestClient) -> None:
     """資料窗格建立、改變與刪除階層；檢視器依新的階層切入。"""
     url = "/api/edit/demo/datasources/ds_orders/hierarchies"

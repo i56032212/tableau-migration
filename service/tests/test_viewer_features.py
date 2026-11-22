@@ -441,6 +441,72 @@ def test_viz_in_tooltip(server: str) -> None:
         browser.close()
 
 
+def test_pinned_tooltip_shows_the_tooltip_sheets(server: str) -> None:
+    """點選標記後釘住的工具提示也有工具提示中的工作表（Viz in Tooltip），與滑過時相同：以點選的那個標記篩選，
+    數字與直接以同樣狀態查詢相同。觸控的裝置上點標記（沒有滑過）也看得到——原本釘住的工具提示只有文字與命令
+    按鈕，觸控的裝置上因此完全看不到工具提示中的工作表。框選多個標記時沒有單一的標記，不顯示工作表。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    ensure_data(FEATURES, ir)
+    source = "ws_sales_by_segment"
+    bars = f"[data-worksheet='{source}'] svg path[aria-roledescription='bar']:not(.frozen *)"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        desktop = browser.new_page(viewport={"width": 1400, "height": 1000})
+        phone = browser.new_context(**p.devices["Pixel 5"]).new_page()
+        errors: list[str] = []
+        for page in (desktop, phone):
+            renders = Renders()
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+            page.on("response", renders)
+            page.goto(f"{server}/w/superstore_features/s/{source}")
+            page.wait_for_selector(f".worksheet[data-worksheet='{source}'][data-loading='false']")
+            page.wait_for_function(LOADED)
+            pinned = page.locator(".viz-tooltip.pinned")
+            for segment in ("Corporate", "Consumer"):
+                start = len(renders.items)
+                bar = page.locator(f"{bars}[aria-label$='Segment: {segment}']")
+                if page is desktop:
+                    bar.click()
+                else:
+                    bar.tap()  # 觸控：直接點，沒有滑過
+                expect(pinned).to_have_count(1)
+                expect(pinned.get_by_role("button", name="✓ 只保留")).to_be_visible()
+                renders.wait_for(page, {"ws_category_mix"}, start)
+                body, data = next(
+                    (b, d) for w, b, d in reversed(renders.items[start:]) if w == "ws_category_mix"
+                )
+                assert body["tooltip"] == {"source": source, "mark": {"f_segment": segment}}
+                check_numbers(ir, "ws_category_mix", body, data, approx=True)
+                sheet = pinned.locator("[data-tooltip-sheet='ws_category_mix']")
+                expect(sheet.locator(".worksheet[data-loading='false'] svg")).to_have_count(1)
+                assert segment in pinned.inner_text()
+                box = sheet.bounding_box()
+                assert box is not None and box["width"] <= 320 and box["height"] <= 240
+                # 整個工具提示都在畫面之內
+                frame = pinned.bounding_box()
+                size = page.viewport_size
+                assert frame is not None and size is not None
+                assert frame["x"] >= 0 and frame["x"] + frame["width"] <= size["width"], frame
+                page.keyboard.press("Escape")
+                expect(pinned).to_have_count(0)
+
+        # 框選兩個標記：釘住的工具提示是「N 個標記」，沒有工具提示中的工作表
+        first = desktop.locator(f"{bars}[aria-label$='Segment: Consumer']").bounding_box()
+        last = desktop.locator(f"{bars}[aria-label$='Segment: Corporate']").bounding_box()
+        assert first is not None and last is not None
+        desktop.mouse.move(first["x"] + 4, first["y"] + first["height"] / 2)
+        desktop.mouse.down()
+        desktop.mouse.move(last["x"] + 30, last["y"] + last["height"] / 2, steps=8)
+        desktop.mouse.up()
+        pinned = desktop.locator(".viz-tooltip.pinned")
+        expect(pinned).to_contain_text("2 個標記")
+        expect(pinned.locator("[data-tooltip-sheet]")).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
 def test_phone_layout(server: str) -> None:
     """裝置專屬版面：手機大小的畫面（或網址的 :device=phone）改用「篩選動作」dashboard 的手機版面——
     各工作表由上到下、寬度符合畫面；篩選動作照常作用。桌面大小的畫面用預設版面。"""
@@ -1542,6 +1608,135 @@ def test_escape_in_presentation_mode_only_leaves_presentation(server: str) -> No
         expect(presenting).to_have_count(1)
         page.locator("body").press("Escape")
         expect(presenting).to_have_count(0)
+        assert errors == []
+        browser.close()
+
+
+def test_presentation_mode_shortcuts(server: str) -> None:
+    """簡報模式的快捷鍵（Tableau 的快捷鍵表：「Switch in and out of Presentation Mode」是 F7、Ctrl+H）：在檢視的
+    頁面上按 F7 或 Ctrl+H 進入簡報模式，再按一次離開；Esc 照舊離開。按鍵標成已處理（瀏覽器自己的 F7、Ctrl+H
+    不跟著出現）。正在輸入文字、開著對話框時不處理——那一下按鍵是輸入框、對話框的。原本這兩個鍵沒有作用。
+
+    測試送出的按鍵不經過瀏覽器自己的快捷鍵處理：瀏覽器的視窗裡這兩個鍵會不會先被瀏覽器拿走，這裡測不到
+    （README「已知限制與待驗證」）。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "醒目提示")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        # 記下每一下按鍵最後有沒有被標成已處理
+        page.add_init_script(
+            "window.__keys = []; window.addEventListener('keydown', (e) => e.key !== 'Control' &&"
+            " window.__keys.push((e.ctrlKey ? 'Ctrl+' : '') + e.key + ':' + e.defaultPrevented));"
+        )
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_selector(".worksheet")
+        page.wait_for_function(LOADED)
+        presenting = page.locator(".page.presenting")
+
+        # F7、Ctrl+H：進入，再按一次離開；可以交替使用，Esc 也離開
+        for enter, leave in (
+            ("F7", "F7"),
+            ("Control+h", "Control+h"),
+            ("F7", "Control+h"),
+            ("Control+h", "Escape"),
+        ):
+            expect(presenting).to_have_count(0)
+            page.keyboard.press(enter)
+            expect(presenting).to_have_count(1)
+            expect(page.locator(".presentation-bar")).to_be_visible()
+            page.keyboard.press(leave)
+            expect(presenting).to_have_count(0)
+            expect(page.locator(".page > .toolbar")).to_be_visible()
+        handled = page.evaluate("window.__keys")
+        assert handled.count("F7:true") == 3 and handled.count("Ctrl+h:true") == 4, handled
+        assert not [key for key in handled if key.endswith(":false") and "Escape" not in key], (
+            handled
+        )
+
+        # 正在輸入文字（醒目提示控制項的搜尋框）：不處理，按鍵留給輸入框
+        search = page.get_by_label("醒目提示 Category")
+        search.click()
+        search.press("F7")
+        search.press("Control+h")
+        page.wait_for_timeout(300)
+        expect(presenting).to_have_count(0)
+        assert page.evaluate("window.__keys.slice(-2)") == ["F7:false", "Ctrl+h:false"]
+        # 焦點在不是輸入文字的控制項上（切換檢視的下拉選單）：照常
+        page.get_by_label("切換檢視").focus()
+        page.keyboard.press("F7")
+        expect(presenting).to_have_count(1)
+        page.keyboard.press("F7")
+        expect(presenting).to_have_count(0)
+
+        # 開著對話框（下載交叉資料表）：不處理
+        page.get_by_label("匯出").select_option(label="交叉資料表…")
+        expect(page.locator(".modal-backdrop")).to_have_count(1)
+        page.locator(".modal-backdrop .modal header h2").click()
+        page.keyboard.press("F7")
+        page.keyboard.press("Control+h")
+        page.wait_for_timeout(300)
+        expect(presenting).to_have_count(0)
+        expect(page.locator(".modal-backdrop")).to_have_count(1)
+        assert errors == []
+        browser.close()
+
+
+def test_presentation_mode_survives_rapid_toggling(server: str) -> None:
+    """全螢幕的要求是非同步的，進入、離開簡報模式可能比它快：連按 F7（或 Ctrl+H、進入之後馬上按 Esc），最後要
+    不在簡報模式、也不留在全螢幕；離開之後馬上再進入，上一次結束全螢幕的通知不能把這一次踢出去；真的進入全螢幕
+    之後，全螢幕被結束（使用者按 Esc，瀏覽器自己收下）照樣離開簡報模式。
+
+    原本（第五批的第一版）連按時畫面留在全螢幕、卻不是簡報模式（無頭的 Chromium 上 6 次中 3–6 次）；全螢幕的要求
+    還沒有結果時收到的「不在全螢幕」一律不理會，於是 `test_presentation_mode_shortcuts` 在電腦忙的時候偶爾停在
+    簡報模式裡。"""
+    from playwright.sync_api import expect, sync_playwright
+
+    ir = load_ir(FEATURES / "golden.ir.json")
+    board = next(d for d in ir.dashboards if d.name == "醒目提示")
+    state = (
+        "() => [document.querySelectorAll('.page.presenting').length, !!document.fullscreenElement]"
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1300, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"{server}/w/superstore_features/d/{board.id}")
+        page.wait_for_selector(".worksheet")
+        page.wait_for_function(LOADED)
+        presenting = page.locator(".page.presenting")
+
+        # 進入之後馬上離開（不等全螢幕）：不在簡報模式，也不留在全螢幕
+        for enter, leave in (("F7", "F7"), ("Control+h", "Control+h"), ("F7", "Escape")):
+            for _ in range(3):
+                page.keyboard.press(enter)
+                page.keyboard.press(leave)
+                page.wait_for_timeout(800)
+                assert page.evaluate(state) == [0, False], (enter, leave)
+
+        # 進入、等全螢幕；離開之後馬上再進入：上一次結束全螢幕的通知不把這一次踢出去
+        for _ in range(3):
+            page.keyboard.press("F7")
+            page.wait_for_function("document.fullscreenElement !== null")
+            page.keyboard.press("F7")
+            page.keyboard.press("F7")
+            page.wait_for_timeout(800)
+            assert page.evaluate(state) == [1, True]
+            page.keyboard.press("F7")
+            page.wait_for_function("document.fullscreenElement === null")
+            expect(presenting).to_have_count(0)
+
+        # 真的進入全螢幕之後，全螢幕在頁面之外結束（使用者按 Esc 時瀏覽器自己收下）：離開簡報模式
+        page.keyboard.press("Control+h")
+        page.wait_for_function("document.fullscreenElement !== null")
+        page.evaluate("document.exitFullscreen()")
+        expect(presenting).to_have_count(0)
+        assert page.evaluate(state) == [0, False]
         assert errors == []
         browser.close()
 

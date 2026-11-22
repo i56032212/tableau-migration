@@ -1040,8 +1040,11 @@ def create_app(
                     continue
                 found = data.run(headers, datasource, database)
             except (QueryError, ExecutionError, SourceConnectionError) as exc:
+                # 附註顯示給使用者：查詢的原因以畫面上的名稱寫（見 tmig.sqlgen.query 的 pill）；資料庫
+                # 執行時的錯誤訊息裡是 SQL 的內部欄名（sum(f_x)），不寫進附註
+                reason = "查詢執行失敗" if isinstance(exc, ExecutionError) else str(exc)
                 rendered_notes.append(
-                    f"顯示空的{'列' if shelf == 'rows' else '欄'}：查不到成員（{exc}）"
+                    f"顯示空的{'列' if shelf == 'rows' else '欄'}：查不到成員（{reason}）"
                 )
                 continue
             keys = [c.key for c in headers.columns if c.role == "dimension"]

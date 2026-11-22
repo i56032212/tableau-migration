@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 
-from tmig.ir import MarkLabels
+from tmig.ir import FieldUse, MarkLabels
+from tmig.ir.models import DateDerivation
 from tmig.render.vegalite import main_encoding
 
 from ..parser.builder import instance, ref, worksheet
@@ -168,6 +169,73 @@ def test_label_size_and_position_on_points(tmp_path: Path, db: Path) -> None:
     )
     (layer,) = label_layers(centered)
     assert layer["mark"]["align"] == "center" and "dx" not in layer["mark"]
+
+
+def test_multi_line_labels_are_placed_as_a_block(tmp_path: Path, db: Path) -> None:
+    """多行的標籤（標籤上的兩個欄位）在長條、折線與區域上（2026-11-21 記下的，2026-11-22 在畫面上量過：
+    Vega 把第一行放在單行時的位置、其餘往下排——橫的長條上整段的中線比長條的中線低 7 像素，直的長條上方
+    的第二行蓋到長條 11 像素，折線點上方的第二行蓋到點）：單行時以定位點為中線的（橫的長條、置中的長條、
+    點的左右）整段以它為中心；從上方掛著的（直的長條、折線與區域的點的上方、最大值）整段往上移，最後一行
+    在單行時那一行的位置；從下方掛著的（點的下方、堆疊的各段內側）不動。只有一行的、直寫的與修正前相同。
+    散佈圖標記旁的標籤見 test_row_heights.py。"""
+    ir = parse(
+        tmp_path,
+        worksheet(
+            "Bars", [REGION, SALES, PROFIT], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk")
+        ),
+    )
+    region, category = FieldUse(field="f_region"), FieldUse(field="f_category")
+    sales = FieldUse(field="f_sales", agg="sum", continuous=True)
+    profit = FieldUse(field="f_profit", agg="sum", continuous=True)
+    year = FieldUse(field="f_order_date", date=DateDerivation(kind="part", unit="year"))
+
+    def placed(
+        rows: list[FieldUse], columns: list[FieldUse], two: bool = True, **marks: Any
+    ) -> dict[str, Any]:
+        """標籤的位置（align、baseline、dx、dy）。"""
+        sheet = ir.worksheets[0].model_copy(deep=True)
+        sheet.rows, sheet.columns = rows, columns
+        direction = marks.pop("direction", None)
+        sheet.marks = sheet.marks.model_copy(
+            update={"label": [sales, profit] if two else [sales], **marks}
+        )
+        sheet.marks.labels = MarkLabels(show=True, direction=direction)
+        (layer,) = label_layers(render(ir.model_copy(update={"worksheets": [sheet]}), db).spec)
+        return {k: layer["mark"].get(k) for k in ("align", "baseline", "dx", "dy")}
+
+    across, down = ([region], [sales]), ([sales], [region])
+    # 橫的長條：整段以長條的中線為中心（往上半行：兩行時 7 像素）
+    assert placed(*across) == {"align": "left", "baseline": None, "dx": 3, "dy": -7.0}
+    assert placed(*across, two=False) == {"align": "left", "baseline": None, "dx": 3, "dy": None}
+    assert placed(*across, cell_align="center")["dy"] == -7.0
+    assert placed(*across, color=category)["dy"] == -7.0  # 堆疊的各段
+    # 直的長條：整段在長條的上端之上（往上一行）；垂直置中時整段在中間；堆疊的各段從上緣往下排
+    assert placed(*down) == {"align": None, "baseline": "bottom", "dx": None, "dy": -17.0}
+    assert placed(*down, two=False)["dy"] == -3
+    assert placed(*down, label_valign="center")["dy"] == -7.0
+    assert placed(*down, color=category) == {"align": None, "baseline": "top", "dx": None, "dy": 3}
+
+    # 折線與區域：點的上方整段往上一行；置中時整段以點為中心；點的下方不動
+    line = ([sales], [year])
+    assert placed(*line, type="line") == {
+        "align": None,
+        "baseline": "bottom",
+        "dx": None,
+        "dy": -18.0,
+    }
+    assert placed(*line, type="line", two=False)["dy"] == -4
+    assert placed(*line, type="area")["dy"] == -18.0
+    assert placed(*line, type="line", label_valign="center", cell_align="right") == {
+        "align": "left",
+        "baseline": "middle",
+        "dx": 4,
+        "dy": -7.0,
+    }
+    assert placed(*line, type="line", label_valign="bottom")["dy"] == 4
+    # 直寫的標籤（各行左右排）：與只有一行時相同
+    assert placed(*line, type="line", direction="up") == placed(
+        *line, type="line", two=False, direction="up"
+    )
 
 
 def test_bar_labels_with_measure_color_are_not_stacked(tmp_path: Path, db: Path) -> None:

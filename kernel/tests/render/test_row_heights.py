@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from tmig.ir.models import FontStyle
 from tmig.render.vegalite import ROW_HEIGHT, apply_fit
 
 from ..parser import builder as b
@@ -293,6 +294,36 @@ def test_column_width_follows_each_line_and_its_font(tmp_path: Path, db: Path) -
     assert columns(spec) == {"size": estimated("Total: 350", 12.0)}
 
 
+def test_dot_and_highlight_table_columns_fit_their_text(tmp_path: Path, db: Path) -> None:
+    """圓點表格與醒目提示表在欄架上有維度時的欄寬（2026-11-22 在畫面上量過：只依欄標題估計——圓點右邊
+    12pt 的標籤蓋到右邊那一欄的圓點；醒目提示表 20pt 的數字比欄寬寬，蓋到左右兩格）：圓點表格每一欄的
+    寬度與只有列時相同（標記 10 像素、左右的空白與標籤）；醒目提示表與文字表相同依每一格的文字估計。
+    文字比欄標題窄時與修正前相同。"""
+    category = f"<text column='{ref('none:Category:nk')}' />"
+    across = ref("none:Category:nk")
+    label_width = estimated("Technology", 12.0)  # 最長的標籤
+    assert label_width == 82
+
+    # 圓點表格：只有列時是一欄（標記、空白與標籤），欄架上有維度時每一欄也一樣寬
+    only_rows = render(parse(tmp_path, table(category, mark="Circle")), db).spec
+    assert columns(only_rows) == {"size": 10 + 16 + label_width}
+    crossed = render(parse(tmp_path, table(category, mark="Circle", cols=across)), db).spec
+    assert columns(crossed) == {"step": 10 + 16 + label_width, "count": 3, "fixed": True}
+
+    # 醒目提示表：16pt 的標籤（21.33 像素）比欄標題（12 像素）寬時依標籤
+    color = f"<color column='{ref('sum:Sales:qk')}' />"
+    ir = parse(tmp_path, table(color + category, mark="Square", cols=across))
+    assert columns(render(ir, db).spec) == {"step": label_width, "count": 3, "fixed": False}
+    sheet = ir.worksheets[0].model_copy(deep=True)
+    sheet.marks.label_font = FontStyle(size=16)
+    larger = render(ir.model_copy(update={"worksheets": [sheet]}), db).spec
+    assert columns(larger) == {
+        "step": estimated("Technology", 21.33),
+        "count": 3,
+        "fixed": False,
+    }
+
+
 # ---------------------------------------------------------------- 沒有列的檢視：整段置中
 
 
@@ -396,7 +427,8 @@ def test_dot_table_rows_follow_multi_line_labels(tmp_path: Path, db: Path) -> No
 def test_dot_table_labels_above_and_below_stay_in_their_row(tmp_path: Path, db: Path) -> None:
     """標籤在標記的上方或下方（垂直對齊）：多行的整段文字留在自己的這一列裡，不蓋到標記、上下列與欄標題。
     上方的標籤整段往上移（原本只算自訂標籤文字中的換行，標籤上的多個欄位不算：第二行起蓋在標記上）；
-    列高的一半放得下標記的半徑（5）、間距（4）與整段文字（兩行 28 像素）：74 像素。只有一行的照舊。"""
+    列高的一半放得下標記的半徑（5）、間距（4）與整段文字（兩行 28 像素）：74 像素（只有一行的見下一個
+    測試）。"""
     above = render(parse(tmp_path, dots(valign="top")), db).spec
     mark = label_mark(above)
     assert (mark["align"], mark["baseline"]) == ("center", "bottom")
@@ -410,8 +442,27 @@ def test_dot_table_labels_above_and_below_stay_in_their_row(tmp_path: Path, db: 
     assert (mark["baseline"], mark["dy"]) == ("top", 9.0)  # 第一行的上緣在標記下方 4 像素
     assert rows(below) == {"step": 74}
 
-    single = render(parse(tmp_path, dots(SALES_TEXT, valign="top")), db).spec
-    assert label_mark(single)["dy"] == -9.0 and rows(single) == {"step": ROW_HEIGHT}
+
+def test_dot_table_single_line_above_and_below_stays_in_its_row(tmp_path: Path, db: Path) -> None:
+    """只有一行的標籤在標記的上方或下方（2026-11-22 在畫面上量過：預設 20 像素的列，17 個標記中 16 個
+    標籤蓋到上、下一列的圓點，最多 10 像素）：與多行的相同留在自己的這一列裡——列高的一半放得下標記的半徑
+    （5）、間距（4）與這一行（14 像素）：46 像素。與文字表的大字相同，設定了列高的照設定（只有一行）；
+    標籤在標記右邊（預設）的照舊 20 像素。"""
+    above = render(parse(tmp_path, dots(SALES_TEXT, valign="top")), db)
+    assert label_mark(above.spec)["dy"] == -9.0 and rows(above.spec) == {"step": 46}
+    assert above.notes == []
+    below = render(parse(tmp_path, dots(SALES_TEXT, valign="bottom")), db).spec
+    assert label_mark(below)["dy"] == 9.0 and rows(below) == {"step": 46}
+    shapes = render(parse(tmp_path, dots(SALES_TEXT, valign="top", mark="Shape")), db).spec
+    assert rows(shapes) == {"step": 46}
+
+    # 設定的列高照設定、不寫附註
+    set_height = styled(dots(SALES_TEXT, valign="top"), rule("cell", fmt("height", "30")))
+    kept = render(parse(tmp_path, set_height), db)
+    assert rows(kept.spec) == {"step": 30} and kept.notes == []
+    # 標籤在標記右邊：照舊
+    side = render(parse(tmp_path, dots(SALES_TEXT)), db).spec
+    assert rows(side) == {"step": ROW_HEIGHT} and label_mark(side)["align"] == "left"
 
 
 def test_dot_table_labels_with_different_line_counts(tmp_path: Path, db: Path) -> None:
@@ -447,7 +498,8 @@ def test_dot_table_labels_with_different_line_counts(tmp_path: Path, db: Path) -
 
 def test_labels_above_marks_on_axes_count_label_fields(tmp_path: Path, db: Path) -> None:
     """座標軸上的圓點（散佈圖）：在標記上方的標籤依資料的行數整段往上移（標籤上的兩個欄位是兩行；原本只
-    往上一個間距，第二行蓋在標記上）。在標記右邊的標籤位置不變（只有表格中的標籤整段置中）。"""
+    往上一個間距，第二行蓋在標記上）。在標記右邊的標籤與表格中的相同整段以標記的中線為中心（2026-11-22
+    在畫面上量過：原本第一行在中線上，整段的中線比圓點低 7 像素）。"""
 
     def scatter(valign: str | None) -> dict[str, Any]:
         style = (
@@ -472,4 +524,4 @@ def test_labels_above_marks_on_axes_count_label_fields(tmp_path: Path, db: Path)
     above = scatter("top")
     assert (above["baseline"], above["dy"]) == ("bottom", -23.0)
     side = scatter(None)
-    assert (side["baseline"], side["dx"]) == ("middle", 9.0) and "dy" not in side
+    assert (side["baseline"], side["dx"], side["dy"]) == ("middle", 9.0, -7.0)

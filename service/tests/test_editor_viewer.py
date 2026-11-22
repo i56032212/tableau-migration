@@ -4892,6 +4892,255 @@ def test_dot_table_rows_follow_multi_line_labels(engine: str) -> None:
         browser.close()
 
 
+def test_point_and_area_annotations_on_discrete_rows(engine: str) -> None:
+    """點與區域的註解的座標在離散的座標軸上（2026-11-21 記下的，2026-11-22 在畫面上重現：示範報表的
+    Sub-Category Profit 以 API 加上「列在某個子類別」的點或區域，圖上什麼都沒有，附註是「…的位置不在這張圖
+    的座標軸上，沒有畫出」）：點的文字畫在那個子類別的那一列，區域的方框從第一列的上緣到最後一列的下緣
+    （不碰到上下相鄰的長條），長條的順序不變、沒有附註。"""
+    from playwright.sync_api import Page, sync_playwright
+
+    ws = "ws_sub_category_profit"
+    bars = ".editor-canvas svg path[aria-roledescription='bar']:not(.frozen *)"
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+        page.wait_for_selector('.editor .chart[data-drawn="true"]')
+
+    def put(body: dict[str, Any]) -> None:
+        request = urllib.request.Request(
+            f"{engine}/api/edit/demo/worksheets/{body['id']}",
+            data=json.dumps({"worksheet": body}).encode(),
+            headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+            method="PUT",
+        )
+        urllib.request.urlopen(request, timeout=60).close()
+
+    def rows(page: Page) -> list[tuple[str, float, float]]:
+        """畫面上由上到下的長條：子類別的名稱、上緣與下緣。"""
+        found = page.locator(bars).evaluate_all(
+            """nodes => nodes.map(n => { const r = n.getBoundingClientRect();
+              return [n.getAttribute('aria-label'), r.top, r.bottom]; })"""
+        )
+        named: list[tuple[str, float, float]] = []
+        for label, top, bottom in sorted(found, key=lambda item: item[1]):
+            matched = re.search(r"Sub-Category: ([^;]+)", label)
+            assert matched is not None, label
+            named.append((matched.group(1), top, bottom))
+        return named
+
+    original = call(engine, f"/api/edit/demo/worksheets/{ws}")["worksheet"]
+    profit, category = original["columns"][0], original["rows"][0]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{ws}")
+        settle(page)
+        names = [name for name, _, _ in rows(page)]
+        assert len(names) >= 6 and names != sorted(names)  # 依利潤排序，不是依名稱
+
+        def at(name: str, x: float) -> dict[str, Any]:
+            return {"x": x, "x_axis": profit, "y": name, "y_axis": category}
+
+        noted = {
+            **original,
+            "annotations": [
+                {"kind": "point", "text": [{"text": "這一列"}], "point": at(names[2], 20000)}
+                | {"offset": [30, 0]},
+                {"kind": "area", "text": [{"text": "這幾列"}]}
+                | {"top_left": at(names[1], 10000), "bottom_right": at(names[4], 30000)},
+            ],
+        }
+        put(noted)
+        page.reload()
+        settle(page)
+        text = page.locator(f"{MAIN_SVG} g[class*='__deco_annotation0'] text").first
+        text.wait_for()
+        shown = rows(page)
+        assert [name for name, _, _ in shown] == names
+        response = call(engine, f"/api/workbooks/demo/worksheets/{ws}/render", {})
+        assert response["notes"] == []
+        # 點：文字在第三個長條的那一列
+        box = text.bounding_box()
+        assert box is not None and text.text_content() == "這一列"
+        middle = (shown[2][1] + shown[2][2]) / 2
+        assert abs(box["y"] + box["height"] / 2 - middle) <= 2
+        # 區域：方框涵蓋第二到第五個長條，不碰到第一個與第六個
+        rect = page.locator(f"{MAIN_SVG} g[class*='__deco_annotation1_box'] path").first
+        area = rect.bounding_box()
+        assert area is not None
+        top, bottom = area["y"], area["y"] + area["height"]
+        assert shown[0][2] <= top <= shown[1][1] and shown[4][2] <= bottom <= shown[5][1]
+        # 文字在這四列的中間（第三、第四個長條之間）
+        label = page.locator(f"{MAIN_SVG} g[class*='__deco_annotation1'] text").last
+        placed = label.bounding_box()
+        assert placed is not None and label.text_content() == "這幾列"
+        assert abs(placed["y"] + placed["height"] / 2 - (shown[2][2] + shown[3][1]) / 2) <= 2
+        assert errors == []
+        browser.close()
+
+
+def test_dot_table_single_line_labels_above_and_below(engine: str) -> None:
+    """圓點與形狀的表格（每一列一個標記、預設 20 像素的列）中只有一行的標籤在標記的上方或下方（2026-11-22
+    在畫面上量過：17 個標籤中 16 個蓋到上一列或下一列的圓點，最多 10 像素）：與多行的相同，列加高到標籤
+    留在自己的這一列裡（46 像素），不蓋到任何標記或其他標籤；標籤在右邊（預設）的照舊 20 像素。"""
+    from playwright.sync_api import sync_playwright
+
+    sub = {"field": "f_sub_category"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1300})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        for mark, valign in (("circle", "top"), ("circle", "bottom"), ("shape", "top")):
+            marks = {"type": mark, "label": [sales], "label_valign": valign}
+            found = _text_layout(engine, page, f"{mark}_{valign}", rows=[sub], marks=marks)
+            assert found["rows"] == {"step": 46}, (mark, valign)
+            assert len(found["texts"]) == len(found["symbols"]) == 17
+            assert _overlapping([*found["texts"], *found["symbols"]]) == 0, (mark, valign)
+            pairs = zip(
+                sorted(found["symbols"], key=_middle),
+                sorted(found["texts"], key=_middle),
+                strict=True,
+            )
+            for dot, text in pairs:
+                # 在標記之上（之下），整行在這一列裡：標記在列的中線，上下各 23 像素（文字的外框含字型
+                # 上下的留白，比行高 14 像素多 2 像素）
+                if valign == "top":
+                    assert text[3] <= dot[1] + 1 and text[1] >= _middle(dot) - 23 - 3
+                else:
+                    assert text[1] >= dot[3] - 1 and text[3] <= _middle(dot) + 23 + 3
+
+        side = _text_layout(
+            engine, page, "circle_side", rows=[sub], marks={"type": "circle", "label": [sales]}
+        )
+        assert side["rows"] == {"step": 20}
+        assert _overlapping([*side["texts"], *side["symbols"]]) == 0
+        assert errors == []
+        browser.close()
+
+
+def test_multi_line_labels_on_bars_lines_and_points(engine: str) -> None:
+    """長條、折線與散佈圖上多行的標籤（標籤上的兩個欄位；2026-11-21 記下的，2026-11-22 在畫面上量過：Vega
+    把第一行放在單行時的位置、其餘往下排——橫的長條上整段比長條的中線低 7 像素，直的長條上方的第二行蓋到
+    長條 11 像素，折線點上方的第二行蓋到點 10 像素，散佈圖標記旁的整段比圓點低 7 像素）：整段放在單行時
+    的位置——以長條或圓點的中線為中心；在直的長條與折線點之上的，最後一行在長條、點的上方。"""
+    from playwright.sync_api import sync_playwright
+
+    region = {"field": "f_region"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+    profit = {"field": "f_profit", "agg": "sum", "continuous": True}
+    year = {"field": "f_order_date", "date": {"kind": "part", "unit": "year"}}
+    two = [sales, profit]
+
+    def bars(page: Any) -> list[list[float]]:
+        return page.locator(f"{MAIN_SVG} path[aria-roledescription='bar']").evaluate_all(
+            """nodes => nodes.map(n => { const r = n.getBoundingClientRect();
+              return [r.left, r.top, r.right, r.bottom]; })"""
+        )
+
+    def centre_x(box: list[float]) -> float:
+        return (box[0] + box[2]) / 2
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1100})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        # 橫的長條：整段的中線與長條的中線對齊
+        marks = {"type": "bar", "label": two}
+        found = _text_layout(engine, page, "hbars2", rows=[region], columns=[sales], marks=marks)
+        assert found["lines"] == [2] * 4
+        pairs = zip(
+            sorted(bars(page), key=_middle), sorted(found["texts"], key=_middle), strict=True
+        )
+        for bar, text in pairs:
+            assert abs(_middle(text) - _middle(bar)) <= 1.5
+
+        # 直的長條：整段在長條的上端之上，不蓋到長條
+        found = _text_layout(engine, page, "vbars2", rows=[sales], columns=[region], marks=marks)
+        assert found["lines"] == [2] * 4
+        shown = bars(page)
+        pairs = zip(sorted(shown, key=centre_x), sorted(found["texts"], key=centre_x), strict=True)
+        for bar, text in pairs:
+            assert 1 <= bar[1] - text[3] <= 5
+        assert _overlapping([*shown, *found["texts"]]) == 0
+
+        # 折線：整段在點之上（透明的點：每個標記都有一個）
+        marks = {"type": "line", "label": two}
+        found = _text_layout(engine, page, "lines2", rows=[sales], columns=[year], marks=marks)
+        assert found["lines"] == [2] * 4
+        for text in found["texts"]:
+            point = min(found["symbols"], key=lambda s: abs(centre_x(s) - centre_x(text)))
+            assert text[3] <= _middle(point) - 2
+
+        # 散佈圖：標記右邊的整段以圓點的中線為中心
+        marks = {"type": "circle", "label": [region, sales], "detail": [region]}
+        found = _text_layout(engine, page, "scatter2", rows=[sales], columns=[profit], marks=marks)
+        assert found["lines"] == [2] * 4
+        for text in found["texts"]:
+            dot = min(
+                found["symbols"],
+                key=lambda s: abs(s[2] + 4 - text[0]) + abs(_middle(s) - _middle(text)),
+            )
+            assert abs(_middle(text) - _middle(dot)) <= 1.5
+        assert errors == []
+        browser.close()
+
+
+def test_dot_and_highlight_table_columns_fit_their_text(engine: str) -> None:
+    """欄架上有維度的圓點表格與醒目提示表的欄寬（2026-11-22 在畫面上量過：只依欄標題估計——圓點右邊 12pt
+    的標籤蓋到右邊那一欄的圓點 7 像素；醒目提示表 20pt 的數字 92 像素寬、欄寬 89 像素）：圓點的標籤不蓋到
+    別的圓點與標籤，醒目提示表每一格的文字在自己的色塊裡。"""
+    from playwright.sync_api import sync_playwright
+
+    sub, region = {"field": "f_sub_category"}, {"field": "f_region"}
+    sales = {"field": "f_sales", "agg": "sum", "continuous": True}
+
+    def cells(page: Any) -> list[list[float]]:
+        return page.locator(f"{MAIN_SVG} g.mark-rect.role-mark path").evaluate_all(
+            """nodes => nodes.map(n => { const r = n.getBoundingClientRect();
+              return [r.left, r.top, r.right, r.bottom]; })"""
+        )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 1000})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+
+        # 圓點表格：12pt 的標籤在圓點右邊，不蓋到右邊那一欄的圓點或標籤
+        marks = {"type": "circle", "label": [sales], "label_font": {"size": 12}}
+        dots = _text_layout(engine, page, "dots_cols", rows=[sub], columns=[region], marks=marks)
+        assert len(dots["texts"]) == len(dots["symbols"]) == 17 * 4
+        assert _overlapping([*dots["texts"], *dots["symbols"]]) == 0
+        assert dots["columns"]["step"] > 62  # 原本只依欄標題（Central）估計
+
+        # 醒目提示表：20pt 的數字在自己的色塊裡（左右不超出）
+        marks = {"type": "square", "label": [sales], "color": sales, "label_font": {"size": 20}}
+        table = _text_layout(engine, page, "highlight", rows=[region], columns=[sub], marks=marks)
+        blocks = cells(page)
+        assert len(table["texts"]) == len(blocks) == 4 * 17
+        for text in table["texts"]:
+            centre = ((text[0] + text[2]) / 2, _middle(text))
+            block = next(
+                b for b in blocks if b[0] <= centre[0] <= b[2] and b[1] <= centre[1] <= b[3]
+            )
+            assert block[0] - 1 <= text[0] and text[2] <= block[2] + 1, (text, block)
+        assert errors == []
+        browser.close()
+
+
 def test_dual_axis_with_trend_lines(engine: str) -> None:
     """雙軸加趨勢線（2026-11-21 稽核：整張圖變成「查詢失敗：Duplicate data set name: "__ref_trend_pathgroup"」）：
     連續的月份 × SUM(Sales)、SUM(Profit)，Profit 設成雙軸後加上趨勢線——圖照樣畫出來，兩個量值各一條趨勢線。"""
@@ -5312,5 +5561,144 @@ def test_fit_height_rows_are_not_squeezed_into_each_other(engine: str) -> None:
         settle(page)
         found = layout(kept=True, scroll="both")  # 符合高度時寬度不填滿：兩個方向都可以捲動
         assert found["overlapping"] == 0 and found["step"] == pytest.approx(48, abs=0.1), found
+        assert errors == []
+        browser.close()
+
+
+def test_filter_range_default_arriving_late_keeps_what_was_typed(engine: str) -> None:
+    """量值篩選對話框的預設範圍（資料的最小值、最大值）是另一個查詢，機器忙的時候在使用者開始輸入之後才回來：
+    這時使用者改過、或正在裡面（點進去、全選了準備輸入）的方塊不填預設值，打的字原樣留下；其他的方塊照常填上。
+
+    原本最小值的方塊只要還是空的就填進資料的最小值：點進去（或像 Playwright 的 fill 一樣全選）之後範圍才到，
+    預設值填進方塊、游標跑到最後，接著打的「600000」接在後面，變成「391721.905…600000」，存成資料的最小值
+    （test_filter_tabs_control_options_missing_values_and_view_data 偶爾失敗的原因）。測試把範圍的回應扣住，
+    在指定的步驟之後才放行，不靠時間。"""
+    from playwright.sync_api import Page, Route, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def use(field: str, agg: str | None = None) -> dict[str, Any]:
+        return {"field": field, "agg": agg, "date": None, "continuous": agg is not None}
+
+    created = call(engine, "/api/edit/demo/worksheets", {"name": "Late"})["worksheet"]
+    ws = created["id"]
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/{ws}",
+        data=json.dumps(
+            {
+                "worksheet": {
+                    **created,
+                    "rows": [use("f_region")],
+                    "columns": [use("f_sales", "sum")],
+                }
+            }
+        ).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        assert response.status == 200
+    bounds = call(
+        engine,
+        "/api/edit/demo/domain",
+        {"use": use("f_sales", "sum"), "kind": "range", "worksheet": ws},
+    )
+    least, most = float(bounds["min"]), float(bounds["max"])
+    assert least < 600000 < most
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        held: list[Route] = []
+
+        def hold(route: Route) -> None:
+            body = route.request.post_data_json or {}
+            if body.get("kind") == "range":
+                held.append(route)  # 扣住範圍的查詢，等 release() 才放行
+            else:
+                route.continue_()
+
+        page.route("**/api/edit/demo/domain", hold)
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/{ws}")
+        settle(page)
+        dialog = page.locator(".filter-dialog")
+        low = dialog.get_by_label("最小值")
+        high = dialog.get_by_label("最大值")
+
+        def open_dialog(tab: str = "值範圍") -> None:
+            page.locator('.shelf[data-shelf="columns"] .pill').click()
+            page.locator(
+                ".popup-menu li[role=menuitem] > .menu-label", has_text="篩選…"
+            ).first.click()
+            expect(dialog).to_have_count(1)
+            dialog.get_by_role("tab", name=tab).click()
+            deadline = time.monotonic() + 30
+            while not held:
+                assert time.monotonic() < deadline, "對話框沒有查詢資料的範圍"
+                page.wait_for_timeout(20)
+            expect(low).to_have_value("")
+
+        def release() -> None:
+            # 範圍的提示與方塊的預設值在同一次畫面更新：看到提示時方塊已經是範圍到了之後的樣子
+            held.pop().continue_()
+            expect(dialog.locator(".hint", has_text="資料的範圍")).to_be_visible()
+
+        def cancel() -> None:
+            page.locator(".modal-backdrop").get_by_role("button", name="取消").click()
+            expect(dialog).to_have_count(0)
+
+        # 沒有動過：兩個方塊都填上資料的範圍（原本的行為）
+        open_dialog()
+        release()
+        assert (float(low.input_value()), float(high.input_value())) == (least, most)
+        cancel()
+
+        # 點進最小值的方塊之後範圍才到，接著一個字一個字打
+        open_dialog()
+        low.click()
+        release()
+        page.keyboard.type("600000")
+        expect(low).to_have_value("600000")
+        assert float(high.input_value()) == most  # 沒有點進去的方塊照常填上
+        cancel()
+
+        # 打到一半範圍到了，再打完
+        open_dialog()
+        low.click()
+        page.keyboard.type("600")
+        release()
+        page.keyboard.type("000")
+        expect(low).to_have_value("600000")
+        cancel()
+
+        # 打了又刪掉（留空＝不限），焦點離開之後範圍才到：仍是空的
+        open_dialog()
+        low.click()
+        page.keyboard.type("6")
+        page.keyboard.press("Backspace")
+        page.locator(".modal header h2").click()
+        release()
+        expect(low).to_have_value("")
+        assert float(high.input_value()) == most
+        cancel()
+
+        # 「至少」分頁，像 fill 一樣：點進去、全選，範圍到了之後才插入文字；存起來的下限是 600000
+        open_dialog("至少")
+        low.focus()
+        low.evaluate("e => e.select()")
+        release()
+        page.keyboard.insert_text("600000")
+        expect(low).to_have_value("600000")
+        dialog.get_by_role("button", name="確定").click()
+        expect(dialog).to_have_count(0)
+        page.wait_for_timeout(300)
+        settle(page)
+        saved = call(engine, f"/api/edit/demo/worksheets/{ws}")["worksheet"]["filters"]
+        assert [(f["kind"], f["min"], f["max"]) for f in saved] == [("range", 600000, None)]
         assert errors == []
         browser.close()

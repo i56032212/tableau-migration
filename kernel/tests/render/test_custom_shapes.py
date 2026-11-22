@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from tmig.ir import IR, MarkShape, ShapeAssignment
+from tmig.ir import IR, MarkLabels, MarkShape, ShapeAssignment
 from tmig.package import image_paths, read_package, read_report_file, shape_images, write_package
 from tmig.parser.workbook import parse_workbook
 from tmig.shapes import embedded_shapes, palettes, shape_path
@@ -331,9 +331,74 @@ def test_multiline_label_above_an_image_shape(tmp_path: Path, db: Path) -> None:
     # 圖片的半徑 + 間隔 4，再往上一行（Vega 的行高是字級 + 2）；大小 2 的圖片填滿儲存格較短的一邊
     side = "min(bandwidth('x'), height) * 1.0"
     assert text["mark"]["baseline"] == "bottom" and text["mark"]["align"] == "center"
-    assert text["mark"]["dy"] == {"expr": f"-1 * ((({side}) / 2) + {4 + font + 2})"}
+    assert text["mark"]["dy"] == {"expr": f"-1 * ((({side}) / 2) + {4 + font + 2:g})"}
     image = next(layer for layer in spec["layer"] if layer["mark"]["type"] == "image")
     assert image["mark"]["width"] == {"expr": side}
     # 只有欄的標題：圖片在這一格的中間（沒有列）
     assert image["encoding"]["y"] == {"value": {"expr": "height / 2"}}
     assert "x" not in image["encoding"]
+
+
+def test_rotated_label_on_a_cell_sized_image_shape(tmp_path: Path, db: Path) -> None:
+    """直寫的標籤（文字方向：由下往上、由上往下）加在大小相對於儲存格的圖片形狀上（2026-11-21 記下的：
+    畫圖時 TypeError——標籤與圖片的距離是運算式，轉向時直接取負號）：照樣畫出來，位移換算到轉了 90 度的
+    文字自己的方向上，運算式整個取負號。"""
+    style = (
+        "<style><style-rule element='mark'><format attr='mark-labels-show' value='true' />"
+        "<format attr='shape' value='Clear/blank.png' /><format attr='size' value='2' />"
+        "</style-rule></style>"
+    )
+    sheet = worksheet(
+        "Icons",
+        [REGION, SALES],
+        cols=ref("none:Region:nk"),
+        mark="Shape",
+        encodings=f"<text column='{ref('sum:Sales:qk')}' />",
+        pane_extra=style,
+    )
+    parsed = parse(tmp_path, sheet, embedded("Clear/blank.png"))
+    assert parsed.unsupported == [], [u.reason for u in parsed.unsupported]
+    side = "min(bandwidth('x'), height) * 1.0"
+    out = f"1 * ((({side}) / 2) + 4)"  # 圖片的半徑 + 間隔 4
+
+    def label(direction: str | None, **placement: Any) -> dict[str, Any]:
+        ws = parsed.worksheets[0].model_copy(deep=True)
+        ws.marks.labels = MarkLabels(show=True, direction=direction)  # type: ignore[arg-type]
+        for key, value in placement.items():
+            setattr(ws.marks, key, value)
+        ir = parsed.model_copy(update={"worksheets": [ws]})
+        rendered = render(ir, db)
+        assert rendered.unsupported is None and rendered.spec is not None
+        text = next(
+            layer
+            for layer in rendered.spec["layer"]
+            if str(layer.get("name", "")).startswith("__label_")
+        )
+        return {k: text["mark"].get(k) for k in ("align", "baseline", "angle", "dx", "dy")}
+
+    # 橫寫：標籤在圖片的右邊（預設）
+    assert label(None) == {"align": "left", "baseline": "middle"} | {
+        "angle": None,
+        "dx": {"expr": out},
+        "dy": None,
+    }
+    # 由下往上：仍在圖片的右邊——文字自己的「下方」朝右，位移成為 dy
+    assert label("up") == {"align": "center", "baseline": "top"} | {
+        "angle": 270,
+        "dx": None,
+        "dy": {"expr": out},
+    }
+    # 由上往下：文字自己的「上方」朝右，位移取負號（原本在這裡 TypeError）
+    assert label("down") == {"align": "center", "baseline": "bottom"} | {
+        "angle": 90,
+        "dx": None,
+        "dy": {"expr": f"-({out})"},
+    }
+    # 標籤在圖片的上方、由下往上寫：文字從圖片的上緣往上，位移成為 dx 且取負號
+    above = label("up", label_valign="top", cell_align="center")
+    assert (above["align"], above["baseline"], above["angle"]) == ("left", "middle", 270)
+    assert above["dx"] == {"expr": f"-(-{out})"} and above["dy"] is None
+    # 標籤在圖片的下方、由上往下寫
+    below = label("down", label_valign="bottom", cell_align="center")
+    assert (below["align"], below["baseline"], below["angle"]) == ("left", "middle", 90)
+    assert below["dx"] == {"expr": out} and below["dy"] is None

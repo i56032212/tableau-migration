@@ -1,6 +1,6 @@
 // 篩選對話框：類別（一般、條件、頂部）、範圍（量值、連續的數字與日期）、相對日期。
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
 import { editApi } from "./api";
@@ -138,6 +138,10 @@ export function FilterDialog({
   const [low, setLow] = useState<string>(existing?.kind === "range" && existing.min !== null && existing.min !== undefined ? String(existing.min) : "");
   const [high, setHigh] = useState<string>(existing?.kind === "range" && existing.max !== null && existing.max !== undefined ? String(existing.max) : "");
   const [bounds, setBounds] = useState<{ min: Scalar; max: Scalar } | null>(null);
+  // 最小值、最大值的方塊：使用者改過或正在裡面（點進去、全選了準備輸入）的，晚到的資料範圍不填進去
+  const lowInput = useRef<HTMLInputElement>(null);
+  const highInput = useRef<HTMLInputElement>(null);
+  const edited = useRef({ low: false, high: false });
   const [includeNull, setIncludeNull] = useState(Boolean(existing?.include_null));
   // 範圍的分頁（與 Tableau 相同）：值範圍、至少（只有下限）、至多（只有上限）、特殊值（Null、非 Null、全部）
   const [rangeTab, setRangeTab] = useState<"range" | "least" | "most" | "special">(() => {
@@ -220,9 +224,14 @@ export function FilterDialog({
         if (cancelled || d.kind !== "range") return;
         setBounds({ min: d.min, max: d.max });
         if (!existing || existing.kind !== "range") {
-          // 範圍載入之前使用者已經輸入的值不覆蓋（查詢慢的時候，先輸入的下限或上限會被資料的範圍蓋掉）
-          setLow((current) => (current !== "" ? current : d.min === null ? "" : String(d.min)));
-          setHigh((current) => (current !== "" ? current : d.max === null ? "" : String(d.max)));
+          // 資料的範圍是預設值，只填進使用者還沒動過的方塊。查詢慢的時候使用者可能已經在輸入：輸入過的值不覆蓋；
+          // 已經點進去（或全選了）還沒打字的空方塊也不填——否則預設值填進去、游標跑到最後，接著打的字接在預設值
+          // 後面（例如 600000 變成「391721.905…600000」，存成資料的最小值）。是不是在方塊裡，到畫面更新的那一刻
+          // 才判斷（更新與畫上畫面之間不會插進按鍵）
+          const untouched = (key: "low" | "high", input: HTMLInputElement | null, current: string) =>
+            current === "" && !edited.current[key] && (input === null || document.activeElement !== input);
+          setLow((current) => (untouched("low", lowInput.current, current) && d.min !== null ? String(d.min) : current));
+          setHigh((current) => (untouched("high", highInput.current, current) && d.max !== null ? String(d.max) : current));
         }
       })
       .catch((e: Error) => !cancelled && setError(e.message));
@@ -561,13 +570,31 @@ export function FilterDialog({
                   {rangeTab !== "most" && (
                     <label>
                       最小值
-                      <input type={dateInput ? "date" : "text"} aria-label="最小值" value={dateInput ? low.slice(0, 10) : low} onChange={(e) => setLow(e.target.value)} />
+                      <input
+                        ref={lowInput}
+                        type={dateInput ? "date" : "text"}
+                        aria-label="最小值"
+                        value={dateInput ? low.slice(0, 10) : low}
+                        onChange={(e) => {
+                          edited.current.low = true;
+                          setLow(e.target.value);
+                        }}
+                      />
                     </label>
                   )}
                   {rangeTab !== "least" && (
                     <label>
                       最大值
-                      <input type={dateInput ? "date" : "text"} aria-label="最大值" value={dateInput ? high.slice(0, 10) : high} onChange={(e) => setHigh(e.target.value)} />
+                      <input
+                        ref={highInput}
+                        type={dateInput ? "date" : "text"}
+                        aria-label="最大值"
+                        value={dateInput ? high.slice(0, 10) : high}
+                        onChange={(e) => {
+                          edited.current.high = true;
+                          setHigh(e.target.value);
+                        }}
+                      />
                     </label>
                   )}
                 </div>

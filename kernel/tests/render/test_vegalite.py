@@ -181,7 +181,8 @@ def test_unsupported_mark(ir) -> None:
         QueryResult(columns=[c.key for c in query.columns], rows=[]),
     )
     assert rendered.spec is None
-    assert rendered.unsupported == "標記類型 map 尚未支援"
+    # 檢視器上顯示的原因：標記類型寫標記卡選單上的名稱（原本是「標記類型 map 尚未支援」）
+    assert rendered.unsupported == "標記類型「地圖」尚未支援"
 
 
 def test_view_without_marks_is_blank(ir) -> None:

@@ -418,8 +418,9 @@ class _Builder:
         """離散的列上多行的文字需要的列高（像素；只有一行時為 0）：見 fit_rows，列高不夠時由 shelf_size 加大
         （設定的列高放不下時也加大，並寫進附註）。"""
         self.row_line = 0.0
-        """離散的列上只有一行、但字大到放不下預設列高的文字需要的列高（像素；放得下時為 0）：見 fit_rows。
-        只在沒有設定列高時由 shelf_size 加大——設定了列高的照設定。"""
+        """離散的列上只有一行、但放不下預設列高的文字需要的列高（像素；放得下時為 0）：字大到放不下的，或
+        圓點表格中標記上方、下方的標籤（見 fit_rows）。只在沒有設定列高時由 shelf_size 加大——設定了列高的
+        照設定。"""
         self.main_marks: Marks | None = None
         """第一張圖的標記卡（unit 第一次畫的那一張；雙軸時是第一個量值的）：build_spec 依它的文字估計欄寬。"""
         self.cell_lines: dict[int, list[list[tuple[str, float]]]] = {}
@@ -628,21 +629,23 @@ class _Builder:
         需要的列高是整段文字的高度加上留白（margin；省略時與預設的列相同比例——ROW_PADDING：預設的
         12 像素的字一行 14 像素，留 6 像素，剛好是 ROW_HEIGHT）。多行的文字一律依它；只有一行時，放得下
         預設的列高（這一行占的高度——字級的 LINE_PITCH 倍——不超過 ROW_HEIGHT，約 12pt 以下）就不動，
-        列照舊是 ROW_HEIGHT，放不下才依它加高（例如 20pt 的字：42 像素）。推定的：Tableau 的文件沒有寫，
-        也還沒有與 Tableau 的畫面對過。"""
+        列照舊是 ROW_HEIGHT，放不下才依它加高（例如 20pt 的字：42 像素）。有 margin 時（圓點表格中標記
+        上方或下方的標籤：留白是標記與標籤占的高度）只有一行的也依整段的高度加上 margin 判斷放不放得下。
+        只有一行的不改設定的列高（與文字表的大字相同）。推定的：Tableau 的文件沒有寫，也還沒有與 Tableau
+        的畫面對過。"""
         y = encoding.get("y")
         if not isinstance(y, dict) or y.get("type") not in ("ordinal", "nominal"):
             return
         needed = block + (largest * ROW_PADDING if margin is None else margin)
         if lines > 1:
             self.row_text = max(self.row_text, needed)
-        elif largest * LINE_PITCH > ROW_HEIGHT:
+        elif (needed if margin is not None else largest * LINE_PITCH) > ROW_HEIGHT:
             # 字級的像素是四捨五入到小數兩位的（20pt 是 26.67）：先捨去這個誤差再進位，20pt 才是 42 而不是 43
             self.row_line = max(self.row_line, round(needed, 1))
 
     def cell_width(self, values: list[dict[str, Any]]) -> float:
-        """文字表每一格文字的寬度估計（像素，不含左右的空白）：各行依自己的字級估計、取最寬的一行，一行
-        有格式不同的幾段時各段相加（見 cell_lines）；不是文字標記時為 0。"""
+        """文字表與醒目提示表每一格文字的寬度估計（像素，不含左右的空白）：各行依自己的字級估計、取最寬
+        的一行，一行有格式不同的幾段時各段相加（見 cell_lines）；不是文字標記時為 0。"""
         lines = self.cell_lines.get(id(self.main_marks)) if self.main_marks is not None else None
         if not lines:
             return 0.0
@@ -1108,6 +1111,10 @@ class _Builder:
 
         self.common(encoding, marks)
         if highlight_table:
+            text_enc = encoding.get("text")
+            if isinstance(text_enc, dict) and "field" in text_enc:
+                # 醒目提示表的欄寬也依每一格的文字估計（與文字表相同，見 cell_width；原本只依欄標題）
+                self.cell_lines[id(marks)] = [[(text_enc["field"], float(vl_mark["fontSize"]))]]
             self.stack_text(marks, vl_mark, encoding)
             vl_mark.pop("color", None)
             text = {
@@ -1552,7 +1559,7 @@ class _Builder:
         most = max(counts, default=1)
         varying = field_name if len(counts) > 1 else None
         rotated = setting.direction is not None
-        # 圓點與形狀的表格（每格一個標記）：多行的標籤整段以標記的中線為中心，列高跟著標籤變高。
+        # 圓點與形狀的表格（每格一個標記）：列高跟著標籤變高（多行的標籤整段的位置見 _label_layer）。
         # 圖片形狀的大小相對於儲存格（半徑是運算式）：列高改了圖片也跟著變，不處理；直寫的標籤各行是
         # 左右排的，也不處理
         table = vl_type == "cell" and not rotated and not isinstance(radius, str)
@@ -1561,13 +1568,14 @@ class _Builder:
             most = 1 + sum(run.text.count("\n") for run in marks.label_text if run.text)
             varying = None
         if table and not isinstance(radius, str):
-            # 列高要放得下每一格的標籤（與文字表相同，見 fit_rows）。標籤在標記的上方或下方時，多行的
-            # 整段文字要留在自己的這一列裡（不畫到上、下一列或欄標題上）：標記在列的中線，列高的一半要
-            # 放得下標記的半徑、間距與整段文字（只有一行的照舊）
+            # 列高要放得下每一格的標籤（與文字表相同，見 fit_rows）。標籤在標記的上方或下方時，整段
+            # 文字要留在自己的這一列裡（不畫到上、下一列的標記或欄標題上）：標記在列的中線，列高的一半要
+            # 放得下標記的半徑、間距與整段文字。只有一行的也一樣（原本照舊 20 像素，蓋到上、下一列的
+            # 標記），但與文字表的大字相同不改設定的列高
             block = most * (font.size + LINE_SPACING)
             if marks.label_valign not in ("top", "bottom"):
                 self.fit_rows(encoding, block, font.size, most)
-            elif most > 1:
+            else:
                 self.fit_rows(encoding, block, font.size, most, block + 2 * (radius + LABEL_GAP))
 
         def layer(extreme: Literal["max", "min"] | None = None) -> dict[str, Any]:
@@ -1586,7 +1594,8 @@ class _Builder:
                 middle,
                 most,
                 varying,
-                table,
+                # 多行的標籤依行數調整位置（見 _label_layer）；直寫的各行左右排，不調整
+                not rotated,
             )
             if setting.direction is not None:
                 _rotate_label(found["mark"], setting.direction)
@@ -2893,7 +2902,10 @@ def build_spec(
                 sized=ws.marks.size is not None,
             )
         if mark in UNSUPPORTED_MARKS:
-            return RenderResult(None, len(result.rows), mark, f"標記類型 {mark} 尚未支援")
+            # 原因顯示在檢視器上：標記類型寫標記卡選單上的名稱（見 tmig.render.names）
+            return RenderResult(
+                None, len(result.rows), mark, f"標記類型「{mark_name(mark)}」尚未支援"
+            )
         body, mark = builder.unit(ws.marks, mark, rows_dims, cols_dims, rows_meas, cols_meas)
 
     # 欄標題依查詢算出的名次排列（列與欄都有離散維度時）：資料依列優先排序，只看資料的順序時
@@ -2943,7 +2955,9 @@ def build_spec(
     if ws.annotations and map_plan is None:
         if pie_marks is None and not multiple and ("mark" in body or "layer" in body):
             params = {p.id: p.value for p in ir.parameters} | (parameters or {})
-            body = _with_annotations(builder, body, values, ir, params)
+            # 欄標題另外排序時（見上面的 column_order）註解在欄標題上的位置依那個順序
+            orders = {column_field: column_order} if column_field is not None else None
+            body = _with_annotations(builder, body, values, ir, params, orders)
         else:
             builder.notes.append("多個量值、圓餅等圖表上的註解尚未畫出（不影響數字）")
 
@@ -3042,12 +3056,6 @@ def build_spec(
         # 文字表每一格的文字依各行自己的字級估計的寬度（各行格式不同的自訂文字是每一行一個圖層，最上層的
         # encoding 裡沒有文字的欄位，見 _Builder.cell_lines）
         content = builder.cell_width(values)
-        spec["usermeta"]["sizing"] = {
-            "rows": builder.shelf_size(encoding.get("y"), rows_dims, "rows", values),
-            "columns": builder.shelf_size(encoding.get("x"), cols_dims, "columns", values, content),
-        }
-        y_type = encoding.get("y", {}).get("type") if isinstance(encoding.get("y"), dict) else None
-        sizing: dict[str, dict[str, Any]] = spec["usermeta"]["sizing"]
         # 只有離散欄位的圓點與形狀（每格一個標記）與文字表相同排成表格
         dots = mark in ("circle", "shape") and not rows_meas and not cols_meas
         if dots:
@@ -3055,8 +3063,17 @@ def build_spec(
             labels = [str(v.get(label, "")) for v in values] if label is not None else []
             label_size = builder.text_font(ws.marks).size
             width = POINT_DIAMETER + 16 + (_column_width(labels, label_size) if labels else 0)
+            # 欄架上有維度時每一欄也要放得下標記與它的標籤，與只有列時的寬度相同（原本只依欄標題估計，
+            # 標籤蓋到右邊那一欄的標記）
+            content = max(content, width - 16)
         else:
             width = _column_width([], content=content)
+        spec["usermeta"]["sizing"] = {
+            "rows": builder.shelf_size(encoding.get("y"), rows_dims, "rows", values),
+            "columns": builder.shelf_size(encoding.get("x"), cols_dims, "columns", values, content),
+        }
+        y_type = encoding.get("y", {}).get("type") if isinstance(encoding.get("y"), dict) else None
+        sizing: dict[str, dict[str, Any]] = spec["usermeta"]["sizing"]
         if (mark == "text" or dots) and "x" not in encoding and y_type in ("ordinal", "nominal"):
             # 只有列標題的文字表是一欄：寬度依內容（與離散的欄相同），不填滿
             sizing["columns"] = {"size": ws.column_style.cell or width}
@@ -4872,15 +4889,29 @@ def _with_annotations(
     values: list[dict[str, Any]],
     ir: IR,
     params: dict[str, Scalar],
+    orders: dict[str, list[Any]] | None = None,
 ) -> dict[str, Any]:
     """註解：標記的註解畫在那個標記的位置，點與區域的註解畫在座標軸的值上；文字相對於位置偏移時
-    畫一條線連到文字（與 Tableau 相同）。只畫在第一列資料所在的窗格。"""
+    畫一條線連到文字（與 Tableau 相同）。只畫在第一列資料所在的窗格。
+
+    點與區域的座標在離散的座標軸（標題）上時是那個成員所在的格子：點在格子的中間，區域從第一格的起點
+    到最後一格的終點（見 _annotation_position）。orders 是離散座標軸上成員的順序（座標軸的欄位 → 成員；
+    欄標題另外排序時，見 _column_order），沒有列出的依資料的順序。"""
     ws, notes = builder.ws, builder.notes
     encoding = main_encoding(body)
     rows = [v for v in values if not v.get(TOTAL)]
     if not isinstance(encoding, dict) or not rows:
         notes.append("這張圖表上的註解尚未畫出（不影響數字）")
         return body
+    members: dict[str, list[Any]] = {}
+    for channel in ("x", "y"):
+        enc = encoding.get(channel)
+        if isinstance(enc, dict) and enc.get("type") in ("ordinal", "nominal"):
+            # 離散座標軸上的成員，依顯示的順序（含總計的格子）
+            axis_field = enc.get("field", "")
+            members[channel] = (orders or {}).get(axis_field) or list(
+                dict.fromkeys(v.get(axis_field) for v in values)
+            )
     layers: list[dict[str, Any]] = []
     for n, annotation in enumerate(ws.annotations):
         name = f"{ANNOTATION}{n}"
@@ -4904,32 +4935,53 @@ def _with_annotations(
         record = rows[0]
         if annotation.kind == "point":
             assert annotation.point is not None
-            position = _annotation_position(builder, encoding, annotation.point, record, name)
-            if position is None:
-                notes.append(f"{shown}的位置不在這張圖的座標軸上，沒有畫出")
+            spots = _annotation_position(
+                builder, encoding, annotation.point, record, name, rows, members
+            )
+            if isinstance(spots, str):
+                notes.append(f"{shown}的位置{spots}，沒有畫出")
                 continue
+            position = {channel: spot.encoding for channel, spot in spots.items()}
             record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
             layers += _annotation_text(name, position, dx, dy)
             continue
         assert annotation.top_left is not None and annotation.bottom_right is not None
-        start = _annotation_position(builder, encoding, annotation.top_left, record, f"{name}_a")
-        end = _annotation_position(builder, encoding, annotation.bottom_right, record, f"{name}_b")
-        if start is None or end is None or set(start) != set(end):
-            notes.append(f"{shown}的區域不在這張圖的座標軸上，沒有畫出")
+        corners = [
+            _annotation_position(builder, encoding, corner, record, f"{name}_{tag}", rows, members)
+            for corner, tag in ((annotation.top_left, "a"), (annotation.bottom_right, "b"))
+        ]
+        reason = next((found for found in corners if isinstance(found, str)), None)
+        start, end = corners
+        if isinstance(start, str) or isinstance(end, str) or set(start) != set(end):
+            notes.append(f"{shown}的區域{reason or '不在這張圖的座標軸上'}，沒有畫出")
             continue
         record[name] = compose_text(annotation.text, ir, params, builder.channels, record)
-        box: dict[str, Any] = dict(start)
-        for channel, enc in end.items():
-            box[f"{channel}2"] = {"field": enc["field"]}
+        box: dict[str, Any] = {}
         center: dict[str, Any] = {}
-        for channel in start:
-            first = record.get(start[channel]["field"])
-            second = record.get(end[channel]["field"])
+        for channel, spot in start.items():
+            other = end[channel]
+            enc, far = spot.encoding, other.encoding["field"]
             mid = f"{name}_{channel}mid"
+            if spot.span is not None and other.span is not None:
+                # 離散的座標軸：方框從兩個角落占的第一格的起點到最後一格的終點，文字在這幾格的中間
+                # （格數是偶數時在中間兩格的交界）
+                low = min(spot.span[0], other.span[0])
+                high = max(spot.span[1], other.span[1])
+                middle, between = divmod(low + high, 2)
+                record[enc["field"]] = members[channel][low]
+                record[far] = members[channel][high]
+                record[mid] = members[channel][middle]
+                box[channel] = {**enc, "bandPosition": 0}
+                box[f"{channel}2"] = {"field": far, "bandPosition": 1}
+                center[channel] = {**enc, "field": mid, "bandPosition": 1 if between else 0.5}
+                continue
+            first, second = record.get(enc["field"]), record.get(far)
             record[mid] = (
                 (first + second) / 2 if _is_number(first) and _is_number(second) else first
             )
-            center[channel] = {**start[channel], "field": mid}
+            box[channel] = enc
+            box[f"{channel}2"] = {"field": far}
+            center[channel] = {**enc, "field": mid}
         layers.append(
             {
                 "name": f"{name}_box",
@@ -5157,35 +5209,108 @@ def _band_center(enc: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+@dataclass
+class _Spot:
+    """註解在一個方向（x 或 y）上的位置：沿用座標軸比例尺的 encoding（欄位是寫進資料列的那一欄）。"""
+
+    encoding: dict[str, Any]
+    span: tuple[int, int] | None = None
+    """離散的座標軸：座標占的第一格與最後一格（座標軸上由前到後的序號）；連續的座標軸為 None。"""
+
+
+def _annotation_members(
+    builder: _Builder,
+    enc: dict[str, Any],
+    shelf: list[FieldUse],
+    axis: FieldUse,
+    value: Scalar,
+    rows: list[dict[str, Any]],
+) -> list[Any] | None:
+    """離散的座標軸 enc（標題）上，欄位 axis 的值是 value 的那些格子（座標軸上的成員，依資料的順序）；
+    這個座標軸不是 axis 的時為 None，資料中沒有這個值時是空的。
+
+    座標軸只有一個維度時，成員是它顯示的文字（Channel.label，不是原始值的 Channel.name）；多個維度合併成
+    「外層｜內層」時（見 _Builder.axis_dim）value 是其中一層的值，外層的值對到它底下的每一格。value 先與
+    原始值比對，對不到再與顯示的文字比對（成員別名、日期與數字的格式）。"""
+    channel = builder.channels.get(axis.field if axis.field in SPECIAL_FIELDS else use_key(axis))
+    if channel is None or enc.get("type") not in ("ordinal", "nominal"):
+        return None
+    field_name = enc.get("field")
+    if not isinstance(field_name, str):
+        return None
+    dims = [use_key(u) for u in shelf if not builder.is_axis(u)]
+    combined = field_name in ("rows_dim", "cols_dim") and len(dims) > 1 and use_key(axis) in dims
+    if field_name != channel.label and not combined:
+        return None
+    for key in (channel.name, channel.label):
+        found = list(dict.fromkeys(r.get(field_name) for r in rows if r.get(key) == value))
+        if found:
+            return found
+    return []
+
+
 def _annotation_position(
     builder: _Builder,
     encoding: dict[str, Any],
     point: AnnotationPoint,
     record: dict[str, Any],
     name: str,
-) -> dict[str, Any] | None:
-    """點或區域角落的位置：座標軸的值寫入第一列資料（name_x、name_y），沿用座標軸的比例尺。"""
-    position: dict[str, Any] = {}
+    rows: list[dict[str, Any]],
+    members: dict[str, list[Any]],
+) -> dict[str, _Spot] | str:
+    """點或區域角落的位置：座標軸的值寫入第一列資料（name_x、name_y），沿用座標軸的比例尺。畫不出來時
+    回傳原因（接在「…的位置」「…的區域」之後的文字）。
+
+    連續的座標軸是座標軸上的值。離散的座標軸（標題；只有 API 與編輯器做的註解有這種座標，Tableau 的註解
+    只記連續座標軸上的值）是那個成員所在的格子（rows 是工作表的資料列，members 是各離散座標軸上的成員，依
+    顯示的順序）：寫入的是格子的成員、位置在格子的中間；多層的標題上外層的值占相鄰的好幾格時在這幾格的
+    中間（偶數格時在中間兩格的交界：寫入前一格的成員、位置在它的終點）。寫在另一個欄位、與主圖共用
+    比例尺：成員都是座標軸上已經有的，排序沿用主圖的（sort: null 的圖層不參與排序，見 _band_center）。"""
+    spots: dict[str, _Spot] = {}
     for value, axis in ((point.x, point.x_axis), (point.y, point.y_axis)):
         if axis is None or value is None:
             continue
         channel = builder.channels.get(use_key(axis))
-        found = next(
-            (
-                c
-                for c in ("x", "y")
-                if channel is not None
-                and isinstance(encoding.get(c), dict)
-                and encoding[c].get("field") == channel.name
-            ),
-            None,
-        )
+        found: str | None = None
+        cells: list[Any] | None = None
+        for c, shelf in (("x", builder.columns), ("y", builder.rows)):
+            enc = encoding.get(c)
+            if not isinstance(enc, dict):
+                continue
+            discrete = enc.get("type") in ("ordinal", "nominal")
+            if channel is not None and enc.get("field") == channel.name and not discrete:
+                found = c
+                break
+            cells = (
+                _annotation_members(builder, enc, shelf, axis, value, rows) if discrete else None
+            )
+            if cells is not None:
+                found = c
+                break
         if found is None:
-            return None
-        field = f"{name}_{found}"
-        record[field] = value
-        position[found] = {**_band_center(encoding[found]), "field": field}
-    return position or None
+            return "不在這張圖的座標軸上"
+        field_name = f"{name}_{found}"
+        if cells is None:
+            record[field_name] = value
+            spots[found] = _Spot({**_band_center(encoding[found]), "field": field_name})
+            continue
+        order = members[found]
+        at = sorted(order.index(cell) for cell in cells if cell in order)
+        if not at:
+            return "不在目前的資料中"
+        if at[-1] - at[0] != len(at) - 1:
+            return "在標題上不只一處"
+        middle, between = divmod(at[0] + at[-1], 2)
+        record[field_name] = order[middle]
+        spots[found] = _Spot(
+            {
+                **_band_center(encoding[found]),
+                "field": field_name,
+                "bandPosition": 1 if between else 0.5,
+            },
+            (at[0], at[-1]),
+        )
+    return spots or "不在這張圖的座標軸上"
 
 
 def _annotation_text(name: str, position: dict[str, Any], dx: int, dy: int) -> list[dict[str, Any]]:
@@ -5200,7 +5325,7 @@ def _annotation_text(name: str, position: dict[str, Any], dx: int, dy: int) -> l
         }
         for channel in ("x2", "y2"):
             if "bandPosition" in position[channel[0]]:
-                line[channel]["bandPosition"] = 0.5
+                line[channel]["bandPosition"] = position[channel[0]]["bandPosition"]
         layers.append(
             {
                 "name": f"{name}_line",
@@ -6365,9 +6490,12 @@ def _label_layer(
     寫在點的右上、最小值在右下（與 Tableau 的畫面相同）。match 時文字的顏色與標記相同（依欄位著色時沿用
     同一個色彩的 encoding）。
 
-    lines 是標籤的行數（圓點、形狀與方塊的標籤用）：各標記的行數不同時 varying 是標籤的資料欄，行數在
-    畫圖時依各標記的文字算。在標記上方的多行標籤一律整段往上移；centre 時（圓點與形狀的表格）在標記
-    左右或中央的多行標籤整段以標記的中線為中心。"""
+    lines 是標籤的行數：各標記的行數不同時 varying 是標籤的資料欄，行數在畫圖時依各標記的文字算。多行的
+    標籤（標籤上的多個欄位各占一行、標籤文字或值裡的換行）：Vega 把第一行放在定位點、其餘往下排，所以
+    單行時以定位點為中線的（長條尾端、長條中間、標記左右或中央、折線點的左右）整段以定位點為中心；從
+    上方掛著的（長條、折線點、圓點的上方：最後一行的下緣在定位點之上）整段往上移；從下方掛著的（長條
+    各段的內側上緣、點的下方）不動。centre 為 False 時（直寫的標籤：各行左右排，見 _rotate_label）
+    除了圓點、形狀與方塊上方的以外不依行數調整。"""
     stacked = stacked and vl_type == "bar"
     horizontal = encoding.get("x", {}).get("type") == "quantitative"
     font = font or resolve()
@@ -6375,15 +6503,24 @@ def _label_layer(
     layer: dict[str, Any] = {"text": {"field": field_name}, "color": {"value": color}}
     if "size" in encoding:
         layer["size"] = {"value": font.size}  # 大小上的欄位決定標記的大小，不是標籤的字級
+    # extra 是第一行以外各行占的高度（Vega 的行高是字級 + 2；各標記的行數不同時是運算式）
+    pitch = font.size + LINE_SPACING
+    extra: float | str = (lines - 1) * pitch
+    if varying is not None:
+        extra = f"(length(split(datum[{json.dumps(varying)}] || '', '\\n')) - 1) * {pitch}"
+
+    def raised(base: float, part: float) -> dict[str, Any]:
+        """位移 base（像素）再往上移 part 段第一行以外的高度：part = 1 時最後一行在單行時那一行的位置
+        （從上方掛著的），0.5 時整段以單行時的中線為中心。只有一行（或 centre 為 False）時是 base。"""
+        if not centre or extra == 0:
+            return {"dy": base} if base else {}
+        if isinstance(extra, str):
+            return {"dy": {"expr": f"{base:g} - ({extra}) * {part:g}"}}
+        return {"dy": round(base - extra * part, 2)}
+
     if vl_type in ("cell", "circle", "square", "point"):
-        # 多行的標籤（標籤上的多個欄位各占一行、標籤文字或值裡的換行）：Vega 把第一行放在定位點、其餘
-        # 往下排。在標記上方時要把整段往上移，最後一行才不會蓋到標記；表格中（centre）在標記的左右或
-        # 中央時整段以標記的中線為中心（與單行時相同置中）。extra 是第一行以外各行占的高度（各標記的
-        # 行數不同時是運算式）
-        pitch = font.size + LINE_SPACING
-        extra: float | str = (lines - 1) * pitch
-        if varying is not None:
-            extra = f"(length(split(datum[{json.dumps(varying)}] || '', '\\n')) - 1) * {pitch}"
+        # 圓點、形狀與方塊：在標記上方時整段往上移（直寫的也是），最後一行才不會蓋到標記；在標記的
+        # 左右或中央時整段以標記的中線為中心（與單行時相同置中）
 
         def gap(sign: int, more: float | str = 0) -> Any:
             """標記的邊緣再往外 LABEL_GAP 像素（再加上 more）；半徑（大小相對於儲存格的圖片）或 more 是
@@ -6391,7 +6528,8 @@ def _label_layer(
             if isinstance(more, str):
                 return {"expr": f"{sign} * (({radius}) + {LABEL_GAP} + {more})"}
             if isinstance(radius, str):
-                return {"expr": f"{sign} * (({radius}) + {LABEL_GAP + more})"}
+                # :g——整數的距離寫成 4 而不是 4.0
+                return {"expr": f"{sign} * (({radius}) + {LABEL_GAP + more:g})"}
             return sign * (radius + LABEL_GAP + more)
 
         def centred() -> dict[str, Any]:
@@ -6421,7 +6559,9 @@ def _label_layer(
         else:
             mark.update(align="left", baseline="middle", dx=gap(1), **centred())
     elif vl_type == "bar" and horizontal:
+        # 橫的長條：標籤的中線與長條的中線對齊（多行的整段以它為中心）
         mark.update(align="right", dx=-3) if stacked else mark.update(align="left", dx=3)
+        mark.update(raised(0, 0.5))
         if stacked:
             layer["x"] = {**encoding["x"], "stack": "zero"}
         elif align == "left":
@@ -6431,26 +6571,33 @@ def _label_layer(
             mark.update(align="center", dx=0)
             layer["x"] = {**encoding["x"], "field": middle, "stack": None}
     elif vl_type == "bar":
-        mark.update(baseline="top", dy=3) if stacked else mark.update(baseline="bottom", dy=-3)
+        # 直的長條：標籤在長條的上端之上（多行的整段往上移）；堆疊時在各段的上緣之下（從上緣往下排，
+        # 不動）；垂直對齊置中時整段在長條的中間
+        if stacked:
+            mark.update(baseline="top", dy=3)
+        else:
+            mark.update(baseline="bottom", **raised(-3, 1))
         if stacked:
             layer["y"] = {**encoding["y"], "stack": "zero"}
         elif valign == "bottom":
             layer["y"] = {"datum": 0, "type": "quantitative"}
         elif valign == "center" and middle is not None:
-            mark.update(baseline="middle", dy=0)
+            mark.update({"baseline": "middle", "dy": 0, **raised(0, 0.5)})
             layer["y"] = {**encoding["y"], "field": middle, "stack": None}
     elif extreme == "max":
-        mark.update(align="left", baseline="bottom", dx=3, dy=-2)
+        # 折線的最大值在點的右上：多行的整段往上移，最後一行在點之上
+        mark.update(align="left", baseline="bottom", dx=3, **raised(-2, 1))
     elif extreme == "min":
         mark.update(align="left", baseline="top", dx=3, dy=2)
     else:
-        # 折線與區域：預設在點的上方；垂直對齊可以改到中間或下方，水平對齊改到左邊或右邊
+        # 折線與區域：預設在點的上方（多行的整段往上移，最後一行在點之上）；垂直對齊可以改到中間（整段
+        # 以點為中心）或下方（從點往下排，不動），水平對齊改到左邊或右邊
         if valign == "bottom":
             mark.update(baseline="top", dy=4)
         elif valign == "center":
-            mark.update(baseline="middle")
+            mark.update(baseline="middle", **raised(0, 0.5))
         else:
-            mark.update(baseline="bottom", dy=-4)
+            mark.update(baseline="bottom", **raised(-4, 1))
         if align == "left":
             mark.update(align="right", dx=-4)
         elif align == "right":
@@ -6472,19 +6619,25 @@ def _rotate_label(mark: dict[str, Any], direction: Literal["up", "down"]) -> Non
     """直寫的標籤（文字方向：由下往上、由上往下）：文字轉 90 度，仍在原來的位置（標記的上、下、左、右）。
 
     Vega 的 align、baseline 與 dx、dy 都相對於文字自己的方向，所以依旋轉換算：由下往上時文字的起點在下方，
-    「在錨點上方」成為 align=left，「在錨點右邊」成為 baseline=top；由上往下相反。"""
+    「在錨點上方」成為 align=left，「在錨點右邊」成為 baseline=top；由上往下相反。位移可能是運算式
+    （圖片形狀的大小相對於儲存格時，標籤與圖片的距離在畫圖時才算得出來，見 _label_layer 的 gap）。"""
+
+    def opposite(shift: Any) -> Any:
+        """位移的相反方向；運算式整個取負號。"""
+        return {"expr": f"-({shift['expr']})"} if isinstance(shift, dict) else -shift
+
     sx, sy = mark.pop("dx", 0), mark.pop("dy", 0)
     horizontal = mark.get("align", "center")  # left：文字在錨點右邊；right：在左邊
     vertical = mark.get("baseline", "middle")  # bottom：文字在錨點上方；top：在下方
     if direction == "up":
         mark["align"] = {"bottom": "left", "top": "right"}.get(vertical, "center")
         mark["baseline"] = {"left": "top", "right": "bottom"}.get(horizontal, "middle")
-        dx, dy = -sy, sx
+        dx, dy = opposite(sy), sx
         mark["angle"] = 270
     else:
         mark["align"] = {"bottom": "right", "top": "left"}.get(vertical, "center")
         mark["baseline"] = {"left": "bottom", "right": "top"}.get(horizontal, "middle")
-        dx, dy = sy, -sx
+        dx, dy = sy, opposite(sx)
         mark["angle"] = 90
     if dx:
         mark["dx"] = dx

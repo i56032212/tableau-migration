@@ -298,9 +298,13 @@ export function useUndoRedo(
   keys.current = { undo, redo };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
       if (!(e.ctrlKey || e.metaKey)) return;
+      // 焦點在可以輸入的地方（輸入框、下拉選單、格式文字的方塊）時，Ctrl+Z、Ctrl+Y 是那個方塊自己的復原；
+      // 開著對話框時也不動對話框後面的東西——否則打字打到一半按 Ctrl+Z，後面的工作表被退回一步，
+      // 復原的若是刪除分頁，編輯器還會換到別的分頁、對話框裡輸入的內容跟著不見
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("input, textarea, select") || target?.isContentEditable) return;
+      if (document.querySelector(".modal-backdrop")) return;
       const key = e.key.toLowerCase();
       if (key === "z" && !e.shiftKey) {
         e.preventDefault();

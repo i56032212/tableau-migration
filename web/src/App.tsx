@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AdminPage } from "./Admin";
 import { AlertButton } from "./Alerts";
 import { api, errorText } from "./api";
@@ -101,6 +101,18 @@ function viewPath(
   id: string,
 ): string {
   return `/w/${encodeURIComponent(workbook)}/${kind}/${encodeURIComponent(id)}`;
+}
+
+/** 不是輸入文字用的 input：焦點在上面時快捷鍵照常（勾過的核取方塊、按鈕、滑桿…）。 */
+const NOT_TEXT_INPUTS = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image"]);
+
+/** 這一下按鍵是打給輸入文字的地方的（文字的輸入框、多行文字、可以編輯的區塊）。 */
+function isTyping(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element?.closest) return false;
+  if (element.isContentEditable || element.closest("textarea")) return true;
+  const input = element.closest("input");
+  return input !== null && !NOT_TEXT_INPUTS.has(input.type);
 }
 
 export function navigate(to: string) {
@@ -437,10 +449,47 @@ function WorkbookPage({
   const [toolsOpen, setToolsOpen] = useState(false);
   // 簡報模式（Tableau 的「視窗＞簡報模式」）：全螢幕、只留檢視，下方的列切換前後一張；按 Esc 結束
   const [presenting, setPresenting] = useState(false);
+  // 全螢幕的要求是非同步的，進入、離開可能比它快（連按 F7、Ctrl+H，或進入之後馬上按 Esc）：
+  // - wanted：現在要不要簡報模式。要求有了結果、簡報模式卻已經離開時，把剛進入的全螢幕結束——否則畫面留在
+  //   全螢幕、卻不是簡報模式
+  // - sawFullscreen：這一次簡報模式真的進入過全螢幕。之後全螢幕結束（使用者按 Esc，瀏覽器自己收下）才算離開；
+  //   在那之前收到的「不在全螢幕」是上一次離開留下的通知，不理會
+  // - exiting：離開時結束全螢幕還沒完成。這時馬上再進入，要等它完成才要求全螢幕：否則要求落在「正在結束」的
+  //   全螢幕上（立刻成功），接著結束完成，這一次的簡報模式被踢出去
+  const presentingWanted = useRef(false);
+  const sawFullscreen = useRef(false);
+  const exiting = useRef<Promise<void> | null>(null);
+  const exitFullscreenNow = () => {
+    if (!document.fullscreenElement) return;
+    const done = document.exitFullscreen().catch(() => undefined);
+    exiting.current = done;
+    void done.then(() => {
+      if (exiting.current === done) exiting.current = null;
+    });
+  };
+  const enterPresentation = () => {
+    presentingWanted.current = true;
+    sawFullscreen.current = false;
+    setPresenting(true);
+    const root = document.documentElement;
+    if (!root.requestFullscreen) return;
+    void (exiting.current ?? Promise.resolve()).then(async () => {
+      if (!presentingWanted.current) return;
+      try {
+        await root.requestFullscreen();
+      } catch {
+        return; // 全螢幕要求可能被瀏覽器拒絕（例如內嵌的視窗）：仍以簡報的版面顯示
+      }
+      if (!presentingWanted.current) exitFullscreenNow();
+      else if (document.fullscreenElement) sawFullscreen.current = true;
+    });
+  };
   useEffect(() => {
     if (!presenting) return;
+    presentingWanted.current = true;
     const leave = () => {
-      if (!document.fullscreenElement) setPresenting(false);
+      if (document.fullscreenElement) sawFullscreen.current = true;
+      else if (sawFullscreen.current) setPresenting(false);
     };
     // 一次 Esc 只做一件事：簡報模式中是離開簡報模式（Tableau 的使用經驗；官方文件沒有寫，見 README「已知限制
     // 與待驗證」）。真正全螢幕時瀏覽器自己收下 Esc、結束全螢幕（上面的 leave）；沒有全螢幕時（外殼、不允許
@@ -457,11 +506,35 @@ function WorkbookPage({
     document.addEventListener("fullscreenchange", leave);
     document.addEventListener("keydown", keys, true);
     return () => {
+      presentingWanted.current = false;
+      sawFullscreen.current = false;
       document.removeEventListener("fullscreenchange", leave);
       document.removeEventListener("keydown", keys, true);
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      exitFullscreenNow();
     };
   }, [presenting]);
+  // 簡報模式的快捷鍵（Tableau 的「Switch in and out of Presentation Mode」：F7、Ctrl+H）：在檢視的頁面上進入或
+  // 離開。正在輸入文字、開著對話框或選單時不處理（那一下按鍵是它們的）；編輯器的頁面沒有簡報模式。按鍵標成
+  // 已處理：瀏覽器自己的 F7（游標瀏覽）、Ctrl+H（歷程記錄）不跟著出現
+  const presentable = route.page === "dashboard" || route.page === "sheet" || route.page === "story";
+  const presentingNow = useRef(presenting);
+  presentingNow.current = presenting;
+  const enterRef = useRef(enterPresentation);
+  enterRef.current = enterPresentation;
+  useEffect(() => {
+    if (!presentable) return;
+    const keys = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.altKey || event.shiftKey || event.metaKey) return;
+      const shortcut = event.ctrlKey ? event.key.toLowerCase() === "h" : event.key === "F7";
+      if (!shortcut || isTyping(event.target)) return;
+      if (document.querySelector(".modal-backdrop, .popup-menu, .options.floating, .notes-list")) return;
+      event.preventDefault();
+      if (presentingNow.current) setPresenting(false);
+      else enterRef.current();
+    };
+    document.addEventListener("keydown", keys);
+    return () => document.removeEventListener("keydown", keys);
+  }, [presentable]);
 
   // 報表的定義在檢視器之外改變（例如報表改用發布的資料源）：重新載入
   useEffect(() => {
@@ -648,7 +721,7 @@ function WorkbookPage({
           <button type="button" aria-label="下一張" title="下一張" onClick={() => present(1)}>
             ▶
           </button>
-          <button type="button" title="結束簡報模式（Esc）" onClick={() => setPresenting(false)}>
+          <button type="button" title="結束簡報模式（Esc、F7、Ctrl+H）" onClick={() => setPresenting(false)}>
             結束簡報
           </button>
         </nav>
@@ -781,12 +854,8 @@ function WorkbookPage({
         {(dashboard || worksheet || story) && (
           <button
             type="button"
-            title="全螢幕、只顯示檢視，可以切換前後一張（Tableau 的「簡報模式」）；按 Esc 結束"
-            onClick={() => {
-              setPresenting(true);
-              // 全螢幕要求可能被瀏覽器拒絕（例如內嵌的視窗）：仍以簡報的版面顯示
-              void document.documentElement.requestFullscreen?.().catch(() => undefined);
-            }}
+            title="全螢幕、只顯示檢視，可以切換前後一張（Tableau 的「簡報模式」）；按 F7 或 Ctrl+H 進入、離開，Esc 結束"
+            onClick={enterPresentation}
           >
             簡報模式
           </button>

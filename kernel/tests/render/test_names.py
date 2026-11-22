@@ -15,9 +15,12 @@ from typing import Any, get_args
 from tmig.data.executor import execute
 from tmig.ir import IR, Annotation, AnnotationPoint, FieldUse, TextRun, Worksheet
 from tmig.ir.models import (
+    MEASURE_NAMES,
     MEASURE_VALUES,
     SPECIAL_FIELDS,
+    Aggregation,
     DateDerivation,
+    DatePart,
     MapStyle,
     Marks,
     MarkType,
@@ -27,6 +30,7 @@ from tmig.ir.models import (
     TableCalc,
 )
 from tmig.parser.workbook import parse_workbook
+from tmig.planner.forecast import COMPONENT_NAMES
 from tmig.render.names import (
     MAP_STYLE_NAMES,
     MARK_NAMES,
@@ -154,6 +158,85 @@ def test_every_ir_value_has_a_name() -> None:
     assert set(SPECIAL_FIELDS) == set(SPECIAL_NAMES)
 
 
+EDITOR = Path(__file__).resolve().parents[3] / "web" / "src" / "editor"
+"""編輯器的原始碼：這裡的名稱抄自那裡的表格。"""
+
+
+def _front_table(source: str, name: str) -> dict[str, str]:
+    """前端的常數表 `const NAME: [string, string][] = [["值", "名稱"], …];` 或
+    `const NAME: Record<string, string> = { 值: "名稱", [常數]: "名稱", … };` 讀成 dict（只讀原始碼，不執行）。
+    鍵是 `[常數]` 時換成那個常數的值（`export const 常數 = "值";`）。"""
+    found = re.search(
+        rf"\b(?:const|let)\s+{name}\b[^=]*=\s*(\[.*?\n\s*\];|\{{.*?\n\s*\}};)", source, re.DOTALL
+    )
+    assert found is not None, f"前端的 {name} 不見了"
+    body = found.group(1)
+    if body.startswith("["):
+        pairs = re.findall(r'\[\s*"([^"]+)",\s*"([^"]*)"', body)
+    else:
+        pairs = re.findall(r'^\s*(\w+|"[^"]+"|\[\w+\]):\s*"([^"]*)"', body, re.MULTILINE)
+    constants = dict(re.findall(r'\bexport const (\w+) = "([^"]+)";', source))
+    table: dict[str, str] = {}
+    for key, value in pairs:
+        if key.startswith("["):
+            key = constants[key[1:-1]]
+        table[key.strip('"')] = value
+    assert table, f"前端的 {name} 讀不到內容"
+    return table
+
+
+def _front_function(source: str, name: str) -> str:
+    """前端的一個函式（元件）的原始碼：從 `function name(` 到下一個頂層的 function。"""
+    start = source.index(f"function {name}(")
+    following = re.search(r"\n(?:export )?function ", source[start + 1 :])
+    return source[start : start + 1 + following.start()] if following else source[start:]
+
+
+def test_names_match_the_editor_tables() -> None:
+    """名稱表與它們抄來的編輯器表格相同（讀 web/src 的原始碼）：前端改了選單上的名稱而這裡沒跟著改時，
+    附註與錯誤訊息裡的稱呼就與畫面不同。標記類型（model.ts 的 MARK_TYPES）、背景地圖的樣式（Editor.tsx 的
+    MAP_STYLES）、參考線（Editor.tsx 的 AnalyticsPane 清單與 Dialogs.tsx 參考線對話框的選項）、預測模型的
+    趨勢與季節（Dialogs.tsx 的 COMPONENTS）、膠囊上的彙總與日期層級（model.ts 的 pillLabel）與 Tableau
+    產生的欄位（model.ts 的 GENERATED_LABELS）。"""
+    model = (EDITOR / "model.ts").read_text(encoding="utf-8")
+    editor = (EDITOR / "Editor.tsx").read_text(encoding="utf-8")
+    dialogs = (EDITOR / "Dialogs.tsx").read_text(encoding="utf-8")
+
+    assert _front_table(model, "MARK_TYPES") == MARK_NAMES
+    assert _front_table(editor, "MAP_STYLES") == MAP_STYLE_NAMES
+    assert _front_table(dialogs, "COMPONENTS") == COMPONENT_NAMES
+
+    # 參考線：「分析」分頁清單的名稱表，與清單上一行的寫法（見 reference_name）
+    pane = _front_function(editor, "AnalyticsPane")
+    assert _front_table(pane, "names") == REFERENCE_NAMES
+    for piece in (
+        '"盒鬚圖"',
+        "`分布（${names[line.formula]",
+        '"（區間）"',
+        "：{pillLabel(line.axis",
+    ):
+        assert piece in pane, f"「分析」分頁清單的寫法改了：{piece}"
+    # 參考線對話框上的計算（線的值、分布的計算）與清單上的名稱相同
+    for value, text in _front_table(dialogs, "REFERENCE_FORMULAS").items():
+        assert REFERENCE_NAMES[value] == text, value
+    reference = _front_function(dialogs, "ReferenceDialog")
+    spreads = dict(re.findall(r'<option value="(\w+)">([^<]+)</option>', reference))
+    for value in ("percentile", "stdev", "quantiles"):
+        assert REFERENCE_NAMES[value] == spreads[value], value
+
+    # 膠囊：彙總與日期層級的寫法（pillLabel：表裡沒有的寫成大寫）、Tableau 產生的欄位
+    aggs = _front_table(model, "AGG_NAMES")
+    for agg in get_args(Aggregation):
+        assert pill_name(FieldUse(field="x", agg=agg), {}) == f"{aggs.get(agg, agg.upper())}(x)"
+    dates = _front_table(model, "DATE_NAMES")
+    for unit in get_args(DatePart):
+        use = FieldUse(field="x", date=DateDerivation(kind="part", unit=unit))
+        assert pill_name(use, {}) == f"{dates.get(unit, unit.upper())}(x)"
+    generated = _front_table(model, "GENERATED_LABELS")
+    assert generated == {k: v for k, v in SPECIAL_NAMES.items() if k in generated}
+    assert set(SPECIAL_NAMES) - set(generated) == {MEASURE_NAMES, MEASURE_VALUES}
+
+
 def test_quick_table_calculation_pill_has_a_delta(tmp_path: Path) -> None:
     """快速 Table Calculation 的膠囊後面有「△」（與編輯器的膠囊相同）；計算欄位裡的 Table Calculation 沒有。"""
     ir = bars(tmp_path)
@@ -220,22 +303,22 @@ def test_annotation_notes_quote_the_annotation(tmp_path: Path, db: Path) -> None
         point=AnnotationPoint(mark={"f_region": "Mars"}),
     )
     discrete = FieldUse(field="f_region")
-    # 點與區域的位置在離散的座標上（平台還不會畫）
+    # 點的位置在離散的座標上、成員不在資料中；區域在檢視裡沒有的量值（SUM(Profit)）的座標軸上
     point = Annotation(
         kind="point",
         text=[TextRun(text="目標")],
-        point=AnnotationPoint(x=500, x_axis=SUM_SALES, y="East", y_axis=discrete),
+        point=AnnotationPoint(x=500, x_axis=SUM_SALES, y="Mars", y_axis=discrete),
     )
     area = Annotation(
         kind="area",
         text=[],
-        top_left=AnnotationPoint(x=200, x_axis=SUM_SALES, y="East", y_axis=discrete),
-        bottom_right=AnnotationPoint(x=400, x_axis=SUM_SALES, y="West", y_axis=discrete),
+        top_left=AnnotationPoint(x=200, x_axis=SUM_PROFIT, y="East", y_axis=discrete),
+        bottom_right=AnnotationPoint(x=400, x_axis=SUM_PROFIT, y="West", y_axis=discrete),
     )
     notes = notes_of(ir, db, annotations=[missing, point, area])
     assert notes == [
         "註解「看這裡： <SUM(Sales)>」的標記不在目前的資料中，沒有畫出",
-        "註解「目標」的位置不在這張圖的座標軸上，沒有畫出",
+        "註解「目標」的位置不在目前的資料中，沒有畫出",
         "第 3 個註解的區域不在這張圖的座標軸上，沒有畫出",
     ]
     assert not any(INTERNAL.search(note) for note in notes)

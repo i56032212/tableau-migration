@@ -1058,8 +1058,10 @@ def test_exclude_as_dimension_is_unsupported(run: Run) -> None:
 
 def test_unknown_worksheet(tmp_path: Path) -> None:
     ir = parse_workbook(b.write_twb(tmp_path, b.workbook(worksheets=region_sheet())))
-    with pytest.raises(QueryError, match="找不到工作表"):
+    # 錯誤訊息列出可用的工作表的名稱（不是 id）
+    with pytest.raises(QueryError) as caught:
         worksheet_sql(ir, "nope")
+    assert str(caught.value) == "找不到這張工作表；可用的工作表：「S」"
 
 
 def test_sql_has_stage_comments_and_pushdown_boundary(tmp_path: Path) -> None:

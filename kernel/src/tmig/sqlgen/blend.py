@@ -371,7 +371,8 @@ class Blending:
             for external in externals:
                 if external.rule is None:
                     raise QueryError(
-                        f"Data Blending：次要資料源「{source.datasource.caption}」的 {external.formula} "
+                        f"Data Blending：次要資料源「{source.datasource.caption}」的 "
+                        f"{query.readable(external.formula)} "
                         "在比連結欄位粗的層級（總計、小計、依欄位排序、TOTAL）不能由各連結值的結果再彙總"
                         "（只支援加總、計數、最小、最大、平均與 ATTR），尚不支援",
                         unsupported=True,

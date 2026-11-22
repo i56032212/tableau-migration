@@ -77,7 +77,16 @@ from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
 from tmig.natural import natural_sql
 from tmig.planner.analytics import Analytics, ClusterPlan, ForecastPlan
 from tmig.planner.identity import Identity
-from tmig.planner.state import EffectiveState, QueryState, SetValue, apply_state, use_key
+from tmig.planner.state import (
+    EffectiveState,
+    QueryState,
+    SetValue,
+    StateError,
+    apply_state,
+    parse_key,
+    use_key,
+)
+from tmig.render.datasource import readable_formula
 from tmig.render.names import pill_name
 from tmig.sqlgen.expr import ExprCompiler, interval, week_offset
 from tmig.sqlgen.model import (
@@ -384,11 +393,13 @@ class _PostEnv:
             return None
         col = self.agg_cols.get(self.query.canon(self.query.external_ref(target.id)))  # type: ignore[arg-type]
         if col is None:
-            raise QueryError(f"內部錯誤：次要資料源的欄位 {target.id} 沒有對應的欄位")
+            raise QueryError(
+                f"內部錯誤：次要資料源的欄位「{self.query.caption(target.id)}」沒有對應的欄位"
+            )
         return ident(col)
 
     def column(self, target: Target) -> str:
-        raise QueryError(f"列層級欄位 {target.id} 必須彙總")
+        raise QueryError(f"列層級的欄位「{self.query.caption(target.id)}」必須彙總")
 
     def param(self, target: Target) -> str:
         return self.query.param_sql(target.id)
@@ -609,6 +620,34 @@ class WorksheetQuery:
             finally:
                 self.worksheet = original
 
+    # ------------------------------------------------------------ 錯誤訊息裡的稱呼
+    # QueryError 的文字會顯示給使用者（檢視器的「尚不支援」、編輯器的錯誤提示、/render 的附註）：與畫面上
+    # 的寫法相同（見 tmig.render.names），不寫欄位、篩選與 Table Calculation 的 id 或輸出欄名（sum(f_x)）
+
+    def pill(self, use: FieldUse) -> str:
+        """欄位在膠囊上的寫法：SUM(Profit)、YEAR(Order Date)；快速 Table Calculation 的後面有「△」。"""
+        return pill_name(use, self.fields, self.worksheet.table_calcs)
+
+    def caption(self, field_id: str) -> str:
+        """欄位的名稱（資料窗格上的；找不到時照原樣）。"""
+        found = self.fields.get(field_id)
+        return found.caption if found is not None else field_id
+
+    def filter_name(self, flt: Filter, kind: str = "篩選") -> str:
+        """篩選的稱呼：「篩選「Region」」——篩選的欄位（多欄位篩選是各欄位），與篩選架上的膠囊相同；以篩選的
+        計算決定成員的集合（Top N 與條件集合，見 _set_member）是「集合「名稱」」。"""
+        found = self.fields.get(flt.id)
+        if found is not None and found.set is not None:
+            return f"集合「{found.caption}」"
+        uses = flt.fields if isinstance(flt, TupleFilter) else [flt.field]
+        return f"{kind}「{'、'.join(self.pill(u) for u in uses)}」"
+
+    def readable(self, formula: str) -> str:
+        """公式的寫法：內部名稱換成顯示名稱（[Calculation_123] → [利潤率]，與公式編輯器相同）。"""
+        names = {f.name: f.caption for f in self.fields.values()}
+        params = {p.name: p.caption for p in self.ir.parameters}
+        return readable_formula(formula, names, params)
+
     # ------------------------------------------------------------ 工具
 
     def canon(self, node: Node) -> Node:
@@ -714,7 +753,7 @@ class WorksheetQuery:
         if use.agg is not None:
             if self.level(use.field) in ("agg", "tc"):
                 raise QueryError(
-                    f"{self.fields[use.field].caption} 已經是彙總，不能再套用 {use.agg}"
+                    f"{self.fields[use.field].caption} 已經是彙總，不能再彙總（{self.pill(use)}）"
                 )
             if use.agg in PERCENTILES:
                 fraction = LiteralNode(0, "real", PERCENTILES[use.agg] / 100)
@@ -1524,13 +1563,13 @@ class WorksheetQuery:
         if use.table_calc is not None:
             tc = next((t for t in self.worksheet.table_calcs if t.id == use.table_calc), None)
             if tc is None:
-                raise QueryError(f"Table Calculation {use.table_calc} 不存在")
+                raise QueryError(f"{self.pill(use)} 的 Table Calculation 設定不存在")
             node = self._quick_calc(tc, base)
             if tc.secondary is not None:
                 node = self._secondary_calc(tc, node)
         is_tc = bool(self.table_calcs_in(node))
         if is_tc and tc is None:
-            raise QueryError(f"{key} 含 Table Calculation 函式，卻沒有計算方向設定")
+            raise QueryError(f"{self.pill(use)} 含 Table Calculation 函式，卻沒有計算方向設定")
         return Measure(
             key=key,
             use=use,
@@ -1604,7 +1643,7 @@ class WorksheetQuery:
                 Binary(0, ">=", Call(0, "LAST", ()), high),
             )
             return If(0, ((complete, window),), None)
-        raise QueryError(f"快速 Table Calculation 類型 {tc.type} 尚不支援", unsupported=True)
+        raise QueryError("這種快速 Table Calculation 尚不支援", unsupported=True)
 
     def _difference(self, tc: TableCalc, base: Node) -> Node:
         """差異、差異百分比與百分比（Percent From）：與 Tableau 轉成計算欄位時相同，
@@ -1624,7 +1663,11 @@ class WorksheetQuery:
             key = str(tc.options.get("member_field"))
             target = next((u for u in self._view_uses() if use_key(u) == key), None)
             if target is None:
-                raise QueryError(f"差異計算的比較欄位 {key} 不在檢視中")
+                try:
+                    shown = f"「{self.pill(parse_key(key))}」"
+                except StateError:
+                    shown = ""
+                raise QueryError(f"差異計算的比較欄位{shown}不在檢視中")
             member = (
                 self._parameter_node(str(tc.options["parameter"]))
                 if "parameter" in tc.options
@@ -1660,7 +1703,7 @@ class WorksheetQuery:
         try:
             return parse_formula(ref)
         except FormulaSyntaxError as exc:
-            raise QueryError(f"參數參照 {ref} 無法解析：{exc}") from exc
+            raise QueryError(f"參數 {self.readable(ref)} 無法解析：{exc.message}") from exc
 
     def _view_uses(self) -> list[FieldUse]:
         ws = self.worksheet
@@ -1689,9 +1732,11 @@ class WorksheetQuery:
         try:
             info = self.analyzer.analyze(m.node)
         except FormulaSemanticError as exc:
-            raise QueryError(f"{m.key}：{exc.message}", unsupported=exc.unsupported) from exc
+            raise QueryError(
+                f"{self.pill(m.use)}：{exc.message}", unsupported=exc.unsupported
+            ) from exc
         if info.level == "row":
-            raise QueryError(f"{m.key} 是列層級的值，作量值時必須彙總")
+            raise QueryError(f"{self.pill(m.use)} 是列層級的值，作量值時必須彙總")
 
     # ------------------------------------------------------------ 篩選
 
@@ -1703,11 +1748,16 @@ class WorksheetQuery:
         彙總條件與 Top N 需要先算出成員，這裡列為不支援。"""
         for flt in filters:
             if isinstance(flt, TopNFilter):
-                raise QueryError(f"Top N 篩選 {flt.id} 不能逐列套用", unsupported=True)
+                raise QueryError(
+                    f"{self.filter_name(flt, 'Top N 篩選')}不能逐列套用", unsupported=True
+                )
             if isinstance(flt, ConditionFilter):
                 node = self._condition_node(flt)
                 if self.analyzer.analyze(node).level == "agg":
-                    raise QueryError(f"彙總條件的篩選 {flt.id} 不能逐列套用", unsupported=True)
+                    raise QueryError(
+                        f"{self.filter_name(flt, '彙總條件的篩選')}不能逐列套用",
+                        unsupported=True,
+                    )
                 self.cond_nodes[flt.id] = node
         return [self._row_condition(f) for f in filters]
 
@@ -1716,7 +1766,7 @@ class WorksheetQuery:
         if isinstance(flt, TupleFilter):
             return self._tuple_condition(flt)
         if self.is_measure(flt.field):
-            raise QueryError(f"篩選 {flt.id} 位於維度階段，欄位卻是量值")
+            raise QueryError(f"{self.filter_name(flt)}位於維度階段，欄位卻是量值")
         value = self.dim_sql(flt.field)
         datatype = self.dim_datatype(flt.field)
         if isinstance(flt, CategoricalFilter):
@@ -1730,7 +1780,7 @@ class WorksheetQuery:
             cond = self._compile(lambda: self.row.row(node))
             selected = _members(value, flt.mode, flt.values, datatype)
             return " AND ".join(c for c in (f"({cond})", selected) if c)
-        raise QueryError(f"篩選 {flt.id} 的種類不支援在此階段")
+        raise QueryError(f"{self.filter_name(flt)}的種類不支援在此階段")
 
     def _relative(self, flt: RelativeDateFilter, value: str) -> str:
         """相對日期：基準日所在期間的 first 到 last 個期間（含），不含之後的期間。"""
@@ -1755,9 +1805,15 @@ class WorksheetQuery:
             node = parse_formula(flt.condition)
             info = self.analyzer.analyze(node)
         except (FormulaSyntaxError, FormulaSemanticError) as exc:
-            raise QueryError(f"條件篩選 {flt.id} 的公式「{flt.condition}」：{exc}") from exc
+            raise QueryError(
+                f"{self.filter_name(flt, '條件篩選')}的公式「{self.readable(flt.condition)}」："
+                f"{exc.message}"
+            ) from exc
         if info.level == "tc":
-            raise QueryError(f"條件篩選 {flt.id} 含 Table Calculation，尚不支援", unsupported=True)
+            raise QueryError(
+                f"{self.filter_name(flt, '條件篩選')}含 Table Calculation，尚不支援",
+                unsupported=True,
+            )
         return node
 
     def _attach_sets(self, source: str, stage: int) -> str:
@@ -1841,7 +1897,7 @@ class WorksheetQuery:
         if flt.mode == "all":
             return ""
         if any(self.is_measure(u) for u in flt.fields):
-            raise QueryError(f"多欄位篩選 {flt.id} 的欄位必須是維度")
+            raise QueryError(f"{self.filter_name(flt, '多欄位篩選')}的欄位必須是維度")
         dims = [(self.dim_sql(u), self.dim_datatype(u)) for u in flt.fields]
         if flt.tuples:
             groups = [
@@ -1865,16 +1921,21 @@ class WorksheetQuery:
             # 離散的彙總計算欄位：每個標記的值是否在清單中
             numeric = all(isinstance(v, int | float) for v in flt.values if v is not None)
             return _categorical(value, flt, "real" if numeric else "string")
-        raise QueryError(f"量值篩選 {flt.id} 只支援範圍與類別篩選", unsupported=True)
+        raise QueryError(
+            f"{self.filter_name(flt, '量值篩選')}只支援範圍與類別篩選", unsupported=True
+        )
 
     def _top_by(self, flt: TopNFilter) -> Node:
         try:
             node = parse_formula(flt.by)
             info = self.analyzer.analyze(node)
         except (FormulaSyntaxError, FormulaSemanticError) as exc:
-            raise QueryError(f"Top N 篩選 {flt.id} 的排名依據「{flt.by}」：{exc}") from exc
+            raise QueryError(
+                f"{self.filter_name(flt, 'Top N 篩選')}的排名依據「{self.readable(flt.by)}」："
+                f"{exc.message}"
+            ) from exc
         if info.level != "agg":
-            raise QueryError(f"Top N 篩選 {flt.id} 的排名依據必須是彙總")
+            raise QueryError(f"{self.filter_name(flt, 'Top N 篩選')}的排名依據必須是彙總")
         return node
 
     def _top_n(self, flt: TopNFilter, by: Node, source: str, stage: int) -> str:
@@ -1884,10 +1945,14 @@ class WorksheetQuery:
             if isinstance(value, float) and value.is_integer():
                 value = int(value)  # 實數的參數（例如 3.0）
             if not isinstance(value, int) or isinstance(value, bool):
-                raise QueryError(f"Top N 篩選 {flt.id} 的參數值 {value!r} 不是整數")
+                param = self.params.get(count.parameter)
+                shown = f"「{param.caption}」" if param is not None else ""
+                raise QueryError(
+                    f"{self.filter_name(flt, 'Top N 篩選')}的參數{shown}的值 {value!r} 不是整數"
+                )
             count = value
         if count < 0:
-            raise QueryError(f"Top N 篩選 {flt.id} 的數量不能是負數")
+            raise QueryError(f"{self.filter_name(flt, 'Top N 篩選')}的數量不能是負數")
         nodes = self.aggregates_in(by)
         self._guard(self._covered([flt.field]), "Top N 篩選", nodes)
         dim = self.dim_sql(flt.field)
@@ -2981,9 +3046,9 @@ def domain_sql(
     """篩選控制項的可選值：資料源篩選後的不重複值、最小值與最大值，或各值的筆數（多到少）。"""
     datasource = next((ds for ds in ir.datasources if ds.id == datasource_id), None)
     if datasource is None:
-        raise QueryError(f"找不到資料源「{datasource_id}」")
+        raise QueryError("找不到這個資料源（可能已經刪除）")
     if not any(f.id == use.field for f in datasource.fields):
-        raise QueryError(f"資料源「{datasource_id}」沒有欄位「{use.field}」")
+        raise QueryError(f"資料源「{datasource.caption}」沒有這個欄位（可能已經刪除）")
     holder = Worksheet(
         id="domain",
         name="domain",
@@ -3081,7 +3146,7 @@ def preview_sql(
     條件集合不在預覽中；隱藏的欄位不列出。"""
     datasource = next((ds for ds in ir.datasources if ds.id == datasource_id), None)
     if datasource is None:
-        raise QueryError(f"找不到資料源「{datasource_id}」")
+        raise QueryError("找不到這個資料源（可能已經刪除）")
     holder = Worksheet(
         id="preview",
         name="preview",
@@ -3096,7 +3161,7 @@ def preview_sql(
         ids = [t.id for t in source.model.tables]
         chosen = table or ids[0]
         if chosen not in ids:
-            raise QueryError(f"資料源「{datasource.caption}」沒有資料表「{table}」")
+            raise QueryError(f"資料源「{datasource.caption}」沒有這張資料表（可能已經刪除）")
     columns: list[PreviewColumn] = []
     values: list[str] = []
     usage = Usage()
@@ -3284,8 +3349,8 @@ def _find_worksheet(ir: IR, key: str) -> Worksheet:
     for ws in ir.worksheets:
         if key in (ws.id, ws.name):
             return ws
-    names = "、".join(f"{ws.id}（{ws.name}）" for ws in ir.worksheets)
-    raise QueryError(f"找不到工作表「{key}」；可用的工作表：{names}")
+    names = "、".join(f"「{ws.name}」" for ws in ir.worksheets)
+    raise QueryError(f"找不到這張工作表；可用的工作表：{names}")
 
 
 def worksheet_sql(
@@ -3801,7 +3866,14 @@ def percentages(
         at = {key: i for i, key in enumerate(result.columns)}
         missing = [k for k in kept if k not in at]
         if missing:
-            raise QueryError(f"百分比的合計缺少欄位 {missing}", unsupported=True)
+            uses = {c.key: c.use for c in main.columns if c.use is not None}
+            names = "、".join(
+                pill_name(use, fields, ws.table_calcs)
+                for key in missing
+                if (use := uses.get(key)) is not None
+            )
+            shown = f"（{names}）" if names else ""
+            raise QueryError(f"百分比的合計缺少欄位{shown}", unsupported=True)
         found = {
             tuple(row[at[k]] for k in kept): {k: row[i] for k, i in at.items() if k in keys}
             for row in result.rows
