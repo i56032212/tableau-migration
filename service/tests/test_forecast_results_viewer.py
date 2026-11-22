@@ -162,6 +162,19 @@ def test_forecast_result_menu_and_summary(engine: str) -> None:
         trend = row.locator("[data-contribution-trend]").inner_text()
         season = row.locator("[data-contribution-season]").inner_text()
         assert float(trend.rstrip("%")) + float(season.rstrip("%")) == pytest.approx(100, abs=0.2)
+        # 摘要與模型的數字不在中間斷行（桌面版視窗裡看到 15,984.6 ± 6,100.53 被拆成好幾行、Profit 拆成兩行）
+        wrapped = page.evaluate(
+            """() => [...document.querySelectorAll('.describe-dialog .describe-table.wide td')]
+              .filter((td) => td.textContent.trim() !== '')
+              .filter((td) => {
+                const range = document.createRange();
+                range.selectNodeContents(td);
+                const tops = new Set([...range.getClientRects()].map((r) => Math.round(r.top)));
+                return tops.size > 1;
+              })
+              .map((td) => td.textContent.trim())"""
+        )
+        assert wrapped == []
         page.locator(".describe-dialog").get_by_role("button", name="關閉").click()
 
         # 移除預測：膠囊上的結果類型一併清除

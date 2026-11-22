@@ -798,12 +798,13 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .capture .notes-indicator { display: none !important; }
 .divider-details { display: inline-flex; gap: 8px; align-items: center; }
 .divider-details input[type="number"] { width: 56px; margin-left: 4px; }
-.describe-dialog { min-width: 460px; max-width: 860px; max-height: 70vh; overflow: auto; }
+.describe-dialog { min-width: 460px; max-width: min(1100px, 92vw); max-height: 70vh; overflow: auto; }
 .describe-table { border-collapse: collapse; margin: 6px 0 14px; font-size: 13px; }
 .describe-table caption { text-align: left; font-weight: 600; padding-bottom: 4px; }
 .describe-table th, .describe-table td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
 .describe-table tbody th { font-weight: 400; color: var(--muted); white-space: nowrap; }
-.describe-table.wide td { text-align: right; }
+/* 數字的表（摘要、模型、係數）：數字與量值的名稱不在中間斷行（原本 15,984.6 被拆成好幾行），放不下時對話框橫向捲動 */
+.describe-table.wide td { text-align: right; white-space: nowrap; word-break: normal; }
 .describe-table.wide td:first-child { text-align: left; }
 .tooltip-options { flex-wrap: wrap; gap: 6px 14px; }
 .page-history { display: flex; gap: 12px; align-items: center; font-size: 12px; padding: 2px 8px 4px; }
