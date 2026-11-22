@@ -1850,9 +1850,19 @@ def test_maps_in_editor(engine: str) -> None:
             pinned.get_by_role("button", name="✓ 只保留").click()
         body = json.loads(response.value.request.post_data or "{}")
         assert body["marks"] == [{"mode": "keep", "marks": [{"f_state_province": "Texas"}]}]
-        # 只剩德州與德州的城市；矩形選取全部：兩個圖層的標記都選到
-        page.wait_for_selector('.single-sheet .worksheet[data-loading="false"]')
-        page.wait_for_selector('.single-sheet .chart[data-zoomable="true"]', timeout=30000)
+        # 只剩德州與德州的城市；矩形選取全部：兩個圖層的標記都選到。要等新的地圖畫好（只剩德州的形狀）：重畫要等
+        # 更細的底圖下載，在那之前 data-loading、data-zoomable 還是舊圖的值，框選落在還沒畫好的地圖上什麼都選不到
+        # （2026-11-23 完整測試中電腦忙時出現一次；網路延遲 1.5 秒時每次都如此）
+        page.wait_for_function(
+            """() => {
+              const chart = document.querySelector('.single-sheet .chart');
+              if (!chart || chart.dataset.drawn !== 'true' || chart.dataset.zoomable !== 'true') return false;
+              const states = Array.from(document.querySelectorAll('.single-sheet svg .mark-shape.role-mark path'))
+                .filter((p) => p.__data__ && p.__data__.datum && p.__data__.datum.__row >= 0);
+              return states.length > 0 && states.every((p) => Object.values(p.__data__.datum).includes('Texas'));
+            }""",
+            timeout=60000,
+        )
         tools.get_by_role("button", name="矩形選取").click()
         box = page.locator(".single-sheet .select-overlay").bounding_box()
         assert box is not None
