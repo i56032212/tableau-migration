@@ -227,6 +227,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .toolbar, .action-menu, .dashboard-button, .worksheet-meta, .worksheet-overlay, .map-tools, .viz-tooltip, .select-overlay, .presentation-bar { display: none !important; }
   :root, body { background: #fff; }
 }
+/* 拖曳標題排序（headerDrag.ts）：放下的位置的粗黑線 */
+.header-drop-line { position: fixed; z-index: 1200; background: #111; pointer-events: none; }
+body.dragging-header, body.dragging-header * { cursor: grabbing !important; user-select: none; }
+/* 列印分頁（printPages.ts）：分好的頁畫面上不顯示；列印時取代整個畫面，一頁一個區塊 */
+.print-pages { display: none; }
+@media print {
+  html.tmig-paged body > :not(.print-pages) { display: none !important; }
+  html.tmig-paged .print-pages { display: block; }
+  .print-page { position: relative; overflow: hidden; break-after: page; }
+  .print-page:last-child { break-after: auto; }
+  .print-sheet { position: relative; overflow: hidden; }
+}
 /* 訂閱與資料警示擷取畫面時（tmig_service.subscriptions 在 <html> 加上 capture）：圖片裡同樣不畫檢視器的介面 */
 .capture .worksheet-meta, .capture .worksheet-overlay, .capture .map-tools { display: none !important; }
 

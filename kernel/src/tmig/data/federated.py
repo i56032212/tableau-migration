@@ -38,6 +38,7 @@ from tmig.ir.models import (
     local_tables,
     remote_tables,
 )
+from tmig.sqlgen import rawsql
 from tmig.sqlgen.dialect import ParameterValues, to_dialect
 from tmig.sqlgen.query import WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX, SQL_TYPES
@@ -310,6 +311,7 @@ def execute_federated(
     if query.stages and tables is None:
         raise ExecutionError("Data Blending 的次要資料源要以 DataRuntime 先執行")
     sqls = [query.sql, *(g.sql for g in query.guards)]
+    rawsql.forbid_local(query.sql, "跨資料庫的 join")
     con = federated_connection(database, connection, fetch, cache, sqls, query.parameters)
     try:
         for name, table in (tables or {}).items():

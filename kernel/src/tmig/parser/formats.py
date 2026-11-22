@@ -38,7 +38,8 @@
     legend-title、tooltip；活頁簿 <style> 的設定（all 為預設字型）在前；標記標籤為標記卡的 datalabel
   - 框線：element='cell'（儲存格）、'pane'（窗格）、'header'（表頭）的 border-style（none、solid、dashed、
     dotted）、border-width、border-color（屬性名稱與 dashboard 區塊的框線相同；工作表的寫法沒有樣本，
-    是推定的）。表頭的框線還沒有畫出
+    是推定的）。合計與總計的框線是同樣的格式加上 data-class（subtotal 為合計、total 為總計，與網底的
+    寫法相同）與 scope（rows、cols），寫法也是推定的
   - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
     stroke-color、line-pattern-only（樣式，各自設定），table-div 的 div-level（第幾層標題之間，
     0 為不畫），以 scope 區分列與欄；沒有寫時
@@ -70,6 +71,7 @@ from tmig.ir.models import (
     Scalar,
     ShelfStyle,
     TextStyle,
+    TotalBorder,
     TrendLine,
     ZeroLine,
     ZoneStyle,
@@ -105,8 +107,8 @@ class SheetFormats:
     field_colors: dict[str, str] = field(default_factory=dict)
     cell_border: Border | None = None
     pane_border: Border | None = None
-    header_border: bool = False
-    """有設定表頭的框線（還沒有畫出：由呼叫端記進 ignored）。"""
+    header_border: Border | None = None
+    total_borders: list[TotalBorder] = field(default_factory=list)
 
 
 def worksheet_formats(
@@ -198,6 +200,8 @@ def worksheet_formats(
     bands: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
     dividers: dict[str, dict[str, str]] = {"rows": {}, "columns": {}}
     borders: dict[str, dict[str, str]] = {"cell": {}, "pane": {}, "header": {}}
+    # 合計與總計的框線：（列或欄、合計或總計）→ 元素（cell、pane、header）→ 屬性
+    totals: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
 
     def fonts(element: str | None, item: etree._Element) -> bool:
         """沒有 field 的字型格式：活頁簿的在前、工作表的覆寫（all 是活頁簿的預設字型）。"""
@@ -239,8 +243,20 @@ def worksheet_formats(
                 and ref is None
                 and item.get("data-class") is None
             ):
-                # 儲存格、窗格、表頭的框線（總計等 data-class 的另外設定，不算）
+                # 儲存格、窗格、表頭的框線（總計等 data-class 的在下面）
                 borders[element or ""][name or ""] = value or ""
+            elif (
+                tag == "format"
+                and element in borders
+                and name in BORDER_ATTRS
+                and ref is None
+                and item.get("data-class") in TOTAL_CLASSES
+            ):
+                # 合計、總計的框線：沒有寫 scope 時列與欄都套用（推定）
+                kind = TOTAL_CLASSES[item.get("data-class") or ""]
+                for shelf in [SHELVES[scope]] if scope in SHELVES else list(SHELVES.values()):
+                    raw = totals.setdefault((shelf, kind), {}).setdefault(element or "", {})
+                    raw[name or ""] = value or ""
             elif tag == "format" and name == "background-color" and element == "table":
                 result.background = hex_color(value) or result.background
             elif tag == "format" and name == "background-color" and element == "field-labels":
@@ -322,7 +338,16 @@ def worksheet_formats(
     result.row_style, result.column_style = shelves["rows"], shelves["columns"]
     result.cell_border = _border(borders["cell"])
     result.pane_border = _border(borders["pane"])
-    result.header_border = _border(borders["header"]) is not None
+    result.header_border = _border(borders["header"])
+    for (shelf, kind), raw in sorted(totals.items()):
+        # 窗格、儲存格、表頭的設定擇一（依這個順序；推定 Tableau 的合計、總計只有一種框線的樣子）
+        found = next(
+            (b for b in (_border(raw.get(e, {})) for e in ("pane", "cell", "header")) if b), None
+        )
+        if found is not None:
+            result.total_borders.append(
+                TotalBorder(shelf=shelf, kind=kind, border=found)  # type: ignore[arg-type]
+            )
     return result
 
 
@@ -364,6 +389,8 @@ def _zero_line(raw: dict[str, str]) -> ZeroLine | None:
 
 BORDER_ATTRS = ("border-style", "border-width", "border-color")
 """框線的屬性：樣式（none、solid、dashed、dotted）、線寬（像素）與顏色（與 dashboard 區塊的框線相同）。"""
+TOTAL_CLASSES = {"subtotal": "subtotal", "total": "grand_total"}
+"""格式的 data-class → 合計（小計）、總計（推定：與網底的 data-class 相同的寫法）。"""
 
 
 def _border(raw: dict[str, str]) -> Border | None:

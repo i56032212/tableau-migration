@@ -394,8 +394,25 @@ export function pillLabel(use: FieldUse, fields: Map<string, CatalogField>, calc
     const tc = calcs.find((c) => c.id === use.table_calc);
     if (tc && tc.type !== "formula") text += " △";
   }
+  if (use.forecast && use.forecast !== "none") text += `（${FORECAST_RESULT_NAMES[use.forecast] ?? use.forecast}）`;
   return text;
 }
+
+/** 預測結果（量值膠囊選單的「預測結果」，Tableau 繁體中文版的寫法）；值是 FieldUse.forecast，實際值與預測值為
+ * null。與 tmig.render.names 的 FORECAST_RESULT_NAMES 相同。 */
+export const FORECAST_RESULTS: [string | null, string][] = [
+  [null, "實際值與預測值"],
+  ["trend", "趨勢"],
+  ["precision", "精度"],
+  ["precision_percent", "精度 %"],
+  ["quality", "品質"],
+  ["upper", "上層預測區間"],
+  ["lower", "較低預測區間"],
+  ["none", "無"],
+];
+const FORECAST_RESULT_NAMES: Record<string, string> = Object.fromEntries(
+  FORECAST_RESULTS.filter(([value]) => value !== null) as [string, string][],
+);
 
 /** 膠囊的公式（在架上編輯時的文字）：臨時計算是它的公式，其他欄位是 [名稱] 加上彙總或日期衍生。 */
 export function pillFormula(use: FieldUse, fields: Map<string, CatalogField>): string {
@@ -437,6 +454,7 @@ export function useKey(use: FieldUse): string {
   if (use.date) key = `${use.date.kind === "part" ? use.date.unit : `trunc_${use.date.unit}`}(${key})`;
   if (use.agg) key = `${use.agg}(${key})`;
   if (use.table_calc) key = `${key}#${use.table_calc}`;
+  if (use.forecast) key = `${key}~${use.forecast}`;
   return key;
 }
 
@@ -711,10 +729,47 @@ export function tidy(sheet: SheetIR, fields: Map<string, CatalogField>): SheetIR
   }
   const forecast = sheet.forecast as ForecastIR | null | undefined;
   if (forecast) {
-    const measures = axisMeasures(sheet, fields);
-    changes.forecast = measures.length ? { ...forecast, measures } : null;
+    // 預測結果都選「無」時預測仍開著（與 Tableau 相同，只是沒有預測的量值）；欄列架上沒有量值時才移除
+    const measures = forecastMeasures(sheet, fields);
+    changes.forecast = measures.length || axisMeasures(sheet, fields).length ? { ...forecast, measures } : null;
+    // 預測移除時，膠囊上選的預測結果一併清除
+    if (changes.forecast === null) return refreshTableCalcs(clearForecast({ ...sheet, ...changes }), fields);
   }
   return refreshTableCalcs({ ...sheet, ...changes }, fields);
+}
+
+/** 預測的量值：欄列架上的量值（預測結果為「無」的除外），加上標記卡上選了預測結果（趨勢、精度等）的量值。 */
+export function forecastMeasures(sheet: SheetIR, fields: Map<string, CatalogField>): FieldUse[] {
+  const found = axisMeasures(sheet, fields).filter((u) => u.forecast !== "none");
+  for (const use of [sheet.marks, ...sheet.panes.map((p) => p.marks)].flatMap(markUses)) {
+    if (use.forecast && use.forecast !== "none" && !found.some((u) => sameUse(u, use))) found.push(use);
+  }
+  return found;
+}
+
+/** 移除預測：膠囊上選的預測結果一併清除（量值回到一般的量值）。 */
+export function clearForecast(sheet: SheetIR): SheetIR {
+  const plain = (u: FieldUse): FieldUse => (u.forecast ? { ...u, forecast: null } : u);
+  const single = (u: FieldUse | null | undefined) => (u ? plain(u) : u);
+  const marks = (m: MarksIR): MarksIR => ({
+    ...m,
+    color: single(m.color) ?? null,
+    size: single(m.size) ?? null,
+    shape: single(m.shape) ?? null,
+    angle: single(m.angle) ?? null,
+    path: single(m.path) ?? null,
+    label: m.label.map(plain),
+    detail: m.detail.map(plain),
+    tooltip: m.tooltip.map(plain),
+  });
+  return {
+    ...sheet,
+    forecast: null,
+    rows: sheet.rows.map(plain),
+    columns: sheet.columns.map(plain),
+    marks: marks(sheet.marks),
+    panes: sheet.panes.map((p) => ({ ...p, measure: plain(p.measure), marks: marks(p.marks) })),
+  };
 }
 
 // ---------------------------------------------------------------- 架上的變更
@@ -729,6 +784,7 @@ export function sameUse(a: FieldUse | null | undefined, b: FieldUse | null | und
     a.agg === b.agg &&
     a.continuous === b.continuous &&
     a.table_calc === b.table_calc &&
+    (a.forecast ?? null) === (b.forecast ?? null) &&
     (a.date?.kind ?? null) === (b.date?.kind ?? null) &&
     (a.date?.unit ?? null) === (b.date?.unit ?? null)
   );
@@ -943,6 +999,19 @@ export function setSort(sheet: SheetIR, field: string, sort: Omit<SortIR, "field
   return { ...sheet, sorts: sort ? [...others, { field, ...sort }] : others };
 }
 
+/**
+ * 在檢視上拖曳標題或圖例的項目（Tableau 的手動排序：把標題拖到另一個位置）：這個欄位（key 是檢視上的欄位鍵）的
+ * 排序改成手動，順序是拖曳之後畫面上的順序；原本手動排過、但現在不在畫面上的成員（被篩選掉的）接在後面。
+ */
+export function moveMember(sheet: SheetIR, key: string, values: Scalar[]): SheetIR {
+  const use = useOfKey(sheet, key);
+  if (!use) return sheet;
+  const current = sheet.sorts.find((s) => s.field === use.field);
+  const saved = current?.kind === "manual" ? current.manual_values : [];
+  const rest = saved.filter((v) => !values.some((w) => w === v));
+  return setSort(sheet, use.field, { kind: "manual", order: "asc", by: null, nested: false, manual_values: [...values, ...rest] });
+}
+
 export const isNumeric = (field: CatalogField | undefined) =>
   field !== undefined && (field.datatype === "integer" || field.datatype === "real");
 
@@ -1134,4 +1203,56 @@ export function selectionFilter(sheet: SheetIR, marks: Mark[], mode: "include" |
     source_ref: EDITOR_REF,
   } as unknown as FilterIR;
   return { ...sheet, filters: [...sheet.filters, filter] };
+}
+
+/**
+ * 「N 個 Null」指示器的「篩選資料」要篩選的欄位：欄、列架上連續的欄位（座標軸）中，畫圖的查詢結果裡有 Null 值的
+ * （與指示器的個數相同的算法：Measure Values、地圖的經緯度不算）。table 是 render 回應的 table（欄位鍵與未格式化
+ * 的值，Null 是空字串）；回應裡找不到這個欄位時當成有 Null（指示器出現就表示某個座標軸有 Null）。
+ */
+export function nullAxisUses(sheet: SheetIR, table: { keys: string[]; raw: string[][] } | undefined): FieldUse[] {
+  const axes: FieldUse[] = [];
+  for (const use of [...sheet.columns, ...sheet.rows])
+    if (use.continuous && !isSpecial(use) && !axes.some((u) => useKey(u) === useKey(use))) axes.push(use);
+  const withNulls = axes.filter((use) => {
+    const at = table?.keys.indexOf(useKey(use)) ?? -1;
+    return at < 0 || (table?.raw ?? []).some((row) => row[at] === "" || row[at] === null || row[at] === undefined);
+  });
+  return withNulls.length > 0 ? withNulls : axes;
+}
+
+/**
+ * 「篩選資料」（Tableau 指示器的 Filter Data）：每個有 Null 的座標軸欄位加一個只留非 Null 值的篩選（篩選對話框
+ * 「特殊值」的「非 Null 值」：沒有上下限、不含 Null）。量值是量值篩選（表計算是表計算的篩選），連續的日期與維度
+ * 篩選欄位本身的值（不分日期的層級）。篩選架上已經有同一個欄位的範圍篩選時改成不含 Null，上下限不變。
+ * ids：新篩選的代號，與 uses 一一對應。
+ */
+export function excludeNulls(sheet: SheetIR, uses: FieldUse[], ids: string[], fields: Map<string, CatalogField>): SheetIR {
+  let filters = sheet.filters;
+  uses.forEach((use, i) => {
+    const measure = isMeasure(use, fields);
+    const field: FieldUse = measure ? use : { ...use, date: null, continuous: true };
+    const existing = filters.findIndex((f) => f.kind === "range" && f.field && useKey(f.field) === useKey(field));
+    if (existing >= 0) {
+      filters = filters.map((f, j) => (j === existing ? { ...f, include_null: false, only_null: false } : f));
+      return;
+    }
+    const table = use.table_calc !== null || fields.get(use.field)?.level === "table_calc";
+    filters = [
+      ...filters,
+      {
+        kind: "range",
+        id: ids[i],
+        field,
+        stage: measure ? (table ? "table_calc" : "measure") : "dimension",
+        min: null,
+        max: null,
+        include_null: false,
+        only_null: false,
+        group: null,
+        source_ref: EDITOR_REF,
+      },
+    ];
+  });
+  return { ...sheet, filters };
 }

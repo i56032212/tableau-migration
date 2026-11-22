@@ -24,6 +24,7 @@ from sqlglot.errors import ParseError
 from tmig.data import udf
 from tmig.data.executor import ExecutionError, QueryResult, check_guard, finish
 from tmig.data.sources import Executor
+from tmig.sqlgen import rawsql
 from tmig.sqlgen.dialect import SPATIAL_CALL, DialectError, ParameterValues, split, to_dialect
 from tmig.sqlgen.query import OutputColumn, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
@@ -52,6 +53,7 @@ def execute_rows(
     """取回查詢讀的每張資料表（只取用到的欄；自訂 SQL 取整段的結果），以原本的名稱（"結構描述"."資料表"）交給
     記憶體中的 DuckDB，整段查詢在 DuckDB 執行（與萃取相同）。"""
     given = tables or {}
+    rawsql.forbid_local(query.sql, "用到空間函式的工作表（整段在取回資料列之後計算）")
     referenced = {
         parts: columns
         for parts, columns in source_tables(query.sql, prune=False).items()

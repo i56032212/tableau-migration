@@ -352,6 +352,10 @@ class _RowEnv:
         """Relationship 模型中量值來自多張資料表：彙總只計算所屬部分的列（不需要限定時為 None）。"""
         return self.query.part_condition(node, self._qualify(PART_COL))
 
+    def calc_presence(self, target: Target) -> str | None:
+        """Relationship 模型中列層級的跨資料表計算：只在用到的資料表都有對應的列時計算（條件）。"""
+        return self.query.presence(target, self._qualify)
+
     def aggregate(self, node: Call) -> str:
         raise QueryError(f"{node.name} 不能出現在列層級的位置")
 
@@ -601,6 +605,8 @@ class WorksheetQuery:
         """需要檢查的分支（ModelPlan.parts 與 Part.branches 的索引）→ 在哪些層級彙總。"""
         self._owners: dict[Node, str | None] = {}
         """彙總 → 所屬的量值表（見 owner_of）。"""
+        self._presence: dict[str, list[str]] = {}
+        """列層級的跨資料表計算（欄位 id）→ 要有對應的列的資料表（見 presence）。"""
         self._agg_parts: list[int] = []
         """目前編譯的這組彙總用到哪些部分的列（量值來自多張資料表時，見 _parts_scope）。"""
         self._domain_conds: list[str] = []
@@ -825,7 +831,15 @@ class WorksheetQuery:
         return found
 
     def lods_in(self, node: Node) -> list[Lod]:
-        return _unique([n for n in self.expand(node) if isinstance(n, Lod)])
+        """運算式中的 LOD（含計算欄位展開後的）；Data Blending 中次要資料源的 LOD 不在其中（它們只會在
+        外部彙總之中，在次要資料源的查詢中計算，見 tmig.sqlgen.blend）。"""
+        return _unique(
+            [
+                n
+                for n in self.expand(node)
+                if isinstance(n, Lod) and (self.blend is None or not self.blend.secondary_lod(n))
+            ]
+        )
 
     def has_row_fields(self, node: Node) -> bool:
         for item in self.expand(node):
@@ -1248,6 +1262,7 @@ class WorksheetQuery:
             for node in nodes:
                 self.collect(node, found)
             others |= set(found.tables)
+            usage.present |= found.present
             if member_set(flt):
                 # Top N 與彙總條件以彙總選出成員：用到的欄位與檢視的欄位一樣看待
                 usage.merge(found)
@@ -1288,19 +1303,27 @@ class WorksheetQuery:
 
     def owner_of(self, node: Call) -> str | None:
         """Relationship 模型中彙總所屬的量值表：參數中實體欄位（與資料表的筆數欄位、集合的層級欄位）
-        所在的邏輯資料表。只含 LOD、參數與常值時為 None（LOD 已併到每一列）；用到多張資料表的欄位時
-        列為不支援（Tableau 以列層級連接這些資料表後再彙總）。"""
+        所在的邏輯資料表。只含 LOD、參數與常值時為 None（LOD 已併到每一列）。用到多張資料表的欄位時
+        （跨資料表的計算）與 Tableau 相同，在這些資料表以關聯內部連接後的列彙總：複合的量值表
+        （見 tmig.sqlgen.model 的 ModelPlanner.compound_key）。"""
         if self.source.model is None:
             return None
         key = self.canon(node)
         if key in self._owners:
             return self._owners[key]
+        tables = self._tables_in(list(node.args))
+        owner = self._compound(tables) if tables else None
+        self._owners[key] = owner
+        return owner
+
+    def _tables_in(self, nodes: list[Node]) -> list[str]:
+        """列層級用到的邏輯資料表（計算欄位展開、集合的層級欄位；不含 LOD 之中與次要資料源的欄位）。"""
         tables: list[str] = []
 
         def visit(item: Node) -> None:
             if isinstance(item, FieldRef):
                 target = self._resolve(item)
-                if target.kind != "field":
+                if target.kind != "field" or target.id in self.foreign:
                     return
                 data_field = self.fields[target.id]
                 if data_field.set is not None and data_field.calc is None:
@@ -1317,18 +1340,33 @@ class WorksheetQuery:
             for sub in children(item):
                 visit(sub)
 
-        for arg in node.args:
-            visit(arg)
-        if len(tables) > 1:
-            captions = {t.id: t.caption for t in self.source.model.tables}
-            names = "、".join(f"「{captions.get(t, t)}」" for t in tables)
-            raise QueryError(
-                f"Relationship 模型中 {node.name} 同時用到多張資料表（{names}）的欄位，尚不支援",
-                unsupported=True,
-            )
-        owner = tables[0] if tables else None
-        self._owners[key] = owner
-        return owner
+        for node in nodes:
+            visit(node)
+        return tables
+
+    def _compound(self, tables: list[str]) -> str:
+        """計算用到的資料表 → 量值表（多張時是連接它們的最小子樹，見 ModelPlanner.compound_key）。"""
+        model = self.source.model
+        assert model is not None
+        try:
+            return ModelPlanner(self.datasource, model).compound_key(tables)
+        except ModelError as exc:
+            raise QueryError(str(exc), unsupported=True) from exc
+
+    def presence(self, target: Target, qualify: Callable[[str], str]) -> str | None:
+        """列層級的跨資料表計算：與 Tableau 相同，只在用到的資料表（與連接它們的路徑上的資料表）都有
+        對應的列時計算（定義域是它們的內部連接），否則為 Null。回傳這個條件（不需要時為 None）。"""
+        plan = self.model_plan
+        if plan is None or not plan.markers or target.formula is None:
+            return None
+        found = self._presence.get(target.id)
+        if found is None:
+            node = self.analyzer.calc_ast(target)
+            tables = self._tables_in([node]) if not self.aggregates_in(node) else []
+            found = ModelPlanner.members(self._compound(tables)) if len(tables) > 1 else []
+            self._presence[target.id] = found
+        conds = [f"{qualify(plan.markers[t])} = 1" for t in found if t in plan.markers]
+        return " AND ".join(conds) or None
 
     def part_of(self, node: Call) -> int | None:
         """彙總所屬的部分（ModelPlan.parts 的索引）；不屬於任何量值表時為 None。"""
@@ -1474,14 +1512,19 @@ class WorksheetQuery:
         captions = {t.id: t.caption for t in model.tables}
         for (p, i), whats in sorted(self._guards.items()):
             part = plan.parts[p]
-            measure = captions[part.table]
+            tables = ModelPlanner.members(part.table)
+            measure = (
+                f"「{captions[tables[0]]}」"
+                if len(tables) == 1
+                else "、".join(f"「{captions[t]}」" for t in tables) + "的內部連接"
+            )
             branch = part.branches[i]
             names = "、".join(self.fields[f].caption for f in branch.needed)
             guards.append(
                 Guard(
                     sql=branch.guard_sql(),
                     message=(
-                        f"Relationship 模型中「{self._branch_names(branch)}」對「{measure}」不是多對一"
+                        f"Relationship 模型中「{self._branch_names(branch)}」對{measure}不是多對一"
                         f"（同一個關聯值對應多組 {names}）：{'、'.join(whats)}的層級不含這些欄位，"
                         "量值會重複計算，尚不支援"
                     ),
@@ -1512,9 +1555,15 @@ class WorksheetQuery:
                 return
             if data_field.column is None and data_field.table is not None:
                 # 邏輯資料表的筆數欄位：SUM 即該資料表的列數
-                usage.add_table(data_field.table, inside)
+                usage.add_table(data_field.table, inside, owner)
             if target.formula is not None:
-                self.collect(self.analyzer.calc_ast(target), usage, inside, owner)
+                calc = self.analyzer.calc_ast(target)
+                if not inside and not self.aggregates_in(calc):
+                    # 列層級的跨資料表計算：要知道每一列是否有這些資料表的列（見 presence）
+                    tables = self._tables_in([calc])
+                    if len(tables) > 1:
+                        usage.present.update(ModelPlanner.members(self._compound(tables)))
+                self.collect(calc, usage, inside, owner)
             elif data_field.column is not None:
                 usage.add_field(data_field, inside, owner)
             return
@@ -3430,7 +3479,9 @@ def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analyt
                 "預測需要檢視中剛好一個時間的維度（年、季、月、週、日或時）", unsupported=True
             )
         time, unit = times[0]
-        measures = [column_of(m, "measure") for m in forecast.measures]
+        # 預測結果為「無」的量值不預測
+        wanted = [m for m in forecast.measures if m.forecast != "none"]
+        measures = [column_of(m, "measure") for m in wanted]
         if any(m is None for m in measures):
             raise QueryError("預測的量值不在查詢結果中", unsupported=True)
         indicator = next(
@@ -3452,8 +3503,19 @@ def analytics_plan(ir: IR, ws: Worksheet, columns: list[OutputColumn]) -> Analyt
             settings=forecast,
             # 估計不出來時的附註以膠囊上的寫法稱呼量值（SUM(Profit)）
             captions={
-                key: pill_name(use, fields, ws.table_calcs)
-                for use, key in zip(forecast.measures, measures, strict=True)
+                key: pill_name(use.model_copy(update={"forecast": None}), fields, ws.table_calcs)
+                for use, key in zip(wanted, measures, strict=True)
+                if key is not None
+            },
+            # 結果類型（趨勢、精度等）的欄與它們預測的量值（實際值與預測值的欄名）
+            results={
+                key: use.forecast
+                for use, key in zip(wanted, measures, strict=True)
+                if key is not None and use.forecast is not None
+            },
+            bases={
+                key: use_key(use.model_copy(update={"forecast": None}))
+                for use, key in zip(wanted, measures, strict=True)
                 if key is not None
             },
         )
@@ -3931,6 +3993,9 @@ class TitleQueries:
     """標題中不在檢視中的維度（欄位鍵 → 只有這個維度的查詢）：只有一個值時顯示它，多個值時顯示 *。"""
     from_main: list[str] = field(default_factory=list)
     """標題中在檢視中的維度（欄位鍵）：直接取工作表查詢結果中的值（量值篩選也照樣生效）。"""
+    table_calcs: list[str] = field(default_factory=list)
+    """標題中的 Table Calculation（欄位鍵）：取工作表查詢結果中各標記的值（依檢視的計算方向計算）；
+    各標記的值都相同時顯示它，不同時 Tableau 顯示範圍（寫法未確認，見 tmig.render.vegalite.title_values）。"""
 
 
 def title_sql(
@@ -3939,11 +4004,17 @@ def title_sql(
     main: WorksheetSql,
     state: QueryState | None = None,
     user: Identity | None = None,
+    marks: QueryResult | None = None,
 ) -> TitleQueries | None:
     """標題中的欄位值：量值在去掉所有維度的詳細程度彙總（例如 KPI 卡標題中的合計，與檢視的維度無關），
     維度查出篩選後的各個值。標題沒有欄位值時為 None。
 
-    尚不支援：與量值篩選一起使用（Tableau 只計算通過篩選的標記）。
+    Table Calculation 的值依檢視的計算方向計算，取工作表查詢結果中各標記的值（Tableau 知識庫「Adding Totals
+    to a Title」：標題中放 TOTAL()、WINDOW_SUM() 等在每個標記重複的值；推定：都相同時顯示它）。
+
+    與量值篩選、Table Calculation 篩選一起使用時只計算通過篩選（顯示）的標記：marks 為工作表的查詢結果，
+    量值與不在檢視中的維度限定在這些標記的維度組合（與總計的做法相同，見 totals_sql；推定）。marks 為
+    None（例如盤點只產生 SQL、不執行）時不限定。
     """
     ws = _find_worksheet(ir, worksheet)
     uses: list[FieldUse] = []
@@ -3952,17 +4023,38 @@ def title_sql(
             uses.append(run.use)
     if not uses:
         return None
-    if any(u.table_calc is not None or u.field in SPECIAL_FIELDS for u in uses):
-        raise QueryError("標題中的 Table Calculation 值尚不支援", unsupported=True)
+    special = [u for u in uses if u.field in SPECIAL_FIELDS]
+    if special:
+        raise QueryError(
+            f"標題中「{pill_name(special[0], {}, ws.table_calcs)}」的值尚不支援", unsupported=True
+        )
     classifier = WorksheetQuery(ir, worksheet, state, user)
-    measures = [u for u in uses if classifier.is_measure(u)]
+    calcs = [u for u in uses if u.table_calc is not None or classifier.level(u.field) == "tc"]
+    shown = {c.key for c in main.columns if c.role == "measure"}
+    missing = [u for u in calcs if use_key(u) not in shown]
+    if missing:
+        raise QueryError(
+            f"標題中的 Table Calculation 值（{classifier.pill(missing[0])}）不在檢視中，"
+            "沒有可以取值的標記，尚不支援",
+            unsupported=True,
+        )
+    table_calcs = [use_key(u) for u in calcs]
+    measures = [u for u in uses if classifier.is_measure(u) and u not in calcs]
     in_view = {c.key for c in main.columns if c.role == "dimension"}
     from_main = [use_key(u) for u in uses if not classifier.is_measure(u) and use_key(u) in in_view]
     dimensions = [u for u in uses if not classifier.is_measure(u) and use_key(u) not in from_main]
-    if (measures or dimensions) and any(
-        f.stage in ("measure", "table_calc") for f in main.state.filters
-    ):
-        raise QueryError("標題中的欄位值與量值篩選一起使用尚不支援", unsupported=True)
+    late = {f.id for f in main.state.filters if f.stage in ("measure", "table_calc")}
+    filters = list(ws.filters)
+    if (measures or dimensions) and late:
+        if late - {f.id for f in ws.filters}:
+            raise QueryError(
+                "標題中的欄位值與工作表以外的量值篩選一起使用尚不支援", unsupported=True
+            )
+        if marks is not None and not marks.rows:
+            # 沒有標記通過篩選：標題中沒有值
+            return TitleQueries(None, {}, from_main, table_calcs)
+        # 量值篩選改以通過篩選的標記的維度組合限定（篩選本身在去掉維度的層級沒有意義）
+        filters = [f for f in filters if f.id not in late] + [_marks_filter(ws, main, marks)]
     empty = Marks(type=ws.marks.type)
     base = ws.model_copy(
         update={
@@ -3976,6 +4068,7 @@ def title_sql(
             "reference_lines": [],
             "totals": [],
             "title": [],
+            "filters": filters,
         }
     )
 
@@ -3993,7 +4086,7 @@ def title_sql(
     dimension_queries = {
         use_key(u): query_for(base.model_copy(update={"rows": [u]})) for u in dimensions
     }
-    return TitleQueries(measures_query, dimension_queries, from_main)
+    return TitleQueries(measures_query, dimension_queries, from_main, table_calcs)
 
 
 __all__ = [

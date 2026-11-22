@@ -144,6 +144,9 @@ def use_key(use: FieldUse) -> str:
         key = f"{use.agg}({key})"
     if use.table_calc is not None:
         key = f"{key}#{use.table_calc}"
+    if use.forecast is not None:
+        # 預測的結果類型（趨勢、精度等）：與同一個量值的實際值與預測值各自一欄
+        key = f"{key}~{use.forecast}"
     return key
 
 

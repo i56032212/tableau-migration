@@ -592,6 +592,57 @@ def _collect(name: str) -> Checker:
     return check
 
 
+# 直接送給資料庫的函式（Tableau 的 pass-through functions）：第 1 個參數是資料庫的 SQL（字串常值），其中的 %1、
+# %2… 換成之後各個參數；RAWSQL_* 是列層級，RAWSQLAGG_* 是彙總（彙總寫在 SQL 裡）。只在 Live 連線、整段送到
+# 來源資料庫的部分計算（見 tmig.sqlgen.rawsql）；RAWSQL_SPATIAL 不支援（空間資料在平台的引擎計算）
+RAWSQL_TYPES: dict[str, DataType] = {
+    "BOOL": "boolean",
+    "DATE": "date",
+    "DATETIME": "datetime",
+    "INT": "integer",
+    "REAL": "real",
+    "STR": "string",
+}
+RAWSQL_MAX_ARGS = 100
+RAWSQL_SLOT = re.compile(r"%(\d+)")
+"""SQL 中代入參數的位置：%1 是第 2 個參數（第 1 個是 SQL 本身）。"""
+
+
+def rawsql_template(node: Node, name: str, pos: int) -> str:
+    """直接送給資料庫的 SQL：必須是字串常值（不是常值時 Tableau 也不能送出）。"""
+    if not (isinstance(node, LiteralNode) and node.kind == "string"):
+        raise FormulaSemanticError(
+            f"{name} 的第 1 個參數必須是 SQL 的字串常值", pos, unsupported=True
+        )
+    return str(node.value)
+
+
+def _rawsql(result: DataType) -> Callable[[str], Checker]:
+    def build(name: str) -> Checker:
+        def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+            template = rawsql_template(nodes[0], name, pos)
+            for match in RAWSQL_SLOT.finditer(template):
+                number = int(match.group(1))
+                _need(
+                    1 <= number < len(nodes),
+                    f"{name} 的 SQL 用到 %{number}，卻只有 {len(nodes) - 1} 個參數",
+                    pos,
+                )
+            for i, info in enumerate(args[1:], start=2):
+                if info.level in ("agg", "tc"):
+                    # 彙總寫在 SQL 裡（RAWSQLAGG_*）；參數本身是彙總時 Tableau 怎麼代入沒有文件
+                    raise FormulaSemanticError(
+                        f"{name} 的第 {i} 個參數是彙總，v0 只支援列層級的參數",
+                        pos,
+                        unsupported=True,
+                    )
+            return result
+
+        return check
+
+    return build
+
+
 # ---------------------------------------------------------------- 目錄
 
 _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
@@ -689,6 +740,7 @@ _ROW: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("DISTANCE", 3, 3, _distance),
     ("BUFFER", 3, 3, _buffer),
     ("AREA", 2, 2, _area),
+    *[(f"RAWSQL_{t}", 1, RAWSQL_MAX_ARGS, _rawsql(r)) for t, r in RAWSQL_TYPES.items()],
 ]
 
 _AGGREGATE: list[tuple[str, int, int, Callable[[str], Checker]]] = [
@@ -709,6 +761,7 @@ _AGGREGATE: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("COVAR", 2, 2, _real_numeric),
     ("COVARP", 2, 2, _real_numeric),
     ("COLLECT", 1, 1, _collect),
+    *[(f"RAWSQLAGG_{t}", 1, RAWSQL_MAX_ARGS, _rawsql(r)) for t, r in RAWSQL_TYPES.items()],
 ]
 
 _TABLE_CALC: list[tuple[str, int, int, Callable[[str], Checker]]] = [

@@ -3,7 +3,7 @@
 - 量值是篩選後全部資料的彙總，與檢視的維度無關：KPI 卡常見的寫法是標題放合計、下面畫每月的走勢線
   （公開報表「Sales & Customer Dashboards」的 KPI Sales：Total Sales <SUM(CY Sales)>，欄架是月份）
 - 維度只有一個值時顯示它（例如篩選到一個地區），多個值時顯示 *（與 ATTR 相同）
-- Table Calculation 的值與量值篩選尚不支援
+- Table Calculation 的值與量值篩選見 test_title_values.py
 """
 
 from __future__ import annotations
@@ -11,16 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from tmig.data.executor import execute
 from tmig.ir import IR, TextRun
 from tmig.parser.workbook import parse_workbook
 from tmig.render.vegalite import title_values, worksheet_title
-from tmig.sqlgen.query import QueryError, title_sql, worksheet_sql
+from tmig.sqlgen.query import title_sql, worksheet_sql
 
 from ..parser import builder as b
-from ..parser.builder import instance, ref, worksheet
+from ..parser.builder import DS, instance, ref, worksheet
 from ..sqlgen.test_query import categorical
 from .test_text import db
 
@@ -124,34 +122,15 @@ def test_date_part_in_title(tmp_path: Path, db: Path) -> None:
 
 
 def test_unsupported_title_values(tmp_path: Path) -> None:
-    rank = instance(
-        "[Sales]",
-        "Sum",
-        "[rank:sum:Sales:qk]",
-        "quantitative",
-        "<table-calc ordering-type='Rows' type='Rank' />",
-    )
-    sheet = worksheet(
-        "KPI",
-        [REGION, SALES, rank],
-        rows=ref("none:Region:nk"),
-        cols=ref("sum:Sales:qk"),
-        encodings=f"<text column='{ref('rank:sum:Sales:qk')}' />",
-    )
-    ir = parse(tmp_path, titled(sheet, f"Rank {esc('rank:sum:Sales:qk')}"))
+    """Measure Names 不是資料源的欄位，標題中的值尚不支援（Table Calculation 與量值篩選見
+    test_title_values.py）。"""
+    names = f"[{DS}].[:Measure Names]"
+    sheet = worksheet("KPI", [REGION, SALES], rows=ref("none:Region:nk"), cols=names)
+    ir = parse(tmp_path, titled(sheet, f"Measures &lt;{names}&gt;"))
     assert [u.reason for u in ir.unsupported] == [
-        "工作表「KPI」的標題用到「Sales」的 Table Calculation 值，尚不支援"
+        "工作表「KPI」的標題用到「Measure Names」的值，尚不支援"
     ]
-    assert ir.worksheets[0].title == [TextRun(text="Rank ")]
-    # 與量值篩選一起使用：Tableau 只計算通過篩選的標記
-    measure_filter = (
-        f"<filter class='quantitative' column='{ref('sum:Sales:qk')}' included-values='in-range'>"
-        "<min>100</min></filter>"
-    )
-    ir = parse(tmp_path, kpi(f"Total {esc('sum:Sales:qk')}", measure_filter))
-    ws = ir.worksheets[0]
-    with pytest.raises(QueryError, match="標題中的欄位值與量值篩選一起使用尚不支援"):
-        title_sql(ir, ws.id, worksheet_sql(ir, ws.id))
+    assert ir.worksheets[0].title == [TextRun(text="Measures ")]
 
 
 def test_dimension_in_view_follows_measure_filters(tmp_path: Path, db: Path) -> None:

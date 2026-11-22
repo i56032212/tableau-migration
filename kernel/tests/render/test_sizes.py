@@ -642,7 +642,7 @@ def edge_test(edges: list[str]) -> str:
 
 def test_borders_are_parsed(tmp_path: Path) -> None:
     """儲存格與窗格的框線：樣式、線寬與顏色；樣式是 none、沒有寫樣式、寬度 0 或透明時沒有框線。
-    總計的框線（data-class）不算；表頭的框線還沒有畫出，記在 ignored。"""
+    總計的框線（data-class）不算在儲存格的框線中（另外解析，見 test_header_total_borders）。"""
     plain = parse(tmp_path, banded()).worksheets[0]
     assert (plain.cell_border, plain.pane_border) == (None, None)
     ws = parse(tmp_path, banded(CELL_BORDER, PANE_BORDER)).worksheets[0]
@@ -666,11 +666,10 @@ def test_borders_are_parsed(tmp_path: Path) -> None:
         rule("cell", "<format attr='border-style' data-class='total' value='solid' />"),
     ):
         assert parse(tmp_path, banded(off)).worksheets[0].cell_border is None, off
+    # 表頭的框線也畫出（見 test_header_total_borders），不再記在 ignored
     ir = parse(tmp_path, banded(rule("header", fmt("border-style", "solid"))))
-    assert ir.unsupported == []
-    assert [u.reason for u in ir.ignored if "框線" in u.reason] == [
-        "表頭的框線尚未畫出（儲存格與窗格的框線有畫）"
-    ]
+    assert ir.unsupported == [] and ir.worksheets[0].header_border == Border()
+    assert not any("框線" in u.reason for u in ir.ignored)
     assert not any("框線" in u.reason for u in parse(tmp_path, banded(CELL_BORDER)).ignored)
 
 

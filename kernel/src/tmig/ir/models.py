@@ -21,10 +21,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
+    model_serializer,
     model_validator,
 )
 
@@ -110,6 +112,14 @@ class DateDerivation(IRModel):
     unit: DatePart
 
 
+ForecastResultType = Literal[
+    "trend", "precision", "precision_percent", "quality", "upper", "lower", "none"
+]
+"""預測的量值在膠囊選單「預測結果」中選的結果類型（Tableau 的 Forecast Result）：趨勢（去掉季節成分的估計值）、
+精度（預測區間與估計值的距離）、精度 %（精度占估計值的百分比）、品質（0–100）、上層／較低預測區間，
+none 為「無」（這個量值不預測）。實際值與預測值是預設（None）。"""
+
+
 class FieldUse(IRModel):
     """欄列架、標記編碼、篩選、排序與控制項中的一次欄位使用。"""
 
@@ -118,12 +128,27 @@ class FieldUse(IRModel):
     date: DateDerivation | None = Field(default=None, description="日期衍生；只用於日期維度")
     continuous: bool = Field(default=False, description="True＝連續（綠色），False＝離散（藍色）")
     table_calc: Id | None = Field(default=None, description="套用的 Table Calculation id")
+    forecast: ForecastResultType | None = Field(
+        default=None,
+        description="預測的結果類型（工作表有預測時，量值膠囊的「預測結果」）；None 為實際值與預測值",
+    )
 
     @model_validator(mode="after")
     def _agg_or_date(self) -> Self:
         if self.agg is not None and self.date is not None:
             raise ValueError("agg 與 date 不能同時設定")
+        if self.forecast is not None and self.date is not None:
+            raise ValueError("預測的結果類型只用於量值，不能與 date 同時設定")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_default_forecast(self, handler: SerializerFunctionWrapHandler) -> Any:
+        """forecast 是 None（絕大多數的膠囊）時不寫出：IR 的 JSON、golden IR 與編輯器收送的膠囊都與加上這個
+        欄位之前相同（讀取時沒有就是 None）。"""
+        data = handler(self)
+        if self.forecast is None and isinstance(data, dict):
+            data.pop("forecast", None)
+        return data
 
 
 class ParamRef(IRModel):
@@ -1691,9 +1716,12 @@ ForecastComponent = Literal["none", "additive", "multiplicative"]
 class Forecast(IRModel):
     """預測（分析 → 預測）：時間軸上的量值以指數平滑估計之後幾期（tmig.planner.forecast）。估計的列
     Forecast Indicator 為 Estimate；預測區間另外輸出。Tableau 的初始值與最佳化細節沒有公開，估計值可能
-    與 Tableau 有些微差異。"""
+    與 Tableau 有些微差異。量值的結果類型（趨勢、精度等）在 FieldUse.forecast。"""
 
-    measures: list[FieldUse] = Field(default_factory=list, description="預測的量值")
+    measures: list[FieldUse] = Field(
+        default_factory=list,
+        description="預測的量值（FieldUse.forecast 為結果類型；同一個量值可以以不同的結果類型出現多次）",
+    )
     indicator: Id | None = Field(
         default=None, description='Forecast Indicator 欄位（公式為 "Actual" 的字串欄位）'
     )
@@ -1954,6 +1982,16 @@ class Border(IRModel):
     )
     width: int = Field(default=1, ge=1, description="線寬（像素）")
     color: HexColor = "#d4d4d4"
+
+
+class TotalBorder(IRModel):
+    """合計（小計）或總計的列（欄）的框線（格式設定的「框線」中列、欄的「合計」「總計」）：畫在這些列（欄）的
+    兩側，窗格與標題區域都畫。同一個位置有不只一種線時，分隔線優先、其次總計、合計、窗格、儲存格（Tableau 的
+    格式窗格中後面的設定蓋過前面的，推定）。"""
+
+    shelf: Literal["rows", "columns"] = Field(description="列（合計的列）或欄（合計的欄）")
+    kind: Literal["subtotal", "grand_total"] = Field(description="合計（小計）或總計")
+    border: Border
 
 
 class LineStyle(IRModel):
@@ -2403,6 +2441,16 @@ class Worksheet(IRModel):
         default=None,
         description="窗格的框線（格式＞框線＞窗格）：各窗格（最內層以外的標題成員改變處）之間與檢視的外框；"
         "只有一層標題時整張表是一個窗格，只有外框。None 為沒有",
+    )
+    header_border: Border | None = Field(
+        default=None,
+        description="表頭的框線（格式＞框線＞表頭）：標題區域中各標題成員之間（列標題的每一列、欄標題的每一欄"
+        "之間，外層的成員跨過的列不切開）；None 為沒有",
+    )
+    total_borders: list[TotalBorder] = Field(
+        default_factory=list,
+        description="合計（小計）與總計的列、欄的框線（格式＞框線＞列、欄的「合計」「總計」）：畫在它們的兩側，"
+        "窗格與標題區域都畫",
     )
     null_indicator: bool = Field(
         default=True,

@@ -19,6 +19,7 @@ import pyarrow as pa
 
 from tmig.data import udf
 from tmig.ir.models import FileConnection, LiveConnection, is_federated
+from tmig.sqlgen import rawsql
 from tmig.sqlgen.query import BlendStage, Guard, OutputColumn, QueryError, WorksheetSql
 
 
@@ -67,6 +68,7 @@ def execute(
     path = Path(db_path)
     if not path.is_file():
         raise ExecutionError(f"找不到資料檔 {path}；請先執行 tmig import-hyper")
+    rawsql.forbid_local(sql, "萃取與檔案的資料")
     try:
         # 用到 ICU 的正規表示式（或要登記資料表）時另開記憶體資料庫附加資料檔（見 tmig.data.udf）
         connection = (

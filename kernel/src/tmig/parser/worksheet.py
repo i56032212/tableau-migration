@@ -53,6 +53,7 @@ from tmig.ir.models import (
     FieldUse,
     Filter,
     Forecast,
+    ForecastResultType,
     MarkLabels,
     Marks,
     MarkType,
@@ -137,6 +138,21 @@ SHEET_ATTR = re.compile(r'([\w-]+)="([^"]*)"')
 """自訂文字中的參照：<[資料源].[欄位實例]>、<[Parameters].[參數]>、<Sheet Name>。"""
 LINE_BREAK = "\u00c6\n"
 """Tableau 格式化文字的換行（Æ 加換行）。"""
+FORECAST_RESULTS: dict[str, ForecastResultType] = {
+    "forecast-trend": "trend",
+    "forecast-precision": "precision",
+    "forecast-precision-percent": "precision_percent",
+    "forecast-precision-pct": "precision_percent",
+    "forecast-quality": "quality",
+    "forecast-upper-bound": "upper",
+    "forecast-upper-prediction-interval": "upper",
+    "forecast-lower-bound": "lower",
+    "forecast-lower-prediction-interval": "lower",
+    "forecast-none": "none",
+}
+"""column-instance 的 forecast-column-type → 預測的結果類型（膠囊選單的「預測結果」）。公開報表中只看過
+forecast-value（實際值與預測值）與 forecast-indicator；這裡的名稱沒有樣本，是依那兩個的寫法推定的。
+不在這裡的值一律不支援（報表進人工佇列），猜錯只會讓這種報表照舊留在人工佇列。"""
 
 MARKS: dict[str, MarkType] = {
     "Automatic": "automatic",
@@ -546,14 +562,16 @@ class SheetParser:
         reference_lines = self._reference_lines(child(table, "panes"), child(table, "style"))
         annotations = self._annotations(child(table, "annotations"))
         forecast = self._forecast(child(table, "forecast-specification"))
+        if forecast is None and any(u.forecast is not None for u in card_uses):
+            # 預測沒有開啟（或不支援）時，選了預測結果的膠囊沒有值可以顯示
+            self.ctx.flag(table, "預測結果（趨勢、精度等）用在沒有預測的工作表上，v0 不支援")
+            return None
         cluster = self._cluster_spec(card_uses)
         with self._blend_scope():
             formats = self._formats(child(table, "style"), [*rows, *cols])
         sheet_formats = worksheet_formats(
             child(table, "style"), self.resolve, rows, cols, child(ctx.package.root, "style")
         )
-        if sheet_formats.header_border:
-            ctx.ignore(el, "表頭的框線尚未畫出（儲存格與窗格的框線有畫）")
         title = self._title(child(el, "layout-options"))
         self._check_label_text(card_uses, [marks, *(p.marks for p in panes)])
         on_map = any(u.field in GENERATED_FIELDS for u in [*rows, *cols])
@@ -603,6 +621,8 @@ class SheetParser:
             cell_align=sheet_formats.cell_align,
             cell_border=sheet_formats.cell_border,
             pane_border=sheet_formats.pane_border,
+            header_border=sheet_formats.header_border,
+            total_borders=sheet_formats.total_borders,
             field_label_background=sheet_formats.field_label_background,
             fonts=sheet_formats.fonts,
             label_valign=sheet_formats.label_valign,
@@ -747,18 +767,23 @@ class SheetParser:
         return use
 
     def _forecast_use(self, key: str, inst: etree._Element) -> FieldUse | str:
-        """預測的結果：實際值與估計值（fVal:）是預測的量值本身；Forecast Indicator 是查詢之後才補上
-        Estimate 的字串欄位。其他結果類型（趨勢、精確度等）尚不支援。"""
+        """預測的結果：實際值與估計值（fVal:）是預測的量值本身；其他結果類型（趨勢、精度、精度 %、品質、
+        上層與較低預測區間）是同一個量值加上 FieldUse.forecast；Forecast Indicator 是查詢之後才補上
+        Estimate 的字串欄位。不認得的結果類型不支援。"""
         assert self.ds is not None
-        kind = inst.get("forecast-column-type")
-        if kind == "forecast-value":
+        kind = inst.get("forecast-column-type") or ""
+        result = FORECAST_RESULTS.get(kind)
+        if kind == "forecast-value" or result is not None:
             base = self.resolve(inst.get("forecast-column-base", ""))
             if isinstance(base, str):
                 return base
-            if base not in self.forecast_measures:
-                self.forecast_measures.append(base)
-            self.uses[key] = base
-            return base
+            if base.date is not None:
+                return f"預測的結果類型 {kind} 用在日期維度上，v0 不支援"
+            use = base if result is None else base.model_copy(update={"forecast": result})
+            if result != "none" and use not in self.forecast_measures:
+                self.forecast_measures.append(use)
+            self.uses[key] = use
+            return use
         if kind == "forecast-indicator":
             found = add_forecast_indicator(self.ctx, self.ds, inst)
             if found is None:
@@ -1975,7 +2000,8 @@ class SheetParser:
         """自訂的工作表標題；只有工作表名稱（<Sheet Name>）時與預設相同，回傳空的。
 
         標題中的欄位值與 Tableau 相同，以整張工作表計算（量值是全部資料的彙總，維度只有一個值時顯示它、
-        多個值時顯示 *）；Table Calculation 與 Measure Names／Values 的值尚不支援。"""
+        多個值時顯示 *；Table Calculation 取檢視中各標記的值，見 tmig.sqlgen.query 的 title_sql）；
+        Measure Names、Measure Values 與產生的地理欄位（不是資料源的欄位）的值尚不支援。"""
         formatted = child(child(layout, "title"), "formatted-text")
         if formatted is None:
             return []
@@ -1983,16 +2009,11 @@ class SheetParser:
         runs: list[TextRun] = []
         for run in self._text_runs(formatted, what):
             use = run.use
-            if use is not None and (use.table_calc is not None or use.field in SPECIAL_FIELDS):
-                assert self.ds is not None
-                caption = (
-                    use.field
-                    if use.field in SPECIAL_FIELDS
-                    else self.ds.field_by_id(use.field).caption
-                )
-                self.ctx.flag(
-                    formatted, f"{what}用到「{caption}」的 Table Calculation 值，尚不支援"
-                )
+            if use is not None and use.field in SPECIAL_FIELDS:
+                from tmig.render.names import SPECIAL_NAMES
+
+                name = SPECIAL_NAMES.get(use.field, use.field)
+                self.ctx.flag(formatted, f"{what}用到「{name}」的值，尚不支援")
                 continue
             runs.append(run)
         return [] if runs == [TextRun(text=self.name)] else runs
@@ -2557,12 +2578,14 @@ class SheetParser:
         name: str,
         filters: list[Filter],
         kinds: dict[str, FilterKind],
+        shared: bool = False,
     ) -> bool:
         """次要資料源（Data Blending）的篩選，留在工作表的 filters 中（欄位是次要資料源的欄位）。
 
-        維度篩選：篩選次要資料源的資料；主要資料源中連結欄位的值沒有對應到通過篩選的資料時，那些標記不
-        顯示（見 tmig.sqlgen.blend）。量值與 Table Calculation 的篩選：以混合後的值篩選標記，與主要資料源
-        的量值篩選相同。回傳是否加入。"""
+        維度篩選（含條件與 Top N）：篩選次要資料源的資料，條件與 Top N 在次要資料源的查詢中計算；主要資料源
+        中連結欄位的值沒有對應到通過篩選的資料時，那些標記不顯示（見 tmig.sqlgen.blend）。量值與 Table
+        Calculation 的篩選：以混合後的值篩選標記，與主要資料源的量值篩選相同。shared：主要資料源的全域篩選
+        （「套用到所有使用此資料源的工作表」，Tableau 依工作表的主要資料源套用），同一群組。回傳是否加入。"""
         secondary = self.secondaries[name]
         column = element.get("column", "")
         key = instance_key(column)
@@ -2585,24 +2608,29 @@ class SheetParser:
         if parsed is None:
             return False
         label = f"工作表「{self.name}」以次要資料源「{secondary.caption}」的欄位 {column} 篩選"
+        if not isinstance(parsed, TupleFilter) and parsed.stage == "context":
+            # Tableau 的「加入內容」只出現在主要資料源欄位的篩選（Tableau 社群論壇，2018-12-21）；
+            # 這種篩選在次要資料源中的運算順序無從確認
+            self.ctx.flag(
+                element,
+                f"{label}：次要資料源的內容篩選尚不支援"
+                "（Tableau 只能把主要資料源欄位的篩選加入內容，無法確認這個篩選的運算順序）",
+            )
+            return False
         if isinstance(parsed, TupleFilter) or parsed.stage not in (
             "dimension",
+            "top_n",
             "measure",
             "table_calc",
         ):
             self.ctx.flag(
-                element,
-                f"{label}：Data Blending 只支援次要資料源的維度與量值篩選"
-                "（內容篩選、條件、Top N 尚不支援）",
+                element, f"{label}：Data Blending 只支援次要資料源的維度、Top N 與量值篩選"
             )
             return False
-        if parsed.stage == "dimension" and parsed.kind not in (
-            "categorical",
-            "range",
-            "relative_date",
-        ):
-            self.ctx.flag(element, f"{label}：{parsed.kind} 篩選（Data Blending）尚不支援")
-            return False
+        if shared and self.ds is not None:
+            parsed = parsed.model_copy(
+                update={"group": f"shared:{self.ds.id}:{use_key(parsed.field)}"}
+            )
         filters.append(parsed)
         # 篩選控制項以 [次要資料源].[欄位實例] 找到這個篩選
         own = f"[{name}].{key}#filter"
@@ -2631,7 +2659,9 @@ class SheetParser:
         target = target_el.get("field", "") if target_el is not None else ""
         owner = qualified_parts(column)[0]
         if qualified_parts(target)[:1] != [self.ds.name] and owner in self.secondaries:
-            return self._secondary_filter(element, owner, filters, kinds)
+            # 次要資料源自己的篩選；在主要資料源的全域篩選中（group）時是「套用到所有使用此資料源的
+            # 工作表」：Tableau 混合時依工作表的主要資料源套用，與篩選欄位的資料源無關
+            return self._secondary_filter(element, owner, filters, kinds, shared=group is not None)
         if qualified_parts(target)[:1] != [self.ds.name]:
             self.ctx.flag(
                 element,
@@ -2772,9 +2802,15 @@ class SheetParser:
         if element is None:
             other = self.ctx.shared_views.get(name)
             if other is not None and key in other.filters:
+                # Tableau 說明文件「Apply Filters to Multiple Worksheets」（2021.2）：混合時「套用到所有
+                # 使用此資料源的工作表」依工作表的主要資料源套用，不依篩選欄位的資料源——其他資料源的全域篩選
+                # 不會套用到以它為次要資料源的工作表；篩選架上卻列出它，Tableau 怎麼處理無從確認
+                caption = self.secondaries[name].caption if name in self.secondaries else name
                 self.ctx.flag(
                     column,
-                    f"工作表「{self.name}」套用次要資料源的全域篩選（Data Blending），v0 不支援",
+                    f"工作表「{self.name}」的篩選架列出資料源「{caption}」的全域篩選，但它在這張工作表是"
+                    "次要資料源（Data Blending）：Tableau 的全域篩選依工作表的主要資料源套用，"
+                    "這個篩選是否生效無法確認，尚不支援",
                 )
             return
         if foreign in self.cross or foreign in shared.failed:

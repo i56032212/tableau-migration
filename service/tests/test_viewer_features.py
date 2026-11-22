@@ -1693,7 +1693,11 @@ def test_presentation_mode_survives_rapid_toggling(server: str) -> None:
 
     原本（第五批的第一版）連按時畫面留在全螢幕、卻不是簡報模式（無頭的 Chromium 上 6 次中 3–6 次）；全螢幕的要求
     還沒有結果時收到的「不在全螢幕」一律不理會，於是 `test_presentation_mode_shortcuts` 在電腦忙的時候偶爾停在
-    簡報模式裡。"""
+    簡報模式裡。第二版在電腦忙的時候，離開之後馬上再進入偶爾被踢出簡報模式：上一次進入的全螢幕通知晚到，被當成
+    這一次的全螢幕，接著上一次的全螢幕結束（2026-11-22 補 Tableau 缺口時的完整測試中出現一次）。
+
+    狀態以「連續一段時間都是預期的狀態」判斷（最多等 15 秒）：電腦忙的時候全螢幕的要求與結束可能晚到，固定等
+    800 毫秒會把還沒完成當成錯誤；真的卡住（留在全螢幕、被踢出簡報模式）則一直不是預期的狀態。"""
     from playwright.sync_api import expect, sync_playwright
 
     ir = load_ir(FEATURES / "golden.ir.json")
@@ -1711,13 +1715,27 @@ def test_presentation_mode_survives_rapid_toggling(server: str) -> None:
         page.wait_for_function(LOADED)
         presenting = page.locator(".page.presenting")
 
+        def settles(expected: list[Any], why: object) -> None:
+            deadline = time.monotonic() + 15
+            since: float | None = None
+            while True:
+                now = time.monotonic()
+                found = page.evaluate(state)
+                if found == expected:
+                    since = now if since is None else since
+                    if now - since >= 0.8:
+                        return
+                else:
+                    since = None
+                assert now < deadline, (why, found)
+                page.wait_for_timeout(100)
+
         # 進入之後馬上離開（不等全螢幕）：不在簡報模式，也不留在全螢幕
         for enter, leave in (("F7", "F7"), ("Control+h", "Control+h"), ("F7", "Escape")):
             for _ in range(3):
                 page.keyboard.press(enter)
                 page.keyboard.press(leave)
-                page.wait_for_timeout(800)
-                assert page.evaluate(state) == [0, False], (enter, leave)
+                settles([0, False], (enter, leave))
 
         # 進入、等全螢幕；離開之後馬上再進入：上一次結束全螢幕的通知不把這一次踢出去
         for _ in range(3):
@@ -1725,8 +1743,7 @@ def test_presentation_mode_survives_rapid_toggling(server: str) -> None:
             page.wait_for_function("document.fullscreenElement !== null")
             page.keyboard.press("F7")
             page.keyboard.press("F7")
-            page.wait_for_timeout(800)
-            assert page.evaluate(state) == [1, True]
+            settles([1, True], "離開之後馬上再進入")
             page.keyboard.press("F7")
             page.wait_for_function("document.fullscreenElement === null")
             expect(presenting).to_have_count(0)

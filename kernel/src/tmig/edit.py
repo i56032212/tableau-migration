@@ -382,7 +382,7 @@ def add_analytics_field(
     return _validated(updated, f"無法加入「{caption}」"), field
 
 
-USE_KEYS = frozenset({"field", "agg", "date", "continuous", "table_calc"})
+USE_KEYS = frozenset({"field", "agg", "date", "continuous", "table_calc", "forecast"})
 
 
 def _adapt_worksheets(ir: IR, field: DataField, old: str | None, new: str) -> IR:

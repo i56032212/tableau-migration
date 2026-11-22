@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from tmig.data.file_import import excel_bounds, named_ranges
+from tmig.data.file_import import excel_bounds, named_ranges, xls_named_ranges
 from tmig.edit import (
     EDITOR_REF,
     EditError,
@@ -236,25 +236,37 @@ def _inspect_excel(name: str, data: bytes, interpreter: bool = False) -> list[In
             book = xlrd.open_workbook(file_contents=data)
         except Exception as exc:
             raise EditError(f"{name} 不是可讀取的 Excel 檔：{exc}") from exc
+
+        def xls_value(cell: Any) -> Any:
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                return xlrd.xldate.xldate_as_datetime(float(cell.value), book.datemode)
+            if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                return bool(cell.value)
+            if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
+                return None
+            value = cell.value
+            return int(value) if isinstance(value, float) and value.is_integer() else value
+
         for sheet in book.sheets():
             grid: list[list[Any]] = []
             for r in range(min(sheet.nrows, SAMPLE_ROWS + 1)):
-                row: list[Any] = []
-                for c in range(sheet.ncols):
-                    cell = sheet.cell(r, c)
-                    if cell.ctype == xlrd.XL_CELL_DATE:
-                        row.append(xlrd.xldate.xldate_as_datetime(float(cell.value), book.datemode))
-                    elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
-                        row.append(bool(cell.value))
-                    elif cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
-                        row.append(None)
-                    else:
-                        value = cell.value
-                        row.append(
-                            int(value) if isinstance(value, float) and value.is_integer() else value
-                        )
-                grid.append(row)
+                grid.append([xls_value(sheet.cell(r, c)) for c in range(sheet.ncols)])
             grids.append((sheet.name, grid, max(sheet.nrows - 1, 0)))
+        # 具名範圍：也是一張資料表（名稱與工作表相同的不列），與 .xlsx 相同
+        sheets = book.sheet_names()
+        for range_name, (title, cells) in sorted(xls_named_ranges(book).items()):
+            if range_name in sheets or title not in sheets:
+                continue
+            sheet = book.sheet_by_name(title)
+            first_col, first_row, last_col, last_row = excel_bounds(cells)
+            last_row = min(last_row or sheet.nrows, sheet.nrows)
+            last_col = min(last_col or sheet.ncols, sheet.ncols)
+            grid = [
+                [xls_value(sheet.cell(r, c)) for c in range(first_col - 1, last_col)]
+                for r in range(first_row - 1, last_row)
+            ]
+            if grid:
+                grids.append((range_name, grid[: SAMPLE_ROWS + 1], max(len(grid) - 1, 0)))
     else:
         import openpyxl
 

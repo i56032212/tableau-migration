@@ -2884,6 +2884,28 @@
           "default": null,
           "description": "套用的 Table Calculation id",
           "title": "Table Calc"
+        },
+        "forecast": {
+          "anyOf": [
+            {
+              "enum": [
+                "trend",
+                "precision",
+                "precision_percent",
+                "quality",
+                "upper",
+                "lower",
+                "none"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預測的結果類型（工作表有預測時，量值膠囊的「預測結果」）；None 為實際值與預測值",
+          "title": "Forecast"
         }
       },
       "required": [
@@ -3212,10 +3234,10 @@
     },
     "Forecast": {
       "additionalProperties": false,
-      "description": "預測（分析 → 預測）：時間軸上的量值以指數平滑估計之後幾期（tmig.planner.forecast）。估計的列\nForecast Indicator 為 Estimate；預測區間另外輸出。Tableau 的初始值與最佳化細節沒有公開，估計值可能\n與 Tableau 有些微差異。",
+      "description": "預測（分析 → 預測）：時間軸上的量值以指數平滑估計之後幾期（tmig.planner.forecast）。估計的列\nForecast Indicator 為 Estimate；預測區間另外輸出。Tableau 的初始值與最佳化細節沒有公開，估計值可能\n與 Tableau 有些微差異。量值的結果類型（趨勢、精度等）在 FieldUse.forecast。",
       "properties": {
         "measures": {
-          "description": "預測的量值",
+          "description": "預測的量值（FieldUse.forecast 為結果類型；同一個量值可以以不同的結果類型出現多次）",
           "items": {
             "$ref": "#/$defs/FieldUse"
           },
@@ -7990,6 +8012,40 @@
       "title": "TopNFilter",
       "type": "object"
     },
+    "TotalBorder": {
+      "additionalProperties": false,
+      "description": "合計（小計）或總計的列（欄）的框線（格式設定的「框線」中列、欄的「合計」「總計」）：畫在這些列（欄）的\n兩側，窗格與標題區域都畫。同一個位置有不只一種線時，分隔線優先、其次總計、合計、窗格、儲存格（Tableau 的\n格式窗格中後面的設定蓋過前面的，推定）。",
+      "properties": {
+        "shelf": {
+          "description": "列（合計的列）或欄（合計的欄）",
+          "enum": [
+            "rows",
+            "columns"
+          ],
+          "title": "Shelf",
+          "type": "string"
+        },
+        "kind": {
+          "description": "合計（小計）或總計",
+          "enum": [
+            "subtotal",
+            "grand_total"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "border": {
+          "$ref": "#/$defs/Border"
+        }
+      },
+      "required": [
+        "shelf",
+        "kind",
+        "border"
+      ],
+      "title": "TotalBorder",
+      "type": "object"
+    },
     "TrendLine": {
       "additionalProperties": false,
       "description": "趨勢線（分析的「趨勢線」）：以標記在連續座標軸上的位置做迴歸（縱軸的值對橫軸的值），每個窗格一條，\n依顏色分組時每個顏色一條；畫在資料的範圍內。",
@@ -9250,6 +9306,26 @@
           ],
           "default": null,
           "description": "窗格的框線（格式＞框線＞窗格）：各窗格（最內層以外的標題成員改變處）之間與檢視的外框；只有一層標題時整張表是一個窗格，只有外框。None 為沒有"
+        },
+        "header_border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Border"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "表頭的框線（格式＞框線＞表頭）：標題區域中各標題成員之間（列標題的每一列、欄標題的每一欄之間，外層的成員跨過的列不切開）；None 為沒有"
+        },
+        "total_borders": {
+          "description": "合計（小計）與總計的列、欄的框線（格式＞框線＞列、欄的「合計」「總計」）：畫在它們的兩側，窗格與標題區域都畫",
+          "items": {
+            "$ref": "#/$defs/TotalBorder"
+          },
+          "title": "Total Borders",
+          "type": "array"
         },
         "null_indicator": {
           "default": true,

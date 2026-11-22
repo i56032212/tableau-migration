@@ -55,7 +55,8 @@ def discrete_scale(
     """離散色彩的比例尺：domain 為資料中的顯示值，range 為各值的顏色。
 
     與 Tableau 相同，顏色屬於欄位的成員、不隨工作表的排序改變：成員依原值排序（數字由小到大、文字不分大小寫、
-    Null 在最後），圖例也依這個順序；沒有指定顏色的成員依序取色盤的顏色。Measure Names（keys）依量值在檢視中的
+    Null 在最後），圖例也依這個順序（色彩欄位有手動或字母順序的排序時，圖例另依排序重排、顏色不變，見
+    tmig.render.vegalite 的 legend_in_sort_order）；沒有指定顏色的成員依序取色盤的顏色。Measure Names（keys）依量值在檢視中的
     順序（出現的順序）。集合（members_first）的「內」（True）在「外」之前。
 
     pairs：（顯示值、原值）；keys：指定的值換成原值（Measure Names 時量值的欄位鍵 → 顯示名稱）。

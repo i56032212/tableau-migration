@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import embed, { type Result } from "vega-embed";
 import { api, fileUrl } from "./api";
+import { type HeaderMove, startHeaderDrag } from "./headerDrag";
 import { fitOf, VIEW_SIGNAL, type Viewport, visibleBox, zoomableMap, zoomAt, type ZoomState } from "./mapZoom";
 import { prepareShapeImages, shapeImage, type ShapeLegend } from "./shapeImages";
 import { nextSelection, sameMark } from "./state";
@@ -68,6 +69,8 @@ interface Props {
   pinAbove?: boolean;
   /** 編輯器：拖曳標記或點的註解文字之後，第 index 個註解的文字移動了 dx、dy 像素 */
   onAnnotationMove?: (index: number, dx: number, dy: number) => void;
+  /** 編輯器：在檢視上拖曳離散的標題或圖例的項目到另一個位置（手動排序，見 headerDrag.ts）；沒有傳入時不能拖曳 */
+  onHeaderMove?: (move: HeaderMove) => void;
   /**
    * 畫圖的附註（左下角的標示）：warnings（預設，檢視器）只在有「沒有畫出來、算不出來或畫得不同」的附註時標示、
    * 只列出它們；all（編輯器）連單純的說明也列出；none 不標示（工具提示中的工作表）
@@ -312,7 +315,7 @@ export interface NullAction {
 
 /**
  * 「N 個 Null」指示器（Tableau 檢視右下角的指示器）：連續座標軸上的值是 Null 而沒有畫出的標記數
- * （spec.usermeta.nulls）。編輯器中點一下列出可以做的事。
+ * （spec.usermeta.nulls）。編輯器中點一下（或按右鍵，Tableau 的「隱藏指示器」在右鍵選單）列出可以做的事。
  */
 function NullIndicator({ count, actions }: { count: number; actions?: NullAction[] }) {
   const [open, setOpen] = useState(false);
@@ -325,7 +328,14 @@ function NullIndicator({ count, actions }: { count: number; actions?: NullAction
       </span>
     );
   return (
-    <span className="null-indicator" data-nulls={count}>
+    <span
+      className="null-indicator"
+      data-nulls={count}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setOpen(true);
+      }}
+    >
       <button type="button" title={title} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
         {label}
       </button>
@@ -999,6 +1009,7 @@ export function WorksheetView({
   onKeep,
   pinAbove,
   onAnnotationMove,
+  onHeaderMove,
   showNotes = "warnings",
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -1007,8 +1018,11 @@ export function WorksheetView({
   const onAnnotationMoveRef = useRef(onAnnotationMove);
   onAnnotationMoveRef.current = onAnnotationMove;
   const movable = onAnnotationMove !== undefined;
-  /** 編輯器：這一下滑鼠按在註解上、正在拖曳它（不是框選） */
+  /** 編輯器：這一下滑鼠按在註解或標題上、正在拖曳它（不是框選） */
   const annotationDrag = useRef(false);
+  const onHeaderMoveRef = useRef(onHeaderMove);
+  onHeaderMoveRef.current = onHeaderMove;
+  const sortable = onHeaderMove !== undefined;
   const onKeepRef = useRef(onKeep);
   onKeepRef.current = onKeep;
   const canKeep = onKeep !== undefined;
@@ -1202,6 +1216,27 @@ export function WorksheetView({
     let viewTimer: number | undefined;
     /** 平移、縮放過（放開滑鼠時不當成點選標記） */
     let moved = false;
+    /** 拖曳標題排序（編輯器）：按在標題上時開始拖曳，不框選 */
+    const headerDown = (event: MouseEvent) => {
+      if (event.button !== 0 || annotationDrag.current || !view) return;
+      const svg = element.querySelector<SVGSVGElement>(":scope > svg, :scope > .frozen-host > svg");
+      if (!svg) return;
+      const started = startHeaderDrag(
+        event,
+        element,
+        svg,
+        spec,
+        records,
+        dimensions,
+        (move) => onHeaderMoveRef.current?.(move),
+        (dragged) => {
+          annotationDrag.current = false;
+          if (dragged) moved = true; // 拖曳之後放開滑鼠不算點選
+        },
+      );
+      if (started) annotationDrag.current = true;
+    };
+    if (sortable) element.addEventListener("mousedown", headerDown);
     // 自訂的圖片形狀：先載入圖片（並套用顏色）填進資料列，再畫圖
     prepareShapeImages(spec, workbook)
       .catch(() => undefined)
@@ -1293,6 +1328,9 @@ export function WorksheetView({
         }
         // 捲動時與 Tableau 相同，欄標題、座標軸與列標題固定在區塊邊緣
         freezeHeaders(element, result, scroll, (original.usermeta?.background as string | undefined) ?? undefined);
+        // 列印分頁（printPages.ts）：資料區（座標軸、欄列標題與圖例以外）在 SVG 中的位置與大小
+        const [plotX, plotY] = result.view.origin();
+        element.dataset.plot = [plotX, plotY, result.view.width(), result.view.height()].map((n) => Math.round(Number(n) * 100) / 100).join(",");
         if (movable) {
           // 註解的文字可以拖曳（改變文字相對於標記或點的位置）；放開時回報移動的像素
           element.dataset.annotations = "movable";
@@ -1389,6 +1427,7 @@ export function WorksheetView({
       });
     return () => {
       disposed = true;
+      element.removeEventListener("mousedown", headerDown);
       window.clearTimeout(leaveTimer);
       window.clearTimeout(viewTimer);
       window.clearTimeout(hoverTimer);
@@ -1399,7 +1438,7 @@ export function WorksheetView({
       viewRef.current = null;
       setTip(null);
     };
-  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable, relayout]);
+  }, [response, workbook, hideLegend, showTable, interactive, selectedKey, highlightKey, fit, vizTooltips, canKeep, movable, sortable, relayout]);
 
   // 地圖的選取工具（矩形、半徑、套索）：選了工具之後在圖上拖曳，範圍內的標記都選取
   const [tool, setTool] = useState<SelectTool | null>(null);

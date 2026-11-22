@@ -44,6 +44,7 @@ from tmig.formula.functions import (
     int_literal,
     lookup,
     parameter_ref,
+    rawsql_template,
     string_literal,
     strptime_format,
     window_offset,
@@ -175,7 +176,12 @@ class ExprCompiler:
             precomputed = calc_column(target) if calc_column is not None else None
             if precomputed is not None:
                 return precomputed
-            return "(" + self.compile(self.analyzer.calc_ast(target), mode) + ")"
+            sql = "(" + self.compile(self.analyzer.calc_ast(target), mode) + ")"
+            # Relationship 模型中列層級的跨資料表計算：只在用到的資料表都有對應的列時計算
+            # （見 tmig.sqlgen.query 的 WorksheetQuery.presence）
+            presence = getattr(self.env, "calc_presence", None)
+            condition = presence(target) if presence is not None and mode == "row" else None
+            return f"(CASE WHEN {condition} THEN {sql} END)" if condition else sql
         if mode != "row":
             raise FormulaSemanticError(f"{node.text} 是列層級的欄位，這裡需要彙總", node.pos)
         return self.env.column(target)
@@ -249,6 +255,15 @@ class ExprCompiler:
             raise FormulaSemanticError(f"尚不支援函式 {name}", node.pos, unsupported=True)
         hook = getattr(self.env, "part_condition", None)
         only: str | None = hook(node) if hook is not None else None
+        if name.startswith("RAWSQLAGG_"):
+            if only:
+                # Relationship 模型中量值來自多張資料表：彙總寫在 SQL 裡，無法只取所屬部分的列
+                raise FormulaSemanticError(
+                    f"{name} 用在 Relationship 模型中多張資料表的量值，v0 不支援",
+                    node.pos,
+                    unsupported=True,
+                )
+            return self._rawsql(node, [self.row(arg) for arg in node.args[1:]])
 
         def arg(index: int) -> str:
             sql = self.row(node.args[index])
@@ -298,6 +313,14 @@ class ExprCompiler:
             # 空間資料合成一個形狀（tmig.geo.spatial.collect）；全是 Null 時為 Null
             return f"{udf.GEO_COLLECT}(list({x}) FILTER (WHERE {x} IS NOT NULL))"
         raise FormulaSemanticError(f"尚不支援彙總函式 {name}", node.pos, unsupported=True)
+
+    def _rawsql(self, node: Call, args: list[str]) -> str:
+        """直接送給資料庫的函式：SQL 原文編在函式名稱中，參數照常編譯（見 tmig.sqlgen.rawsql）。只有轉成
+        Live 連線的方言時才換回原文；在 DuckDB 執行時列為不支援。"""
+        from tmig.sqlgen.rawsql import function_name
+
+        template = rawsql_template(node.args[0], node.name, node.pos)
+        return f"{function_name(node.name, template)}({', '.join(args)})"
 
     def _week_start(self, node: Call, index: int) -> int:
         if len(node.args) > index:
@@ -367,6 +390,8 @@ class ExprCompiler:
     def _row_function(self, node: Call, a: list[str]) -> str:
         name = node.name
         nargs = len(node.args)
+        if name.startswith("RAWSQL_"):
+            return self._rawsql(node, a[1:])
         if name == "IIF":
             unknown = a[3] if nargs == 4 else "NULL"
             return (

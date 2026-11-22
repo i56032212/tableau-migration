@@ -451,6 +451,11 @@ def check_references(ir: IR) -> list[str]:
                     check_use(use, ws.datasource, f"{where}.fields[{j}]", None, extra=blended)
                     if use.agg is not None or use.table_calc is not None:
                         errors.append(f"{where}.fields[{j}]：只能以維度篩選")
+        if ws.forecast is None:
+            # 預測結果（趨勢、精度等）只在有預測的工作表上：沒有預測時這些膠囊會顯示實際值，名稱卻是結果類型
+            shown = [*ws.rows, *ws.columns, *(u for _, c in cards for u in c.uses())]
+            if any(use.forecast is not None for use in shown):
+                errors.append(f"{base}：工作表沒有預測，膠囊卻選了預測結果")
         for i, pane in enumerate(ws.panes):
             where = f"{base}.panes[{i}].measure"
             if pane.measure.field == MEASURE_VALUES:

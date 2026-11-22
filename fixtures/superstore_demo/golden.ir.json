@@ -1292,6 +1292,8 @@
       "null_marks": null,
       "cell_border": null,
       "pane_border": null,
+      "header_border": null,
+      "total_borders": [],
       "null_indicator": true,
       "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[1]"
@@ -1509,6 +1511,8 @@
       "null_marks": null,
       "cell_border": null,
       "pane_border": null,
+      "header_border": null,
+      "total_borders": [],
       "null_indicator": true,
       "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[2]"
@@ -1719,6 +1723,8 @@
       "null_marks": null,
       "cell_border": null,
       "pane_border": null,
+      "header_border": null,
+      "total_borders": [],
       "null_indicator": true,
       "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[3]"
@@ -1956,6 +1962,8 @@
       "null_marks": null,
       "cell_border": null,
       "pane_border": null,
+      "header_border": null,
+      "total_borders": [],
       "null_indicator": true,
       "stack": null,
       "source_ref": "/workbook/worksheets/worksheet[4]"

@@ -425,6 +425,41 @@ def named_ranges(book: Any) -> dict[str, tuple[str, str]]:
     return found
 
 
+def xls_named_ranges(book: Any) -> dict[str, tuple[str, str]]:
+    """.xls（舊版 Excel，xlrd）的具名範圍：名稱 →（工作表、範圍，例如 A1:C10），與 .xlsx 的 named_ranges
+    相同：只列整本活頁簿的名稱中指向單一工作表上一塊連續範圍的；Excel 內建的名稱（列印範圍、篩選的範圍等）
+    與只屬於某張工作表的名稱不算。"""
+    from xlrd.formula import oREF
+
+    found: dict[str, tuple[str, str]] = {}
+    for item in getattr(book, "name_obj_list", None) or []:
+        if item.builtin or item.scope != -1 or not item.name:
+            continue
+        # 名稱的公式算出的結果是一塊參照（xlrd 的 Name.area2d 的條件；不符時 area2d 會把整個名稱印到記錄檔，
+        # 這裡先自己判斷）：公式、常數、多塊範圍或參照其他檔案的名稱不算
+        result = item.result
+        if result is None or result.kind != oREF or len(result.value) != 1:
+            continue
+        ref = result.value[0]
+        if not 0 <= ref.shtxlo == ref.shtxhi - 1 < book.nsheets:
+            continue
+        first_row, end_row, first_col, end_col = ref.rowxlo, ref.rowxhi, ref.colxlo, ref.colxhi
+        if end_row <= first_row or end_col <= first_col:
+            continue
+        cells = f"{_letters(first_col + 1)}{first_row + 1}:{_letters(end_col)}{end_row}"
+        found[str(item.name)] = (book.sheet_names()[ref.shtxlo], cells)
+    return found
+
+
+def _letters(column: int) -> str:
+    """欄的序號（從 1 起算）→ Excel 的欄名（1 → A、27 → AA）。"""
+    letters = ""
+    while column > 0:
+        column, rest = divmod(column - 1, 26)
+        letters = chr(ord("A") + rest) + letters
+    return letters
+
+
 def excel_bounds(cells: str | None) -> tuple[int, int, int | None, int | None]:
     """Excel 範圍的起訖（給其他模組用，見 _bounds）。"""
     return _bounds(cells)
@@ -493,8 +528,15 @@ def _xls_grid(data: bytes, table: FileTable, books: dict[str, Any]) -> list[list
         except Exception as exc:
             raise FileImportError(f"{table.path} 不是可讀取的 Excel 檔：{exc}") from exc
         books[table.path] = book
-    sheet = book.sheet_by_name(_sheet(book.sheet_names(), table))
-    first_col, first_row, last_col, last_row = _bounds(table.cells)
+    ranges = xls_named_ranges(book)
+    if table.sheet and table.sheet not in book.sheet_names() and table.sheet in ranges:
+        # 具名範圍：資料在它所在的工作表的那一塊範圍
+        title, cells = ranges[table.sheet]
+        sheet = book.sheet_by_name(title)
+        first_col, first_row, last_col, last_row = _bounds(cells)
+    else:
+        sheet = book.sheet_by_name(_sheet(book.sheet_names(), table))
+        first_col, first_row, last_col, last_row = _bounds(table.cells)
     last_row = min(last_row or sheet.nrows, sheet.nrows)
     last_col = min(last_col or (first_col + len(table.columns) - 1), sheet.ncols)
     grid: list[list[Any]] = []
@@ -523,8 +565,7 @@ def _sheet(names: Iterable[str], table: FileTable) -> str:
     if wanted.casefold() in folded:
         return folded[wanted.casefold()]
     raise FileImportError(
-        f"{table.path} 中找不到工作表或具名範圍「{wanted}」（工作表有：{'、'.join(names)}）；"
-        ".xls 的具名範圍尚不支援"
+        f"{table.path} 中找不到工作表或具名範圍「{wanted}」（工作表有：{'、'.join(names)}）"
     )
 
 

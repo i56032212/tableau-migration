@@ -92,6 +92,7 @@ from tmig.render.colors import (
     scale_color,
     shape_members,
     shape_scale,
+    value_key,
 )
 from tmig.render.fonts import (
     DEFAULT_SIZE,
@@ -114,7 +115,13 @@ from tmig.render.format import (
     parse_format,
 )
 from tmig.render.missing import pad_result
-from tmig.render.names import annotation_name, mark_name, pill_name, reference_name
+from tmig.render.names import (
+    FORECAST_RESULT_NAMES,
+    annotation_name,
+    mark_name,
+    pill_name,
+    reference_name,
+)
 from tmig.render.palettes import DEFAULT_REGULAR, PALETTES
 from tmig.render.trends import fit_model, format_p, format_r2, t_quantile
 from tmig.sqlgen.query import (
@@ -122,6 +129,7 @@ from tmig.sqlgen.query import (
     GRAND_TOTAL,
     SUBTOTAL,
     OutputColumn,
+    QueryError,
     TitleQueries,
     TotalQuery,
 )
@@ -295,6 +303,8 @@ PIE_ONE = "__pie_one"
 """分面的甜甜圈中間的文字（每一格的第一列資料）。"""
 """標記標籤的 id（資料中每一列，含較粗的標記卡的資料）：重疊時隱藏的標籤依它找出。"""
 """色帶、多層列標題等裝飾圖層的名稱前綴：檢視器的選取與醒目提示略過這些圖層（與參考線的 __ref 相同）。"""
+LEGEND_ORDER = "__legend_order"
+"""色彩欄位有手動或字母順序的排序時，各列的成員在圖例中的位置：堆疊的長條與區域依它堆疊。"""
 MEASURE_NAMES_TITLE = "Measure Names"
 MEASURE_VALUES_TITLE = "Measure Values"
 MEASURE_NAME_FIELD = "__mn_name"
@@ -359,6 +369,9 @@ def caption(ir_field: DataField, use: FieldUse, ws: Worksheet) -> str:
             if tc.secondary is not None:
                 label = f"{label}的{TC_LABELS.get(tc.secondary.type, tc.secondary.type)}"
             name = f"{name}（{label}）"
+    if use.forecast is not None and use.forecast != "none":
+        # 預測結果（趨勢、精度等）：與同一個量值的實際值與預測值區分（標題的寫法是推定的）
+        name = f"{name}（{FORECAST_RESULT_NAMES[use.forecast]}）"
     return name
 
 
@@ -2196,6 +2209,50 @@ class _Builder:
             # 與 Tableau 相同，線的兩端與轉折是圓的（粗的線最明顯，例如啞鈴圖）
             vl_mark.update(strokeCap="round", strokeJoin="round")
 
+    def legend_in_sort_order(
+        self,
+        encoding: dict[str, Any],
+        marks: Marks,
+        ch: Channel,
+        scale: dict[str, Any],
+        records: list[dict[str, Any]],
+    ) -> None:
+        """色彩欄位有手動或字母順序的排序（工作表的排序，沒有時為欄位預設的排序）時，圖例依這個順序排列，
+        堆疊的長條與區域也依它堆疊：Tableau 的排序說明寫在圖例上排序（拖曳圖例的項目）也改變標記的順序
+        （https://help.tableau.com/v2021.2/pro/desktop/en-us/sortgroup_sorting_computed_howto.htm ，2026-11-22
+        查閱）。各成員的顏色不變（domain 與 range 一起重排）；堆疊的方向與沒有排序時相同（圖例的第一項在
+        基線那一端，見 README「已知限制與待驗證」）。依欄位的值排序時圖例仍依成員排列（尚未支援）。"""
+        sort = next((s for s in self.ws.sorts if s.field == ch.use.field), None)
+        found = self.fields.get(ch.use.field)
+        default = found.default_sort if found is not None else None
+        kind = sort.kind if sort is not None else default.kind if default is not None else None
+        order = sort.order if sort is not None else default.order if default is not None else "asc"
+        manual = (
+            sort.manual_values
+            if sort is not None
+            else default.manual_values
+            if default is not None
+            else []
+        )
+        if kind not in ("manual", "alphabetic") or (kind == "alphabetic" and order == "asc"):
+            return
+        raw: dict[Any, Any] = {}
+        for record in records:
+            raw.setdefault(record.get(ch.label), record.get(ch.name))
+        pairs = list(zip(scale["domain"], scale["range"], strict=True))
+        if kind == "alphabetic":
+            pairs.reverse()  # domain 已依成員排列（由小到大）
+        else:
+            place = {value_key(value): i for i, value in enumerate(manual)}
+            pairs.sort(key=lambda pair: place.get(value_key(raw.get(pair[0])), len(place)))
+        scale["domain"] = [label for label, _ in pairs]
+        scale["range"] = [color for _, color in pairs]
+        if marks.type in ("bar", "area") and "order" not in encoding:
+            index = {label: i for i, label in enumerate(scale["domain"])}
+            for record in records:
+                record[LEGEND_ORDER] = index.get(record.get(ch.label), len(index))
+            encoding["order"] = {"field": LEGEND_ORDER, "type": "quantitative"}
+
     def common(self, encoding: dict[str, Any], marks: Marks) -> None:
         """顏色、大小、形狀、詳細資料與工具提示。"""
         names_only = (
@@ -2245,6 +2302,8 @@ class _Builder:
                         self.measure_names if ch.use.field == MEASURE_NAMES else None,
                         members_first=ch.is_set,
                     )
+                    if scale is not None and ch.use.field != MEASURE_NAMES:
+                        self.legend_in_sort_order(encoding, marks, ch, scale, records)
                 if scale is not None:
                     encoding["color"]["scale"] = scale
         if marks.size is not None:
@@ -3105,10 +3164,13 @@ def build_spec(
             enc = encoding.get(channel)
             if not isinstance(enc, dict) or enc.get("type") not in ("ordinal", "nominal"):
                 continue
+            # 合計與總計的框線（窗格與標題區域都畫）
+            total_lines = _total_edges(builder, dims, enc["field"], values, ws, shelf)
             if (
                 style.divider is not None
                 or ws.cell_border is not None
                 or ws.pane_border is not None
+                or total_lines
             ):
                 _pane_lines(
                     spec,
@@ -3119,11 +3181,40 @@ def build_spec(
                     style.divider,
                     ws.pane_border,
                     ws.cell_border,
+                    total_lines,
                 )
+            levels = len(dims)
+            divided: list[Any] = []
+            if (
+                style.header_divider is not None
+                and _divider_level(style.header_divider, levels) >= 1
+            ):
+                level = _divider_level(style.header_divider, levels)
+                divided = _band_edges(values, enc["field"], levels, level)
+            # 表頭的框線：標題區域中每一列（欄）之間
+            every = _band_edges(values, enc["field"], levels, levels) if ws.header_border else []
             if shelf == "rows" and headers is not None and style.header_divider is not None:
-                _header_divider(spec, enc, values, len(dims), style.header_divider, headers)
+                _header_divider(spec, enc, values, levels, style.header_divider, headers)
+            if shelf == "rows" and headers is not None and (total_lines or every):
+                rules: list[tuple[str, list[Any], Border | Divider]] = [
+                    (f"total{i}", edges, border) for i, (edges, border) in enumerate(total_lines)
+                ]
+                if ws.header_border is not None:
+                    rules.append(("border", every, ws.header_border))
+                _header_rules(spec, enc, values, levels, rules, headers, set(divided))
             shown = len(builder.header(dims, "columns")[0]) if shelf == "columns" and dims else 0
-            if shelf == "columns" and style.header_divider is not None and shown:
+            if shelf == "columns" and shown and (total_lines or every):
+                ticks: list[tuple[list[Any], str, int, list[int]]] = []
+                if style.header_divider is not None:
+                    divider = style.header_divider
+                    dash = _divider_dash(divider) if divider.pattern != "solid" else []
+                    ticks.append((divided, _css_color(divider.color), divider.width, dash))
+                ticks += [(edges, *_border_style(border)) for edges, border in total_lines]
+                if ws.header_border is not None:
+                    ticks.append((every, *_border_style(ws.header_border)))
+                _column_header_lines(enc, ticks, shown * HEADER_LINE_HEIGHT + 4)
+                _flush_bands(spec, enc, "x")
+            elif shelf == "columns" and style.header_divider is not None and shown:
                 _column_header_divider(
                     spec,
                     enc,
@@ -3662,11 +3753,13 @@ def _pane_lines(
     divider: Divider | None,
     pane: Border | None,
     cell: Border | None,
+    totals: list[tuple[list[Any], Border]] | None = None,
 ) -> None:
-    """窗格中列（欄）之間的線：分隔線、窗格的框線與儲存格的框線都以座標軸的格線畫在各列（欄）的邊界
-    （tickBand extent）。分隔線畫在前 level 層的成員改變處，窗格的框線畫在最內層以外的成員改變處（各窗格
-    之間），儲存格的框線畫在每一列（欄）之間；同一個位置有不只一種線時，分隔線優先、其次窗格、最後儲存格
-    （Tableau 的文件沒有說明重疊時的順序，是推定的）。"""
+    """窗格中列（欄）之間的線：分隔線、合計與總計的框線、窗格的框線與儲存格的框線都以座標軸的格線畫在各列
+    （欄）的邊界（tickBand extent）。分隔線畫在前 level 層的成員改變處，合計與總計的框線畫在那些列（欄）的
+    兩側（totals：依優先的順序，各自的邊界與框線），窗格的框線畫在最內層以外的成員改變處（各窗格之間），
+    儲存格的框線畫在每一列（欄）之間；同一個位置有不只一種線時，依這個順序優先（Tableau 的文件沒有說明
+    重疊時的順序，是推定的）。"""
     field_name = encoding["field"]
     tiers: list[tuple[list[Any], str, int, list[int]]] = []
     if divider is not None:
@@ -3674,6 +3767,8 @@ def _pane_lines(
         edges = _band_edges(values, field_name, levels, level) if level >= 1 else []
         dash = _divider_dash(divider) if divider.pattern != "solid" else []
         tiers.append((edges, _css_color(divider.color), divider.width, dash))
+    for edges, border in totals or []:
+        tiers.append((edges, *_border_style(border)))
     for border, level in ((pane, levels - 1), (cell, levels)):
         if border is None:
             continue
@@ -3715,6 +3810,126 @@ def _pane_lines(
 def _divider_dash(divider: Divider) -> list[int]:
     """分隔線的虛線、點線：線段與間隔隨線寬放大（粗的線才看得出樣式）。"""
     return [n * divider.width for n in DASHES[divider.pattern]]
+
+
+def _border_style(border: Border) -> tuple[str, int, list[int]]:
+    """框線的顏色、線寬與虛線（實線為空的；線段與間隔隨線寬放大）。"""
+    dash = [n * border.width for n in DASHES[border.pattern]] if border.pattern != "solid" else []
+    return _css_color(border.color), border.width, dash
+
+
+def _total_edges(
+    builder: _Builder,
+    dims: list[FieldUse],
+    field: str,
+    values: list[dict[str, Any]],
+    ws: Worksheet,
+    shelf: str,
+) -> list[tuple[list[Any], Border]]:
+    """合計與總計的框線（ws.total_borders 中這一架的）：各自畫在合計（小計）、總計的列（欄）的兩側——前一列
+    （欄）的尾端與它自己的尾端（最後一列的尾端是外框，不畫）。依優先的順序：總計、合計。"""
+    wanted = {t.kind: t.border for t in ws.total_borders if t.shelf == shelf}
+    if not wanted or not dims:
+        return []
+    channels = [builder.ch(u) for u in dims]
+    order = list(dict.fromkeys(v.get(field) for v in values))
+    kinds: dict[Any, str] = {}
+    for record in values:
+        if not record.get(TOTAL):
+            continue
+        dropped = [_dropped(record, ch) for ch in channels]
+        if any(dropped):
+            kinds[record.get(field)] = "grand_total" if dropped[0] else "subtotal"
+    found: list[tuple[list[Any], Border]] = []
+    for kind in ("grand_total", "subtotal"):
+        border = wanted.get(kind)
+        if border is None:
+            continue
+        edges: list[Any] = []
+        for i, value in enumerate(order):
+            if kinds.get(value) != kind:
+                continue
+            if i > 0:
+                edges.append(order[i - 1])
+            if i < len(order) - 1:
+                edges.append(value)
+        if edges:
+            found.append((list(dict.fromkeys(edges)), border))
+    return found
+
+
+def _header_rules(
+    spec: dict[str, Any],
+    encoding: dict[str, Any],
+    values: list[dict[str, Any]],
+    levels: int,
+    tiers: list[tuple[str, list[Any], Border | Divider]],
+    headers: RowHeaders,
+    skip: set[Any] | None = None,
+) -> None:
+    """列標題區域的線（表頭的框線、合計與總計的框線）：與標題的分隔線相同的畫法——畫在各列的尾端，從改變的
+    那一層所在的欄畫到窗格（外層沒有改變的欄不切開）。tiers：依優先的順序（名稱、邊界、樣式），同一個位置
+    只畫優先的那一種；skip 是標題的分隔線已經畫的邊界（分隔線優先）。"""
+    field_name = encoding["field"]
+    order = list(dict.fromkeys(v.get(field_name) for v in values))
+    taken: set[Any] = set(skip or ())
+    layers: list[dict[str, Any]] = []
+    for name, edges, style in tiers:
+        wanted = [e for e in edges if e not in taken]
+        taken |= set(edges)
+        starts: dict[Any, int] = {}
+        for a, b in itertools.pairwise(order):
+            if a not in wanted:
+                continue
+            here, after = _levels(a, levels), _levels(b, levels)
+            changed = next(
+                (i for i, (x, y) in enumerate(zip(here, after, strict=False)) if x != y),
+                len(here) - 1,
+            )
+            start = next((x for lv, x in sorted(headers.starts.items()) if lv >= changed), None)
+            if start is not None:
+                starts[a] = start
+        if not starts:
+            continue
+        flag = f"{DIVIDER}rows_{name}"
+        for record in values:
+            record[flag] = starts.get(record.get(field_name), 0)
+        color, width, dash = (
+            _border_style(style)
+            if isinstance(style, Border)
+            else (
+                _css_color(style.color),
+                style.width,
+                _divider_dash(style) if style.pattern != "solid" else [],
+            )
+        )
+        position = {k: encoding[k] for k in ("field", "type", "sort", "scale") if k in encoding}
+        mark: dict[str, Any] = {
+            "type": "rule",
+            "color": color,
+            "strokeWidth": width,
+            "x": {"expr": f"datum['{flag}']"},
+            "x2": 0,
+        }
+        if dash:
+            mark["strokeDash"] = dash
+        layers.append(
+            {
+                "name": f"{DECO}{flag}",
+                "transform": [{"calculate": "-1", "as": ROW}],
+                "mark": mark,
+                "encoding": {
+                    "y": {**position, "bandPosition": 1},
+                    "strokeOpacity": {
+                        "condition": {"test": f"datum['{flag}'] < 0", "value": 1},
+                        "value": 0,
+                    },
+                },
+            }
+        )
+    if layers:
+        _flush_bands(spec, encoding, "y")
+        _add_layers(spec, layers)
 
 
 def _header_divider(
@@ -4022,6 +4237,45 @@ def _column_header_divider(
     _flush_bands(spec, encoding, "x")
 
 
+def _column_header_lines(
+    encoding: dict[str, Any],
+    tiers: list[tuple[list[Any], str, int, list[int]]],
+    extent: int,
+) -> None:
+    """欄標題區域的線（標題的分隔線、合計與總計的框線、表頭的框線）：以座標軸的刻度畫在各欄的邊界
+    （tickBand extent），長度為標題的高度。tiers：依優先的順序（邊界、顏色、線寬、虛線），同一個位置只畫
+    優先的那一種。"""
+    tiers = [tier for tier in tiers if tier[0]]
+    if not tiers:
+        return
+
+    def test(edges: list[Any]) -> str:
+        return f"indexof({json.dumps(edges, ensure_ascii=False)}, datum.value) >= 0"
+
+    def conditional(at: int) -> Any:
+        if len(tiers) == 1:
+            return tiers[0][at]
+        conditions = [{"test": test(tier[0]), "value": tier[at]} for tier in tiers[:-1]]
+        return {
+            "condition": conditions[0] if len(conditions) == 1 else conditions,
+            "value": tiers[-1][at],
+        }
+
+    drawn = list(dict.fromkeys(edge for tier in tiers for edge in tier[0]))
+    axis = dict(encoding.get("axis") or {})
+    axis.update(
+        ticks=True,
+        tickBand="extent",
+        tickSize=extent,
+        tickColor=conditional(1),
+        tickWidth=conditional(2),
+        tickOpacity={"condition": {"test": test(drawn), "value": 1}, "value": 0},
+    )
+    if any(tier[3] for tier in tiers):
+        axis["tickDash"] = conditional(3)
+    encoding["axis"] = axis
+
+
 def _flush_bands(spec: dict[str, Any], encoding: dict[str, Any], channel: str) -> None:
     """分隔線與色帶畫在列（欄）之間：band scale 的列（欄）之間沒有空隙，長條維持原本的粗細。"""
     scale = dict(encoding.get("scale") or {})
@@ -4121,6 +4375,12 @@ def _visit_marks(node: Any, visit: Callable[[dict[str, Any]], Any]) -> None:
 
 DISCRETE_INTEGER_FORMAT = "0"
 """離散維度的整數沒有設定格式時不加千分位（與 Tableau 相同，例如年份顯示 2026 而不是 2,026）。"""
+FORECAST_RESULT_FORMATS: dict[str, str] = {
+    "precision_percent": PERCENT_DEFAULT,
+    "quality": "n#,##0",
+}
+"""預測結果沒有在工作表上設定格式時的顯示格式：精度 % 以百分比（兩位小數）、品質以整數顯示（推定：Tableau
+沒有說明這兩種結果的預設格式）。"""
 
 
 def value_format(ws: Worksheet, data_field: DataField, use: FieldUse) -> str | None:
@@ -4131,6 +4391,9 @@ def value_format(ws: Worksheet, data_field: DataField, use: FieldUse) -> str | N
     sheet_format = ws.formats.get(key)
     if sheet_format is None and any(use_key(u) == key for u in ws.measure_values):
         sheet_format = ws.formats.get(MEASURE_VALUES)
+    if sheet_format is None and use.forecast in FORECAST_RESULT_FORMATS:
+        # 預測結果的精度 % 是比例、品質是 0–100 的分數：不沿用量值的格式（例如貨幣）
+        return FORECAST_RESULT_FORMATS[use.forecast]
     found = sheet_format or display_format(data_field.format, _table_calc_type(ws, use))
     if (
         found is None
@@ -4469,7 +4732,10 @@ def title_values(
 ) -> dict[str, str]:
     """標題中欄位值的顯示文字（欄位鍵 → 文字）：量值依格式顯示；維度只有一個值時顯示它（成員別名、
     日期部分照樣套用），多個值時為 *；Null 與沒有資料時不顯示。
-    main：工作表查詢的欄位與結果（標題中在檢視中的維度直接取它的值）。"""
+    main：工作表查詢的欄位與結果（標題中在檢視中的維度、Table Calculation 直接取它的值）。
+
+    Table Calculation：各標記的值（不含 Null）顯示出來都相同時顯示它；不同時 Tableau 顯示這些值的範圍
+    （Tableau 知識庫「Adding Totals to a Title」），寫法無從確認，列為不支援。"""
     fields = {f.id: f for d in ir.datasources for f in d.fields}
     starts = fiscal_starts(ir)
     texts: dict[str, str] = {}
@@ -4482,6 +4748,31 @@ def title_values(
                 continue
             fmt = value_format(ws, fields[use.field], use)
             texts[column.key] = format_value(row[index[column.key]], column.datatype, fmt)
+    if queries.table_calcs and main is not None:
+        main_columns, main_result = main
+        for column in main_columns:
+            use = column.use
+            if column.key not in queries.table_calcs or use is None:
+                continue
+            if column.key not in main_result.columns:
+                continue
+            position = main_result.columns.index(column.key)
+            fmt = value_format(ws, fields[use.field], use)
+            shown = list(
+                dict.fromkeys(
+                    format_value(row[position], column.datatype, fmt)
+                    for row in main_result.rows
+                    if row[position] is not None
+                )
+            )
+            if len(shown) > 1:
+                raise QueryError(
+                    f"標題中的 {pill_name(use, fields, ws.table_calcs)} 在各標記的值不同"
+                    f"（{shown[0]}、{shown[1]}…）：Tableau 顯示這些值的範圍，寫法未確認，尚不支援",
+                    unsupported=True,
+                )
+            if shown:
+                texts[column.key] = shown[0]
     sources: dict[str, tuple[OutputColumn, QueryResult]] = {}
     for key, query in queries.dimensions.items():
         column = next((c for c in query.columns if c.key == key), None)
@@ -5128,7 +5419,8 @@ def _with_forecast_bands(
     for n, use in enumerate(ws.forecast.measures):
         channel = builder.channels.get(use_key(use))
         key = use_key(use)
-        if channel is None or LOW + key not in index:
+        if channel is None or LOW + key not in index or use.forecast is not None:
+            # 預測區間只畫在實際值與預測值上（趨勢、精度等結果類型沒有）
             continue
         axis = next(
             (

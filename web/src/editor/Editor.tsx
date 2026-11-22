@@ -54,6 +54,7 @@ import {
   type Catalog,
   type CatalogField,
   cardMarks,
+  excludeNulls,
   fieldIndex,
   addMapLayer,
   blendSources,
@@ -62,7 +63,9 @@ import {
   isSpecial,
   MEASURE_VALUES,
   markUses,
+  moveMember,
   newTableCalc,
+  nullAxisUses,
   pillLabel,
   selectionFilter,
   selectionLevels,
@@ -483,6 +486,8 @@ export function Editor({
   const [sideTab, setSideTab] = useState<"data" | "analytics">("data");
   // 檢視最近一次畫出的結果：狀態列的列數、「自動」實際畫出的標記類型
   const [rendered, setRendered] = useState<{ rows: number; mark: string | null } | null>(null);
+  // 最近一次畫出的查詢結果：「N 個 Null」指示器的「篩選資料」從這裡找出哪些座標軸的欄位有 Null
+  const renderedTable = useRef<{ keys: string[]; raw: string[][] } | undefined>(undefined);
   const [viewData, setViewData] = useState(false);
   const [importing, setImporting] = useState(false);
   const [card, setCard] = useState<Card>("all");
@@ -1127,9 +1132,22 @@ export function Editor({
                   revision={revision}
                   onRendered={(response) => {
                     const mark = response.mark ?? null;
+                    renderedTable.current = response.table;
                     setRendered((last) => (last && last.rows === response.rows && last.mark === mark ? last : { rows: response.rows, mark }));
                   }}
                   nullActions={[
+                    {
+                      // 與 Tableau 的 Filter Data 相同：以篩選排除 Null 值（之後的計算也不含它們）
+                      label: "篩選資料",
+                      run: () => {
+                        apply(async (s) => {
+                          const uses = nullAxisUses(s, renderedTable.current);
+                          const ids = await Promise.all(uses.map((use) => newId("flt", fieldsRef.current.get(use.field)?.caption ?? use.field)));
+                          return excludeNulls(s, uses, ids, fieldsRef.current);
+                        });
+                        notify("已加入排除 Null 值的篩選");
+                      },
+                    },
                     { label: "在預設位置顯示資料", run: () => apply((s) => ({ ...s, null_marks: "zero" })) },
                     { label: "隱藏指示器", run: () => apply((s) => ({ ...s, null_indicator: false })) },
                   ]}
@@ -1157,6 +1175,8 @@ export function Editor({
                     });
                   }}
                   tooltipState={(_target, mark) => ({ ...EMPTY_STATE, tooltip: { source: sheet.id, mark } })}
+                  // 拖曳標題或圖例的項目到另一個位置：這個欄位改成手動排序（與其他編輯相同可以復原）
+                  onHeaderMove={(move) => apply((s) => moveMember(s, move.key, move.values))}
                   onAnnotationMove={(index, dx, dy) =>
                     // 拖曳註解的文字：改變文字相對於標記或點的位置（區域的註解以對話框調整）
                     apply((s) => ({

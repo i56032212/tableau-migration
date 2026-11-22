@@ -12,7 +12,10 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     from fastapi.testclient import TestClient
 
-from tmig.ir import TextRun, load_ir
+from tmig.data.executor import execute_query
+from tmig.ir import IR, Filter, RangeFilter, TextRun, load_ir
+from tmig.planner.state import use_key
+from tmig.sqlgen.query import worksheet_sql
 from tmig_service import create_app
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,14 +23,8 @@ DEMO = ROOT / "fixtures" / "superstore_demo"
 SHEET = "ws_sales_by_region"
 
 
-@pytest.fixture(scope="module")
-def client(tmp_path_factory: pytest.TempPathFactory) -> TestClient:
-    root = tmp_path_factory.mktemp("titles")
-    target = root / "titles"
-    target.mkdir()
-    for name in ("superstore_demo.twbx", "cases.yaml"):
-        shutil.copy(DEMO / name, target / name)
-    shutil.copytree(DEMO / "data", target / "data")
+def titled(extra: list[Filter] | None = None) -> IR:
+    """示範報表的 Sales 依地區長條圖，標題為 Total Sales <SUM(Sales)> in <Region>；extra 為加上的篩選。"""
     ir = load_ir(DEMO / "golden.ir.json")
     worksheets = []
     for ws in ir.worksheets:
@@ -39,10 +36,39 @@ def client(tmp_path_factory: pytest.TempPathFactory) -> TestClient:
                 TextRun(text=" in "),
                 TextRun(use=region),
             ]
-            ws = ws.model_copy(update={"title": title})
+            ws = ws.model_copy(update={"title": title, "filters": [*ws.filters, *(extra or [])]})
         worksheets.append(ws)
-    ir = ir.model_copy(update={"worksheets": worksheets})
+    return ir.model_copy(update={"worksheets": worksheets})
+
+
+def serve(root: Path, name: str, ir: IR) -> None:
+    target = root / name
+    target.mkdir()
+    for item in ("superstore_demo.twbx", "cases.yaml"):
+        shutil.copy(DEMO / item, target / item)
+    shutil.copytree(DEMO / "data", target / "data")
     (target / "golden.ir.json").write_text(ir.model_dump_json(indent=2), encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def client(tmp_path_factory: pytest.TempPathFactory) -> TestClient:
+    root = tmp_path_factory.mktemp("titles")
+    serve(root, "titles", titled())
+    # 同一張圖加上 SUM(Sales) 的量值篩選：下限在銷售最高與第二高的標記之間（只留下最高的標記）
+    ir = titled()
+    ws = next(w for w in ir.worksheets if w.id == SHEET)
+    result = execute_query(DEMO / "data" / f"{ws.datasource}.duckdb", worksheet_sql(ir, SHEET))
+    column = result.columns.index(use_key(ws.columns[0]))
+    sales = sorted(float(row[column]) for row in result.rows)
+    at_least = RangeFilter(
+        kind="range",
+        id="flt_sales_at_least",
+        field=ws.columns[0],
+        stage="measure",
+        min=(sales[-2] + sales[-1]) / 2,
+        source_ref="test",
+    )
+    serve(root, "filtered", titled([at_least]))
     return TestClient(create_app(root, ROOT / "no-web-dist"))
 
 
@@ -65,3 +91,16 @@ def test_title_values_follow_the_view(client: TestClient) -> None:
     one = sum(float(row[2]) for row in data["table"]["raw"])
     head = data["title"].split(" in ")[0]
     assert float(head.removeprefix("Total Sales ").replace(",", "")) == pytest.approx(one, abs=1)
+
+
+def test_title_values_with_measure_filter(client: TestClient) -> None:
+    """與量值篩選一起使用：標題中的 SUM(Sales) 只計算通過篩選的標記（只剩銷售最高的標記：它的值，
+    Region 也只有它的地區），不是全部地區的合計。"""
+    data = client.post(f"/api/workbooks/filtered/worksheets/{SHEET}/render").json()
+    assert data["unsupported"] is None
+    (row,) = data["table"]["raw"]  # 地區、…、SUM(Sales)（與上一個測試相同的欄位順序）
+    head, tail = data["title"].split(" in ")
+    assert tail == row[0]
+    assert float(head.removeprefix("Total Sales ").replace(",", "")) == pytest.approx(
+        float(row[2]), abs=1
+    )

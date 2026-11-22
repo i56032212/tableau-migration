@@ -44,6 +44,13 @@ class ForecastPlan:
     settings: Forecast | None = None
     captions: dict[str, str] = field(default_factory=dict)
     """量值的輸出欄名 → 膠囊上的寫法（SUM(Profit)）：附註裡這樣稱呼量值，不寫輸出欄名。"""
+    results: dict[str, str] = field(default_factory=dict)
+    """預測結果不是實際值與預測值的量值：輸出欄名 → 結果類型（trend、precision、precision_percent、quality、
+    upper、lower；見 tmig.planner.forecast.result_values）。這些欄只有估計的期有值（實際值的期為 Null，
+    推定），也不畫預測區間。"""
+    bases: dict[str, str] = field(default_factory=dict)
+    """量值的輸出欄名 → 它預測的量值（不含結果類型）的欄位鍵：同一個量值以幾種結果類型出現時只估計一次，
+    描述預測也只列一次。"""
 
 
 @dataclass
@@ -109,7 +116,15 @@ def _forecast(
     notes: list[str],
     details: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[tuple[Any, ...]]]:
-    from tmig.planner.forecast import AUTO_LENGTH, SEASONS, ForecastError, Model, best_fit, forecast
+    from tmig.planner.forecast import (
+        AUTO_LENGTH,
+        SEASONS,
+        ForecastError,
+        Model,
+        best_fit,
+        forecast,
+        result_values,
+    )
 
     settings = plan.settings or Forecast(measures=[])
     time_at = columns.index(plan.time)
@@ -130,7 +145,12 @@ def _forecast(
         if settings.model == "custom"
         else None
     )
-    result: list[tuple[Any, ...]] = [(*row, *([None] * len(extra))) for row in rows]
+    # 結果類型的欄（趨勢、精度等）只有估計的期有值：實際值的期先清成 Null
+    blank = {columns.index(c) for c in plan.results if c in columns}
+    result: list[tuple[Any, ...]] = [
+        (*(None if k in blank else v for k, v in enumerate(row)), *([None] * len(extra)))
+        for row in rows
+    ]
     appended: dict[int, list[tuple[Any, ...]]] = {}
     models: list[dict[str, Any]] = []
     # 可以用來估計的資料不到兩期、估計不了的時間序列數：本來就不到兩期的，與扣掉忽略的最後幾期之後不到兩期的
@@ -150,54 +170,47 @@ def _forecast(
         fitted_times = timeline[: len(timeline) - trim]
         horizon = trim + _horizon(settings, unit, timeline[-1], AUTO_LENGTH)
         future = [_step(timeline[-1], unit, k) for k in range(1, horizon - trim + 1)]
-        estimates: list[list[float] | None] = []
+        estimates: list[list[float | None] | None] = []
         bands: list[tuple[list[float], list[float]] | None] = []
+        # 同一個量值以幾種結果類型出現時（同一個基礎量值的欄）只估計一次
+        fitted: dict[str, Any] = {}
+        estimated = [*timeline[len(timeline) - trim :], *future]
         for j in measures:
-            values = []
-            for t in fitted_times:
-                value = _number(rows[index[t]][j]) if t in index else None
-                values.append(value)
-            series = _fill(values, settings.fill_zeros)
-            if series is None:
-                short = True
+            column = columns[j]
+            base = plan.bases.get(column, column)
+            kind = plan.results.get(column)
+            if base not in fitted:
+                values = []
+                for t in fitted_times:
+                    value = _number(rows[index[t]][j]) if t in index else None
+                    values.append(value)
+                series = _fill(values, settings.fill_zeros)
+                if series is None:
+                    fitted[base] = None
+                    short = True
+                else:
+                    try:
+                        found = best_fit(series, period, seasonal, custom)
+                    except ForecastError as exc:
+                        # 每條時間序列各估計一次：同一個原因只說一次
+                        _note(notes, f"預測（{plan.captions.get(column, column)}）：{exc}")
+                        fitted[base] = None
+                    else:
+                        predicted = forecast(found, horizon, settings.confidence)
+                        fitted[base] = (found, predicted)
+                        models.append(
+                            _model_details(
+                                key, column, found, predicted, horizon, fitted_times, estimated
+                            )
+                        )
+            if fitted[base] is None:
                 estimates.append(None)
                 bands.append(None)
                 continue
-            try:
-                found = best_fit(series, period, seasonal, custom)
-            except ForecastError as exc:
-                # 每條時間序列各估計一次：同一個原因只說一次
-                _note(notes, f"預測（{plan.captions.get(columns[j], columns[j])}）：{exc}")
-                estimates.append(None)
-                bands.append(None)
-                continue
-            predicted = forecast(found, horizon, settings.confidence)
-            estimates.append(predicted.values)
-            bands.append((predicted.low, predicted.high))
-            models.append(
-                {
-                    "series": list(key),
-                    "measure": columns[j],
-                    "model": found.model.code,
-                    "trend": found.model.trend,
-                    "season": found.model.season,
-                    "alpha": found.params[0],
-                    "beta": found.params[1],
-                    "gamma": found.params[2],
-                    "aic": found.aic,
-                    "rmse": math.sqrt(found.sse / found.n) if found.n else None,
-                    "mae": found.mae,
-                    "mase": found.mase,
-                    "mape": found.mape,
-                    "quality": found.quality,
-                    "observations": found.n,
-                    "period": found.period,
-                    "horizon": horizon,
-                    "first": fitted_times[0],
-                    "last": fitted_times[-1],
-                    "until": future[-1] if future else timeline[-1],
-                }
-            )
+            found, predicted = fitted[base]
+            estimates.append(result_values(kind, found, predicted, horizon))  # type: ignore[arg-type]
+            # 預測區間只畫在實際值與預測值上
+            bands.append((predicted.low, predicted.high) if kind is None else None)
         if all(e is None for e in estimates):
             short_after_ignoring += short
             continue
@@ -213,13 +226,13 @@ def _forecast(
         last = max(members)
         new_rows = appended.setdefault(last, [])
         for h, t in enumerate(future, start=trim):
-            base: list[Any] = [None] * (width + len(extra))
+            added: list[Any] = [None] * (width + len(extra))
             for s, j in zip(key, series_at, strict=True):
-                base[j] = s
-            base[time_at] = t
+                added[j] = s
+            added[time_at] = t
             new_rows.append(
                 _estimate_row(
-                    tuple(base),
+                    tuple(added),
                     measures,
                     estimates,
                     bands,
@@ -260,10 +273,49 @@ def _note(notes: list[str], text: str) -> None:
         notes.append(text)
 
 
+def _model_details(
+    key: tuple[Any, ...],
+    column: str,
+    found: Any,
+    predicted: Any,
+    horizon: int,
+    fitted_times: list[Any],
+    estimated: list[Any],
+) -> dict[str, Any]:
+    """描述預測中一條時間序列、一個量值的模型：選項、平滑係數、品質指標，與摘要（初始、相對於初始值的變化、
+    季節影響、貢獻；見 tmig.planner.forecast.summary）。estimated 是估計的各期（忽略的最後幾期與之後的期）。"""
+    from tmig.planner.forecast import summary
+
+    return {
+        "series": list(key),
+        "measure": column,
+        "model": found.model.code,
+        "trend": found.model.trend,
+        "season": found.model.season,
+        "alpha": found.params[0],
+        "beta": found.params[1],
+        "gamma": found.params[2],
+        "aic": found.aic,
+        "rmse": math.sqrt(found.sse / found.n) if found.n else None,
+        "mae": found.mae,
+        "mase": found.mase,
+        "mape": found.mape,
+        "quality": found.quality,
+        "observations": found.n,
+        "period": found.period,
+        "horizon": horizon,
+        "first": fitted_times[0],
+        "last": fitted_times[-1],
+        "until": estimated[-1] if estimated else fitted_times[-1],
+        "initial_time": estimated[0] if estimated else None,
+        **summary(found, predicted, horizon),
+    }
+
+
 def _estimate_row(
     row: tuple[Any, ...],
     measures: list[int],
-    estimates: list[list[float] | None],
+    estimates: list[list[float | None] | None],
     bands: list[tuple[list[float], list[float]] | None],
     h: int,
     indicator_at: int | None,
@@ -272,11 +324,12 @@ def _estimate_row(
 ) -> tuple[Any, ...]:
     values = list(row)
     for n, (j, predicted, band) in enumerate(zip(measures, estimates, bands, strict=True)):
-        if predicted is None or band is None:
+        if predicted is None:
             continue
         values[j] = predicted[h]
-        values[width + 2 * n] = band[0][h]
-        values[width + 2 * n + 1] = band[1][h]
+        if band is not None:
+            values[width + 2 * n] = band[0][h]
+            values[width + 2 * n + 1] = band[1][h]
     if indicator_at is not None:
         values[indicator_at] = ESTIMATE
     assert len(values) == width + 2 * count

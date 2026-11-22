@@ -75,6 +75,9 @@ class Fit:
     """平均絕對誤差 ÷ 單純預測（下一期等於這一期）的平均絕對誤差；資料沒有變動時為 None。"""
     mape: float | None = None
     """平均絕對百分比誤差（百分比）；資料中有 0 時沒有定義，為 None。"""
+    seasonal_parts: list[float] | None = None
+    """各期的一步預測中季節的成分（與數值同單位：加法季節是季節指數，乘法季節是去掉季節的值 ×（指數 − 1））；
+    沒有季節的模型為 None。描述預測的「季節影響」用。"""
 
     @property
     def quality(self) -> Literal["good", "ok", "poor"] | None:
@@ -83,6 +86,14 @@ class Fit:
         if self.mase is None:
             return None
         return "good" if self.mase < 0.5 else "ok" if self.mase < 1 else "poor"
+
+    @property
+    def quality_score(self) -> float | None:
+        """預測結果「品質」的值：100 × MAX(1 − MASE, 0)（Tableau 的「Forecast Field Results」），0 最差、
+        100 最好；資料沒有變動（MASE 沒有定義）時為 None。"""
+        if self.mase is None:
+            return None
+        return 100 * max(1 - self.mase, 0.0)
 
 
 @dataclass
@@ -146,8 +157,10 @@ def _run(
     m: int,
     params: tuple[float, float, float],
     errors: list[float] | None = None,
+    parts: list[float] | None = None,
 ) -> tuple[float, float, float, list[float]]:
-    """平滑：回傳最小平方誤差與最後的水準、趨勢、季節；errors 有給時另外記下各期的一步預測誤差。"""
+    """平滑：回傳最小平方誤差與最後的水準、趨勢、季節；errors 有給時另外記下各期的一步預測誤差，
+    parts 有給時記下各期一步預測中季節的成分（一步預測 − 去掉季節的部分）。"""
     alpha, beta, gamma = params
     level, trend, seasons = _initial(y, model, m)
     seasons = list(seasons)
@@ -167,6 +180,8 @@ def _run(
         sse += error * error
         if errors is not None:
             errors.append(error)
+        if parts is not None:
+            parts.append(float(fitted - base))
         if model.season == "additive":
             new_level = alpha * (value - season) + (1 - alpha) * base
         elif model.season == "multiplicative":
@@ -264,13 +279,15 @@ def fit(y: list[float], model: Model, m: int) -> Fit | None:
     raw = _nelder_mead(objective, [0.0, -1.0, -1.0])
     params = params_of(raw)
     errors: list[float] = []
-    sse, level, trend, seasons = _run(data, model, m, params, errors)
+    parts: list[float] = []
+    sse, level, trend, seasons = _run(data, model, m, params, errors, parts)
     if not math.isfinite(sse):
         return None
     variance = max(sse / n, 1e-300)
     aic = n * math.log(variance) + 2 * (count + 1)
     mae, mase, mape = _quality(data, errors)
-    return Fit(model, params, level, trend, seasons, sse, n, aic, m, mae, mase, mape)
+    seasonal = parts if model.season != "none" else None
+    return Fit(model, params, level, trend, seasons, sse, n, aic, m, mae, mase, mape, seasonal)
 
 
 def _quality(y: np.ndarray, errors: list[float]) -> tuple[float | None, float | None, float | None]:
@@ -374,3 +391,85 @@ def forecast(found: Fit, horizon: int, confidence: float = 0.95) -> ForecastResu
     low = [float(v) for v in np.quantile(paths, tail, axis=0)]
     high = [float(v) for v in np.quantile(paths, 1 - tail, axis=0)]
     return ForecastResult(values, low, high, found.model)
+
+
+# ---------------------------------------------------------------- 預測結果與描述預測的摘要
+
+
+def trend_values(found: Fit, horizon: int) -> list[float]:
+    """預測結果「趨勢」：去掉季節成分的估計值，即水準與趨勢的組合（沒有季節的模型與估計值相同）。"""
+    return [
+        float(_combine(found.level, found.trend, found.model, h)) for h in range(1, horizon + 1)
+    ]
+
+
+def precisions(predicted: ForecastResult) -> list[float]:
+    """預測結果「精度」：預測區間與估計值的距離。加法的模型上下對稱，即區間的一半；乘法的模型以模擬計算，
+    上下不一定對稱，也取區間寬度的一半（推定：Tableau 沒有說明不對稱時的算法）。"""
+    return [(hi - lo) / 2 for lo, hi in zip(predicted.low, predicted.high, strict=True)]
+
+
+ResultKind = Literal["trend", "precision", "precision_percent", "quality", "upper", "lower"]
+
+
+def result_values(
+    kind: ResultKind | None, found: Fit, predicted: ForecastResult, horizon: int
+) -> list[float | None]:
+    """預測的量值在估計的各期顯示的值（Tableau 的預測結果，見「Forecast Field Results」）：
+    None 為實際值與預測值（估計值）；trend 去掉季節成分；precision 預測區間與估計值的距離；
+    precision_percent 精度 ÷ 估計值（以百分比顯示；估計值為 0 時沒有定義）；quality 為
+    100 × MAX(1 − MASE, 0)，每一期相同；upper、lower 為預測區間的上下界。"""
+    if kind is None:
+        return list(predicted.values)
+    if kind == "trend":
+        return list(trend_values(found, horizon))
+    if kind == "upper":
+        return list(predicted.high)
+    if kind == "lower":
+        return list(predicted.low)
+    if kind == "quality":
+        return [found.quality_score] * horizon
+    spread = precisions(predicted)
+    if kind == "precision":
+        return list(spread)
+    return [p / abs(v) if v else None for p, v in zip(spread, predicted.values, strict=True)]
+
+
+def summary(found: Fit, predicted: ForecastResult, horizon: int) -> dict[str, float | None]:
+    """描述預測的摘要（Tableau「Forecast Descriptions」的 Summary）：
+
+    - 初始：第一個估計的期的估計值與精度（「值 ± 精度」）
+    - 相對於初始值的變化：最後一個與第一個估計值的差
+    - 季節影響的高值、低值（有季節的模型）：實際值與估計值合起來的序列中最後一個完整季節（最後 m 期，
+      推定）的季節成分的最大、最小值；季節成分是與趨勢的差（與數值同單位，加總約為 0）。實際值的期用一步
+      預測的季節成分
+    - 貢獻：趨勢與季節占估計值變化的比例（百分比，加起來是 100%）。Tableau 沒有公開算法，這裡取估計的各期中
+      去掉季節的部分與季節成分各自的變異數占兩者合計的比例（推定）；沒有季節時趨勢 100%，兩者都沒有變化時
+      也是趨勢 100%
+    """
+    values = predicted.values[:horizon]
+    spread = precisions(predicted)
+    trend = trend_values(found, horizon)
+    result: dict[str, float | None] = {
+        "initial": values[0] if values else None,
+        "initial_precision": spread[0] if spread else None,
+        "change": values[-1] - values[0] if values else None,
+        "seasonal_high": None,
+        "seasonal_low": None,
+        "contribution_trend": 100.0,
+        "contribution_season": 0.0,
+    }
+    if found.model.season == "none" or not values:
+        return result
+    future = [v - t for v, t in zip(values, trend, strict=True)]
+    combined = [*(found.seasonal_parts or []), *future]
+    last = combined[-found.period :]
+    if last:
+        result["seasonal_high"] = max(last)
+        result["seasonal_low"] = min(last)
+    trend_var = float(np.var(trend)) if len(trend) > 1 else 0.0
+    season_var = float(np.var(future)) if len(future) > 1 else 0.0
+    if trend_var + season_var > 0:
+        result["contribution_trend"] = 100 * trend_var / (trend_var + season_var)
+        result["contribution_season"] = 100 * season_var / (trend_var + season_var)
+    return result

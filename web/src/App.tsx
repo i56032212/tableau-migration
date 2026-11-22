@@ -453,11 +453,15 @@ function WorkbookPage({
   // - wanted：現在要不要簡報模式。要求有了結果、簡報模式卻已經離開時，把剛進入的全螢幕結束——否則畫面留在
   //   全螢幕、卻不是簡報模式
   // - sawFullscreen：這一次簡報模式真的進入過全螢幕。之後全螢幕結束（使用者按 Esc，瀏覽器自己收下）才算離開；
-  //   在那之前收到的「不在全螢幕」是上一次離開留下的通知，不理會
+  //   在那之前收到的「不在全螢幕」是上一次離開留下的通知，不理會。只由這一次的要求有了結果時設定：全螢幕的
+  //   通知（fullscreenchange）晚於狀態本身，上一次進入的通知可能在離開、再進入之後才到，那時上一次的全螢幕
+  //   還沒結束——以通知設定會把它當成這一次的全螢幕，接著上一次的結束完成，這一次被踢出去
+  // - entering：第幾次進入。上一次進入的要求晚到時不算這一次的全螢幕
   // - exiting：離開時結束全螢幕還沒完成。這時馬上再進入，要等它完成才要求全螢幕：否則要求落在「正在結束」的
   //   全螢幕上（立刻成功），接著結束完成，這一次的簡報模式被踢出去
   const presentingWanted = useRef(false);
   const sawFullscreen = useRef(false);
+  const entering = useRef(0);
   const exiting = useRef<Promise<void> | null>(null);
   const exitFullscreenNow = () => {
     if (!document.fullscreenElement) return;
@@ -468,28 +472,28 @@ function WorkbookPage({
     });
   };
   const enterPresentation = () => {
+    const mine = ++entering.current;
     presentingWanted.current = true;
     sawFullscreen.current = false;
     setPresenting(true);
     const root = document.documentElement;
     if (!root.requestFullscreen) return;
     void (exiting.current ?? Promise.resolve()).then(async () => {
-      if (!presentingWanted.current) return;
+      if (!presentingWanted.current || entering.current !== mine) return;
       try {
         await root.requestFullscreen();
       } catch {
         return; // 全螢幕要求可能被瀏覽器拒絕（例如內嵌的視窗）：仍以簡報的版面顯示
       }
       if (!presentingWanted.current) exitFullscreenNow();
-      else if (document.fullscreenElement) sawFullscreen.current = true;
+      else if (entering.current === mine && document.fullscreenElement) sawFullscreen.current = true;
     });
   };
   useEffect(() => {
     if (!presenting) return;
     presentingWanted.current = true;
     const leave = () => {
-      if (document.fullscreenElement) sawFullscreen.current = true;
-      else if (sawFullscreen.current) setPresenting(false);
+      if (!document.fullscreenElement && sawFullscreen.current) setPresenting(false);
     };
     // 一次 Esc 只做一件事：簡報模式中是離開簡報模式（Tableau 的使用經驗；官方文件沒有寫，見 README「已知限制
     // 與待驗證」）。真正全螢幕時瀏覽器自己收下 Esc、結束全螢幕（上面的 leave）；沒有全螢幕時（外殼、不允許

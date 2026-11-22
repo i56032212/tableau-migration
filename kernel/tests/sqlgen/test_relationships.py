@@ -917,24 +917,24 @@ def test_top_n_with_measures_from_two_tables(model_ir: IR, engine: Engine) -> No
     assert rows_of(run(ir, engine)) == {"Ann": (150, 1), "Bob": (70, 1)}
 
 
-# ---------------------------------------------------------------- 不支援
+# ---------------------------------------------------------------- 跨資料表的計算
 
 
-def test_aggregate_mixing_two_tables_unsupported(model_ir: IR) -> None:
-    # 同一個彙總用到 CUSTOMERS 與 ORDERS 的欄位（Tableau 以列層級連接後再彙總）
+def test_aggregate_mixing_two_tables(model_ir: IR, engine: Engine) -> None:
+    # 同一個彙總用到 CUSTOMERS 與 ORDERS 的欄位：在兩者內部連接後的列彙總（其他情形見
+    # test_relationship_cross_table.py）
     ir = view(model_ir, [dim(model_ir, "Region")], [measure(model_ir, "Ann Sales")])
-    with pytest.raises(QueryError, match="同時用到多張資料表（「Customers」、「Orders」）") as info:
-        worksheet_sql(ir, "Base")
-    assert info.value.unsupported
+    assert rows_of(run(ir, engine)) == {"East": 150, "West": None, "South": None, "North": None}
 
 
-def test_filter_across_branches_unsupported(model_ir: IR) -> None:
-    # Name + Category 跨兩個分支，又不在檢視中
+def test_filter_across_branches(model_ir: IR, engine: Engine) -> None:
+    # Name + Category 跨兩個分支，又不在檢視中：兩個分支的列的組合中有一組符合的訂單保留
     flt = categorical(model_ir, "Name Category", "include", ["AnnOffice"])
     ir = view(model_ir, [dim(model_ir, "Cust ID")], [measure(model_ir, "Sales")], [flt])
-    with pytest.raises(QueryError, match="多個分支") as info:
-        worksheet_sql(ir, "Base")
-    assert info.value.unsupported
+    assert rows_of(run(ir, engine)) == {"C1": 150}
+
+
+# ---------------------------------------------------------------- 篩選控制項
 
 
 def test_domain_values(model_ir: IR) -> None:

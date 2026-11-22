@@ -3,8 +3,9 @@
 附註（RenderResult.notes、/render 回應的 notes）會顯示給作者與看報表的人：寫「參考線 refline0」
 「預測（sum(f_profit)）」沒有人看得懂。這裡的名稱與編輯器畫面上的寫法相同：
 
-- 欄位：膠囊上的寫法——SUM(Profit)、YEAR(Order Date)，快速 Table Calculation 的後面有「△」
-  （web/src/editor/model.ts 的 pillLabel）；Measure Names、Measure Values 與產生的經緯度是 Tableau 的名稱
+- 欄位：膠囊上的寫法——SUM(Profit)、YEAR(Order Date)，快速 Table Calculation 的後面有「△」，預測結果
+  不是實際值與預測值時寫在後面（SUM(Profit)（趨勢））（web/src/editor/model.ts 的 pillLabel）；
+  Measure Names、Measure Values 與產生的經緯度是 Tableau 的名稱
 - 標記類型：標記卡的選單（web/src/editor/model.ts 的 MARK_TYPES）
 - 背景地圖的樣式：地圖選項（web/src/editor/Editor.tsx 的 MAP_STYLES）
 - 參考線：「分析」分頁清單上的寫法——「平均：SUM(Sales)」「分布（百分位數）：SUM(Sales)」「盒鬚圖：SUM(Sales)」
@@ -84,6 +85,17 @@ REFERENCE_NAMES = {
 """參考線的計算在「分析」分頁清單上的名稱。"""
 NAME_LIMIT = 30
 """附註裡引用的文字（註解的內容）最多幾個字，超過時截短加上「…」。"""
+FORECAST_RESULT_NAMES = {
+    "trend": "趨勢",
+    "precision": "精度",
+    "precision_percent": "精度 %",
+    "quality": "品質",
+    "upper": "上層預測區間",
+    "lower": "較低預測區間",
+    "none": "無",
+}
+"""預測結果在膠囊選單「預測結果」中的名稱（Tableau 繁體中文版的寫法）；膠囊上寫在量值的後面，例如
+SUM(Sales)（趨勢）。"""
 
 
 def pill_name(
@@ -98,6 +110,8 @@ def pill_name(
         calc = next((c for c in calcs if c.id == use.table_calc), None)
         if calc is not None and calc.type != "formula":
             name += " △"
+    if use.forecast is not None and use.forecast != "none":
+        name += f"（{FORECAST_RESULT_NAMES[use.forecast]}）"
     return name
 
 
@@ -146,6 +160,7 @@ def annotation_name(
 
 
 __all__ = [
+    "FORECAST_RESULT_NAMES",
     "MAP_STYLE_NAMES",
     "MARK_NAMES",
     "REFERENCE_NAMES",

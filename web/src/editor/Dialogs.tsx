@@ -9,7 +9,8 @@ import { applyFormatToAll } from "./ViewDialogs";
 import { type RichRun, RichTextEditor } from "./RichText";
 import { useEditor } from "./context";
 import {
-  axisMeasures,
+  clearForecast,
+  forecastMeasures,
   type Card,
   cardMarks,
   type CatalogField,
@@ -779,7 +780,7 @@ export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const editor = useEditor();
   const { sheet, fields } = editor;
   const current = sheet.forecast as ForecastIR | null | undefined;
-  const measures = axisMeasures(sheet, fields);
+  const measures = forecastMeasures(sheet, fields);
   const dates = [...sheet.rows, ...sheet.columns, ...markUses(sheet.marks)].filter((u) => u.date);
   const viewUnit = dates[0]?.date?.unit;
   const [length, setLength] = useState<ForecastIR["length"]>(current?.length ?? "auto");
@@ -795,7 +796,8 @@ export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const [error, setError] = useState<string | null>(null);
   const save = async (remove: boolean) => {
     if (remove) {
-      editor.apply((s: SheetIR) => ({ ...s, forecast: null }));
+      // 膠囊上選的預測結果（趨勢、精度等）一併清除
+      editor.apply((s: SheetIR) => clearForecast(s));
       onClose();
       return;
     }
@@ -1870,7 +1872,14 @@ interface BorderIR {
   color: string;
 }
 
-/** 框線（Tableau 的「格式＞框線」的儲存格、窗格）：勾選後設定樣式、顏色與線寬。 */
+/** 合計（小計）或總計的列（欄）的框線（IR 的 TotalBorder） */
+interface TotalBorderIR {
+  shelf: "rows" | "columns";
+  kind: "subtotal" | "grand_total";
+  border: BorderIR;
+}
+
+/** 框線（Tableau 的「格式＞框線」的儲存格、窗格、表頭、合計與總計）：勾選後設定樣式、顏色與線寬。 */
 function BorderInputs({ label, value, onChange }: { label: string; value: BorderIR | null; onChange: (value: BorderIR | null) => void }) {
   const border: BorderIR = { pattern: "solid", width: 1, color: "#d4d4d4", ...(value ?? {}) };
   const change = (patch: Partial<BorderIR>) => onChange({ ...border, ...patch });
@@ -1973,6 +1982,16 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
   // 框線：儲存格（每一列、每一欄之間）與窗格（各窗格之間），外框跟著畫
   const [cellBorder, setCellBorder] = useState<BorderIR | null>((sheet.cell_border as BorderIR | null | undefined) ?? null);
   const [paneBorder, setPaneBorder] = useState<BorderIR | null>((sheet.pane_border as BorderIR | null | undefined) ?? null);
+  // 表頭的框線（標題區域中各標題成員之間）；合計與總計的框線（列、欄各自的合計與總計的兩側）
+  const [headerBorder, setHeaderBorder] = useState<BorderIR | null>((sheet.header_border as BorderIR | null | undefined) ?? null);
+  const [totalBorders, setTotalBorders] = useState<TotalBorderIR[]>((sheet.total_borders as TotalBorderIR[] | undefined) ?? []);
+  const totalBorder = (shelf: TotalBorderIR["shelf"], kind: TotalBorderIR["kind"]) =>
+    totalBorders.find((t) => t.shelf === shelf && t.kind === kind)?.border ?? null;
+  const setTotalBorder = (shelf: TotalBorderIR["shelf"], kind: TotalBorderIR["kind"]) => (border: BorderIR | null) =>
+    setTotalBorders((current) => [
+      ...current.filter((t) => !(t.shelf === shelf && t.kind === kind)),
+      ...(border ? [{ shelf, kind, border }] : []),
+    ]);
   const [empty, setEmpty] = useState<Set<string>>(new Set((sheet.show_empty as string[] | undefined) ?? []));
   const toggleEmpty = (which: "rows" | "columns") =>
     setEmpty((current) => {
@@ -2003,6 +2022,8 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
         null_indicator: nullIndicator,
         cell_border: cellBorder,
         pane_border: paneBorder,
+        header_border: headerBorder,
+        total_borders: totalBorders,
         show_empty: (["rows", "columns"] as const).filter((which) => empty.has(which)),
       };
   };
@@ -2227,10 +2248,18 @@ export function SheetFormatDialog({ onClose }: { onClose: () => void }) {
             <input type="checkbox" checked={empty.has("columns")} onChange={() => toggleEmpty("columns")} /> 顯示空的欄
           </label>
         </div>
-        <div className="row" title="框線（Tableau 的「格式＞框線」）：儲存格的框線畫在每一列、每一欄之間；窗格的框線畫在各窗格之間；檢視的外框跟著畫">
+        <div className="row" title="框線（Tableau 的「格式＞框線」）：儲存格的框線畫在每一列、每一欄之間；窗格的框線畫在各窗格之間；檢視的外框跟著畫；表頭的框線畫在標題區域中各標題成員之間">
           框線
           <BorderInputs label="儲存格" value={cellBorder} onChange={setCellBorder} />
           <BorderInputs label="窗格" value={paneBorder} onChange={setPaneBorder} />
+          <BorderInputs label="表頭" value={headerBorder} onChange={setHeaderBorder} />
+        </div>
+        <div className="row" title="合計（小計）與總計的列、欄的框線：畫在它們的兩側，窗格與標題區域都畫；分隔線優先，其次總計、合計">
+          合計與總計的框線
+          <BorderInputs label="列的合計" value={totalBorder("rows", "subtotal")} onChange={setTotalBorder("rows", "subtotal")} />
+          <BorderInputs label="列的總計" value={totalBorder("rows", "grand_total")} onChange={setTotalBorder("rows", "grand_total")} />
+          <BorderInputs label="欄的合計" value={totalBorder("columns", "subtotal")} onChange={setTotalBorder("columns", "subtotal")} />
+          <BorderInputs label="欄的總計" value={totalBorder("columns", "grand_total")} onChange={setTotalBorder("columns", "grand_total")} />
         </div>
         {shelf("列", rowStyle, setRowStyle)}
         {shelf("欄", colStyle, setColStyle)}

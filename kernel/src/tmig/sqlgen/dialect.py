@@ -46,6 +46,7 @@ from sqlglot.errors import ParseError
 from tmig.data import udf
 from tmig.formula.functions import icu_features
 from tmig.ir.models import Scalar
+from tmig.sqlgen import rawsql
 from tmig.sqlgen.query import CteDef, QueryError, WorksheetSql
 from tmig.sqlgen.source import CUSTOM_SQL_PREFIX
 
@@ -118,6 +119,8 @@ SQLGLOT_NAMES: dict[str, str] = {
 }
 SUPPORTED: frozenset[str] = frozenset(SQLGLOT_NAMES)
 """已有轉譯規則的方言；其他方言尚不支援。"""
+RAWSQL_NO_BOOLEAN = frozenset({"oracle", "tsql", "teradata", "db2", "hana"})
+"""SELECT 中不能直接放條件（沒有布林值，轉譯時改寫成 CASE 等）的方言：RAWSQL_BOOL 的原文無從改寫，不支援。"""
 
 PLACEHOLDER = re.compile(r"[\"`\[]" + re.escape(CUSTOM_SQL_PREFIX) + r"(\d+)[\"`\]]")
 """自訂 SQL 的佔位資料表（各方言的識別字引號：雙引號、反引號，SQL Server 的方括號）。"""
@@ -224,6 +227,10 @@ def split(query: WorksheetSql) -> Split:
     if localized:
         # 空間函式改在 DuckDB 計算：取回的是資料列，只取 DuckDB 用到的欄
         fetches = _pruned(fetches, head + query.main)
+    # 直接送給資料庫的函式只能在下推的部分
+    rawsql.forbid_local(
+        head + query.main, "這張工作表用到它的部分（Table Calculation 之後或空間函式）"
+    )
     return Split(fetches=fetches, local_sql=head + query.main)
 
 
@@ -347,7 +354,7 @@ def to_dialect(
     """DuckDB 方言的 SQL → 目標方言；自訂 SQL 的佔位資料表換回原文（參數代入目前值）。"""
     custom = [_custom(text, dialect, parameters) for text in (custom_sql or [])]
     if dialect == "duckdb":
-        return _restore(sql, custom)
+        return _restore(_duckdb_rawsql(sql), custom)
     rewriter = REWRITERS.get(dialect)
     if rewriter is None:
         raise DialectError(f"{dialect} 方言的轉譯尚不支援")
@@ -359,7 +366,26 @@ def to_dialect(
     rewriter.finish(tree)
     rewriter.validate(tree)
     out = rewriter.text(tree.sql(dialect=SQLGLOT_NAMES[dialect], identify=True))
-    return _restore(out, custom)
+    # 直接送給資料庫的函式：原文在產生 SQL 文字之後才換回（不經過轉譯與文字的調整）
+    return _restore(rawsql.restore(out), custom)
+
+
+def _duckdb_rawsql(sql: str) -> str:
+    """來源資料庫是 DuckDB 時（不轉譯）：直接送給資料庫的函式代入原文（參數的 SQL 本來就是 DuckDB 方言）。"""
+    if not rawsql.CALL.search(sql):
+        return sql
+    tree = sqlglot.parse_one(sql, read="duckdb")
+    for node in list(tree.find_all(exp.Anonymous)):
+        found = rawsql.parse_name(node.name)
+        if found is None:
+            continue
+        texts = []
+        for arg in node.expressions:
+            text = arg.sql(dialect="duckdb", identify=True)
+            simple = isinstance(arg, (exp.Column, exp.Literal, exp.Paren, exp.Null, exp.Boolean))
+            texts.append(text if simple else f"({text})")
+        node.replace(exp.Var(this=rawsql.placeholder(rawsql.substitute(found[1], texts))))
+    return rawsql.restore(tree.sql(dialect="duckdb", identify=True))
 
 
 def _custom(text: str, dialect: str, parameters: ParameterValues | None) -> str:
@@ -732,6 +758,9 @@ class Rewriter:
         if name in udf.REGEX_FUNCTIONS:
             assert isinstance(node, exp.Anonymous)
             return self._icu_regex(name, list(node.expressions))
+        if name is not None and name.startswith(rawsql.PREFIX):
+            assert isinstance(node, exp.Anonymous)
+            return self._rawsql(name, list(node.expressions))
         if name is not None:
             assert isinstance(node, exp.Anonymous)
             fn = self.functions().get(name)
@@ -769,6 +798,26 @@ class Rewriter:
         replaced.set("expression", args[1])
         replaced.set("replacement", replacement)
         return self.node(replaced)
+
+    def _rawsql(self, name: str, args: list[exp.Expr]) -> exp.Expr:
+        """直接送給資料庫的函式（RAWSQL_*、RAWSQLAGG_*）：參數已改寫成這個方言，驗證之後產生 SQL 文字代入原文的
+        %1、%2…；原文不經過轉譯，產生整段 SQL 之後才換回（tmig.sqlgen.rawsql.restore）。欄位與常值直接代入，
+        其他運算式加上括號。布林值：資料庫沒有布林型別的值（SELECT 中不能直接放條件）時不支援。"""
+        found = rawsql.parse_name(name)
+        if found is None:  # pragma: no cover - 名稱一定是 tmig.sqlgen.rawsql 產生的
+            raise DialectError("內部錯誤：無法辨識的直接送給資料庫的函式")
+        kind, template = found
+        if kind == "b" and self.dialect in RAWSQL_NO_BOOLEAN:
+            raise DialectError(
+                f"RAWSQL_BOOL、RAWSQLAGG_BOOL 在 {self.name} 不支援（資料庫沒有布林值）"
+            )
+        texts: list[str] = []
+        for arg in args:
+            self.validate(arg)
+            text = self.text(arg.sql(dialect=SQLGLOT_NAMES[self.dialect], identify=True))
+            simple = isinstance(arg, (exp.Column, exp.Literal, exp.Paren, exp.Null, exp.Boolean))
+            texts.append(text if simple else f"({text})")
+        return _mark(exp.Var(this=rawsql.placeholder(rawsql.substitute(template, texts))))
 
     def finish(self, tree: exp.Expr) -> None:
         """整棵樹改寫完成後的調整。"""

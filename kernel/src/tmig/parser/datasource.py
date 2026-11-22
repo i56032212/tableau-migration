@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 from lxml import etree
 
 from tmig.formula.analyze import Analyzer
-from tmig.formula.ast import FieldRef, to_json
+from tmig.formula.ast import Call, FieldRef, Node, to_json, walk
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
 from tmig.formula.types import FormulaSemanticError
@@ -1928,6 +1928,15 @@ def _foreign_refs(state: DsState, formula: str, seen: set[str] | None = None) ->
     return False
 
 
+def _rawsql_calls(node: Node) -> list[str]:
+    """公式中直接送給資料庫的函式（RAWSQL_*、RAWSQLAGG_*）的名稱。"""
+    return [
+        n.name
+        for n in walk(node)
+        if isinstance(n, Call) and n.name.startswith(("RAWSQL_", "RAWSQLAGG_"))
+    ]
+
+
 def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
     """以公式引擎分析計算欄位：補上語法樹（附解析出的 id）與計算層級。"""
     resolve_definitions(ctx, state)
@@ -1949,6 +1958,14 @@ def analyze_calcs(ctx: ParseContext, state: DsState) -> None:
         try:
             info = analyzer.target_info(target)
             node = analyzer.calc_ast(target)
+            raw = _rawsql_calls(node)
+            if raw and not isinstance(state.connection, LiveConnection):
+                # 直接送給資料庫的 SQL：萃取與檔案在平台的引擎計算，Tableau 這時的行為沒有文件
+                raise FormulaSemanticError(
+                    f"{raw[0]} 把 SQL 直接送給資料庫，只能用在 Live 連線；這個資料源是萃取或檔案",
+                    0,
+                    unsupported=True,
+                )
         except FormulaSemanticError as exc:
             if not ctx.datasources_parsed and _foreign_refs(state, data_field.calc.formula):
                 continue  # 引用還沒解析的資料源：資料源都解析完後再分析

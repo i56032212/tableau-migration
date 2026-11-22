@@ -975,7 +975,8 @@ def create_app(
             result = data.run(query, datasource, database)
             # 與量值篩選一起使用時，總計只合計通過篩選的標記（以工作表的結果限定）
             total_queries = totals_sql(ir, sheet.id, query, state, user, result)
-            title_queries = title_sql(ir, sheet.id, query, state, user)
+            # 與量值篩選一起使用時，標題中的值只計算通過篩選的標記（以工作表的結果限定）
+            title_queries = title_sql(ir, sheet.id, query, state, user, result)
             panes = {
                 i: (q.columns, data.run(q, datasource, database)) for i, q in pane_queries.items()
             }

@@ -47,6 +47,18 @@ interface ForecastModel {
   first: unknown;
   last: unknown;
   until: unknown;
+  /** 摘要：第一個估計的期、它的估計值與精度（預測區間與估計值的距離） */
+  initial_time?: unknown;
+  initial?: number | null;
+  initial_precision?: number | null;
+  /** 最後一個估計值減第一個估計值 */
+  change?: number | null;
+  /** 最後一個完整季節的季節成分的高值、低值（有季節的模型） */
+  seasonal_high?: number | null;
+  seasonal_low?: number | null;
+  /** 趨勢與季節的貢獻（百分比，加起來 100%） */
+  contribution_trend?: number | null;
+  contribution_season?: number | null;
 }
 
 interface ForecastDescription {
@@ -97,6 +109,15 @@ function pValue(value: number | null | undefined): string {
 
 function text(value: unknown): string {
   return value === null || value === undefined ? "" : String(value);
+}
+
+/** 期間（日期取年月日；年份的整數照原樣）。 */
+function period(value: unknown): string {
+  return text(value).slice(0, 10);
+}
+
+function percent(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? "—" : `${number(value, 3)}%`;
 }
 
 export function DescribeModelDialog({ kind, onClose, onSaved }: { kind: DescribeKind; onClose: () => void; onSaved: () => void }) {
@@ -230,6 +251,60 @@ export function DescribeModelDialog({ kind, onClose, onSaved }: { kind: Describe
             </tbody>
           </table>
           {forecast.models.length === 0 && <p className="hint">資料不足，沒有估計出模型。</p>}
+          {forecast.models.length > 0 && (
+            // 摘要（Tableau 描述預測的「摘要」索引標籤）：初始、相對於初始值的變化、季節影響、貢獻與品質
+            <table className="describe-table wide" data-forecast-summary="">
+              <caption>摘要</caption>
+              <thead>
+                <tr>
+                  <th rowSpan={2}>量值</th>
+                  <th rowSpan={2}>序列</th>
+                  <th rowSpan={2} title="第一個估計的期的估計值 ± 精度（預測區間與估計值的距離）">
+                    初始
+                  </th>
+                  <th rowSpan={2} title="最後一個估計值減第一個估計值">
+                    相對於初始值的變化
+                  </th>
+                  <th colSpan={2} title="最後一個完整季節的季節成分（與趨勢的差）">
+                    季節影響
+                  </th>
+                  <th colSpan={2} title="趨勢與季節占估計值變化的比例">
+                    貢獻
+                  </th>
+                  <th rowSpan={2}>品質</th>
+                </tr>
+                <tr>
+                  <th>高值</th>
+                  <th>低值</th>
+                  <th>趨勢</th>
+                  <th>季節性</th>
+                </tr>
+              </thead>
+              <tbody>
+                {forecast.models.map((model, i) => (
+                  <tr key={i} data-summary={i}>
+                    <td>{header(model.measure)}</td>
+                    <td>{model.series.map(text).join("、")}</td>
+                    <td data-initial="">
+                      {number(model.initial)} ± {number(model.initial_precision)}
+                      <span className="hint">（{period(model.initial_time)}）</span>
+                    </td>
+                    <td data-change="">
+                      {number(model.change)}
+                      <span className="hint">
+                        （{period(model.initial_time)}–{period(model.until)}）
+                      </span>
+                    </td>
+                    <td data-seasonal-high="">{number(model.seasonal_high)}</td>
+                    <td data-seasonal-low="">{number(model.seasonal_low)}</td>
+                    <td data-contribution-trend="">{percent(model.contribution_trend)}</td>
+                    <td data-contribution-season="">{percent(model.contribution_season)}</td>
+                    <td>{model.quality ? QUALITY[model.quality] : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           {forecast.models.length > 0 && (
             <table className="describe-table wide">
               <caption>模型（指數平滑）</caption>

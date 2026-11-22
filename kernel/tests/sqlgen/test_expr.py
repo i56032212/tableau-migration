@@ -401,8 +401,16 @@ def test_every_row_and_aggregate_function_is_tested() -> None:
     nondeterministic = {"TODAY", "NOW", "RANDOM"}
     # 空間函式在 test_spatial 與 Hyper（Tableau 的引擎）的結果逐一比對
     spatial = {"MAKEPOINT", "MAKELINE", "DISTANCE", "BUFFER", "AREA", "COLLECT"}
+    # 直接送給資料庫的函式只在 Live 連線計算：test_rawsql 以 DuckDB 當作來源資料庫實跑
+    passthrough = {n for n in implemented_names() if n.startswith(("RAWSQL_", "RAWSQLAGG_"))}
     missing = (
-        implemented_names() - tested - table_calcs - USER_FUNCTIONS - nondeterministic - spatial
+        implemented_names()
+        - tested
+        - table_calcs
+        - USER_FUNCTIONS
+        - nondeterministic
+        - spatial
+        - passthrough
     )
     assert missing == set()
 

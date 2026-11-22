@@ -13,6 +13,9 @@ export interface FieldUse {
   date: DateDerivation | null;
   continuous: boolean;
   table_calc: string | null;
+  /** 預測的結果類型（量值膠囊的「預測結果」）：trend、precision、precision_percent、quality、upper、lower、
+   * none；沒有（null）為實際值與預測值 */
+  forecast?: string | null;
 }
 
 /** 別名：維度成員或參數值的顯示名稱（只改變顯示，篩選仍用原始值）。 */

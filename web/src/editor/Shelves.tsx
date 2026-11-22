@@ -20,6 +20,7 @@ import {
   drillToggle,
   ensureMeasureNames,
   firstMeasure,
+  FORECAST_RESULTS,
   type FilterIR,
   GENERATED_LABELS,
   GEOMETRY_GENERATED,
@@ -414,7 +415,7 @@ export function usePillMenu() {
       });
     }
     if (measure && use.agg !== null && field && field.level === null && field.kind === "column") {
-      items.push({ label: "維度", action: () => change({ agg: null, continuous: false, table_calc: null }) });
+      items.push({ label: "維度", action: () => change({ agg: null, continuous: false, table_calc: null, forecast: null }) });
     }
     if (isNumeric(field) || isDate(field) || measure) {
       items.push({ label: "離散", checked: !use.continuous, action: () => change({ continuous: false }) });
@@ -493,6 +494,17 @@ export function usePillMenu() {
         });
         // 計算類型與選項（相對於、排名方式、移動計算的範圍等）、計算層級與重新開始間隔
         items.push({ label: "編輯表計算…", action: () => editor.openDialog({ kind: "direction", tableCalc: tc.id }) });
+      }
+      if (sheet.forecast) {
+        // 預測結果（Tableau 的 Forecast Result）：估計的期顯示估計值、趨勢、精度、品質或預測區間；「無」不預測
+        items.push({
+          label: "預測結果",
+          children: FORECAST_RESULTS.map(([value, label]) => ({
+            label,
+            checked: (use.forecast ?? null) === value,
+            action: () => change({ forecast: value }),
+          })),
+        });
       }
       items.push({ label: "格式…", action: () => editor.openDialog({ kind: "format", use }) });
     }

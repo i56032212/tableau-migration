@@ -283,6 +283,8 @@ const FORMAT_KEYS = [
   "null_indicator",
   "cell_border",
   "pane_border",
+  "header_border",
+  "total_borders",
 ] as const;
 const FORMAT_STORE = "tmig.copied-format";
 let copiedFormat: Record<string, unknown> | null = null;

@@ -26,15 +26,22 @@
 次要資料源的維度篩選（工作表的 filters 中欄位是次要資料源欄位的篩選）套用在次要資料源的查詢；主要資料源中連結
 欄位的值沒有對應到通過篩選的資料時，那些標記不顯示（檢視層級的彙總改為 INNER JOIN），篩選包含 Null 時保留次要
 資料源完全沒有對應資料的標記（另外查出不篩選時有哪些連結值，__u）。這一項與總計再彙總的算法，Tableau 的說明
-文件沒有寫明，依公開資料推定。
+文件沒有寫明，依公開資料推定。次要資料源欄位的條件篩選與 Top N 篩選同樣在次要資料源的查詢中計算（以次要資料源
+的資料決定成員，Tableau 說明文件「Blend Your Data」：混合時各資料源分別查詢、彙總後再合併；條件與 Top N 的
+細節沒有寫明，推定）。
+
+次要資料源的計算欄位中的 LOD 運算式（{FIXED [Region] : SUM([Target])} 等）只會出現在外部彙總之中，與外部彙總
+一起在次要資料源的查詢中計算：FIXED 以次要資料源的資料，INCLUDE／EXCLUDE 相對於次要資料源查詢的維度（作用中
+的連結欄位，推定）。Tableau 說明文件「Troubleshoot Data Blending」：這時主要資料源的連結欄位要在檢視中，且不能
+有次要資料源的維度或維度篩選（Tableau 顯示「不支援的彙總」錯誤），本平台同樣不給出結果。
 
 次要資料源中定義的 Table Calculation 計算欄位（RUNNING_SUM(SUM([Target])) 等）在混合後的結果上計算：公式改寫成
 以 [資料源].[欄位] 引用（tmig.ir.scope.ForeignSource.qualified），在主要資料源的查詢中展開，其中的彙總仍是
 外部彙總；彙總之上還有運算的運算式（ZN(SUM([Target]))）整段在次要資料源計算（EXTERNAL_REF），所以沒有對應
 資料的標記是 Null，與主要資料源的計算欄位（混合後才計算，ZN 得到 0）不同。
 
-尚不支援：同一個彙總中同時用到主要與次要資料源的欄位、LOD 運算式中次要資料源的欄位、次要資料源的內容篩選、
-條件篩選與 Top N 篩選。
+尚不支援：同一個彙總中同時用到主要與次要資料源的欄位、同一個 LOD 運算式中同時用到主要與次要資料源的欄位、
+次要資料源的內容篩選（Tableau 的「加入內容」只出現在主要資料源欄位的篩選，見 tmig.parser.worksheet）。
 """
 
 from __future__ import annotations
@@ -42,7 +49,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from tmig.formula.ast import Call, FieldRef, Node, map_children, walk
+from tmig.formula.ast import Call, FieldRef, Lod, Node, map_children, walk
 from tmig.formula.functions import EXTERNAL
 from tmig.formula.unparse import to_formula
 from tmig.ir.models import (
@@ -231,11 +238,54 @@ class Blending:
         return self.sources[next(iter(sides))]
 
     def check_lod(self, node: Node) -> None:
+        """主要資料源的 LOD（在主要資料源的查詢中計算）不能用到次要資料源的欄位。"""
         from tmig.sqlgen.query import QueryError
 
         if any(side != -1 for side in self.sides(node)):
             raise QueryError(
-                "Data Blending：LOD 運算式中用到次要資料源的欄位，尚不支援", unsupported=True
+                "Data Blending：LOD 運算式中同時用到主要與次要資料源的欄位，尚不支援",
+                unsupported=True,
+            )
+
+    def secondary_lod(self, node: Lod) -> bool:
+        """LOD 只用到一個次要資料源的欄位（次要資料源的計算欄位中的 LOD）：只會在外部彙總之中，與外部彙總
+        一起在次要資料源的查詢中計算（FIXED 以次要資料源的全部資料、INCLUDE／EXCLUDE 相對於連結欄位）。"""
+        sides = self.sides(node)
+        return bool(sides) and -1 not in sides and len(sides) == 1
+
+    def _check_secondary_lods(
+        self, source: Source, secondary: WorksheetQuery, measures: list[FieldUse]
+    ) -> None:
+        """Tableau 說明文件「Troubleshoot Data Blending」：檢視用到次要資料源的 LOD 時，主要資料源的連結欄位
+        要在檢視中，且不能有次要資料源的維度（含維度篩選），否則 Tableau 也顯示錯誤。secondary：次要資料源
+        的查詢，measures：其中的外部彙總（檢視用到的次要資料源的 LOD 在它們與次要資料源的篩選之中）。"""
+        from tmig.sqlgen.query import QueryError
+
+        query = self.query
+        nodes = [secondary.measure_node(use) for use in measures]
+        nodes += [
+            secondary.field_node(f.field.field)
+            for f in source.filters
+            if not isinstance(f, TupleFilter)
+        ]
+        if not any(secondary.lods_in(node) for node in nodes):
+            return
+
+        def dimension(node: Node) -> bool:
+            if not isinstance(node, FieldRef):
+                return False
+            found = query.fields.get(query._resolve(node).id)  # pyright: ignore[reportPrivateUsage]
+            return found is not None and found.role == "dimension"
+
+        dims = [
+            e
+            for e in source.externals.values()
+            if e.node.name == "ATTR" and e.node.args and dimension(e.node.args[0])
+        ]
+        if source.filters or dims:
+            raise QueryError(
+                f"Data Blending：檢視用到次要資料源「{source.datasource.caption}」的 LOD 運算式，又有它的"
+                "維度或維度篩選；Tableau 也不能這樣混合（顯示「不支援的彙總」錯誤）"
             )
 
     def _external(self, source: Source, node: Call) -> External:
@@ -465,12 +515,14 @@ class Blending:
                 }
             )
             holder = self._holder(source, measures, source.filters)
-            built = WorksheetQuery(
+            secondary_query = WorksheetQuery(
                 ir.model_copy(update={"worksheets": [holder]}),
                 holder.id,
                 query.query_state,
                 query.user,
-            ).build()
+            )
+            built = secondary_query.build()
+            self._check_secondary_lods(source, secondary_query, measures)
             found.append(BlendStage(source.name, secondary, built))
             where = "資料庫" if isinstance(secondary.connection, LiveConnection) else "資料"
             keys = ", ".join(use_key(f) for _, f in source.pairs)
