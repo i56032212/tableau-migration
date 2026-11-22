@@ -175,6 +175,13 @@ def test_forecast_result_menu_and_summary(engine: str) -> None:
               .map((td) => td.textContent.trim())"""
         )
         assert wrapped == []
+        # 對話框依表的寬度放寬（原本固定 560 像素、摘要要橫向捲動才看得完）：摘要整張在對話框裡
+        widths = page.evaluate(
+            """() => [document.querySelector('.modal:has(.describe-dialog)').getBoundingClientRect().width,
+              document.querySelector('.describe-dialog').clientWidth,
+              document.querySelector('[data-forecast-summary]').getBoundingClientRect().width]"""
+        )
+        assert widths[0] > 560 and widths[2] <= widths[1], widths
         page.locator(".describe-dialog").get_by_role("button", name="關閉").click()
 
         # 移除預測：膠囊上的結果類型一併清除

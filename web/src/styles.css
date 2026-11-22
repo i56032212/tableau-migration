@@ -798,7 +798,9 @@ textarea.cs-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mo
 .capture .notes-indicator { display: none !important; }
 .divider-details { display: inline-flex; gap: 8px; align-items: center; }
 .divider-details input[type="number"] { width: 56px; margin-left: 4px; }
-.describe-dialog { min-width: 460px; max-width: min(1100px, 92vw); max-height: 70vh; overflow: auto; }
+/* 描述趨勢模型、描述預測、描述叢集：對話框依表的寬度放寬（最寬 1200 像素、不超過視窗的 94%），再寬時表在對話框裡橫向捲動 */
+.modal:has(.describe-dialog) { width: fit-content; min-width: min(560px, 100%); max-width: min(1200px, 94vw); }
+.describe-dialog { min-width: 460px; max-width: 100%; max-height: 70vh; overflow: auto; }
 .describe-table { border-collapse: collapse; margin: 6px 0 14px; font-size: 13px; }
 .describe-table caption { text-align: left; font-weight: 600; padding-bottom: 4px; }
 .describe-table th, .describe-table td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
