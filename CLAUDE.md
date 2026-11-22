@@ -78,12 +78,12 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 - 沒有實機驗證過的（資料庫、Windows 安裝檔、與 Tableau 的畫面比對）在文件與回報中照實寫，不寫成已驗證
 - 其餘見 README 的「開發規則」
 
-## 目前的狀態（2026-11-22）
+## 目前的狀態（2026-11-23）
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（6ec93f4，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2788 項通過、114 項略過
-  （其中 110 項需要 PostgreSQL、MySQL、Spark，在 Windows 上還沒跑過）；前端可以建置，結果與 Linux 上的相同。
+- Windows 上的完整測試（a050f0c，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2852 項通過、140 項略過
+  （都是需要 PostgreSQL、MySQL、Spark、Trino、BigQuery 或認證管理員的，在 Windows 上還沒跑過）；前端可以建置。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
 - 2026-11-21 使用體驗稽核找到的程式錯誤已修（01f6a4c 桌面版與核心、baf7d8b 伺服器端、ac93b7e 桌面版裡的確認、
   392a424 刪除可以復原、手機版面、畫圖的附註、框選與多行文字的列高）；修這幾批時看到的 10 項在 2026-11-22 修了
@@ -91,10 +91,16 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
   ca7583a 捲軸蓋住右邊的數字；6ec93f4 第五批：對話框裡的復原、釘住的工具提示中的工作表、簡報模式的 F7／Ctrl+H、
   篩選範圍的預設值、離散座標軸上的註解、標籤的位置與欄寬、錯誤訊息裡的內部代號）。還沒處理的，以及
   「與 Tableau 不同」的項目在 `docs/backlog.md`
+- 2026-11-22 補 Tableau 缺口（第一批，232f545；408be66、a050f0c 是描述預測對話框的版面）：Relationship 跨資料表的計算、Data Blending 次要資料源的
+  條件與 Top N 篩選和 LOD、標題中的表計算、預測結果與描述預測的摘要、Live 連線上的 RAWSQL、表頭與合計／總計的
+  框線、.xls 的具名範圍、單張工作表分頁列印、在檢視上拖曳標題與圖例排序、「N 個 Null」的「篩選資料」。推定的部分
+  與待驗證的在 README「已知限制與待驗證」與 `docs/backlog.md`；**待使用者確認**：標題中的量值在檢視中有多個值時
+  Tableau 顯示「範圍」還是合計（`docs/backlog.md`「四、待決定」）
 - GitHub Actions 目前沒有在跑（使用者決定先不處理）；Windows 上的測試與安裝檔的建置在本機做
-- 桌面版安裝檔（6ec93f4）：2026-11-22 在 Windows 本機重建，引擎的冒煙測試通過；同一天在真正的視窗中驗證過第四、
-  第五批的項目（以 WebView2 的除錯埠與 Win32 操作，見 `docs/backlog.md`；觸控的工具提示只在瀏覽器的手機模擬上
-  看過；F7、Ctrl+H 是從除錯埠送的按鍵，實體鍵盤會不會先被 WebView2 拿走沒有驗證）。之前
+- 桌面版安裝檔（a050f0c）：2026-11-23 在 Windows 本機重建，引擎的冒煙測試通過；在真正的視窗中驗證過補 Tableau
+  缺口的項目與第四、第五批的項目（以 WebView2 的除錯埠與 Win32 操作，見 `docs/backlog.md`；觸控的工具提示只在
+  瀏覽器的手機模擬上看過；F7、Ctrl+H 是從除錯埠送的按鍵，實體鍵盤會不會先被 WebView2 拿走沒有驗證；分頁列印
+  沒有經過真正的列印對話框）。之前
   幾批在視窗裡驗證過版面、功能表、拉 dashboard、刪除後復原與確認用的訊息方塊。還沒有實際執行安裝檔，原生的選檔與
   存檔對話框也還沒驗證。建置的做法在 `desktop/README.md`；動到桌面版的流程後要在真正的視窗裡再驗證（瀏覽器裡的
   測試看不到外殼特有的行為：捲軸占的寬度就是在視窗裡才看到的）
