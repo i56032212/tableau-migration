@@ -78,11 +78,11 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
 - 沒有實機驗證過的（資料庫、Windows 安裝檔、與 Tableau 的畫面比對）在文件與回報中照實寫，不寫成已驗證
 - 其餘見 README 的「開發規則」
 
-## 目前的狀態（2026-11-23）
+## 目前的狀態（2026-11-24）
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（c6aa856，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 2954 項通過、144 項略過
+- Windows 上的完整測試（2fcd576，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 3019 項通過、145 項略過
   （都是需要 PostgreSQL、MySQL、Spark、Trino、BigQuery 或認證管理員的，在 Windows 上還沒跑過）；前端可以建置。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
 - 2026-11-21 使用體驗稽核找到的程式錯誤已修（01f6a4c 桌面版與核心、baf7d8b 伺服器端、ac93b7e 桌面版裡的確認、
@@ -101,10 +101,14 @@ uv run playwright install chromium              # 端到端測試用的瀏覽器
   欄列架等狀態、合併集合（寫法取自公開報表）、背景圖片、依欄位的值排序時的圖例順序、拖曳 Measure Names 與分格標題、
   「清除排序」、列印所有頁面、整張的圖片與 PowerPoint、「更新中…」、標記的動畫（.twb 的動畫設定還沒解析，見
   `docs/backlog.md`）
+- 2026-11-24 補 Tableau 缺口（第三批，d59cd74、2fcd576）：MODEL_QUANTILE／MODEL_PERCENTILE（線性迴歸）、預測選項的
+  彙總依據、故事點加上的欄位與量值／Top N 篩選、顯示集合中的成員、分格與地圖上的背景圖片；以 GitHub 上的公開報表
+  核對 .twb 的寫法（預測區間的名稱改正、框線確認）並解析動畫、表計算的自訂排序、篩選控制項的自訂、顯示歷程、Story
+  的格式與分頁顏色；叢集對話框加入維度、「更新中…」的停止、折線與座標軸的動畫。Snow Sports 開啟後動畫是開
 - GitHub Actions 目前沒有在跑（使用者決定先不處理）；Windows 上的測試與安裝檔的建置在本機做。這台電腦閒置時會進入
   新式待機：完整測試、建置等長時間的工作要先讓電腦保持喚醒（2026-11-23 有一次完整測試因待機跑了 14 小時並失敗）
-- 桌面版安裝檔（c6aa856）：2026-11-23 在 Windows 本機重建，引擎的冒煙測試通過；在真正的視窗中驗證過補 Tableau
-  缺口兩批的項目與第四、第五批的項目（以 WebView2 的除錯埠與 Win32 操作，見 `docs/backlog.md`；觸控的工具提示只在
+- 桌面版安裝檔（2fcd576）：2026-11-24 在 Windows 本機重建，引擎的冒煙測試通過；在真正的視窗中驗證過補 Tableau
+  缺口三批的項目與第四、第五批的項目（以 WebView2 的除錯埠與 Win32 操作，見 `docs/backlog.md`；觸控的工具提示只在
   瀏覽器的手機模擬上看過；F7、Ctrl+H 是從除錯埠送的按鍵，實體鍵盤會不會先被 WebView2 拿走沒有驗證；分頁列印
   沒有經過真正的列印對話框）。之前
   幾批在視窗裡驗證過版面、功能表、拉 dashboard、刪除後復原與確認用的訊息方塊。還沒有實際執行安裝檔，原生的選檔與
