@@ -100,6 +100,11 @@ class IRModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def _unset(value: object) -> bool:
+    """沒有設定（None）的選用欄位不寫進 JSON：golden IR 與舊的 IR 檔不因新欄位而改變。"""
+    return value is None
+
+
 # ---------------------------------------------------------------- 欄位使用
 
 
@@ -1780,6 +1785,12 @@ class Forecast(IRModel):
     fill_zeros: bool = Field(default=False, description="缺少的期以 0 填補")
     confidence: float = Field(default=0.95, gt=0, lt=1, description="預測區間的信賴水準")
     bands: bool = Field(default=True, description="畫出預測區間")
+    aggregate_by: DatePart | None = Field(
+        default=None,
+        exclude_if=_unset,
+        description="預測選項指定的「彙總依據」（.twb 的 auto-forecast-agg='false' 與 forecast-agg）：估計的"
+        "時間細度，比檢視細時估計之後彙總回檢視的期；None 為「自動」",
+    )
 
 
 class Pane(IRModel):
@@ -2256,6 +2267,11 @@ class MapOptions(IRModel):
     （Natural Earth），沒有街道、地形與衛星影像。"""
 
     style: MapStyle = Field(default="light", description="背景地圖的樣式")
+    basemap: bool = Field(
+        default=True,
+        description="背景地圖（地圖＞背景地圖）；False 為「無」（<mapsource name=''>）：不畫底圖，經緯度以等距的"
+        "座標畫出，背景圖片（地圖＞背景圖片）才顯示",
+    )
     washout: float = Field(default=0, ge=0, le=1, description="淡化：0 為原色，1 為全白")
     layers: dict[MapLayerName, bool] = Field(
         default_factory=dict, description="與預設不同的底圖圖層（預設不顯示郡界與城市名稱）"
@@ -2284,11 +2300,6 @@ class Animation(IRModel):
         default=None,
         description="simultaneous＝同時（as-synced），sequential＝依序（as-phased：淡出、移動、淡入）",
     )
-
-
-def _unset(value: object) -> bool:
-    """沒有設定（None）的選用欄位不寫進 JSON：golden IR 與舊的 IR 檔不因新欄位而改變。"""
-    return value is None
 
 
 class Worksheet(IRModel):
@@ -2875,11 +2886,20 @@ class StorySelection(IRModel):
     marks: list[Mark] = Field(min_length=1)
 
 
+class StoryShelfField(IRModel):
+    """故事點加在欄列架上的欄位（<column delta-type='added' field=… index=…>）。"""
+
+    use: FieldUse
+    index: int = Field(
+        default=0, ge=0, description="在架上的位置（0 起算，從架上移除的欄位先移除之後的位置）"
+    )
+
+
 class StorySheet(IRModel):
-    """故事點記下的工作表狀態（篩選、選取、參數與頁之外的差異）：排序、從欄列架上移除的欄位、註解、
-    座標軸（範圍、標題、文字方向）與地圖的顯示範圍。檢視故事點時套用在工作表目前的定義上
-    （tmig.story.apply_story_sheet）：Tableau 的故事點與原本的工作表相連，工作表之後的修改也反映在
-    故事點上。"""
+    """故事點記下的工作表狀態（檢視者的篩選狀態表示得了的篩選、選取、參數與頁之外的差異）：排序、
+    欄列架上移除與加上的欄位、量值與 Top N 等篩選、移除的篩選、註解、座標軸（範圍、標題、文字方向）與
+    地圖的顯示範圍。檢視故事點時套用在工作表目前的定義上（tmig.story.apply_story_sheet）：Tableau 的
+    故事點與原本的工作表相連，工作表之後的修改也反映在故事點上。"""
 
     worksheet: Id
     sorts: list[Sort] = Field(
@@ -2894,6 +2914,20 @@ class StorySheet(IRModel):
     )
     removed_columns: list[FieldUse] = Field(
         default_factory=list, description="故事點從欄架上移除的欄位"
+    )
+    added_rows: list[StoryShelfField] = Field(
+        default_factory=list, description="故事點加在列架上的欄位（移除之後加上，依序）"
+    )
+    added_columns: list[StoryShelfField] = Field(
+        default_factory=list, description="故事點加在欄架上的欄位（移除之後加上，依序）"
+    )
+    filters: list[Filter] = Field(
+        default_factory=list,
+        description="故事點的篩選中檢視者的篩選狀態表示不了的（量值的範圍與選取、Top N、條件）："
+        "取代工作表上同一個欄位的篩選（沿用它的 id），工作表上沒有時加上",
+    )
+    removed_filters: list[Id] = Field(
+        default_factory=list, description="故事點移除的工作表篩選（篩選的 id）"
     )
     annotations: list[Annotation] | None = Field(
         default=None,

@@ -41,8 +41,15 @@ from tmig.ir.models import (
     Workbook,
     Worksheet,
 )
+from tmig.parser.animation import workbook_animation
+from tmig.parser.colors import hex_color
 from tmig.parser.context import DsState, ParseContext, SharedView, TooltipRef
-from tmig.parser.dashboard import DashboardParser, filter_control, parameter_control
+from tmig.parser.dashboard import (
+    DashboardParser,
+    control_options,
+    filter_control,
+    parameter_control,
+)
 from tmig.parser.datasource import (
     DatasourceParser,
     add_calc_field,
@@ -51,6 +58,7 @@ from tmig.parser.datasource import (
     resolve_dynamic_parameters,
 )
 from tmig.parser.fields import instance_key, use_from_name
+from tmig.parser.formats import story_format
 from tmig.parser.refs import qualified_parts
 from tmig.parser.story import StoryParser
 from tmig.parser.twbx import (
@@ -100,6 +108,9 @@ WORKBOOK_CHILDREN = frozenset(
         "shared-views",
     }
 )
+THEMES = {"smooth": "Smooth", "clean": "Clean", "modern": "Modern", "classic": "Classic"}
+"""活頁簿佈景主題的名稱（Tableau 2021.2 說明文件 formatting_workbook.htm：Smooth 是 10.x 起、Clean 是 8.0–9.3、
+Modern 是 3.5–7.0、Classic 是 1.0–3.2 的樣子；新的活頁簿是 Default，.twb 中不寫）。"""
 SHARED_VIEW_CHILDREN = frozenset({"datasources", "datasource-dependencies", "filter"})
 ACTION_KINDS = {"tsc:brush": "醒目提示", "tsc:tsl-filter": "篩選", "tsc:url": "網址"}
 
@@ -230,6 +241,15 @@ class WorkbookParser:
             tag = local_name(item)
             if tag == "mapsources":
                 _map_sources(ctx, item)
+            elif tag == "style-theme" and item.get("name") not in (None, "", "default"):
+                # 活頁簿佈景主題（格式＞活頁簿佈景主題）：.twb 只寫名稱（smooth、clean、modern、classic），
+                # 佈景主題的字型、顏色與線條不寫進檔案，Tableau 的說明文件也沒有列出各自的預設值
+                theme = THEMES.get(item.get("name") or "", item.get("name") or "")
+                ctx.ignore(
+                    item,
+                    f"活頁簿佈景主題「{theme}」：新平台以預設佈景主題呈現（預設的字型、顏色與線條可能與 "
+                    "Tableau 不同；報表中自訂的格式照常套用）",
+                )
             elif tag not in WORKBOOK_CHILDREN:
                 ctx.flag(item, f"workbook 中的未知元素 <{tag}>")
 
@@ -238,6 +258,7 @@ class WorkbookParser:
             id=ctx.ids.make("wb", stem),
             name=stem,
             tableau_version=root.get("version"),
+            animation=workbook_animation(ctx, root),
             source_ref="/workbook",
         )
 
@@ -310,7 +331,10 @@ class WorkbookParser:
 
         actions = self._actions(child(root, "actions"), worksheets, dashboards)
         stories = [
-            story
+            # Story 的格式（Story＞格式）：storyboard 的 <style>
+            story.model_copy(
+                update={"format": story_format(child(el, "style"), ctx.ignore, story.name)}
+            )
             for el in story_elements
             if (story := StoryParser(ctx, el, worksheets, dashboards, actions).parse()) is not None
         ]
@@ -481,10 +505,17 @@ class WorkbookParser:
         for window in children(windows, "window"):
             name = window.get("name", "")
             ws, sheet = by_name.get(name), self.ctx.sheets.get(name)
+            color = window.get("tab-color")
+            if color is not None and (ws is None or hex_color(color) is None):
+                # dashboard 與 Story 的分頁顏色：IR 只有工作表的（Worksheet.tab_color）
+                kind = "工作表" if window.get("class") == "worksheet" else "dashboard／Story"
+                self.ctx.ignore(window, f"{kind}「{name}」的分頁顏色 {color}：新平台不顯示")
             if window.get("class") != "worksheet" or ws is None or sheet is None:
                 continue
             # 隱藏的工作表（只在 dashboard、Story 中使用）：檢視器的工作表清單不列出
             ws.hidden = window.get("hidden") == "true"
+            # 分頁的顏色（分頁選單的「色彩」）：<window tab-color='#f66273'>
+            ws.tab_color = hex_color(window.get("tab-color")) or None
             controls: list[SheetControl] = []
             for card in descendants(window, "card"):
                 kind = card.get("type")
@@ -499,6 +530,7 @@ class WorkbookParser:
                         field=use,
                         control=control,
                         relevant=card.get("values") == "relevant",
+                        options=control_options(self.ctx, card, name),
                     )
                 elif kind == "parameter":
                     param = parameter_control(self.ctx, card)

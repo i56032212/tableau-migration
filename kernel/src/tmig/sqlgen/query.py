@@ -43,6 +43,8 @@ from tmig.formula.ast import (
 from tmig.formula.functions import PRIMARY, lookup
 from tmig.formula.lexer import FormulaSyntaxError
 from tmig.formula.parser import parse_formula
+from tmig.formula.predictive import NAMES as MODEL_FUNCTIONS
+from tmig.formula.predictive import model_call
 from tmig.formula.types import FormulaSemanticError
 from tmig.formula.unparse import to_formula
 from tmig.ir.models import (
@@ -82,6 +84,8 @@ from tmig.ir.setformula import FormulaValueError, members_formula, set_levels
 from tmig.natural import natural_sql
 from tmig.planner.analytics import Analytics, ClusterPlan, Finer, ForecastPlan
 from tmig.planner.identity import Identity
+from tmig.planner.predictive import ModelPlan as PredictionPlan
+from tmig.planner.predictive import ModelPredictor
 from tmig.planner.state import (
     EffectiveState,
     QueryState,
@@ -626,6 +630,10 @@ class WorksheetQuery:
         """是否有遞迴的 CTE（PREVIOUS_VALUE）：輸出時寫成 WITH RECURSIVE。"""
         self.row_number: str | None = None
         """另外輸出依顯示順序的列號的欄名。"""
+        self.predictions: list[PredictionPlan] = []
+        """預測模型函式（MODEL_QUANTILE、MODEL_PERCENTILE）：查詢之後計算（見 _prediction）。"""
+        self._prediction_cols: list[tuple[str, str, str]] = []
+        """預測模型函式另外輸出的目標與預測變數：（CTE 中的欄名、輸出欄名、型別）。"""
         if blended:
             from tmig.sqlgen.blend import Blending  # blend 也匯入本模組
 
@@ -1178,6 +1186,10 @@ class WorksheetQuery:
             # 不畫出、不匯出（「__」開頭、role 為 sort），只給叢集用
             outputs.append(f"{ident(m.col)} AS {ident(m.key)}")
             columns.append(OutputColumn(m.key, "sort", self.datatype(m.node), m.use))
+        for col, key, datatype in self._prediction_cols:
+            # 預測模型函式的目標與預測變數：不畫出、不匯出，只給查詢之後的計算用
+            outputs.append(f"{ident(col)} AS {ident(key)}")
+            columns.append(OutputColumn(key, "sort", datatype, None))
         for d in dims:
             if d.key in sort_cols:
                 name = f"__sort({d.key})"
@@ -1229,6 +1241,7 @@ class WorksheetQuery:
             else {},
             guards=self._guard_list(),
             underlying=underlying,
+            analytics=Analytics(models=self.predictions) if self.predictions else None,
         )
 
     def _localize(self, tables: set[str]) -> None:
@@ -2591,6 +2604,11 @@ class WorksheetQuery:
             assert m.table_calc is not None
             tc = m.table_calc
             window = self._window(tc, dims, sorts, sort_cols)
+            model = self._model_root(m.node)
+            if model is not None:
+                # 預測模型函式：查詢時是 Null，目標與預測變數另外輸出，查詢之後計算
+                expressions += self._prediction(m, model, window, dims, agg_cols)
+                continue
             # 次要計算：主要計算依它自己的計算方向先算，外層是次要計算的計算方向
             primary_window = window if tc.secondary is not None else None
             if tc.secondary is not None:
@@ -2647,6 +2665,111 @@ class WorksheetQuery:
         if not expressions:
             return base
         return self.cte(7, "tc", f"SELECT m.*, {', '.join(expressions)} FROM {base} m")
+
+    def _model_root(self, node: Node) -> Call | None:
+        """量值整個就是 MODEL_QUANTILE／MODEL_PERCENTILE（計算欄位的公式展開）時回傳這個呼叫。"""
+        while isinstance(node, FieldRef):
+            target = self._resolve(node)
+            if target.kind != "field" or target.formula is None:
+                return None
+            node = self.analyzer.calc_ast(target)
+        if isinstance(node, Call) and node.name in MODEL_FUNCTIONS:
+            return node
+        return None
+
+    def _is_attr(self, node: Node) -> bool:
+        """預測變數是 ATTR(維度)（計算欄位的公式展開）：Tableau 以 ATTR 把維度當作預測變數。"""
+        while isinstance(node, FieldRef):
+            target = self._resolve(node)
+            if target.kind != "field" or target.formula is None:
+                return False
+            node = self.analyzer.calc_ast(target)
+        return isinstance(node, Call) and node.name == "ATTR"
+
+    def _prediction(
+        self,
+        m: Measure,
+        node: Call,
+        window: _Window,
+        dims: list[Dim],
+        agg_cols: dict[Call, str],
+    ) -> list[str]:
+        """預測模型函式（見 tmig.planner.predictive）：在檢視的詳細程度算出目標與各預測變數（隱藏的輸出欄），
+        依計算依據之外的維度分割；量值本身先輸出 Null。"""
+        ws = self.worksheet
+        name = self.pill(m.use)
+        try:
+            call = model_call(node.name, node.args, node.pos)
+        except FormulaSemanticError as exc:
+            raise QueryError(f"{name}：{exc.message}", unsupported=exc.unsupported) from exc
+        if ws.forecast is not None:
+            raise QueryError(
+                f"{name}：預測模型函式與預測（分析＞預測）在同一張工作表上尚不支援",
+                unsupported=True,
+            )
+        if any(f.stage == "table_calc" for f in self._filters()):
+            raise QueryError(
+                f"{name}：工作表有 Table Calculation 篩選（Tableau 以篩選前的所有標記建立模型），尚不支援",
+                unsupported=True,
+            )
+        quantile: float | None = None
+        if call.quantile is not None:
+            q = call.quantile
+            if isinstance(q, LiteralNode):
+                quantile = float(q.value)
+            elif isinstance(q, FieldRef) and self._resolve(q).kind == "param":
+                value = self.param_value(self._resolve(q).id)
+                quantile = float(value) if isinstance(value, int | float) else None
+            if quantile is None or not 0 < quantile < 1:
+                raise QueryError(
+                    f"{name}：分位數必須是 0 與 1 之間（不含 0 與 1）的數字", unsupported=True
+                )
+        post = self.compiler(_PostEnv(self, agg_cols))
+        selects: list[str] = []
+
+        def hidden(arg: Node, label: str) -> str:
+            col = self.name("__model")
+            key = f"__model({m.key}):{label}"
+            sql = self._compile(lambda: post.post(arg))
+            selects.append(f"{sql} AS {ident(col)}")
+            self._prediction_cols.append((col, key, self.datatype(arg)))
+            return key
+
+        target = hidden(call.target, "target")
+        predictors: list[ModelPredictor] = []
+        for j, predictor in enumerate(call.predictors):
+            datatype = self.datatype(predictor.node)
+            kind: Literal["measure", "category"]
+            if "unordered" in predictor.options or datatype in ("string", "boolean"):
+                kind = "category"
+            elif datatype in ("integer", "real") and not self._is_attr(predictor.node):
+                kind = "measure"
+            else:
+                text = self.readable(to_formula(predictor.node))
+                raise QueryError(
+                    f"{name}：預測變數 {text} 是數字的維度，Tableau 把它當作有序還是無序的維度沒有寫明"
+                    '（前面加上 "unordered" 才支援）',
+                    unsupported=True,
+                )
+            column = hidden(predictor.node, str(j))
+            square = kind == "measure" and "augmentation=on" in predictor.options
+            predictors.append(ModelPredictor(column, kind, square))
+        self.predictions.append(
+            PredictionPlan(
+                column=m.key,
+                function=node.name,  # type: ignore[arg-type]
+                target=target,
+                predictors=predictors,
+                partition=[d.key for d in dims if ident(d.col) in window.partition],
+                quantile=quantile,
+                caption=name,
+            )
+        )
+        self.note(
+            7,
+            f"{m.key}：{node.name}（線性迴歸），分割 {len(window.partition)} 個維度；查詢之後計算",
+        )
+        return [f"CAST(NULL AS DOUBLE) AS {ident(m.col)}", *selects]
 
     def _has_previous(self, node: Node) -> bool:
         return any(isinstance(n, Call) and n.name == "PREVIOUS_VALUE" for n in self.expand(node))
@@ -2848,6 +2971,12 @@ class WorksheetQuery:
         def arg(i: int) -> str:
             return self._compile(lambda: inner.post(node.args[i]))
 
+        if name in MODEL_FUNCTIONS:
+            raise QueryError(
+                f"{name} 只支援單獨作為計算欄位的公式、放在檢視中（不能與其他運算組合，也不能在其他 "
+                "Table Calculation 中引用或用來排序）",
+                unsupported=True,
+            )
         if name.startswith("RUNNING_"):
             fn = WINDOW_AGG[name.removeprefix("RUNNING_")]
             sql = f"{fn}({arg(0)}) {over('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW')}"
@@ -3474,7 +3603,12 @@ def worksheet_sql(
     """detail：總計與小計的查詢（totals_sql）中原本的工作表（Data Blending 的連結依原本的檢視）。"""
     ws = _find_worksheet(ir, worksheet)
     query = WorksheetQuery(ir, worksheet, state, user, detail if ws.blends else None).build()
+    models = query.analytics.models if query.analytics is not None else []
     query.analytics = analytics_plan(ir, ws, query.columns, state, user)
+    if models:
+        # 預測模型函式（build 時決定）與叢集、預測一起在查詢之後計算
+        query.analytics = query.analytics or Analytics()
+        query.analytics.models = models
     return query
 
 
@@ -3620,6 +3754,11 @@ FINER_UNITS = {"year": "quarter", "quarter": "month", "week": "day"}
 """預測選「自動」時 Tableau 改用的較細細度中平台照做的（見 tmig.planner.analytics）。"""
 REFINABLE = frozenset({"year", "year_number", "quarter", "week", "day", "hour"})
 """Tableau 會改以較細的時間估計的細度（說明文件的 Getting More Data；月沒有）。"""
+CHOSEN_FINER = frozenset(
+    {("year", "quarter"), ("year", "month"), ("quarter", "month"), ("week", "day")}
+)
+"""預測選項指定的「彙總依據」比檢視細時平台照做的組合（檢視的截斷細度, 指定的細度）：檢視的一期剛好是固定
+個數的較細的期（tmig.planner.analytics 的 SUB_COUNTS）。"""
 
 
 def _plan_finer(
@@ -3633,13 +3772,18 @@ def _plan_finer(
     user: Identity | None,
 ) -> None:
     """預測選「自動」時以較細的時間估計（見 tmig.planner.analytics）：SUM、COUNT 的量值，較細的查詢（維度、
-    篩選與工作表相同，時間換成較細的細度），與需要時不能照做的原因。是否真的需要依查詢結果的期數決定。"""
+    篩選與工作表相同，時間換成較細的細度），與需要時不能照做的原因。是否真的需要依查詢結果的期數決定。
+    預測選項指定了「彙總依據」（Forecast.aggregate_by）時：與檢視相同就不另外查詢；比檢視細、而且是平台照做的
+    組合（CHOSEN_FINER）時以它查詢，其餘由 tmig.planner.analytics 列為不支援。"""
     plan.worksheet = ws.name
     plan.additive = [
         key
         for use, key in zip(wanted, plan.measures, strict=True)
         if use.agg in ("sum", "count") and use.table_calc is None and use.forecast is None
     ]
+    chosen = plan.settings.aggregate_by if plan.settings is not None else None
+    if chosen is not None and (plan.unit, chosen) not in CHOSEN_FINER:
+        return
     if not plan.additive or plan.unit not in REFINABLE:
         return
     reasons: list[str] = []
@@ -3661,8 +3805,8 @@ def _plan_finer(
     ):
         reasons.append("量值中有 INCLUDE／EXCLUDE LOD（相對於檢視的維度）")
     date = time.use.date if time.use is not None else None
-    if plan.unit in FINER_UNITS and not reasons and time.use is not None and date is not None:
-        finer = FINER_UNITS[plan.unit]
+    finer = chosen or FINER_UNITS.get(plan.unit)
+    if finer is not None and not reasons and time.use is not None and date is not None:
         fine_use = time.use.model_copy(update={"date": date.model_copy(update={"unit": finer})})
         marks = Marks(
             type=ws.marks.type, detail=[c.use for c in series if c.use is not None], label=wanted

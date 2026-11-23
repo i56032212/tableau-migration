@@ -9,6 +9,8 @@
 資料源篩選（排除加拿大的 200 列）、維度篩選、Top N（參數）、計算排序、快速 Table Calculation、彙總計算、
 FIXED 與 INCLUDE LOD、日期截斷與日期部分、量值篩選、Table Calculation 篩選、
 固定尺寸 dashboard 與篩選、參數、圖例控制項。計算欄位與參數使用中文名稱。
+活頁簿預設的動畫明確關閉（animation-on='ao-off'）：manifest 有 AnimationOnByDefault，沒有寫時是開，
+量位置的端到端測試會因標記的動畫而不穩定。
 """
 
 from __future__ import annotations
@@ -613,6 +615,11 @@ def twb(rows: int) -> str:
     <preference name='ui.encoding.shelf.height' value='24' />
     <preference name='ui.shelf.height' value='26' />
   </preferences>
+  <style>
+    <style-rule element='animation'>
+      <format attr='animation-on' value='ao-off' />
+    </style-rule>
+  </style>
   <datasources>
 {PARAMETER}
 {datasource(rows)}

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from tmig.data import initial_sql
+from tmig.data import cancel, initial_sql
 from tmig.data.executor import QueryResult, execute, execute_query, stage_tables
 from tmig.data.federated import FederatedCache, execute_federated, execute_federated_sql
 from tmig.data.live import execute_live, execute_remote
@@ -159,12 +159,14 @@ class DataRuntime:
                 self._clock += 1
                 self._used[key] = self._clock
             try:
-                yield executor
+                # 停止（tmig.data.cancel）時以驅動程式的取消中斷正在執行的查詢（執行器有 cancel 時）
+                with cancel.watching(getattr(executor, "cancel", None)):
+                    yield executor
             except (SourceConnectionError, QueryError):
                 # 轉譯不了或設定不完整：連線本身沒有問題
                 raise
             except Exception:
-                # 來源資料庫執行失敗，連線可能已中斷：下次重新連線
+                # 來源資料庫執行失敗（或查詢被停止），連線可能已中斷：下次重新連線
                 with self._lock:
                     self._executors.pop(key, None)
                     self._used.pop(key, None)

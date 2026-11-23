@@ -136,6 +136,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .view-updating .spinner { width: 12px; height: 12px; border: 2px solid #c8ced6; border-top-color: var(--accent); border-radius: 50%; animation: view-updating-spin 0.8s linear infinite; }
 @keyframes view-updating-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .view-updating .spinner { animation: none; } }
+.view-updating-stop { margin-left: 4px; padding: 1px 8px; font: inherit; font-size: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.view-updating-stop:hover { border-color: var(--accent); color: var(--accent); }
+/* 停止之後（暫停在之前的結果）：圖淡化、上方標示「已停止更新」與「繼續更新」；圖仍可以操作 */
+.worksheet[data-stale="true"] .chart { filter: grayscale(0.8); opacity: 0.55; }
+.view-suspended { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 6; display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; font-size: 12px; color: var(--ink); background: rgba(255, 255, 255, 0.97); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 4px rgb(0 0 0 / 12%); white-space: nowrap; }
+.view-suspended button { padding: 1px 8px; font: inherit; font-size: 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer; }
 .box-selecting .viz-tooltip, .box-selecting .vg-tooltip { display: none !important; }
 .select-overlay rect, .select-overlay circle, .select-overlay polygon { fill: rgba(31, 119, 180, 0.12); stroke: #1f77b4; stroke-width: 1; stroke-dasharray: 4 3; }
 .chart[data-zoomable="true"] { cursor: grab; }
@@ -230,7 +236,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    每張工作表右上角的列數、「資料」切換、切入的連結與選取的提示、地圖工具列、工具提示、框選的方框——都不印；
    頁面的底色（:root 的灰色）也不印 */
 @media print {
-  .toolbar, .action-menu, .dashboard-button, .worksheet-meta, .worksheet-overlay, .map-tools, .viz-tooltip, .select-overlay, .presentation-bar, .view-updating { display: none !important; }
+  .toolbar, .action-menu, .dashboard-button, .worksheet-meta, .worksheet-overlay, .map-tools, .viz-tooltip, .select-overlay, .presentation-bar, .view-updating, .view-suspended { display: none !important; }
   :root, body { background: #fff; }
 }
 /* 拖曳標題排序（headerDrag.ts）：放下的位置的粗黑線 */
@@ -246,7 +252,7 @@ body.dragging-header, body.dragging-header * { cursor: grabbing !important; user
   .print-sheet { position: relative; overflow: hidden; }
 }
 /* 訂閱與資料警示擷取畫面時（tmig_service.subscriptions 在 <html> 加上 capture）：圖片裡同樣不畫檢視器的介面 */
-.capture .worksheet-meta, .capture .worksheet-overlay, .capture .map-tools, .capture .view-updating { display: none !important; }
+.capture .worksheet-meta, .capture .worksheet-overlay, .capture .map-tools, .capture .view-updating, .capture .view-suspended { display: none !important; }
 
 .story { display: inline-flex; flex-direction: column; gap: 8px; min-width: var(--story-width); }
 .story-title { font-size: 20px; font-weight: 600; padding: 2px 4px; }
@@ -420,6 +426,14 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .pill.filter.context { background: #8c8c8c; }
 .pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill-caret { opacity: 0.8; font-size: 10px; }
+/* 不擋住編輯器的對話框（叢集）：浮在檢視的右上方，資料窗格與架照常可以拖曳 */
+.modal.floating-dialog { position: fixed; z-index: 850; top: 96px; right: 24px; width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 120px); overflow-y: auto; }
+.cluster-variables-label { font-weight: 600; margin-bottom: 4px; }
+.cluster-variables { list-style: none; margin: 0 0 6px; padding: 6px; min-height: 64px; border: 1px dashed var(--line); border-radius: 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.cluster-variables.over { border-color: var(--accent); background: rgb(78 121 167 / 8%); }
+.cluster-variables .hint { color: var(--muted); font-size: 12px; }
+.pill-remove { border: 0; background: none; color: inherit; opacity: 0.8; padding: 0 0 0 2px; cursor: pointer; font: inherit; line-height: 1; }
+.pill-remove:hover { opacity: 1; }
 .editor-canvas { position: relative; flex: 1; min-height: 0; padding: 8px; background: var(--panel); }
 .editor-canvas .placeholder { position: absolute; inset: 8px; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--line); border-radius: 6px; color: var(--muted); }
 .editor .toast { position: absolute; }

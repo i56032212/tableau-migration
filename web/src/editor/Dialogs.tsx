@@ -1,21 +1,24 @@
 // 編輯器的對話框：計算欄位、計算方向（指定維度）、數字格式、標題、座標軸、參考線、趨勢線、參數、階層與色彩。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "../Server";
 import type { FieldUse, Scalar } from "../types";
 import { editApi, type FormulaCheck, type Outline } from "./api";
 import { textTokens } from "./MoreDialogs";
 import { applyFormatToAll } from "./ViewDialogs";
 import { type RichRun, RichTextEditor } from "./RichText";
-import { useEditor } from "./context";
+import { currentDrag, endDrag, useEditor } from "./context";
 import {
   clearForecast,
   forecastMeasures,
   type Card,
   cardMarks,
+  type Catalog,
   type CatalogField,
   type ClusterIR,
+  defaultUse,
   EDITOR_REF,
+  fieldDatasource,
   type ForecastIR,
   GEO_ROLES,
   type GeoAlias,
@@ -26,12 +29,14 @@ import {
   type MarksIR,
   markUses,
   MEASURE_NAMES,
+  MEASURE_VALUES,
   pillLabel,
   sameUse,
   type SheetIR,
   type TooltipSheetIR,
   updateCard,
   useKey,
+  usesOn,
   viewMeasures,
 } from "./model";
 
@@ -790,6 +795,10 @@ export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const [trend, setTrend] = useState<NonNullable<ForecastIR["trend"]>>(current?.trend ?? "additive");
   const [season, setSeason] = useState<NonNullable<ForecastIR["season"]>>(current?.season ?? "none");
   const [ignore, setIgnore] = useState(current?.ignore_last ?? 1);
+  // 彙總依據：自動，或與檢視相同、比檢視細的時間單位（比檢視粗的 Tableau 不能選）
+  const [aggregateBy, setAggregateBy] = useState<string | null>(current?.aggregate_by ?? null);
+  const viewLevel = FORECAST_UNITS.findIndex(([u]) => u === viewUnit);
+  const aggregateUnits = viewLevel < 0 ? [] : FORECAST_UNITS.slice(viewLevel);
   const [zeros, setZeros] = useState(current?.fill_zeros ?? false);
   const [bands, setBands] = useState(current ? current.bands : true);
   const [confidence, setConfidence] = useState(current?.confidence ?? 0.95);
@@ -817,6 +826,7 @@ export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSa
         fill_zeros: zeros,
         confidence,
         bands,
+        ...(aggregateBy ? { aggregate_by: aggregateBy } : {}),
       };
       editor.apply((s: SheetIR) => ({ ...s, forecast: settings }));
       onClose();
@@ -858,6 +868,17 @@ export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSa
         </fieldset>
         <fieldset>
           <legend>來源資料</legend>
+          <label className="inline">
+            彙總依據
+            <select aria-label="彙總依據" value={aggregateBy ?? ""} onChange={(e) => setAggregateBy(e.target.value || null)}>
+              <option value="">自動</option>
+              {aggregateUnits.map(([u, name]) => (
+                <option key={u} value={u}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="inline">
             忽略最後
             <input type="number" min={0} max={100} aria-label="忽略最後幾期" value={ignore} onChange={(e) => setIgnore(Math.max(0, Number(e.target.value) || 0))} />
@@ -931,20 +952,90 @@ export function ForecastDialog({ onClose, onSaved }: { onClose: () => void; onSa
 
 // ---------------------------------------------------------------- 叢集
 
-/** 叢集（分析窗格的「叢集」）：依檢視中的量值以 k-means 分組，叢集欄位放在色彩上（與 Tableau 相同）。
- * 叢集數自動時以 Calinski-Harabasz 指標決定。 */
+/** 叢集的變數：量值（檢視中的量值）或維度（類別變數，以 ATTR 彙總，可以不在檢視中）；不能當變數時是原因。
+ * 與 Tableau 的說明相同，Table Calculation、群組、集合、數值分組、參數、日期與 Measure Names／Values 不能當變數；
+ * 量值要在檢視中（Tableau 可以拖入檢視以外的量值，平台還不支援）。 */
+export function clusterVariable(
+  use: FieldUse | null | undefined,
+  sheet: SheetIR,
+  fields: Map<string, CatalogField>,
+  catalog: Catalog,
+): { use: FieldUse; category: boolean } | { error: string } {
+  if (!use) return { error: "這個欄位不能當作叢集的變數" };
+  if (use.field === MEASURE_NAMES || use.field === MEASURE_VALUES) return { error: "Measure Names、Measure Values 不能當作叢集的變數" };
+  const field = fields.get(use.field);
+  if (!field || isSpecial(use)) return { error: "這個欄位不能當作叢集的變數" };
+  const name = `「${field.caption}」`;
+  if (fieldDatasource(catalog, field.id) !== sheet.datasource) return { error: `${name}不在這張工作表的資料源中，不能當作叢集的變數` };
+  if (use.table_calc || field.level === "table_calc") return { error: `${name}是 Table Calculation，不能當作叢集的變數` };
+  if (field.kind === "set") return { error: `${name}是集合，不能當作叢集的變數` };
+  if (field.group) return { error: `${name}是群組，不能當作叢集的變數` };
+  if (field.bin) return { error: `${name}是數值分組，不能當作叢集的變數` };
+  if (isMeasure(use, fields)) {
+    const shown = viewMeasures(sheet, fields).filter((u) => clusterMeasure(u, fields));
+    const found = shown.find((u) => sameUse(u, use)) ?? shown.find((u) => u.field === use.field);
+    return found ? { use: found, category: false } : { error: `${name}不在檢視中：量值要先放到檢視中才能當作叢集的變數` };
+  }
+  if (isDate(field) || use.date) return { error: `${name}是日期，不能當作叢集的變數` };
+  if (field.datatype === "spatial") return { error: `${name}是空間欄位，不能當作叢集的變數` };
+  return { use: { field: field.id, agg: null, date: null, continuous: false, table_calc: null }, category: true };
+}
+
+/** 可以當作叢集變數的量值（Table Calculation 不行） */
+const clusterMeasure = (use: FieldUse, fields: Map<string, CatalogField>) =>
+  !use.table_calc && fields.get(use.field)?.level !== "table_calc";
+
+/** 對話框中的一個變數 */
+interface ClusterVariable {
+  use: FieldUse;
+  category: boolean;
+}
+
+/**
+ * 叢集（分析窗格的「叢集」）：依變數以 k-means 分組，叢集欄位放在色彩上（與 Tableau 相同）。叢集數自動時以
+ * Calinski-Harabasz 指標決定。與 Tableau 的叢集對話框相同不擋住編輯器：開啟時側欄換到資料窗格，從資料窗格
+ * （或架上）把欄位拖進「變數」，拖出去（或按 ×）移除。變數預設為檢視中的量值；維度是類別變數（ATTR）。
+ */
 export function ClusterDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const editor = useEditor();
-  const { sheet, fields } = editor;
+  const { sheet, fields, catalog } = editor;
   const current = sheet.cluster as ClusterIR | null | undefined;
-  const candidates = viewMeasures(sheet, fields);
-  const [chosen, setChosen] = useState<string[]>(
-    (current ? current.measures : candidates).map((u) => useKey(u)),
-  );
+  const [variables, setVariables] = useState<ClusterVariable[]>(() => [
+    ...(current ? current.measures : viewMeasures(sheet, fields).filter((u) => clusterMeasure(u, fields))).map((use) => ({ use, category: false })),
+    ...(current?.categories ?? []).map((use) => ({ use, category: true })),
+  ]);
   const [auto, setAuto] = useState(!current?.count);
   const [count, setCount] = useState(current?.count ?? 3);
   const [error, setError] = useState<string | null>(null);
-  const toggle = (key: string, on: boolean) => setChosen((list) => (on ? [...list, key] : list.filter((k) => k !== key)));
+  const [over, setOver] = useState(false);
+  // 換到別的工作表時關閉（變數屬於開啟時的工作表）
+  const sheetId = sheet.id;
+  const opened = useRef(sheetId);
+  useEffect(() => {
+    if (sheetId !== opened.current) onClose();
+  }, [sheetId, onClose]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const keyOf = (v: ClusterVariable) => `${v.category ? "attr" : "m"}:${useKey(v.use)}`;
+  const label = (v: ClusterVariable) => (v.category ? `ATTR(${pillLabel(v.use, fields, sheet.table_calcs)})` : pillLabel(v.use, fields, sheet.table_calcs));
+  const add = (use: FieldUse | null | undefined) => {
+    const found = clusterVariable(use, sheet, fields, catalog);
+    if ("error" in found) {
+      setError(found.error);
+      return;
+    }
+    setError(null);
+    setVariables((list) => (list.some((v) => keyOf(v) === keyOf(found)) ? list : [...list, found]));
+  };
+  const remove = (key: string) => setVariables((list) => list.filter((v) => keyOf(v) !== key));
+  /** 拖出變數區時移除的那一個 */
+  const draggingOut = useRef<string | null>(null);
+  const measures = variables.filter((v) => !v.category);
   const save = async (remove: boolean) => {
     if (remove && current) {
       editor.apply((s: SheetIR) =>
@@ -959,8 +1050,12 @@ export function ClusterDialog({ onClose, onSaved }: { onClose: () => void; onSav
         field = (await editApi.addAnalyticsField(editor.workbook, sheet.datasource, "cluster")).id;
         onSaved();
       }
-      const measures = candidates.filter((u) => chosen.includes(useKey(u)));
-      const cluster: ClusterIR = { field, measures, count: auto ? null : count };
+      const cluster: ClusterIR = {
+        field,
+        measures: measures.map((v) => v.use),
+        categories: variables.filter((v) => v.category).map((v) => v.use),
+        count: auto ? null : count,
+      };
       const color: FieldUse = { field, agg: null, date: null, continuous: false, table_calc: null };
       editor.apply((s: SheetIR) => updateCard({ ...s, cluster }, "all", (m) => ({ ...m, color })));
       onClose();
@@ -969,43 +1064,108 @@ export function ClusterDialog({ onClose, onSaved }: { onClose: () => void; onSav
     }
   };
   return (
-    <Modal title="叢集" onClose={onClose}>
-      <div className="cluster-dialog">
-        <fieldset>
-          <legend>變數</legend>
-          {candidates.map((use) => (
-            <label key={useKey(use)} className="inline">
-              <input type="checkbox" checked={chosen.includes(useKey(use))} onChange={(e) => toggle(useKey(use), e.target.checked)} />{" "}
-              {pillLabel(use, fields, sheet.table_calcs)}
-            </label>
-          ))}
-          {candidates.length === 0 && <p className="hint">檢視中沒有量值。</p>}
-        </fieldset>
-        <label className="inline">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 自動決定叢集數
-        </label>
-        {!auto && (
+    <div className="modal floating-dialog" role="dialog" aria-modal="false" aria-label="叢集">
+      <header>
+        <h2>叢集</h2>
+        <button type="button" className="link close" aria-label="關閉" onClick={onClose}>
+          ×
+        </button>
+      </header>
+      <div className="modal-body">
+        <div className="cluster-dialog">
+          <div className="cluster-variables-label" id="cluster-variables-label">
+            變數
+          </div>
+          <ul
+            className={`cluster-variables${over ? " over" : ""}`}
+            aria-labelledby="cluster-variables-label"
+            data-drop="cluster-variables"
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              setOver(true);
+            }}
+            onDragLeave={(e) => {
+              if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) setOver(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setOver(false);
+              // 變數區自己的變數放回原處：不變
+              if (draggingOut.current !== null) return;
+              const item = currentDrag();
+              endDrag();
+              if (!item) return;
+              if (item.kind === "field") {
+                const field = fields.get(item.field);
+                add(item.field === MEASURE_NAMES || item.field === MEASURE_VALUES ? { field: item.field, agg: null, date: null, continuous: false, table_calc: null } : field ? defaultUse(field) : null);
+              } else add(usesOn(sheet, item.shelf, item.card)[item.index]);
+            }}
+          >
+            {variables.map((v) => (
+              <li
+                key={keyOf(v)}
+                className={`pill ${v.category ? "discrete" : "continuous"}`}
+                data-variable={keyOf(v)}
+                draggable
+                title="拖出變數區移除"
+                onDragStart={(e) => {
+                  endDrag(); // 不是資料窗格或架上的項目
+                  draggingOut.current = keyOf(v);
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", keyOf(v));
+                }}
+                onDragEnd={(e) => {
+                  // 放在變數區以外（沒有地方接受）：移除，與 Tableau 相同
+                  if (e.dataTransfer.dropEffect === "none") remove(keyOf(v));
+                  draggingOut.current = null;
+                }}
+              >
+                <span className="pill-text">{label(v)}</span>
+                <button type="button" className="pill-remove" aria-label={`移除變數 ${label(v)}`} title="移除" onClick={() => remove(keyOf(v))}>
+                  ×
+                </button>
+              </li>
+            ))}
+            {variables.length === 0 && <li className="hint">把欄位從資料窗格拖到這裡</li>}
+          </ul>
+          <p className="hint">
+            量值是檢視中的量值；維度（類別變數）以 ATTR 在檢視的詳細程度彙總，可以不在檢視中，超過 25 個值的維度不用於分群。
+          </p>
           <label className="inline">
-            叢集數
-            <input type="number" min={2} max={50} aria-label="叢集數" value={count} onChange={(e) => setCount(Math.max(2, Math.min(50, Number(e.target.value) || 2)))} />
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 自動決定叢集數
           </label>
-        )}
-        {error && <p className="error">{error}</p>}
-        <div className="dialog-actions">
-          <button type="button" className="primary" disabled={chosen.length === 0} onClick={() => void save(false)}>
-            確定
-          </button>
-          {current && (
-            <button type="button" className="danger" onClick={() => void save(true)}>
-              移除叢集
-            </button>
+          {!auto && (
+            <label className="inline">
+              叢集數
+              <input type="number" min={2} max={50} aria-label="叢集數" value={count} onChange={(e) => setCount(Math.max(2, Math.min(50, Number(e.target.value) || 2)))} />
+            </label>
           )}
-          <button type="button" onClick={onClose}>
-            取消
-          </button>
+          {measures.length === 0 && <p className="hint">至少要有一個量值（只有維度的叢集尚不支援）。</p>}
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="dialog-actions">
+            <button type="button" className="primary" disabled={measures.length === 0} onClick={() => void save(false)}>
+              確定
+            </button>
+            {current && (
+              <button type="button" className="danger" onClick={() => void save(true)}>
+                移除叢集
+              </button>
+            )}
+            <button type="button" onClick={onClose}>
+              取消
+            </button>
+          </div>
         </div>
       </div>
-    </Modal>
+    </div>
   );
 }
 

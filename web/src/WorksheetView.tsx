@@ -11,6 +11,7 @@ import { nextSelection, sameMark } from "./state";
 import { bundledFontsReady } from "./fonts";
 import { summarize } from "./summaryStats";
 import { layoutTextSegments } from "./textSegments";
+import { newQueryId, registerView, resumeAllViews, stopAllViews } from "./viewUpdates";
 import type { FitMode, Mark, QueryState, RenderResponse, Scalar, TextStyle, TooltipSheetInfo } from "./types";
 
 /** 標記上的互動：點選（含空白處，mark 為 null）、滑過、移開。座標為視窗座標。 */
@@ -1087,6 +1088,23 @@ export function WorksheetView({
   const [loading, setLoading] = useState(true);
   // 圖正在畫（embed 開始到畫好，地圖的形狀、底圖下載完之前）：與查詢中一樣是「檢視更新中」
   const [drawing, setDrawing] = useState(false);
+  // 停止（「更新中」的停止，見 viewUpdates.ts）：查詢中止、伺服器上的查詢中斷，檢視暫停在最後畫好的圖，
+  // 之後的狀態改變不查詢；繼續更新、復原回到畫面上的狀態或重新整理（編輯器裡改了工作表）時恢復
+  const [suspended, setSuspended] = useState(false);
+  const responseRef = useRef(response);
+  responseRef.current = response;
+  /** 各回應是哪一個狀態查詢的結果（queryKey） */
+  const responseKeys = useRef(new WeakMap<RenderResponse, string>());
+  /** 最後一張畫好的圖的回應（停止時新的圖還沒畫好就回到它） */
+  const drawnResponse = useRef<RenderResponse | null>(null);
+  /** 進行中的查詢：中止它（連伺服器上的查詢） */
+  const inflight = useRef<(() => void) | null>(null);
+  /** 查詢的效果上一次看到的狀態；停止時的 revision；剛從暫停恢復 */
+  const seenKey = useRef<string | null>(null);
+  const revisionRef = useRef(revision);
+  revisionRef.current = revision;
+  const stoppedRevision = useRef(revision);
+  const wasSuspended = useRef(false);
   const [showTable, setShowTable] = useState(false);
   // 區塊的大小改變、要重新決定列是填滿還是保持標準的列高時遞增（重畫）
   const [relayout, setRelayout] = useState(0);
@@ -1096,13 +1114,36 @@ export function WorksheetView({
   const tooltipSheets = tooltipState ? (response?.tooltip_sheets ?? []) : [];
   const vizTooltips = tooltipSheets.length > 0;
 
+  const queryKey = JSON.stringify([workbook, worksheet, stateKey, revision]);
   useEffect(() => {
+    const shown = responseRef.current ? responseKeys.current.get(responseRef.current) : undefined;
+    if (suspended) {
+      // 暫停中（停止之後）不查詢。復原回到畫面上的狀態、或重新整理時，整頁恢復更新
+      wasSuspended.current = true;
+      const back = queryKey !== seenKey.current && queryKey === shown;
+      seenKey.current = queryKey;
+      if (back || revision !== stoppedRevision.current) resumeAllViews();
+      return;
+    }
+    const resumed = wasSuspended.current;
+    wasSuspended.current = false;
+    seenKey.current = queryKey;
+    // 恢復更新時畫面上已經是這個狀態的結果：不必重新查詢
+    if (resumed && queryKey === shown) return;
     let cancelled = false;
+    const controller = new AbortController();
+    const query = newQueryId();
+    const abort = () => {
+      controller.abort();
+      void api.stopQuery(query);
+    };
+    inflight.current = abort;
     setLoading(true);
     api
-      .render(workbook, worksheet, JSON.parse(stateKey) as QueryState)
+      .render(workbook, worksheet, JSON.parse(stateKey) as QueryState, { query, signal: controller.signal })
       .then((result) => {
         if (cancelled) return;
+        responseKeys.current.set(result, queryKey);
         setResponse(result);
         // 查詢回來到新的圖畫好之前也是更新中（與 setResponse 一起更新，「更新中」不會在兩者之間閃掉）
         setDrawing(Boolean(result.spec));
@@ -1110,21 +1151,42 @@ export function WorksheetView({
         onRendered?.(result);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        // 停止而中止的請求不是錯誤
+        if (!cancelled && !controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
+        if (inflight.current === abort) inflight.current = null;
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-    // onRendered 只用來回報結果，不觸發重新查詢
+    // onRendered 只用來回報結果，不觸發重新查詢；queryKey 由 workbook、worksheet、stateKey、revision 組成
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbook, worksheet, stateKey, revision]);
+  }, [workbook, worksheet, stateKey, revision, suspended]);
+
+  /** 停止這張工作表的更新（頁面上所有的檢視一起，見 viewUpdates.ts）：進行中的查詢中止、伺服器上的查詢中斷；
+   * 新的圖還沒畫好時回到最後畫好的那一張。 */
+  const stopUpdating = () => {
+    inflight.current?.();
+    inflight.current = null;
+    setLoading(false);
+    const drawn = drawnResponse.current;
+    if (drawn && responseRef.current !== drawn) {
+      setResponse(drawn);
+      setDrawing(Boolean(drawn.spec));
+    }
+    stoppedRevision.current = revisionRef.current;
+    setSuspended(true);
+  };
+  const stopRef = useRef(stopUpdating);
+  stopRef.current = stopUpdating;
+  useEffect(() => registerView({ stop: () => stopRef.current(), resume: () => setSuspended(false) }), []);
 
   useEffect(() => {
     const element = chartRef.current;
     if (!element || !response?.spec || showTable) {
+      if (response && !response.spec) drawnResponse.current = response;
       setDrawing(false);
       return;
     }
@@ -1363,6 +1425,7 @@ export function WorksheetView({
         }
         view = result;
         viewRef.current = result;
+        drawnResponse.current = response;
         setDrawing(false);
         setZoomable(zoomed);
         element.dataset.zoomable = zoomed ? "true" : "false";
@@ -1627,6 +1690,9 @@ export function WorksheetView({
   // 檢視更新中（重新查詢、或新的圖還沒畫好）：與 Tableau 處理互動時相同，畫面上標示正在更新，更新完之前不接受
   // 滑鼠操作（框選、點選落在還沒畫好的圖上什麼都選不到）。很快就好的更新（選取標記之後重畫）不顯示
   const busy = (loading || drawing) && response !== null && !error;
+  // 停止之後要的狀態與畫面上的不同（之前的結果，或第一次查詢就停止了、什麼都還沒有）：標示「已停止更新」、
+  // 可以繼續更新
+  const stale = suspended && (response === null || responseKeys.current.get(response) !== queryKey);
   const [updating, setUpdating] = useState(false);
   useEffect(() => {
     if (!busy) {
@@ -1770,6 +1836,8 @@ export function WorksheetView({
       data-worksheet={worksheet}
       data-loading={loading ? "true" : "false"}
       data-updating={busy ? "true" : "false"}
+      data-suspended={suspended ? "true" : "false"}
+      data-stale={stale ? "true" : undefined}
       data-interactive={interactive ? "true" : undefined}
       style={{ background: usermeta.background }}
     >
@@ -1881,12 +1949,28 @@ export function WorksheetView({
         {nulls > 0 && !error && !showTable && !response?.unsupported && <NullIndicator count={nulls} actions={nullActions} />}
         {showNotes !== "none" && !error && !showTable && !response?.unsupported && <NotesIndicator warnings={warnings} others={otherNotes} />}
         {loading && !response && <div className="placeholder">載入中…</div>}
-        {updating && busy && !showTable && (
+        {updating && busy && !suspended && !showTable && (
           <div className="view-updating" role="status" aria-live="polite" onMouseDown={(e) => e.preventDefault()}>
             <span className="view-updating-label">
               <span className="spinner" aria-hidden="true" />
               更新中…
+              <button
+                type="button"
+                className="view-updating-stop"
+                title="停止這次更新：檢視停在之前的結果，可以復原、繼續更新，或不更新繼續操作"
+                onClick={stopAllViews}
+              >
+                停止
+              </button>
             </span>
+          </div>
+        )}
+        {stale && !showTable && (
+          <div className="view-suspended" role="status" aria-live="polite">
+            <span>{response ? "已停止更新，顯示的是之前的結果" : "已停止更新"}</span>
+            <button type="button" onClick={resumeAllViews} title="以目前的篩選與設定重新查詢（之後的變更照常更新）">
+              繼續更新
+            </button>
           </div>
         )}
       </div>

@@ -34,7 +34,7 @@ from tmig.ir.models import (
 )
 from tmig.parser.context import ParseContext, SheetState
 from tmig.parser.dashboard import _runs, _size, formatted_content
-from tmig.parser.fields import instance_key, use_from_instance
+from tmig.parser.fields import FilterParser, instance_key, use_from_instance
 from tmig.parser.story_sheet import INCLUDED_NULL, SORT_TAGS, SheetDelta
 from tmig.parser.twbx import child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
@@ -172,7 +172,7 @@ class StoryParser:
                 delta.sort(item)
             elif tag == "shelf-sort-deltas":
                 delta.clear_sorts(item)
-            elif tag in ("rows", "cols"):
+            elif tag in ("rows", "cols", "columns"):
                 delta.shelf(item)
             elif tag == "annotations":
                 delta.annotation_deltas(item)
@@ -304,14 +304,26 @@ class StoryParser:
         label: str,
         delta: SheetDelta,
     ) -> None:
-        """記下的篩選：成員（保留或排除）、所有的值、範圍，與篩選動作的選取。"""
+        """記下的篩選：成員（保留或排除）、所有的值、範圍，與篩選動作的選取；量值的篩選、Top N 與條件篩選
+        以工作表的寫法解析（_sheet_filter）；delta-type='removed' 是故事點移除的篩選（_removed）。"""
+        if element.get("delta-type") == "removed":
+            self._removed(element, sheet, label, delta)
+            return
         if element.get("delta-type") is not None:
             self._unsupported(element, label, f"篩選的變更（{element.get('delta-type')}）")
+            return
+        group = child(element, "groupfilter")
+        use = self._level(sheet, element.get("column", ""))
+        if use is not None and (
+            use.agg is not None
+            or use.table_calc is not None
+            or (group is not None and group.get("function") in ("end", "filter"))
+        ):
+            self._sheet_filter(element, label, delta)
             return
         if element.get("class") == "quantitative":
             self._range(element, sheet, point, label)
             return
-        group = child(element, "groupfilter")
         nodes = list(group.iter("groupfilter")) if group is not None else []
         action_name = next((g.get(UI_ACTION) for g in nodes if g.get(UI_ACTION)), None)
         if (
@@ -351,6 +363,90 @@ class StoryParser:
             self._unsupported(element, label, "篩選的值")
             return
         point.filters.append(StoryFilter(worksheet=sheet.id, field=use, mode=mode, values=values))
+
+    def _sheet_filter(self, element: etree._Element, label: str, delta: SheetDelta) -> None:
+        """量值（彙總）的範圍與選取、Top N 與條件篩選：檢視者的篩選狀態表示不了（篩選控制項只改維度的
+        選取），以工作表的寫法解析，套用時取代工作表上同一個欄位的篩選（StorySheet.filters）。"""
+        key = instance_key(element.get("column", ""))
+        instance = delta.parser.instances.get(key)
+        if (
+            key not in delta.sheet.uses
+            and instance is not None
+            and child(instance, "table-calc") is not None
+        ):
+            # Table Calculation 的設定只在工作表上的欄位實例建立
+            self._unsupported(element, label, "Table Calculation 的篩選（工作表上沒有這個欄位）")
+            return
+        before = len(self.ctx.unsupported)
+        parsed = FilterParser(self.ctx, delta.sheet.ds, delta.parser.resolve, "worksheet").parse(
+            element
+        )
+        # 解析失敗的原因加上故事點的名稱
+        for i in range(before, len(self.ctx.unsupported)):
+            entry = self.ctx.unsupported[i]
+            self.ctx.unsupported[i] = entry.model_copy(
+                update={
+                    "reason": f"Story「{self.name}」的故事點「{label}」記下的篩選：{entry.reason}"
+                }
+            )
+        if parsed is None or isinstance(parsed, TupleFilter):
+            if len(self.ctx.unsupported) == before:
+                self._unsupported(element, label, "篩選")
+            return
+        delta.filters = [
+            f
+            for f in delta.filters
+            if use_key(f.field) != use_key(parsed.field)  # type: ignore[union-attr]
+        ] + [parsed]
+
+    def _removed(
+        self, element: etree._Element, sheet: SheetState, label: str, delta: SheetDelta
+    ) -> None:
+        """<filter column=… delta-type='removed'>：故事點中沒有工作表上的這個篩選。篩選動作的篩選與沒有選取
+        時相同（顯示所有的值，在故事點上選取標記時照常篩選），其他篩選從工作表移除。"""
+        column = element.get("column", "")
+        worksheet = delta.worksheet
+        if sheet.ds.auto_groups.get(instance_key(column)) == "sheet_link":
+            # 工作表上這個欄位的篩選記著篩選動作的名稱
+            saved = next(
+                (
+                    f
+                    for f in descendants(child(delta.element, "table"), "filter")
+                    if f.get("column") == column
+                ),
+                None,
+            )
+            names = [
+                g.get(UI_ACTION) for g in (saved.iter("groupfilter") if saved is not None else [])
+            ]
+            name = next((n for n in names if n), None)
+            action = self.actions.get(name) if name is not None else None
+            if action is None or not any(
+                isinstance(f, TupleFilter) and f.action == action for f in worksheet.filters
+            ):
+                self.ctx.ignore(element, "故事點移除的篩選動作的篩選不在工作表上：略過")
+                return
+            if action not in delta.cleared_actions:
+                delta.cleared_actions.append(action)
+            return
+        use = self._level(sheet, column)
+        found = (
+            next(
+                (
+                    f
+                    for f in worksheet.filters
+                    if not isinstance(f, TupleFilter) and use_key(f.field) == use_key(use)
+                ),
+                None,
+            )
+            if use is not None
+            else None
+        )
+        if found is None:
+            self.ctx.ignore(element, "故事點移除的篩選不在工作表上：略過")
+            return
+        if found.id not in delta.removed_filters:
+            delta.removed_filters.append(found.id)
 
     def _action_filter(
         self,
@@ -421,7 +517,7 @@ class StoryParser:
         self, element: etree._Element, sheet: SheetState, point: StoryPoint, label: str
     ) -> None:
         """範圍篩選（<filter class='quantitative' included-values=…><min>…<max>…）：維度（含連續的日期）
-        的範圍；量值（彙總）的篩選與檢視者的篩選相同，不能由故事點改變，列為不支援。"""
+        的範圍；量值（彙總）的範圍篩選見 _sheet_filter。"""
         use = self._level(sheet, element.get("column", ""))
         if use is None or use.agg is not None or use.table_calc is not None:
             self._unsupported(element, label, "篩選")

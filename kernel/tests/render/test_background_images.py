@@ -216,13 +216,14 @@ def test_conditions_and_disabled_images(tmp_path: Path, db: Path) -> None:
     assert layers(render(off, db).spec) == []
 
 
-def test_views_not_drawn_yet_are_noted(tmp_path: Path, db: Path) -> None:
-    """同一架上有多個座標軸（或分格）的檢視尚未畫出背景圖片：寫進附註；沒有 X、Y 欄位的檢視不畫。"""
+def test_several_axes_and_views_without_the_fields(tmp_path: Path, db: Path) -> None:
+    """同一架上有多個座標軸：每個 Y 欄位的座標軸各自畫（見 test_background_panes）；沒有 X、Y 欄位的檢視
+    不畫。"""
     two = f"({ref('sum:Profit:qk')} + {ref('sum:Profit:qk')})"
     ir = parse(tmp_path, mapped(), scatter(rows=two))
     rendered = render(ir, db)
-    assert layers(rendered.spec) == []
-    assert rendered.notes == ["背景圖片「Floor」：分格或同一架上有多個座標軸的檢視尚未畫出"]
+    assert [layers(chart) for chart in rendered.spec["vconcat"]] != [[], []]
+    assert rendered.notes == []
     bars = worksheet("Bars", [REGION, SALES], rows=ref("none:Region:nk"), cols=ref("sum:Sales:qk"))
     other = render(parse(tmp_path, mapped(), bars), db)
     assert layers(other.spec) == [] and other.notes == []

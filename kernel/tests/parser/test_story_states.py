@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tmig.ir import IR, FieldUse, Sort, StorySheet
+from tmig.ir import IR, FieldUse, Sort, StorySheet, TupleFilter
 from tmig.ir.integrity import check_references
 from tmig.ir.models import Axis, MapOptions, MapViewport
 from tmig.planner.state import StoryRef
@@ -148,7 +148,8 @@ def test_unknown_sort_deltas_are_flagged(tmp_path: Path) -> None:
 
 
 def test_story_removes_a_field_from_the_shelf(tmp_path: Path) -> None:
-    """<rows><column delta-type='removed'>：故事點中這個欄位不在列架上；新增欄位（位置不明）列為不支援。"""
+    """<rows><column delta-type='removed'>：故事點中這個欄位不在列架上；新增的欄位沒有寫位置時加在最前面
+    （見 test_story_deltas）。"""
     removed = (
         f"<worksheet name='Source'><rows><column delta-type='removed' field='{ref('none:Category:nk')}' />"
         "</rows></worksheet>"
@@ -161,11 +162,13 @@ def test_story_removes_a_field_from_the_shelf(tmp_path: Path) -> None:
         tmp_path,
         workbook(story(point(1, "Fewer", "Board", removed) + point(2, "More", "Board", added))),
     )
-    assert reasons(ir) == ["Story「Tour」的故事點「More」記下的欄列架的變更（added）尚不支援"]
-    state = only_sheet(ir)
+    assert reasons(ir) == []
+    state = ir.stories[0].points[0].sheets[0]
     assert state.removed_rows == [FieldUse(field="f_category")]
     ws = next(w for w in ir.worksheets if w.id == "ws_source")
     assert [u.field for u in apply_story_sheet(ws, state).rows] == ["f_region"]
+    (more,) = ir.stories[0].points[1].sheets
+    assert [u.field for u in apply_story_sheet(ws, more).columns] == ["f_category", "f_sales"]
 
 
 # ---------------------------------------------------------------- 註解、格式與頁
@@ -251,7 +254,7 @@ def test_story_current_page(tmp_path: Path) -> None:
 
 def test_story_filters_all_exclude_and_range(tmp_path: Path) -> None:
     """所有的值（level-members）、排除（except）、維度的範圍（in-range-or-null 保留 Null）與「全部」的範圍；
-    量值（彙總）的範圍篩選不能由故事點改變。"""
+    量值（彙總）的範圍篩選記在工作表的狀態（見 test_story_deltas）。"""
     deltas = (
         "<worksheet name='Target'>"
         f"<filter class='categorical' column='{ref('none:Category:nk')}'>"
@@ -270,7 +273,11 @@ def test_story_filters_all_exclude_and_range(tmp_path: Path) -> None:
         "</worksheet>"
     )
     ir = parse(tmp_path, workbook(story(point(1, "Filters", "Target", deltas))))
-    assert reasons(ir) == ["Story「Tour」的故事點「Filters」記下的篩選尚不支援"]
+    assert reasons(ir) == []
+    (state,) = ir.stories[0].points[0].sheets
+    (measure,) = state.filters
+    assert measure.kind == "range" and not isinstance(measure, TupleFilter)
+    assert (measure.field.field, measure.stage) == ("f_sales", "measure")
     filters = ir.stories[0].points[0].filters
     assert [(f.field.field, f.mode, f.values, f.min, f.max, f.include_null) for f in filters] == [
         ("f_category", "exclude", [], None, None, None),

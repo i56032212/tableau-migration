@@ -925,7 +925,7 @@ def test_every_table_calc_function_is_tested() -> None:
     folder = Path(__file__).parent
     text = "".join(
         (folder / name).read_text(encoding="utf-8")
-        for name in ("test_query.py", "test_more_functions.py")
+        for name in ("test_query.py", "test_more_functions.py", "test_predictive.py")
     )
     names = [n for n in implemented_names() if is_table_calc_function(n)]
     assert [n for n in names if not re.search(rf"\b{n}\(", text)] == []

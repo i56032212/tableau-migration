@@ -3546,6 +3546,30 @@
           "description": "畫出預測區間",
           "title": "Bands",
           "type": "boolean"
+        },
+        "aggregate_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "year",
+                "quarter",
+                "month",
+                "week",
+                "weekday",
+                "day",
+                "hour",
+                "minute",
+                "second"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "預測選項指定的「彙總依據」（.twb 的 auto-forecast-agg='false' 與 forecast-agg）：估計的時間細度，比檢視細時估計之後彙總回檢視的期；None 為「自動」",
+          "title": "Aggregate By"
         }
       },
       "title": "Forecast",
@@ -4260,6 +4284,12 @@
           ],
           "title": "Style",
           "type": "string"
+        },
+        "basemap": {
+          "default": true,
+          "description": "背景地圖（地圖＞背景地圖）；False 為「無」（<mapsource name=''>）：不畫底圖，經緯度以等距的座標畫出，背景圖片（地圖＞背景圖片）才顯示",
+          "title": "Basemap",
+          "type": "boolean"
         },
         "washout": {
           "default": 0,
@@ -7722,7 +7752,7 @@
     },
     "StorySheet": {
       "additionalProperties": false,
-      "description": "故事點記下的工作表狀態（篩選、選取、參數與頁之外的差異）：排序、從欄列架上移除的欄位、註解、\n座標軸（範圍、標題、文字方向）與地圖的顯示範圍。檢視故事點時套用在工作表目前的定義上\n（tmig.story.apply_story_sheet）：Tableau 的故事點與原本的工作表相連，工作表之後的修改也反映在\n故事點上。",
+      "description": "故事點記下的工作表狀態（檢視者的篩選狀態表示得了的篩選、選取、參數與頁之外的差異）：排序、\n欄列架上移除與加上的欄位、量值與 Top N 等篩選、移除的篩選、註解、座標軸（範圍、標題、文字方向）與\n地圖的顯示範圍。檢視故事點時套用在工作表目前的定義上（tmig.story.apply_story_sheet）：Tableau 的\n故事點與原本的工作表相連，工作表之後的修改也反映在故事點上。",
       "properties": {
         "worksheet": {
           "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
@@ -7762,6 +7792,70 @@
             "$ref": "#/$defs/FieldUse"
           },
           "title": "Removed Columns",
+          "type": "array"
+        },
+        "added_rows": {
+          "description": "故事點加在列架上的欄位（移除之後加上，依序）",
+          "items": {
+            "$ref": "#/$defs/StoryShelfField"
+          },
+          "title": "Added Rows",
+          "type": "array"
+        },
+        "added_columns": {
+          "description": "故事點加在欄架上的欄位（移除之後加上，依序）",
+          "items": {
+            "$ref": "#/$defs/StoryShelfField"
+          },
+          "title": "Added Columns",
+          "type": "array"
+        },
+        "filters": {
+          "description": "故事點的篩選中檢視者的篩選狀態表示不了的（量值的範圍與選取、Top N、條件）：取代工作表上同一個欄位的篩選（沿用它的 id），工作表上沒有時加上",
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "categorical": "#/$defs/CategoricalFilter",
+                "condition": "#/$defs/ConditionFilter",
+                "range": "#/$defs/RangeFilter",
+                "relative_date": "#/$defs/RelativeDateFilter",
+                "top_n": "#/$defs/TopNFilter",
+                "tuple": "#/$defs/TupleFilter"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/CategoricalFilter"
+              },
+              {
+                "$ref": "#/$defs/RangeFilter"
+              },
+              {
+                "$ref": "#/$defs/TopNFilter"
+              },
+              {
+                "$ref": "#/$defs/TupleFilter"
+              },
+              {
+                "$ref": "#/$defs/ConditionFilter"
+              },
+              {
+                "$ref": "#/$defs/RelativeDateFilter"
+              }
+            ]
+          },
+          "title": "Filters",
+          "type": "array"
+        },
+        "removed_filters": {
+          "description": "故事點移除的工作表篩選（篩選的 id）",
+          "items": {
+            "description": "穩定 id：小寫英數字與底線，以字母開頭，最長 64 字元",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Removed Filters",
           "type": "array"
         },
         "annotations": {
@@ -7828,6 +7922,27 @@
         "worksheet"
       ],
       "title": "StorySheet",
+      "type": "object"
+    },
+    "StoryShelfField": {
+      "additionalProperties": false,
+      "description": "故事點加在欄列架上的欄位（<column delta-type='added' field=… index=…>）。",
+      "properties": {
+        "use": {
+          "$ref": "#/$defs/FieldUse"
+        },
+        "index": {
+          "default": 0,
+          "description": "在架上的位置（0 起算，從架上移除的欄位先移除之後的位置）",
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "use"
+      ],
+      "title": "StoryShelfField",
       "type": "object"
     },
     "TableCalc": {

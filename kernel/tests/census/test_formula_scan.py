@@ -63,9 +63,9 @@ def test_table_calc_and_user_functions() -> None:
 
 def test_outside_v0() -> None:
     scan = scan_formula(
-        "IF MODEL_QUANTILE(0.5, [a], [b]) > 0 THEN PROPER([d]) END + ATTR([x]) IN (1) + DATENAME('month', [d])"
+        "IF SCRIPT_REAL('return 1', [a], [b]) > 0 THEN PROPER([d]) END + ATTR([x]) IN (1) + DATENAME('month', [d])"
     )
-    assert scan.outside_v0 == ["MODEL_QUANTILE", "PROPER"]
+    assert scan.outside_v0 == ["PROPER", "SCRIPT_REAL"]
 
 
 def test_numbers_and_date_literals() -> None:

@@ -7,48 +7,32 @@
 
 | 功能 | 現況 | 備註 |
 | --- | --- | --- |
-| 動畫：解析 .twb 的設定 | 部分 | 檢視器與編輯器的動畫、「格式＞動畫…」、IR 的欄位（`Workbook.animation`、`Worksheet.animation`）都有了（2026-11-23）；解析器還不讀 .twb 的設定，從 Tableau 開啟的報表都是關。寫法與規則見表格下面 |
-| 活頁簿佈景主題（Default、Smooth 等） | 沒有 | 需要實際的 .twb 樣本；目前可以把一張工作表的格式套到其他工作表 |
+| 活頁簿佈景主題（Default、Smooth 等） | 沒有 | Tableau 2021.2 有；.twb 只寫名稱（`<style-theme name='clean'>` 等），各佈景主題的字型、顏色、線條沒有文件，開啟時記為略過；要有 Tableau 的畫面或文件才能補 |
 | 自訂地理編碼 | 沒有 | |
 | 擴充功能（Extension）物件 | 沒有 | 開啟 Tableau 檔時列入 unsupported |
 | 預存程序當作資料表 | 沒有 | 開啟 Tableau 檔時列入 unsupported；先看盤點中有沒有報表用到 |
 | Explain Data（資料解釋） | 沒有 | |
 | Ask Data、指標（Metrics）、集合（Collections） | 沒有 | 伺服器上的功能 |
 | 書籤（.tbm） | 部分 | 不解析 .tbm；以「匯入工作表…」從來源報表匯入，效果相同 |
-| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：WMS／Mapbox 底圖、萃取的抽樣（要在來源資料庫取樣，等有引擎的環境再做）、叢集對話框加入維度（類別變數；IR 與編輯 API 已支援） |
-
-**動畫的 .twb 寫法與解析規則**（寫法取自 GitHub 上的公開報表，2026-11-23：2020.3、2021.3、2023.2、2024.1、2025.2 存的
-檔案）：
-
-- 活頁簿預設在 `/workbook/style` 下、各工作表在 `/workbook/worksheets/worksheet/table/style` 下的
-  `<style-rule element='animation'>`（常寫成 `_.fcp.MarkAnimation.true...style-rule`），裡面的 `<format>`：
-  `animation-on`（`ao-on`／`ao-off`）、`animation-duration`（秒，看過 0.001、0.2、0.3、0.5、1、10）、`animation-style`
-  （`as-synced`＝同時、`as-phased`＝依序）。工作表上沒有寫的項目沿用活頁簿預設（`Animation` 的 None）
-- 活頁簿預設的開關：有生效的 `animation-on` 就照它；沒有時，`document-format-change-manifest` 有
-  `AnimationOnByDefault`（不帶前置或 `_.fcp.AnimationOnByDefault.true...`）的檔案是開（2025.2 的公開報表只寫了
-  這個旗標、沒有 style-rule），沒有這個旗標的舊檔案是關。`_.fcp.AnimationOnByDefault.false...format attr='animation-on'
-  value='ao-on'` 是給舊版讀的替代內容（與開的結果相同），照解析器的慣例略過
-- 注意：示範報表（`fixtures/superstore_demo`，`scripts/build_demo_fixture.py` 產生）的 manifest 有
-  `<AnimationOnByDefault />`、沒有 style-rule——照上面的規則是開，解析之後所有用示範報表的端到端測試都會播放動畫
-  （量位置的測試會不穩定）。補解析時先讓示範報表寫上 `animation-on='ao-off'`（或在測試中關掉），並重新產生 golden IR
+| 編輯器的小缺口 | 部分 | `docs/editor-coverage.md` 備註欄中的：WMS／Mapbox 底圖、萃取的抽樣（要在來源資料庫取樣，等有引擎的環境再做）、叢集對話框加入檢視以外的量值與按右鍵改變變數的彙總（IR 的 `ClusterSpec.measures` 只接受檢視中的量值，要先改 `tmig.sqlgen`） |
 
 ## 二、開啟 Tableau 檔時還不支援的寫法
 
 解析時列入 `unsupported`，報表進人工佇列（完整的清單在 README「已知限制與待驗證」最後的「尚未支援」）：
 
-- `SCRIPT_*`、`MODEL_*`；`RAWSQL_*` 在萃取與檔案上（與 `RAWSQL_SPATIAL`）
+- `SCRIPT_*`、`MODEL_*` 的 gp、rl 與有序的預測變數；`RAWSQL_*` 在萃取與檔案上（與 `RAWSQL_SPATIAL`）
 - LOD 的維度中的 INCLUDE／EXCLUDE；Relationship 模型中含 LOD、又要以半連接套用的篩選
 - Data Blending：同一個彙總混用兩個資料源的欄位、同一個 LOD 混用兩個資料源的欄位、次要資料源的內容篩選
-- 預測指定的彙總依據（`auto-forecast-agg='false'`：.twb 中指定細度的寫法沒有樣本）、預測改用較細細度時文件沒有寫明的
-  情況、只以維度分群的叢集、標題中產生的緯度經度
-- 故事點在欄列架上新增的欄位、量值（彙總）的範圍篩選與 Top N 篩選的變更、篩選的刪除
-- 顯示集合中的成員（集合直接放在架上）、不同維度的集合組合成的合併集合；地圖、分格與多個座標軸的檢視上的背景圖片
+- 預測指定的彙總依據中平台不照做的組合（比檢視粗、月→週、日→時、年份的日期部分、SUM／COUNT 以外的彙總）、預測改用
+  較細細度時文件沒有寫明的情況、只以維度分群的叢集、標題中產生的緯度經度
+- 故事點加上的 Measure Names／Values 與新的 Table Calculation 欄位、篩選的其他變更（edited 等）
+- 多個維度的集合以成員顯示、不同維度的集合組合成的合併集合
 - 尚未併入 .tdsx 的 Published Data Source、舊版的 .tde 萃取
 - 要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線（要改用列層級權限重寫）
 
-另有一類**不會**列入 `unsupported`：編輯器裡可以設定，但 .twb 中的寫法沒有樣本、解析器不認得，從 Tableau 開啟的
-報表會是預設值——次要計算與表計算的自訂排序順序、堆疊標記的開關、篩選控制項的自訂（顯示「全部」、搜尋、
-套用按鈕等）、頁面的顯示歷程、Story 的格式、分頁顏色。盤點時要留意報表有沒有用到；拿到樣本就能補上解析
+另有一類**不會**列入 `unsupported`：編輯器裡可以設定，但 .twb 中的寫法沒有樣本、解析器不認得——次要計算、堆疊標記的
+開關（2026-11-23 在約 300 份公開報表與 GitHub 上找過）。表計算的自訂排序、篩選控制項的自訂、顯示歷程、Story 的格式、
+分頁顏色與動畫已經從 .twb 解析（2026-11-23）
 
 ## 三、還沒驗證的
 
@@ -111,8 +95,8 @@
    還沒做的：下拉式控制項的外觀等幾處小差異；Resort View 沒有截圖可以對照；只比了 Overview 畫面上看得到的數字，還沒有用 `cases.yaml` 與 Tableau 匯出的 CSV 做完整的計算比對；依地區設定的寫法只有繁體中文的日期與年份；自然排序在 Live 連線上還沒有與 Tableau 實機比對。前端的修改中，分面儲存格相連（甜甜圈的大小）與依瀏覽器語言的日期寫法沒有端到端測試，只在這份報表的畫面上看過
 7. **與 Tableau 的畫面比對**：README「已知限制與待驗證」中標為「推定」的行為（版面、格式、預設值、圖片形狀的
    大小與著色等）還沒與 Tableau 的畫面對過；`tools/compare_screens` 可以用來比對
-8. **補 Tableau 缺口（2026-11-22）推定的部分**：預測結果類型在 .twb 中的名稱（`forecast-trend` 等，只看過
-   `forecast-value`、`forecast-indicator`）、表頭與合計／總計框線的 .twb 寫法、描述預測摘要的算法、Relationship
+8. **補 Tableau 缺口（2026-11-22）推定的部分**：預測結果類型在 .twb 中的名稱（趨勢、精度、精度 %、品質；預測區間已
+   以公開報表確認）、描述預測摘要的算法、Relationship
    跨資料表計算的細節（路徑上的資料表、Null 的標記）、次要資料源的條件與 Top N 篩選，都要拿真實的報表或 Tableau 的
    數字對過；`RAWSQL_*` 的 PostgreSQL、MySQL 測試還沒在有引擎的環境跑過；列印的分頁只看過 Chromium 產生的 PDF，
    沒有在桌面版視窗的列印對話框與實際的印表機上試過
@@ -120,7 +104,10 @@
    還沒有與 Tableau 的數字比對，預測區間的模擬是推定的；以維度（類別變數）分群的換算（多重對應分析）與 Tableau 比對；
    LOD 的維度含 FIXED 的世代分析以真實報表比對（PostgreSQL、MySQL 的測試還沒在有引擎的環境跑過）；故事點 style 差異的
    合併、edited 註解、clear-shelf-sort 只清巢狀排序；背景圖片的預設選項、淡化、鎖定比例、顛倒與條件的成立方式；
-   都要拿 Tableau 的畫面或數字對過
+   預測指定的彙總依據（年→季、年→月、季→月、週→日）；都要拿 Tableau 的畫面或數字對過
+10. **補 Tableau 缺口第三批（2026-11-23）**：「更新中」的停止、折線區域與座標軸的動畫、叢集對話框的拖放都只在
+    瀏覽器（Playwright 的 Chromium）裡測過，還沒有在桌面版的視窗裡驗證；停止 PostgreSQL 查詢的測試這台電腦沒有
+    引擎、還沒跑過；停止之後的樣子與動畫的動法（README「已知限制與待驗證」標為推定的）沒有與 Tableau 的畫面比對過
 
 ## 使用體驗稽核（2026-11-21）
 
@@ -377,9 +364,17 @@
   - 分頁印時，多層**欄**標題的外層成員在某一頁從組的中間開始時那一頁沒有名稱（列標題已補上）
   - 頁面架的「所有頁面」只有頁面設定的「列印」做得到（Ctrl+P 印目前的頁），各頁之間沒有標示是哪一頁；dashboard
     上的頁面控制項不支援所有頁面
-  - 「更新中…」沒有停止的按鈕（Tableau 的對話框可以停下、之後復原或繼續）
-  - 動畫：折線、區域與座標軸不動（Tableau 會動）；檢視器沒有「重播」按鈕（2021.4 起）與個人的「啟用動畫」設定；
-    dashboard 上多張工作表各自播放，沒有一起
+  - 動畫：檢視器沒有「重播」按鈕（2021.4 起）與個人的「啟用動畫」設定；dashboard 上多張工作表各自播放，沒有一起
+- 補叢集的變數、「更新中」的停止、折線區域與座標軸的動畫（2026-11-23 第三批）時看到、沒有處理的：
+  - 停止：伺服器上能中斷的只有萃取（DuckDB）與 Live 的 PostgreSQL、DuckDB；MySQL、SQL Server、Snowflake、Trino、
+    BigQuery 等的查詢照常跑完（Trino、BigQuery 的驅動程式有取消的方法，還沒接）。Live 兩段式執行與跨資料庫 join
+    在本機合併的那一段、Data Blending 次要資料源的查詢不中途中斷（停止在下一段查詢開始時生效）。只有圖的查詢
+    （render）能停止：篩選控制項的可選值、檢視資料、下載不能停止
+  - 停止之後暫停的是當時頁面上的檢視：暫停中才開啟的工具提示中的工作表照常查詢。檢視器與編輯器都沒有 Tableau
+    的「暫停自動更新」（工具列、F10）與「執行更新」（F9），只有停止之後的「繼續更新」
+  - 叢集對話框固定在右上方，不能拖曳移動（Tableau 的對話框可以移動）
+  - 動畫：捲動中固定在區塊邊緣的座標軸（`freezeHeaders` 的複本）不動，只有圖本身的座標軸動；折線、區域上的標籤
+    仍是最後淡入（不跟著線移動）
 
 **與 Tableau 差最多的（桌面版）**
 

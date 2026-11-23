@@ -203,8 +203,9 @@ def test_census_counts_only_unsupported_groups(tmp_path: Path) -> None:
     assert info.groups_or_sets == 1
 
 
-def test_set_shown_as_members_is_unsupported(tmp_path: Path) -> None:
-    """集合直接放在架上（沒有 IN/OUT 的欄位實例）是「顯示集合中的成員」：列出成員、不是 In／Out，尚不支援。"""
+def test_combined_set_shown_as_members(run: Run) -> None:
+    """集合直接放在架上（沒有 IN/OUT 的欄位實例）是「顯示集合中的成員」：列出成員（Coasts 與 South West 的
+    聯集：East、West、South），不是 In／Out（見 test_set_members）。"""
     sheet = worksheet(
         "S",
         [REGION, SALES],
@@ -212,5 +213,9 @@ def test_set_shown_as_members_is_unsupported(tmp_path: Path) -> None:
         cols=ref("sum:Sales:qk"),
         view_extra=f"<filter class='categorical' column='{ref('Both')}' />",
     )
-    ir = parse(tmp_path, b.workbook(b.extract_datasource(extra=GROUPS), worksheets=sheet))
-    assert reasons(ir) == ["rows 架：集合「Both」以成員顯示（顯示集合中的成員）v0 不支援"]
+    rows = run(sheet, ds_extra=GROUPS)
+    assert {r["f_both_members"]: r["sum(f_sales)"] for r in rows} == {
+        "East": 350,
+        "West": 800,
+        "South": 100,
+    }

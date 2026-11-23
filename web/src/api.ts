@@ -88,11 +88,17 @@ export const api = {
   workbooks: () => request<WorkbookSummary[]>("/api/workbooks"),
   ir: (id: string) => request<IR>(`${wb(id)}/ir`),
   cases: (id: string) => request<CaseInfo[]>(`${wb(id)}/cases`),
-  render: (id: string, worksheet: string, state: QueryState) =>
+  /** options.query：查詢的代號（可以以 stopQuery 停止伺服器上的查詢）；options.signal：中止這個請求 */
+  render: (id: string, worksheet: string, state: QueryState, options?: { query?: string; signal?: AbortSignal }) =>
     request<RenderResponse>(`${wb(id)}/worksheets/${encodeURIComponent(worksheet)}/render`, {
       method: "POST",
       body: JSON.stringify(state),
+      signal: options?.signal,
+      headers: options?.query ? { "X-Tmig-Query": options.query } : undefined,
     }),
+  /** 停止伺服器上的查詢（檢視上「更新中」的停止）：執行中的中斷、還沒開始的不執行；失敗不影響檢視 */
+  stopQuery: (query: string) =>
+    fetch(`/api/queries/${encodeURIComponent(query)}/cancel`, { method: "POST" }).catch(() => undefined),
   /** 使用紀錄：開啟一個 dashboard 或工作表（R1）；失敗不影響檢視 */
   visit: (id: string, view: string) =>
     fetch(`${wb(id)}/views/${encodeURIComponent(view)}/visit`, { method: "POST" }).catch(() => undefined),

@@ -83,7 +83,7 @@ from tmig.natural import natural_key
 from tmig.planner.state import use_key
 from tmig.render import maps, packing
 from tmig.render.aliases import alias_key, member_aliases, parameter_label
-from tmig.render.background import background_layers
+from tmig.render.background import background_body, resolve_scales
 from tmig.render.colors import (
     SHAPE_PATHS,
     VEGA_SHAPES,
@@ -395,6 +395,9 @@ class _Builder:
         self.shape_fields: list[dict[str, str]] = []
         """用到圖片形狀的各標記卡在資料列中的欄位（image、tint、url）：寫進 usermeta.shape_images，
         檢視器依它載入圖片。"""
+        self.background_images: list[dict[str, Any]] = []
+        """畫出的背景圖片在圖層資料中的欄（image、url）與是否翻轉：寫進 usermeta.background_images，
+        檢視器依它載入圖片（見 tmig.render.background）。"""
         self.shape_legend: dict[str, Any] | None = None
         """形狀的圖例（形狀上有欄位時）：標題與各成員的形狀（內建形狀的路徑或圖片），寫進
         usermeta.shape_legend；有圖片時由檢視器自己畫圖例（Vega 的圖例不能放圖片）。"""
@@ -3059,6 +3062,11 @@ def build_spec(
         else:
             builder.notes.append("多個量值、圓餅等圖表上的註解尚未畫出（不影響數字）")
 
+    images = next((d.background_images for d in ir.datasources if d.id == ws.datasource), [])
+    if images and map_plan is None and pie_marks is None:
+        # 背景圖片（地圖＞背景圖片）畫在最下層：分格之前加上，每個窗格各自一份
+        body, builder.background_images = background_body(body, ws, images, channels, values)
+
     if (
         map_plan is None
         and pie_marks is None
@@ -3269,10 +3277,10 @@ def build_spec(
                     else (builder.header_extent(dims, shelf) if dims else None)
                 )
                 _banding(spec, enc, channel, values, style.banding, extent, len(dims))
-    images = next((d.background_images for d in ir.datasources if d.id == ws.datasource), [])
-    if images and map_plan is None:
-        # 背景圖片（地圖＞背景圖片）畫在最下層
-        background_layers(spec, ws, images, channels, values, builder.notes)
+    if builder.background_images:
+        # 背景圖片（地圖＞背景圖片）：檢視器載入圖片的欄與翻轉；比例尺的名稱依規格的結構填上
+        spec["usermeta"]["background_images"] = builder.background_images
+        resolve_scales(spec)
     frame = ws.pane_border or ws.cell_border
     if frame is not None and map_plan is None:
         # 外框：窗格（沒有時為儲存格）的框線畫在整個檢視的四周

@@ -17,7 +17,7 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
-from tmig.data import udf
+from tmig.data import cancel, udf
 from tmig.ir.models import FileConnection, LiveConnection, is_federated
 from tmig.sqlgen import rawsql
 from tmig.sqlgen.query import BlendStage, Guard, OutputColumn, QueryError, WorksheetSql
@@ -76,7 +76,8 @@ def execute(
             if udf.needed(sql) or tables
             else duckdb.connect(str(path), read_only=True)
         )
-        with connection as con:
+        # 停止（tmig.data.cancel）時中斷這段查詢
+        with connection as con, cancel.watching(con.interrupt):
             for name, table in (tables or {}).items():
                 con.register(name, table)
             cursor = con.execute(sql)
@@ -160,11 +161,13 @@ def finish(
     result: QueryResult,
     run: Callable[[WorksheetSql], QueryResult] | None = None,
 ) -> QueryResult:
-    """查詢之後的分析：叢集編號、預測的估計值與預測區間（tmig.planner.analytics）。run：以同樣的方式執行
-    另一個查詢（預測以較細的時間估計時的查詢）。預測要以 Tableau 文件沒有寫明的方式計算時列為不支援。"""
+    """查詢之後的分析：叢集編號、預測模型函式的結果、預測的估計值與預測區間（tmig.planner.analytics）。
+    run：以同樣的方式執行另一個查詢（預測以較細的時間估計時的查詢）。預測要以 Tableau 文件沒有寫明的方式
+    計算、預測模型在 Tableau 會顯示錯誤時列為不支援。"""
     if query.analytics is None:
         return result
     from tmig.planner.analytics import UnsupportedForecast, apply
+    from tmig.planner.predictive import ModelError
 
     def fetch(other: WorksheetSql) -> tuple[list[str], list[tuple[Any, ...]]]:
         assert run is not None
@@ -175,7 +178,7 @@ def finish(
         columns, rows = apply(
             query.analytics, list(result.columns), list(result.rows), fetch if run else None
         )
-    except UnsupportedForecast as exc:
+    except (UnsupportedForecast, ModelError) as exc:
         raise QueryError(str(exc), unsupported=True) from exc
     return QueryResult(columns=columns, rows=rows)
 

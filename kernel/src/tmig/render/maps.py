@@ -29,6 +29,7 @@ from tmig.ir.models import (
     IR,
     LATITUDE_GENERATED,
     LONGITUDE_GENERATED,
+    BackgroundImage,
     ColorPalette,
     DataField,
     FieldUse,
@@ -39,6 +40,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.planner.state import use_key
+from tmig.render.background import wanted_images
 from tmig.render.colors import member_order
 from tmig.render.density import KERNEL_RADIUS, MAX_GRID, density_image, palette_of
 from tmig.render.names import MAP_STYLE_NAMES, mark_name
@@ -405,12 +407,16 @@ def _body(
     params: dict[str, Scalar],
 ) -> dict[str, Any]:
     width, height = builder.extent
-    box = _view_box(ir, ws, plan, options)
-    zoom = box.zoom(width, height)
-    project = box.project(width, height)
+    # 背景地圖選「無」：不畫底圖，經緯度以等距的座標畫出（Tableau：「a viz type other than a map」），
+    # 這時才畫背景圖片（地圖＞背景圖片）
+    linear = not options.basemap
+    images = map_images(ir, ws) if linear else []
+    box = _view_box(ir, ws, plan, options, images)
+    zoom = box.zoom(width, height, linear)
+    project = box.project(width, height, linear)
     style = _washed(STYLES[options.style], options.washout)
     builder.notes.extend(dict.fromkeys(plan.notes))
-    if options.style in ("satellite", "streets", "outdoors"):
+    if options.basemap and options.style in ("satellite", "streets", "outdoors"):
         builder.notes.append(
             f"背景地圖的「{MAP_STYLE_NAMES[options.style]}」樣式以簡化的配色呈現"
             "（平台的底圖沒有街道、地形與衛星影像）"
@@ -424,15 +430,18 @@ def _body(
         drawn, labels = _data_layer(builder, layer, project, box, placed, keys)
         marks_layers += drawn
         label_layers += labels
-    base = _base_layers(box, zoom, layers_on, style)
-    names = _place_labels(box, zoom, project, width, height, layers_on, style, placed)
+    if options.basemap:
+        base = _base_layers(box, zoom, layers_on, style)
+        names = _place_labels(box, zoom, project, width, height, layers_on, style, placed)
+    else:
+        base, names = _image_layers(builder, ws, images), []
     references = _reference_layers(builder, ir, ws, plan, box, params)
     references += _trend_layers(builder, plan)
     layers = [*base, *marks_layers, *references, *names, *label_layers]
     if plan.unknown:
         layers.append(_unknown_indicator(plan.unknown, builder.text_color(), bool(facet)))
     projection: dict[str, Any] = {
-        "type": "mercator",
+        "type": "equirectangular" if linear else "mercator",
         "fit": {
             "type": "Feature",
             "properties": {},
@@ -451,7 +460,7 @@ def _body(
     w, h = ("child_width", "child_height") if facet else ("width", "height")
     projection["clipExtent"] = {"expr": f"[[-2, -2], [{w} + 2, {h} + 2]]"}
     result: dict[str, Any] = {"projection": projection, "layer": layers}
-    if layers_on["water"] and layers_on["base"]:
+    if options.basemap and layers_on["water"] and layers_on["base"]:
         result["view"] = {"fill": style.water, "stroke": None}
     if facet:
         return {"facet": facet, "spec": result}
@@ -695,11 +704,29 @@ def _coordinate_role(use: FieldUse, fields: dict[str, DataField]) -> str | None:
     return role if role in ("latitude", "longitude") else None
 
 
-def _view_box(ir: IR, ws: Worksheet, plan: MapPlan, options: MapOptions) -> Box:
+def _view_box(
+    ir: IR,
+    ws: Worksheet,
+    plan: MapPlan,
+    options: MapOptions,
+    images: Sequence[BackgroundImage] = (),
+) -> Box:
     if options.viewport is not None:
         v = options.viewport
         return Box.viewport(v.west, v.south, v.east, v.north)
-    found = Box.of(box for layer in plan.layers for box in layer.boxes)
+    boxes = [box for layer in plan.layers for box in layer.boxes]
+    # 一律顯示整張圖片：自動的範圍包含整張背景圖片
+    boxes += [
+        (
+            min(i.left, i.right),
+            min(i.top, i.bottom),
+            max(i.left, i.right),
+            max(i.top, i.bottom),
+        )
+        for i in images
+        if i.show_entire
+    ]
+    found = Box.of(boxes)
     if found is not None:
         return found.padded(PADDING, *MIN_SPAN)
     ds = next(d for d in ir.datasources if d.id == ws.datasource)
@@ -710,6 +737,75 @@ def _view_box(ir: IR, ws: Worksheet, plan: MapPlan, options: MapOptions) -> Box:
             if fallback is not None:
                 return fallback.padded(PADDING, *MIN_SPAN)
     return WORLD
+
+
+def map_images(ir: IR, ws: Worksheet) -> list[BackgroundImage]:
+    """地圖上的背景圖片：X 是經度、Y 是緯度（Longitude／Latitude (generated)，或經度、緯度角色的欄位；
+    Tableau 的說明：「the X and Y axes should be longitude and latitude expressed as a decimal」），
+    工作表沒有停用。"""
+    ds = next(d for d in ir.datasources if d.id == ws.datasource)
+    fields = {f.id: f for f in ds.fields}
+
+    def role(field: str) -> str | None:
+        if field in (LONGITUDE_GENERATED, LATITUDE_GENERATED):
+            return "longitude" if field == LONGITUDE_GENERATED else "latitude"
+        found = fields.get(field)
+        return found.geo_role if found is not None else None
+
+    return [
+        image
+        for image in wanted_images(ws, ds.background_images)
+        if role(image.x) == "longitude" and role(image.y) == "latitude"
+    ]
+
+
+def _image_layers(
+    builder: _Builder, ws: Worksheet, images: list[BackgroundImage]
+) -> list[dict[str, Any]]:
+    """背景圖片（背景地圖選「無」的地圖）：圖片的四角是對應的經緯度，畫在最下層；條件與淡化、鎖定外觀
+    比例、翻轉與一般的檢視相同（見 tmig.render.background；地圖沒有反轉的座標軸）。分格時每一格都畫
+    （推定）。"""
+    from tmig.render.background import IMAGE, LAYER, URL, image_meta, shown
+
+    layers: list[dict[str, Any]] = []
+    for n, image in enumerate(images):
+        if not shown(image, builder.channels, builder.values):
+            continue
+        row: dict[str, Any] = {
+            f"{IMAGE}{n}": image.image,
+            f"{URL}{n}": None,
+            "lon": min(image.left, image.right),
+            "lat": min(image.top, image.bottom),
+            "lon2": max(image.left, image.right),
+            "lat2": max(image.top, image.bottom),
+        }
+        mark: dict[str, Any] = {
+            "type": "image",
+            "aspect": image.lock_aspect,
+            "align": "center",
+            "baseline": "middle",
+            "clip": True,
+            "tooltip": False,
+        }
+        if image.washout > 0:
+            mark["opacity"] = round(1 - image.washout, 4)
+        layers.append(
+            {
+                "name": f"{LAYER}{n}",
+                "data": {"values": [row]},
+                "transform": [{"filter": f"isValid(datum['{URL}{n}'])"}],
+                "mark": mark,
+                "encoding": {
+                    "longitude": {"field": "lon", "type": "quantitative"},
+                    "latitude": {"field": "lat", "type": "quantitative"},
+                    "longitude2": {"field": "lon2"},
+                    "latitude2": {"field": "lat2"},
+                    "url": {"field": f"{URL}{n}", "type": "nominal"},
+                },
+            }
+        )
+        builder.background_images.append(image_meta(n, image, ws, map_axes=True))
+    return layers
 
 
 def _washed(style: BaseStyle, washout: float) -> BaseStyle:

@@ -45,9 +45,13 @@ def layer_of(layer_id: str) -> MapLayerName | None:
     return None
 
 
-def map_options(style: etree._Element | None, hide_unknown: bool = False) -> MapOptions | None:
-    """工作表 <style> 中的地圖設定；都是預設值時為 None。"""
-    options = MapOptions(hide_unknown=hide_unknown)
+def map_options(
+    style: etree._Element | None, hide_unknown: bool = False, basemap: bool = True
+) -> MapOptions | None:
+    """工作表 <style> 中的地圖設定；都是預設值時為 None。basemap 為 False：背景地圖選「無」，座標軸的
+    固定範圍沒有 projection 屬性時是經緯度（不是 Web Mercator 的公尺；寫法取自公開報表）。"""
+    options = MapOptions(hide_unknown=hide_unknown, basemap=basemap)
+    degrees: dict[str, tuple[float, float]] = {}
     states: dict[MapLayerName, list[bool]] = {}
     ranges: dict[str, tuple[float, float]] = {}
     for rule in children(style, "style-rule"):
@@ -79,11 +83,23 @@ def map_options(style: etree._Element | None, hide_unknown: bool = False) -> Map
                     low, high = float(enc.get("min", "")), float(enc.get("max", ""))
                 except ValueError:
                     continue
-                ranges[axis] = (low, high)
+                if not basemap and enc.get("projection") is None:
+                    degrees[axis] = (min(low, high), max(low, high))
+                else:
+                    ranges[axis] = (low, high)
     # 同一個圖層的各部分（例如州名的各層級）一起開關：有任何一部分開啟就是開啟
     options.layers = {name: any(values) for name, values in states.items()}
     if "lat" in ranges and "lon" in ranges:
         options.viewport = _viewport(ranges["lon"], ranges["lat"])
+    elif "lat" in degrees and "lon" in degrees:
+        (west, east), (south, north) = degrees["lon"], degrees["lat"]
+        if east > west and north > south:
+            options.viewport = MapViewport(
+                west=round(west, 6),
+                south=round(south, 6),
+                east=round(east, 6),
+                north=round(north, 6),
+            )
     if options == MapOptions():
         return None
     return options

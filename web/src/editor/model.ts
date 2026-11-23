@@ -695,10 +695,11 @@ export function newTableCalc(id: string, type: string, options: Record<string, S
   };
 }
 
-/** 叢集（分析＞叢集）：叢集欄位與分析的量值（都在檢視中）。 */
+/** 叢集（分析＞叢集）：叢集欄位、分析的量值（都在檢視中）與維度（類別變數，以 ATTR 彙總，可以不在檢視中）。 */
 export interface ClusterIR {
   field: string;
   measures: FieldUse[];
+  categories?: FieldUse[];
   count: number | null;
 }
 
@@ -716,6 +717,8 @@ export interface ForecastIR {
   fill_zeros: boolean;
   confidence: number;
   bands: boolean;
+  /** 預測選項的「彙總依據」（Tableau 的 Aggregate by）：估計用的時間細度；沒有（null）為自動。 */
+  aggregate_by?: string | null;
 }
 
 /** 欄列架上的量值（預測的對象）。 */

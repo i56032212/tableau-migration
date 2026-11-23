@@ -501,6 +501,20 @@ export function Editor({
   const [filter, setFilter] = useState<FilterTarget | null>(null);
   const [calc, setCalc] = useState<{ field: CatalogField | null; datasource?: string } | undefined>(undefined);
   const [dialog, setDialog] = useState<EditorDialog | null>(null);
+  // 叢集對話框不擋住編輯器：開啟時換到資料窗格，欄位才拖得進「變數」；關閉之後回到原本的分頁
+  const clustering = dialog?.kind === "cluster";
+  const tabBeforeCluster = useRef<"data" | "analytics" | null>(null);
+  useEffect(() => {
+    if (clustering) {
+      setSideTab((tab) => {
+        tabBeforeCluster.current = tab;
+        return "data";
+      });
+    } else if (tabBeforeCluster.current) {
+      setSideTab(tabBeforeCluster.current);
+      tabBeforeCluster.current = null;
+    }
+  }, [clustering]);
   // 檢視上標題的右鍵選單：哪個欄位（檢視上的欄位鍵）、在哪裡開
   const [headerMenu, setHeaderMenu] = useState<{ key: string; anchor: DOMRect } | null>(null);
   // 格式＞動畫：活頁簿預設（報表裡的）與對話框

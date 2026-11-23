@@ -13,7 +13,7 @@
     （solid、dashed、dotted）為座標軸線的顏色、線寬與樣式
   - <style-rule element='gridline'>：line-visibility='off'、stroke-size='0'（不畫格線）；stroke-color、
     stroke-size、line-pattern-only 為格線的顏色、線寬與樣式（屬性名稱與零線、趨勢線、參考線相同；
-    格線與分隔線的寫法沒有樣本，是推定的）
+    格線、座標軸線與 table-div、header-div 的 line-pattern-only 在公開報表中都有樣本，含 dashed）
   - <style-rule element='table'>：format attr='background-color'（工作表的背景，可以透明）
   - <style-rule element='label'> 加上 field：format attr='display'（value='false' 不顯示離散欄位的標題）、
     attr='color'（標題成員或座標軸刻度文字的顏色）、attr='text-align'（標題成員的水平對齊：left、center、
@@ -37,9 +37,11 @@
     工作表）、label（標題成員與刻度；有 field 時為這個欄位）、cell（文字表）、field-labels、title、legend、
     legend-title、tooltip；活頁簿 <style> 的設定（all 為預設字型）在前；標記標籤為標記卡的 datalabel
   - 框線：element='cell'（儲存格）、'pane'（窗格）、'header'（表頭）的 border-style（none、solid、dashed、
-    dotted）、border-width、border-color（屬性名稱與 dashboard 區塊的框線相同；工作表的寫法沒有樣本，
-    是推定的）。合計與總計的框線是同樣的格式加上 data-class（subtotal 為合計、total 為總計，與網底的
-    寫法相同）與 scope（rows、cols），寫法也是推定的
+    dotted）、border-width、border-color（屬性名稱與 dashboard 區塊的框線相同）。合計與總計的框線是同樣的
+    格式加上 data-class（subtotal 為合計、total 為總計，與網底的寫法相同）與 scope（rows、cols），窗格與
+    表頭各自一組。寫法取自 GitHub 上公開的報表（Students-profile-analysis、Pre(Story)_05.12.21 等十幾份，
+    見 README「已知限制與待驗證」）；沒有 data-class 的框線也可能帶 scope（格式化框線的「列」「欄」頁），
+    兩個方向一起讀（公開報表中兩個方向的值相同，或是與預設相同的 none）
   - 分隔線：element='table-div'（窗格）與 'header-div'（標題）的 line-visibility、stroke-size、
     stroke-color、line-pattern-only（樣式，各自設定），table-div 的 div-level（第幾層標題之間，
     0 為不畫），以 scope 區分列與欄；沒有寫時
@@ -70,6 +72,7 @@ from tmig.ir.models import (
     LineStyle,
     Scalar,
     ShelfStyle,
+    StoryFormat,
     TextStyle,
     TotalBorder,
     TrendLine,
@@ -390,7 +393,7 @@ def _zero_line(raw: dict[str, str]) -> ZeroLine | None:
 BORDER_ATTRS = ("border-style", "border-width", "border-color")
 """框線的屬性：樣式（none、solid、dashed、dotted）、線寬（像素）與顏色（與 dashboard 區塊的框線相同）。"""
 TOTAL_CLASSES = {"subtotal": "subtotal", "total": "grand_total"}
-"""格式的 data-class → 合計（小計）、總計（推定：與網底的 data-class 相同的寫法）。"""
+"""格式的 data-class → 合計（小計）、總計（與網底的 data-class 相同的寫法，公開報表的樣本）。"""
 
 
 def _border(raw: dict[str, str]) -> Border | None:
@@ -798,6 +801,92 @@ def dashboard_background(dashboard: etree._Element) -> str | None:
     return color
 
 
+SPECIAL_VALUES = ("show-null-value-warning", "omit-on-special", "break-on-special")
+"""特殊值（格式＞窗格＞特殊值、「N 個 Null」指示器的選單）的格式，在工作表 <style> 的 element='table'。"""
+
+
+def null_indicator(
+    style: etree._Element | None, ignore: Callable[[etree._Element, str], None], name: str
+) -> bool:
+    """「N 個 Null」的指示器：沒有 field 的 show-null-value-warning='false' 是「隱藏指示器」（公開報表中
+    27 張工作表的寫法；故事點的格式差異也是這樣寫，見 tmig.parser.story_sheet）。帶 field 的特殊值設定
+    （標記顯示在預設位置、隱藏並連接或斷開線條）與指示器的對應沒有文件，記為略過。"""
+    shown = True
+    per_field = False
+    for rule in children(style, "style-rule"):
+        if rule.get("element") != "table":
+            continue
+        for item in children(rule, "format"):
+            if item.get("attr") not in SPECIAL_VALUES:
+                continue
+            if item.get("field") is not None:
+                per_field = True
+            elif item.get("attr") == "show-null-value-warning":
+                shown = item.get("value") != "false"
+    if per_field and style is not None:
+        ignore(
+            style,
+            f"工作表「{name}」個別欄位的特殊值設定（Null 值的標記、指示器）尚不解析：以預設呈現"
+            "（隱藏 Null 值的標記並顯示指示器）",
+        )
+    return shown
+
+
+STORY_ELEMENTS = {
+    ("table", "background-color"): "background",
+    ("story-title", "color"): "title_color",
+    ("story-title", "font-size"): "title_size",
+    ("story-title", "text-align"): "title_align",
+    ("story-point-caption", "background-color"): "navigator_background",
+    ("story-point-caption", "color"): "navigator_color",
+    ("story-description", "background-color"): "note_background",
+    ("story-description", "color"): "note_color",
+}
+"""Story 的 <style>（Story＞格式）→ StoryFormat 的欄位：element='table' 是 Story 的底色，story-title 是標題，
+story-point-caption 是導覽（故事點的標題方塊），story-description 是文字物件。寫法取自 GitHub 上公開的報表。"""
+STORY_NAMES = {
+    "story-title": "標題",
+    "story-point-caption": "導覽",
+    "story-description": "文字物件",
+    "table": "底色",
+}
+
+
+def story_format(
+    style: etree._Element | None, ignore: Callable[[etree._Element, str], None], name: str
+) -> StoryFormat | None:
+    """Story 的格式（<dashboard type='storyboard'> 的 <style>）；都是預設時為 None。平台沒有的格式（字型、
+    框線、外距、導覽的寬度等）與個別文字物件的格式（帶 id 的 story-description）記為略過。"""
+    found: dict[str, object] = {}
+    others: list[str] = []
+    for rule in children(style, "style-rule"):
+        element = rule.get("element") or ""
+        for item in children(rule, "format"):
+            attr, value = item.get("attr") or "", item.get("value")
+            key = STORY_ELEMENTS.get((element, attr))
+            if key is not None and item.get("id") is None:
+                # 透明、auto 等與預設相同的值不記
+                parsed: object
+                if key == "title_size":
+                    size = _int(value)
+                    parsed = min(max(size, 6), 72) if size else None
+                elif key == "title_align":
+                    parsed = _align(value)
+                else:
+                    parsed = _opaque(value)
+                if parsed is not None:
+                    found[key] = parsed
+                continue
+            label = STORY_NAMES.get(element, element)
+            if label not in others:
+                others.append(label)
+    if others and style is not None:
+        ignore(style, f"Story「{name}」的格式（{'、'.join(others)}的部分設定）尚不支援：以預設呈現")
+    if not found:
+        return None
+    return StoryFormat(**found)  # type: ignore[arg-type]
+
+
 def zone_style(element: etree._Element | None) -> ZoneStyle | None:
     """<zone-style> → ZoneStyle；沒有寫或都是預設（沒有外距、內距、框線與背景）時回傳 None。"""
     formats = {f.get("attr"): f.get("value") for f in children(element, "format")}
@@ -898,6 +987,8 @@ __all__ = [
     "SheetFormats",
     "dashboard_background",
     "default_text_color",
+    "null_indicator",
+    "story_format",
     "workbook_text",
     "worksheet_formats",
     "zone_style",

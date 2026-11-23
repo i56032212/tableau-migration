@@ -276,8 +276,8 @@ def test_stale_action_with_several_candidates_stays_static(tmp_path: Path) -> No
 
 def test_unsupported_story_states(tmp_path: Path) -> None:
     range_delta = (
-        f"<worksheet name='Target'><filter class='quantitative' column='{ref('sum:Sales:qk')}' "
-        "included-values='in-range'><min>10</min></filter></worksheet>"
+        f"<worksheet name='Target'><filter column='{ref('sum:Sales:qk')}' delta-type='edited' />"
+        "</worksheet>"
     )
     points = "".join(
         [
@@ -291,8 +291,8 @@ def test_unsupported_story_states(tmp_path: Path) -> None:
     ir = parse(tmp_path, story_workbook(story(points)))
     assert reasons(ir) == [
         "Story「Tour」的故事點「Gone」顯示的「Deleted Sheet」無法移轉",
-        # 量值的範圍篩選（彙總）不能由故事點改變；排序缺少欄位（排序本身見 test_story_states.py）
-        "Story「Tour」的故事點「Range」記下的篩選尚不支援",
+        # 認不得的篩選變更；排序缺少欄位（排序本身見 test_story_states.py）
+        "Story「Tour」的故事點「Range」記下的篩選的變更（edited）尚不支援",
         "Story「Tour」的故事點「Sort」記下的排序的欄位（缺少欄位）尚不支援",
         "Story「Tour」的故事點「Ghost」記下的工作表「Ghost」的狀態尚不支援",
         "Story「Tour」的故事點「Param」記下的狀態 <parameter-value>尚不支援",

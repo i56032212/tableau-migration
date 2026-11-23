@@ -7,6 +7,7 @@ API：
 - ``GET  /api/workbooks``：fixtures 中的報表
 - ``GET  /api/workbooks/{wb}/ir``：IR
 - ``POST /api/workbooks/{wb}/worksheets/{ws}/render``：依篩選與參數狀態查詢，回傳 Vega-Lite 規格（資料內嵌）與結果列數
+- ``POST /api/queries/{id}/cancel``：停止 render 的查詢（render 以 ``X-Tmig-Query`` 標出代號，見 tmig_service.query_stop）
 - ``POST /api/workbooks/{wb}/fields/{field}/domain``：篩選器的可選值，或最小值與最大值
 - ``GET  /api/workbooks/{wb}/cases``：cases.yaml 的篩選組合（已轉成篩選狀態），供檢視器切換
 - ``GET  /api/workbooks/{wb}/files/{path}``：報表的圖片（圖片區塊與圖片按鈕；.twbx 內或報表套件的 files/）
@@ -50,6 +51,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from tmig.access.permissions import ADMIN_ROLES, decide
 from tmig.catalog import Catalog, Report, workbook_url_name
 from tmig.data import initial_sql
+from tmig.data.cancel import QueryCancelled
 from tmig.data.executor import ExecutionError, format_value
 from tmig.data.runtime import DataRuntime
 from tmig.data.sources import SourceConnectionError
@@ -112,6 +114,7 @@ from tmig_service.downloads import (
     summary_value,
     xlsx_bytes,
 )
+from tmig_service.query_stop import QUERY_HEADER, RunningQueries
 from tmig_service.site import SiteStore, from_exports
 from tmig_service.store import STORE_ENV, ReportRecord, ReportStore
 from tmig_service.usage import UsageLog, Visit, summarize
@@ -435,6 +438,8 @@ def create_app(
     usage = UsageLog(usage_path) if usage_path is not None else None
     dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
     data = runtime or DataRuntime()
+    running = RunningQueries()
+    """render 中可以停止的查詢（tmig_service.query_stop）。"""
     authenticator = auth if isinstance(auth, Authenticator) else Authenticator(auth or load_auth())
     site = open_site(store, authenticator) if store is not None else None
     permissions: PermissionsSource = (
@@ -898,9 +903,23 @@ def create_app(
         wb: str, ws: str, user: User, request: Request, state: QueryState | None = None
     ) -> dict[str, Any]:
         """檢視器與編輯器要的圖表：日期的寫法依瀏覽器的語言（Accept-Language；與 Tableau 的活頁簿
-        地區設定是「自動」時相同，目前只有繁體中文不同，見 tmig.render.format.LOCALES）。"""
-        with display_locale(accept_language(request.headers.get("accept-language"))):
-            return render(wb, ws, user, state)
+        地區設定是「自動」時相同，目前只有繁體中文不同，見 tmig.render.format.LOCALES）。
+        X-Tmig-Query：查詢的代號，可以以 POST /api/queries/{代號}/cancel 停止（停止時回應 409）。"""
+        with (
+            display_locale(accept_language(request.headers.get("accept-language"))),
+            running.track(user, request.headers.get(QUERY_HEADER)),
+        ):
+            try:
+                return render(wb, ws, user, state)
+            except QueryCancelled as exc:
+                raise HTTPException(409, "已停止查詢") from exc
+
+    @app.post("/api/queries/{query_id}/cancel", status_code=204)
+    def cancel_query(query_id: str, user: User) -> Response:
+        """停止 render 的查詢（檢視上「更新中」的停止）：正在執行的中斷，還沒開始的不再執行。只能停止
+        自己的查詢；代號不存在（已經結束）時也回應 204。"""
+        running.stop(user, query_id)
+        return Response(status_code=204)
 
     def render(
         wb: str, ws: str, user: User, state: QueryState | None = None, summary: bool = False

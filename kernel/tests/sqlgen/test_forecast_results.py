@@ -59,7 +59,7 @@ INDICATOR = (
 def results_ir(
     tmp_path: Path,
     extra: dict[str, str] | None = None,
-    on_rows: tuple[str, ...] = ("fVal", "fUpr", "fLwr"),
+    on_rows: tuple[str, ...] = ("fVal", "fPIU", "fPIL"),
 ) -> Any:
     """月份的銷售：列上是實際值與預測值、上層預測區間、較低預測區間（on_rows），工具提示上是其餘的結果類型
     （趨勢、精度、精度 % 與品質）。"""
@@ -68,8 +68,8 @@ def results_ir(
         "fPrc": "forecast-precision",
         "fPct": "forecast-precision-percent",
         "fQly": "forecast-quality",
-        "fUpr": "forecast-upper-bound",
-        "fLwr": "forecast-lower-bound",
+        "fPIU": "forecast-prediction-interval-upper",
+        "fPIL": "forecast-prediction-interval-lower",
         **(extra or {}),
     }
     deps = [
@@ -98,7 +98,8 @@ def results_ir(
 
 def test_forecast_result_types_are_parsed(tmp_path: Path) -> None:
     """預測結果的各種類型是同一個量值加上結果類型（FieldUse.forecast），各自一欄並都列為預測的量值；
-    實際值與預測值（fVal:）是量值本身。forecast-column-type 的這些名稱沒有樣本（推定的）。"""
+    實際值與預測值（fVal:）是量值本身。上層、較低預測區間的 forecast-column-type（fPIU:、fPIL:）取自公開
+    報表（tests/parser/test_forecast_result_names.py），其餘的名稱沒有樣本（推定的）。"""
     ir = results_ir(tmp_path)
     assert ir.unsupported == [], [u.reason for u in ir.unsupported]
     ws = ir.worksheets[0]

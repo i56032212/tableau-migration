@@ -195,3 +195,62 @@ def test_forecast_result_menu_and_summary(engine: str) -> None:
         expect(pill(page)).to_have_text("SUM(Profit)")
         assert errors == []
         browser.close()
+
+
+def test_forecast_options_keep_the_aggregate_by(engine: str) -> None:
+    """預測選項的「彙總依據」（Tableau 的 Aggregate by，從 .twb 解析成 Forecast.aggregate_by）：對話框顯示目前的
+    設定，選項是「自動」與檢視的時間單位、比它細的單位；按「確定」時照樣存下（原本對話框重建預測的設定時把它丟掉，
+    從 Tableau 開啟的報表在編輯器裡存一次預測選項就改回自動）；改成「自動」時拿掉。"""
+    from playwright.sync_api import Page, expect, sync_playwright
+
+    def settle(page: Page) -> None:
+        page.wait_for_selector('.editor[data-saving="false"]')
+        page.wait_for_selector('.editor .worksheet[data-loading="false"]', timeout=30000)
+
+    def sheet() -> dict[str, Any]:
+        return call(engine, "/api/edit/demo/worksheets/ws_monthly_profit")["worksheet"]
+
+    body = sheet()
+    body["columns"][0]["date"]["unit"] = "year"
+    body["forecast"] = {
+        "measures": [{"field": "f_profit", "agg": "sum", "continuous": True}],
+        "aggregate_by": "month",
+    }
+    request = urllib.request.Request(
+        f"{engine}/api/edit/demo/worksheets/ws_monthly_profit",
+        data=json.dumps({"worksheet": body}).encode(),
+        headers={TOKEN_HEADER: TOKEN, "Content-Type": "application/json"},
+        method="PUT",
+    )
+    urllib.request.urlopen(request, timeout=60).close()
+    assert sheet()["forecast"]["aggregate_by"] == "month"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{engine}/?token={TOKEN}")
+        page.goto(f"{engine}/w/demo/edit/ws_monthly_profit")
+        settle(page)
+        side_tab(page, "分析")
+
+        page.get_by_role("button", name="預測 ✓").click()
+        dialog = page.locator(".forecast-dialog")
+        choice = dialog.get_by_label("彙總依據")
+        expect(choice).to_have_value("month")
+        options = choice.locator("option").all_inner_texts()
+        assert options == ["自動", "年", "季", "月", "週", "日", "小時"]
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        settle(page)
+        assert sheet()["forecast"].get("aggregate_by") == "month"
+
+        page.get_by_role("button", name="預測 ✓").click()
+        dialog.get_by_label("彙總依據").select_option("")
+        dialog.get_by_role("button", name="確定").click()
+        dialog.wait_for(state="detached")
+        settle(page)
+        assert sheet()["forecast"].get("aggregate_by") is None
+        assert errors == []
+        browser.close()

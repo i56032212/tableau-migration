@@ -506,6 +506,89 @@ def _total(name: str) -> Checker:
     return check
 
 
+MODEL_MAX_ARGS = 64
+"""MODEL_* 的參數個數上限（模型設定、分位數、目標，與預測變數和它們前面的設定）。"""
+
+
+def _model(name: str) -> Checker:
+    """MODEL_QUANTILE、MODEL_PERCENTILE（見 tmig.formula.predictive）：只支援 Tableau 文件寫明、數字可以確定
+    相同的線性迴歸；預測變數是量值或無序的維度（字串、布林，或標上 "unordered" 的其他型別）。"""
+    from tmig.formula.predictive import model_call
+
+    def check(args: list[Info], nodes: list[Node], pos: int) -> DataType:
+        call = model_call(name, nodes, pos)
+        if call.model == "gp":
+            raise FormulaSemanticError(
+                f"{name} 的高斯過程迴歸（model=gp）尚不支援：Tableau 沒有公開核函數與超參數的估計方式",
+                pos,
+                unsupported=True,
+            )
+        if call.model == "rl":
+            raise FormulaSemanticError(
+                f"{name} 的正規化線性迴歸（model=rl）尚不支援：Tableau 沒有公開預測變數的標準化方式"
+                "與量值預設擴增的多項式，懲罰的大小會不同",
+                pos,
+                unsupported=True,
+            )
+        unknown = sorted(set(call.settings) - {"lambda"})
+        if unknown:
+            raise FormulaSemanticError(
+                f"{name} 的模型設定「{'、'.join(unknown)}」無法辨識", pos, unsupported=True
+            )
+
+        def info(node: Node) -> Info:
+            return next(a for a, n in zip(args, nodes, strict=True) if n is node)
+
+        if call.quantile is not None:
+            q = info(call.quantile)
+            _need(
+                q.level == "const" and is_numeric(q.datatype),
+                f"{name} 的分位數必須是數字常值或參數",
+                pos,
+            )
+            node = call.quantile
+            if isinstance(node, LiteralNode) and not 0 < float(node.value) < 1:
+                raise FormulaSemanticError(
+                    f"{name} 的分位數必須在 0 與 1 之間（不含 0 與 1）", pos, unsupported=True
+                )
+        for node in (call.target, *(p.node for p in call.predictors)):
+            level = info(node).level
+            if level == "row":
+                raise FormulaSemanticError(
+                    f"{name} 的目標與預測變數不彙總的寫法尚不支援（只支援彙總）",
+                    pos,
+                    unsupported=True,
+                )
+            if level == "tc":
+                raise FormulaSemanticError(
+                    f"{name} 的目標或預測變數是 Table Calculation，尚不支援", pos, unsupported=True
+                )
+        _need(is_numeric(info(call.target).datatype), f"{name} 的目標必須是數字", pos)
+        for predictor in call.predictors:
+            datatype = info(predictor.node).datatype
+            if "ordered" in predictor.options:
+                raise FormulaSemanticError(
+                    f"{name} 中標上 ordered 的預測變數（有序的維度）尚不支援：Tableau 以 Legendre 多項式"
+                    "擴增，維度的值怎麼換成數字沒有公開",
+                    pos,
+                    unsupported=True,
+                )
+            if datatype in ("date", "datetime") and "unordered" not in predictor.options:
+                raise FormulaSemanticError(
+                    f"{name} 中日期的預測變數（有序的維度）尚不支援：Tableau 以 Legendre 多項式擴增，"
+                    "日期怎麼換成數字沒有公開",
+                    pos,
+                    unsupported=True,
+                )
+            if "augmentation=on" in predictor.options and not is_numeric(datatype):
+                raise FormulaSemanticError(
+                    f"{name} 中維度的預測變數擴增（augmentation=on）尚不支援", pos, unsupported=True
+                )
+        return "real"
+
+    return check
+
+
 def _sum(name: str) -> Checker:
     return _same_numeric(name)
 
@@ -783,6 +866,8 @@ _TABLE_CALC: list[tuple[str, int, int, Callable[[str], Checker]]] = [
     ("RANK_PERCENTILE", 1, 2, _rank_percentile),
     ("LOOKUP", 2, 2, _lookup),
     ("PREVIOUS_VALUE", 1, 1, _total),
+    ("MODEL_QUANTILE", 3, MODEL_MAX_ARGS, _model),
+    ("MODEL_PERCENTILE", 2, MODEL_MAX_ARGS, _model),
 ]
 
 

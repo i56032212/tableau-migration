@@ -120,7 +120,7 @@ export async function elementToPng(
   scale = Math.min(scale, CANVAS_SIDE / width, CANVAS_SIDE / height, Math.sqrt(CANVAS_AREA / (width * height)));
   // 捲動時固定標題的複本（照畫面的樣子畫的除外）、浮動的選單與提示不畫
   // 檢視器的介面（列數、資料切換、選取的提示）也不畫
-  clone.querySelectorAll(".frozen, .worksheet-overlay, .worksheet-meta, .action-menu, .popup-menu, .view-updating").forEach((e) => e.remove());
+  clone.querySelectorAll(".frozen, .worksheet-overlay, .worksheet-meta, .action-menu, .popup-menu, .view-updating, .view-suspended").forEach((e) => e.remove());
   // 圖片（.twbx 內的圖片、圖片按鈕）換成 data URL：SVG 中的圖片不會另外載入
   const images = Array.from(clone.querySelectorAll("img"));
   await Promise.all(

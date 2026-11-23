@@ -68,6 +68,7 @@ from tmig.ir.models import (
     Sort,
     TableCalc,
     TableCalcPreset,
+    TableCalcSort,
     TextRun,
     TextStyle,
     TupleFilter,
@@ -75,6 +76,7 @@ from tmig.ir.models import (
     Worksheet,
 )
 from tmig.ir.scope import calc_references
+from tmig.parser.animation import animation_rule
 from tmig.parser.background import disabled_images
 from tmig.parser.colors import (
     color_encodings,
@@ -113,6 +115,7 @@ from tmig.parser.fields import (
     value_type,
 )
 from tmig.parser.formats import (
+    null_indicator,
     pane_cell_align,
     pane_cell_valign,
     pane_label_font,
@@ -127,7 +130,9 @@ from tmig.parser.formats import (
 )
 from tmig.parser.maps import density_style, map_options
 from tmig.parser.model import graph_objects
+from tmig.parser.pages import page_history
 from tmig.parser.refs import qualified_parts
+from tmig.parser.set_members import members_use
 from tmig.parser.twbx import attr, child, children, descendants, local_name, text_of, xpath
 from tmig.parser.values import LiteralError, parse_literal
 from tmig.planner.state import use_key
@@ -145,15 +150,17 @@ FORECAST_RESULTS: dict[str, ForecastResultType] = {
     "forecast-precision-percent": "precision_percent",
     "forecast-precision-pct": "precision_percent",
     "forecast-quality": "quality",
-    "forecast-upper-bound": "upper",
-    "forecast-upper-prediction-interval": "upper",
-    "forecast-lower-bound": "lower",
-    "forecast-lower-prediction-interval": "lower",
+    "forecast-prediction-interval-upper": "upper",
+    "forecast-prediction-interval-lower": "lower",
     "forecast-none": "none",
 }
-"""column-instance 的 forecast-column-type → 預測的結果類型（膠囊選單的「預測結果」）。公開報表中只看過
-forecast-value（實際值與預測值）與 forecast-indicator；這裡的名稱沒有樣本，是依那兩個的寫法推定的。
-不在這裡的值一律不支援（報表進人工佇列），猜錯只會讓這種報表照舊留在人工佇列。"""
+"""column-instance 的 forecast-column-type → 預測的結果類型（膠囊選單的「預測結果」）。GitHub 上公開的報表
+（約 1000 份有預測結果的 .twb）中看過 forecast-value（實際值與預測值）、forecast-indicator，與上層、較低
+預測區間的 forecast-prediction-interval-upper／-lower（欄位實例的前綴 fPIU:、fPIL:）；趨勢、精度、精度 %、
+品質與「無」的名稱沒有樣本，是依這些寫法推定的。不在這裡的值一律不支援（報表進人工佇列），猜錯只會讓這種
+報表照舊留在人工佇列。"""
+FORECAST_UNITS = ("year", "quarter", "month", "week", "day", "hour")
+"""預測的期間單位（range-periods）與指定的彙總依據（forecast-agg）：Year-Trunc 等去掉 -Trunc。"""
 
 MARKS: dict[str, MarkType] = {
     "Automatic": "automatic",
@@ -490,6 +497,9 @@ class SheetParser:
         """工作表上的單一欄位篩選，以篩選的欄位實例名稱為鍵（跨資料源篩選與同一欄位的篩選合併用）。"""
         self.hide_unknown = False
         """地圖篩選掉未知的位置（Latitude／Longitude (generated) 的 non-null 篩選）。"""
+        self.set_members: dict[str, str] = {}
+        """以成員顯示的集合（顯示集合中的成員）：集合的欄位 id → 列出成員的隱藏計算欄位 id（見
+        tmig.parser.set_members）；集合的排序改成排它。"""
 
     # ------------------------------------------------------------ 入口
 
@@ -559,7 +569,12 @@ class SheetParser:
         table_calcs = self._table_calcs(rows, cols, mark_dims, _pie_keys(child(table, "panes")))
         filters, kinds = self._filters(view)
         self._shared_filters(view, main[0], filters, kinds)
-        sorts = self._sorts(view)
+        sorts = [
+            s.model_copy(update={"field": self.set_members[s.field]})
+            if s.field in self.set_members
+            else s
+            for s in self._sorts(view)
+        ]
         reference_lines = self._reference_lines(child(table, "panes"), child(table, "style"))
         annotations = self._annotations(child(table, "annotations"))
         forecast = self._forecast(child(table, "forecast-specification"))
@@ -576,7 +591,16 @@ class SheetParser:
         title = self._title(child(el, "layout-options"))
         self._check_label_text(card_uses, [marks, *(p.marks for p in panes)])
         on_map = any(u.field in GENERATED_FIELDS for u in [*rows, *cols])
-        options = map_options(child(table, "style"), self.hide_unknown) if on_map else None
+        # 背景地圖選「無」（地圖＞背景地圖＞無）：<mapsources><mapsource name='' />（寫法取自公開報表，
+        # 都是有背景圖片的地圖）；緯度、經度角色的欄位在欄列架上時也是地圖
+        sources = children(child(view, "mapsources"), "mapsource")
+        no_basemap = bool(sources) and all(not s.get("name") for s in sources)
+        by_id = {f.id: f for f in ds.fields}
+        roles = {by_id[u.field].geo_role for u in [*rows, *cols] if u.field in by_id}
+        if on_map or (no_basemap and {"latitude", "longitude"} <= roles):
+            options = map_options(child(table, "style"), self.hide_unknown, not no_basemap)
+        else:
+            options = None
         worksheet = Worksheet(
             id=sheet_id,
             name=self.name,
@@ -632,8 +656,13 @@ class SheetParser:
             disaggregated=disaggregated,
             pages=page_use,
             page=page,
+            page_history=page_history(
+                ctx, child(table, "page-trail-options"), self.name, page_use is not None
+            ),
             map=options,
             background_images_off=disabled_images(child(table, "style"), ds),
+            animation=animation_rule(ctx, child(table, "style")),
+            null_indicator=null_indicator(child(table, "style"), ctx.ignore, self.name),
             source_ref=xpath(el),
         )
         ctx.sheets[self.name] = SheetState(
@@ -806,18 +835,23 @@ class SheetParser:
                 element, f"工作表「{self.name}」開啟了預測，但檢視中沒有預測的量值：略過"
             )
             return None
+        aggregate_by: str | None = None
         if element.get("auto-forecast-agg") == "false":
-            # Tableau 2021.2 說明文件（forecast_options.htm、forecast_how_it_works.htm）：以指定的（較細的）
-            # 時間細度估計、再彙總回檢視的時間細度，忽略的最後幾期是估計的細度。估計與彙總回去的做法與「自動」
-            # 改用較細的細度時相同（tmig.planner.analytics 的 _refined_forecast），但 .twb 中指定的細度的寫法
-            # 沒有樣本，無法得知指定了哪一個細度
-            self.ctx.flag(
-                element,
-                f"工作表「{self.name}」的預測選項指定了「彙總依據」（不是「自動」）：Tableau 以指定的時間細度"
-                "估計、再彙總回檢視的時間細度；.twb 中指定的細度的寫法沒有樣本（無法得知指定了哪一個細度），"
-                "尚不支援",
-            )
-            return None
+            # 預測選項指定的「彙總依據」：forecast-agg 是估計的時間細度（Year-Trunc、Month-Trunc、Week-Trunc、
+            # Day-Trunc、Hour-Trunc，GitHub 上公開的報表）。Tableau 2021.2 說明文件（forecast_options.htm）：
+            # 通常與檢視的時間細度相同，也可以比檢視細（估計之後彙總回檢視的期，忽略的最後幾期是估計的細度）；
+            # 估計的做法見 tmig.planner.analytics。整數維度的 Periods 等其他寫法不支援
+            unit = (element.get("forecast-agg") or "").removesuffix("-Trunc").lower()
+            if unit not in FORECAST_UNITS or not (element.get("forecast-agg") or "").endswith(
+                "-Trunc"
+            ):
+                self.ctx.flag(
+                    element,
+                    f"工作表「{self.name}」的預測選項指定的「彙總依據」（{element.get('forecast-agg') or '沒有寫'}）"
+                    "不是年、季、月、週、日或時，尚不支援",
+                )
+                return None
+            aggregate_by = unit
         components = {
             "ets-none": "none",
             "ets-additive": "additive",
@@ -844,13 +878,12 @@ class SheetParser:
             season=components.get(element.get("season-type", "")),  # type: ignore[arg-type]
             length=length,  # type: ignore[arg-type]
             size=int(size) if size and size.isdigit() else None,
-            unit=periods
-            if periods in ("year", "quarter", "month", "week", "day", "hour")
-            else None,  # type: ignore[arg-type]
+            unit=periods if periods in FORECAST_UNITS else None,  # type: ignore[arg-type]
             ignore_last=max(ignore_last, 0),
             fill_zeros=element.get("fill-type") == "fill-zero",
             confidence=min(max(confidence, 0.01), 0.999),
             bands=element.get("show-prediction-bands") != "false",
+            aggregate_by=aggregate_by,  # type: ignore[arg-type]
         )
 
     def _cluster_spec(self, card_uses: list[FieldUse], disaggregated: bool) -> ClusterSpec | None:
@@ -1023,7 +1056,7 @@ class SheetParser:
 
     def _pages(self, element: etree._Element | None) -> tuple[FieldUse | None, Scalar]:
         """頁面架：一個維度（<pages><column>…</column></pages>）；目前的頁取自工作表視窗的
-        <current-page>。頁面的歷程記錄（page-trail-options）不支援，只顯示目前的頁。"""
+        <current-page>。顯示歷程（page-trail-options）見 tmig.parser.pages。"""
         columns = children(element, "column")
         if element is None or not columns:
             return None, None
@@ -1221,15 +1254,17 @@ class SheetParser:
         """欄列架與標記卡上的欄位。集合直接放在架上（沒有 IN/OUT 的欄位實例）是 Tableau 的「顯示集合中的
         成員」：列出集合所在維度的成員（並自動加上集合的篩選，見
         https://help.tableau.com/v2021.2/pro/desktop/en-us/sortgroup_sets_create.htm ，2026-11-23 查閱），
-        不是 In／Out；尚不支援（當成 In／Out 會把成員合成一列，數字不同）。"""
+        不是 In／Out：換成列出成員的隱藏計算欄位（tmig.parser.set_members）。"""
         assert self.ds is not None
         key = instance_key(ref or "")
         found = self.ds.by_name.get(key) if key not in self.instances else None
         if found is not None and found.set is not None:
-            self.ctx.flag(
-                anchor, f"{what}：集合「{found.caption}」以成員顯示（顯示集合中的成員）v0 不支援"
-            )
-            return None
+            members = members_use(self.ctx, self.ds, found)
+            if isinstance(members, str):
+                self.ctx.flag(anchor, f"{what}：{members}")
+                return None
+            self.set_members[found.id] = members.field
+            return members
         return self._use(ref, anchor, what)
 
     # ------------------------------------------------------------ 欄列架與標記
@@ -2272,6 +2307,9 @@ class SheetParser:
         direction = self._direction(calc_el, row_dims, col_dims, mark_dims)
         if direction is None:
             return None
+        if child(calc_el, "sort") is not None:
+            self.ctx.flag(calc_el, f"工作表「{self.name}」巢狀計算的自訂排序順序尚不支援")
+            return None
         return NestedTableCalc(
             field=field_id,
             preset=direction.preset,
@@ -2370,6 +2408,9 @@ class SheetParser:
         restart = self._level_ref(calc_el, "level-break")
         if level is False or restart is False:
             return None
+        sort = self._calc_sort(calc_el)
+        if sort is False:
+            return None
         caption = ds.field_by_id(use.field).caption
         tc_id = self.ctx.ids.make("tc", f"{calc_type} {caption}", f"{calc_type} {use.field}")
         use.table_calc = tc_id
@@ -2383,8 +2424,33 @@ class SheetParser:
             restart=restart,
             inferred=direction.inferred,
             options=options,
+            sort=sort,
             source_ref=xpath(calc_el),
         )
+
+    def _calc_sort(self, calc_el: etree._Element) -> TableCalcSort | Literal[False] | None:
+        """表計算的自訂排序順序（「編輯 Table Calculation」指定維度時的「排序順序＞自訂」）：
+        <table-calc ordering-type='Field'><order field='…' />…<sort direction='DESC' using='[資料源].[max:value:qk]' />
+        （寫法取自 GitHub 上公開的報表，using 是彙總後的欄位實例）。沒有時 None；無法移轉時列為不支援、回傳
+        False（排序的順序改變計算的結果）。"""
+        found = child(calc_el, "sort")
+        if found is None:
+            return None
+        using, direction = found.get("using") or "", found.get("direction") or "ASC"
+        use = self.resolve(using) if using else "沒有寫排序的欄位"
+        if isinstance(use, str) and using:
+            assert self.ds is not None
+            use = use_from_name(self.ds, instance_key(using))
+        if isinstance(use, str) or direction not in ("ASC", "DESC"):
+            reason = use if isinstance(use, str) else f"方向 {direction}"
+            self.ctx.flag(found, f"工作表「{self.name}」表計算的自訂排序順序無法移轉（{reason}）")
+            return False
+        if not self._is_measure(use) or use.table_calc is not None:
+            self.ctx.flag(
+                found, f"工作表「{self.name}」表計算的自訂排序順序不是依彙總的量值，尚不支援"
+            )
+            return False
+        return TableCalcSort(by=use, order="desc" if direction == "DESC" else "asc")
 
     def _difference(
         self, calc_el: etree._Element, direction: Direction, options: dict[str, Scalar]

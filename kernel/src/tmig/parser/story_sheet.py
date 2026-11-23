@@ -5,7 +5,9 @@
 
 - 排序：<computed-sort>、<natural-sort> 等與工作表 <view> 中相同的排序元素（取代同一個欄位的排序）；
   <shelf-sort-deltas><clear-shelf-sorts><clear-shelf-sort-v2 dimension shelf> 清除欄列架的排序
-- 欄列架：<rows>（<cols>）<column delta-type='removed' field=…>，從架上移除這個欄位
+- 欄列架：<rows>（<cols>、<columns>）<column delta-type='removed' field=…>，從架上移除這個欄位；
+  <column delta-type='added' field=… index=…> 加在架上的這個位置（移除之後的位置，推定：樣本都是先移除
+  再加在同一個位置，例如把週改成季）
 - 註解：<annotations><annotation delta-type='added'|'edited'|'removed' id=…>（其餘與工作表的註解相同）
 - 格式：<style delta-type='added'>，加在工作表 <style> 上的 style-rule：座標軸的範圍與標題、標題成員的
   文字方向、地圖的顯示範圍與「N 個 Null」的指示器
@@ -26,13 +28,16 @@ from lxml import etree
 from tmig.ir.models import (
     GENERATED_FIELDS,
     MEASURE_NAMES,
+    MEASURE_VALUES,
     Annotation,
     Axis,
     FieldUse,
+    Filter,
     MapViewport,
     Scalar,
     Sort,
     StorySheet,
+    StoryShelfField,
     Worksheet,
 )
 from tmig.parser.context import ParseContext, SheetState
@@ -71,11 +76,16 @@ class SheetDelta:
         self.flag = flag
         self.parser = SheetParser(ctx, element)
         self.parser.ds = sheet.ds
-        self.parser.instances = dict(sheet.instances)
+        # 資料源層級的欄位實例（資料源篩選用）：故事點的篩選也會用到工作表上沒有的欄位實例
+        self.parser.instances = {**sheet.ds.instances, **sheet.instances}
         self.parser.uses = dict(sheet.uses)
         self.sorts: list[Sort] = []
         self.cleared: list[str] = []
         self.removed: dict[str, list[FieldUse]] = {"rows": [], "cols": []}
+        self.added: dict[str, list[StoryShelfField]] = {"rows": [], "cols": []}
+        self.filters: list[Filter] = []
+        """量值、Top N 與條件篩選（以工作表的寫法解析，見 tmig.parser.story）。"""
+        self.removed_filters: list[str] = []
         self.annotations: list[Annotation] | None = None
         self.axes: list[Axis] = []
         self.viewport: MapViewport | None = None
@@ -110,6 +120,10 @@ class SheetDelta:
             cleared_sorts=self.cleared,
             removed_rows=self.removed["rows"],
             removed_columns=self.removed["cols"],
+            added_rows=self.added["rows"],
+            added_columns=self.added["cols"],
+            filters=self.filters,
+            removed_filters=self.removed_filters,
             annotations=self.annotations,
             axes=self.axes,
             viewport=self.viewport,
@@ -200,11 +214,16 @@ class SheetDelta:
     # ------------------------------------------------------------ 欄列架
 
     def shelf(self, item: etree._Element) -> None:
-        """<rows>／<cols> 的差異：<column delta-type='removed' field=…> 從架上移除。"""
-        shelf = local_name(item)
+        """<rows>／<cols>（<columns>）的差異：<column delta-type='removed' field=…> 從架上移除，
+        <column delta-type='added' field=… index=…> 加在架上。"""
+        shelf = "rows" if local_name(item) == "rows" else "cols"
         for entry in children(item):
-            if local_name(entry) != "column" or entry.get("delta-type") != "removed":
-                self.flag(entry, f"欄列架的變更（{entry.get('delta-type') or local_name(entry)}）")
+            delta = entry.get("delta-type")
+            if local_name(entry) != "column" or delta not in ("removed", "added"):
+                self.flag(entry, f"欄列架的變更（{delta or local_name(entry)}）")
+                continue
+            if delta == "added":
+                self._added(shelf, entry)
                 continue
             use = self.resolve(entry.get("field"), entry, "從欄列架移除的欄位")
             if use is None:
@@ -214,6 +233,34 @@ class SheetDelta:
                 self.ctx.ignore(entry, "故事點從欄列架移除的欄位已不在工作表上：略過")
                 continue
             self.removed[shelf].append(use)
+
+    def _added(self, shelf: str, entry: etree._Element) -> None:
+        """加在欄列架上的欄位：工作表沒有的 Table Calculation 設定、Measure Names／Values 尚不支援。"""
+        use = self.resolve(entry.get("field"), entry, "加在欄列架上的欄位")
+        if use is None:
+            return
+        if use.field in (MEASURE_NAMES, MEASURE_VALUES):
+            self.flag(entry, "加在欄列架上的 Measure Names／Measure Values")
+            return
+        key = instance_key(entry.get("field", ""))
+        instance = self.parser.instances.get(key)
+        new_calc = (
+            key not in self.sheet.uses
+            and instance is not None
+            and child(instance, "table-calc") is not None
+        )
+        if new_calc or (
+            use.table_calc is not None
+            and all(t.id != use.table_calc for t in self.worksheet.table_calcs)
+        ):
+            self.flag(entry, "加在欄列架上、工作表沒有的 Table Calculation 欄位")
+            return
+        try:
+            index = max(int(entry.get("index", "0")), 0)
+        except ValueError:
+            self.flag(entry, f"加在欄列架上的位置 {entry.get('index')}")
+            return
+        self.added[shelf].append(StoryShelfField(use=use, index=index))
 
     # ------------------------------------------------------------ 註解
 
@@ -308,12 +355,14 @@ class SheetDelta:
         removed = {use_key(u) for shelf in self.removed.values() for u in shelf}
         rows = [u for u in ws.rows if use_key(u) not in removed]
         cols = [u for u in ws.columns if use_key(u) not in removed]
+        rows += [a.use for a in self.added["rows"]]
+        cols += [a.use for a in self.added["cols"]]
         formats = worksheet_formats(style, self.parser.resolve, rows, cols, workbook_style)
         original = {(use_key(a.use), a.shelf): a for a in ws.axes}
         self.axes = [a for a in formats.axes if original.get((use_key(a.use), a.shelf)) != a]
         if any(u.field in GENERATED_FIELDS for u in [*rows, *cols]):
             hide = ws.map.hide_unknown if ws.map is not None else False
-            options = map_options(style, hide)
+            options = map_options(style, hide, ws.map.basemap if ws.map is not None else True)
             viewport = options.viewport if options is not None else None
             if viewport != (ws.map.viewport if ws.map is not None else None):
                 self.viewport = viewport

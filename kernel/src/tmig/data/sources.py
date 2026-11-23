@@ -326,6 +326,10 @@ class DuckDBExecutor:
         if self.con.description:
             self.con.fetchall()
 
+    def cancel(self) -> None:
+        """中斷正在執行的查詢（tmig.data.cancel；從別的執行緒呼叫）。"""
+        self.con.interrupt()
+
     def close(self) -> None:
         self.con.close()
 
@@ -380,6 +384,10 @@ class PostgresExecutor:
             self.con.execute(sql)
         finally:
             self.con.execute("SET default_transaction_read_only = on")
+
+    def cancel(self) -> None:
+        """中斷正在執行的查詢（tmig.data.cancel；從別的執行緒呼叫）：送出 PostgreSQL 的取消要求。"""
+        self.con.cancel()
 
     def close(self) -> None:
         self.con.close()

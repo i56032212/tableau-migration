@@ -1,7 +1,8 @@
-"""查詢之後的分析：叢集（tmig.planner.cluster）與預測（tmig.planner.forecast）。
+"""查詢之後的分析：叢集（tmig.planner.cluster）、預測模型函式（tmig.planner.predictive）與預測
+（tmig.planner.forecast）。
 
-工作表的 SQL 照常查詢（叢集欄位是常數 0、Forecast Indicator 是常數 "Actual"），執行後依
-WorksheetSql.analytics 的計畫補上叢集編號、預測的估計值與預測區間。每條執行路徑（萃取、Live）都在
+工作表的 SQL 照常查詢（叢集欄位是常數 0、MODEL_* 是 Null、Forecast Indicator 是常數 "Actual"），執行後依
+WorksheetSql.analytics 的計畫補上叢集編號、預測模型函式的結果、預測的估計值與預測區間。每條執行路徑（萃取、Live）都在
 執行器的最後呼叫 apply()。
 
 預測選「自動」時 Tableau 會改以較細的時間估計（Tableau 2021.2 說明文件「How Forecasting Works in Tableau」的
@@ -26,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tmig.ir.models import Forecast
+from tmig.planner.predictive import ModelPlan
 
 ESTIMATE = "Estimate"
 ACTUAL = "Actual"
@@ -99,6 +101,8 @@ Fetch = Callable[[Any], tuple[list[str], list[tuple[Any, ...]]]]
 class Analytics:
     cluster: ClusterPlan | None = None
     forecast: ForecastPlan | None = None
+    models: list[ModelPlan] = field(default_factory=list)
+    """預測模型函式（MODEL_QUANTILE、MODEL_PERCENTILE，見 tmig.planner.predictive）。"""
     notes: list[str] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
     """計算之後的模型摘要（「描述叢集」「描述預測」）：cluster、forecast。"""
@@ -116,6 +120,10 @@ def apply(
         return columns, rows
     if analytics.cluster is not None:
         rows = _clusters(analytics.cluster, columns, rows, analytics.details)
+    if analytics.models:
+        from tmig.planner.predictive import apply_models
+
+        rows = apply_models(analytics.models, columns, rows)
     if analytics.forecast is not None:
         plan = analytics.forecast
         finer = _refinement(plan, columns, rows, fetch)
@@ -352,6 +360,25 @@ FINER_NAMES = {
 """檢視的細度 → Tableau 改用的細度（說明文件）。月沒有較細的估計。"""
 SUB_PERIODS = {"year": 4, "quarter": 3, "week": 7}
 """平台照做的細度（年→季、季→月、週→日）：檢視的一期有幾個較細的期。"""
+SUB_COUNTS = {
+    ("year", "quarter"): 4,
+    ("year", "month"): 12,
+    ("quarter", "month"): 3,
+    ("week", "day"): 7,
+}
+"""（檢視的細度, 估計的細度）→ 檢視的一期有幾個較細的期：「自動」的三種，加上預測選項指定「彙總依據」時的
+年→月（與 tmig.sqlgen.query 的 CHOSEN_FINER 相同）。"""
+UNIT_NAMES = {
+    "year": "年",
+    "year_number": "年",
+    "quarter": "季",
+    "month": "月",
+    "week": "週",
+    "day": "日",
+    "hour": "時",
+    "minute": "分",
+    "second": "秒",
+}
 COUNT_WORDS = {
     "year": "年",
     "year_number": "年",
@@ -399,10 +426,14 @@ def _refinement(
     做法沒有寫明時 UnsupportedForecast（說明工作表、細度與期數）。
 
     期數的算法沒有寫（算不算沒有資料的期、忽略的最後幾期、各條時間序列還是整個檢視）：最少的算法也不少於
-    9 期時不會改；最多的算法也少於 9 期時一定會改；之間的列為不支援。"""
+    9 期時不會改；最多的算法也少於 9 期時一定會改；之間的列為不支援。
+
+    預測選項指定了「彙總依據」時不依期數判斷，見 _chosen_refinement。"""
+    settings = plan.settings or Forecast(measures=[])
+    if settings.aggregate_by is not None:
+        return _chosen_refinement(plan, columns, rows, fetch)
     if not plan.additive or plan.unit not in FINER_NAMES:
         return None
-    settings = plan.settings or Forecast(measures=[])
     time_at = columns.index(plan.time)
     series_at = [columns.index(s) for s in plan.series]
     groups = _series_times(rows, time_at, series_at)
@@ -444,7 +475,17 @@ def _refinement(
                 f"{head}；以季估計也只有 {quarters} 季：說明文件說資料仍不夠時改以月估計，沒有寫明"
                 "怎樣算不夠，尚不支援"
             )
-    view_of = _view_periods(min(everything), plan.unit)
+    _check_last_period(plan, min(everything), fine_groups, head)
+    return fine_columns, fine_rows
+
+
+def _check_last_period(
+    plan: ForecastPlan, first: Any, fine_groups: dict[tuple[Any, ...], set[Any]], head: str
+) -> None:
+    """各條時間序列較細的資料要到檢視最後一期的期末：不完整的最後一期怎麼處理說明文件沒有寫，列為不支援。"""
+    assert plan.finer is not None
+    word = COUNT_WORDS[plan.unit]
+    view_of = _view_periods(first, plan.unit)
     for times in fine_groups.values():
         last = max(times)
         if view_of(_step(last, plan.finer.unit, 1)) == view_of(last):
@@ -452,6 +493,48 @@ def _refinement(
                 f"{head}；最後一{word[-1]}（{_iso(view_of(last))} 起）的資料只到 {_iso(last)}，"
                 "說明文件沒有寫以較細的時間估計時怎麼處理不完整的最後一期，尚不支援"
             )
+
+
+def _chosen_refinement(
+    plan: ForecastPlan,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    fetch: Fetch | None,
+) -> tuple[list[str], list[tuple[Any, ...]]] | None:
+    """預測選項指定的「彙總依據」（Forecast.aggregate_by）：與檢視的細度相同時以檢視的期估計（不另外取得
+    較細的資料，也不依期數改用較細的細度）；比檢視細時一律以它估計再彙總回檢視的期（說明文件
+    forecast_options.htm：通常與檢視相同、也可以比檢視細，忽略的最後幾期是估計的細度）。彙總回去的做法與
+    「自動」相同（SUM、COUNT 加總；其他彙總怎麼回去文件沒有寫）。平台照做的組合是 SUB_COUNTS，其餘、比檢視粗
+    與文件沒有寫明的情況列為不支援。"""
+    settings = plan.settings or Forecast(measures=[])
+    chosen = settings.aggregate_by
+    view = "year" if plan.unit == "year_number" else plan.unit
+    if chosen is None or chosen == view:
+        return None
+    where = f"工作表「{plan.worksheet}」的預測" if plan.worksheet else "預測"
+    head = (
+        f"{where}：預測選項指定以{UNIT_NAMES.get(chosen, chosen)}估計（檢視的時間是"
+        f"{UNIT_NAMES.get(plan.unit, plan.unit)}{'份' if plan.unit == 'year_number' else ''}），"
+        "Tableau 估計之後彙總回檢視的期"
+    )
+    if (plan.unit, chosen) not in SUB_COUNTS:
+        raise UnsupportedForecast(f"{head}；這個組合尚不支援")
+    if len(plan.additive) != len(plan.measures):
+        raise UnsupportedForecast(
+            f"{head}；量值不是 SUM 或 COUNT 時怎麼彙總回檢視的期說明文件沒有寫，尚不支援"
+        )
+    if plan.blocker is not None:
+        raise UnsupportedForecast(f"{head}；{plan.blocker}，尚不支援")
+    if plan.finer is None or fetch is None:
+        raise UnsupportedForecast(f"{head}；這裡不能另外查詢較細的資料，尚不支援")
+    time_at = columns.index(plan.time)
+    dated = [row[time_at] for row in rows if row[time_at] is not None]
+    fine_columns, fine_rows = fetch(plan.finer.query)
+    if not dated:
+        return fine_columns, fine_rows
+    fine_at = fine_columns.index(plan.finer.time)
+    fine_series = [fine_columns.index(s) for s in plan.series]
+    _check_last_period(plan, min(dated), _series_times(fine_rows, fine_at, fine_series), head)
     return fine_columns, fine_rows
 
 
@@ -528,7 +611,10 @@ def _refined_forecast(
         timeline = _timeline(times[0], times[-1], fine_unit)
         trim = min(max(settings.ignore_last, 0), len(timeline) - 1)
         fitted_times = timeline[: len(timeline) - trim]
-        ahead = _horizon(settings, unit, rows[dated[-1]][time_at], AUTO_LENGTH) * SUB_PERIODS[unit]
+        ahead = (
+            _horizon(settings, unit, rows[dated[-1]][time_at], AUTO_LENGTH)
+            * SUB_COUNTS[(unit, fine_unit)]
+        )
         future = [_step(timeline[-1], fine_unit, k) for k in range(1, ahead + 1)]
         estimated = [*timeline[len(timeline) - trim :], *future]
         horizon = len(estimated)

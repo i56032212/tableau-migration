@@ -19,6 +19,7 @@ from tmig.ir.integrity import iter_zones
 from tmig.ir.models import (
     DEVICE_SIZES,
     Button,
+    ControlOptions,
     ControlType,
     Dashboard,
     DeviceLayout,
@@ -408,6 +409,7 @@ class DashboardParser:
             field=use,
             control=control,
             relevant=element.get("values") == "relevant",
+            options=control_options(self.ctx, element, name or ""),
             show_title=element.get("show-title") != "false",
             **base,
         )
@@ -613,6 +615,53 @@ def filter_control(
     else:
         return f"篩選控制項的樣式 {mode} v0 不支援"
     return use, control
+
+
+CONTROL_FLAGS = {
+    "show-all": "show_all",
+    "show-search": "show_search",
+    "show-exclude": "show_exclude",
+}
+"""篩選控制項選單「自訂」的開關（.twb 只寫與預設不同的；公開報表中看過 show-all='false'、show-search='false'、
+show-exclude='false'、show-apply='true'）→ ControlOptions 的欄位。"""
+UNSUPPORTED_CUSTOMIZATIONS = {
+    "show-null-ctrls": "顯示 Null 控制項",
+    "show-domain": "顯示讀數",
+    "show-slider": "顯示滑桿",
+    "show-morefewerbutton": "顯示更多／更少按鈕",
+    "show-mode": "顯示控制項類型",
+    "show-filter-state": "顯示「顯示所有值」按鈕",
+    "show-reldate-picker": "相對日期的選擇器",
+}
+"""平台沒有的自訂（Tableau 2021.2 說明文件 filtering.htm 的 Customize 選單）：記為略過、以預設呈現。屬性與
+選項的對應依名稱與公開報表中出現的控制項推定（show-domain 出現在範圍的篩選上，推定是讀數）。"""
+
+
+def control_options(
+    ctx: ParseContext, element: etree._Element, sheet_name: str
+) -> ControlOptions | None:
+    """篩選控制項（dashboard 的區塊或工作表上的 <card type='filter'>）的自訂：顯示「全部」值、搜尋按鈕、
+    包含／排除、套用按鈕，與值的範圍「內容中的所有值」（values='context'；relevant 另外記在
+    Zone.relevant、SheetControl.relevant）。都是預設時為 None。平台沒有的自訂記為略過。"""
+    found: dict[str, bool] = {}
+    for name, key in CONTROL_FLAGS.items():
+        value = element.get(name)
+        if value in ("true", "false"):
+            found[key] = value == "true"
+    if element.get("show-apply") == "true":
+        found["show_apply"] = True
+    if element.get("values") == "context":
+        found["context_values"] = True
+    others = [
+        label for name, label in UNSUPPORTED_CUSTOMIZATIONS.items() if element.get(name) is not None
+    ]
+    if others:
+        ctx.ignore(
+            element,
+            f"工作表「{sheet_name}」篩選控制項的自訂（{'、'.join(others)}）尚不支援：以預設呈現",
+        )
+    options = ControlOptions(**found)
+    return None if options == ControlOptions() else options
 
 
 def parameter_control(ctx: ParseContext, element: etree._Element) -> tuple[str, ControlType] | str:

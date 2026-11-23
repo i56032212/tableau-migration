@@ -40,6 +40,13 @@ def mercator_y(lat: float) -> float:
     return math.log(math.tan(math.pi / 4 + phi / 2))
 
 
+def projected_y(lat: float, linear: bool = False) -> float:
+    """緯度 → 投影的 y（弧度）：麥卡托，或等距（linear：背景地圖選「無」時的經緯度座標）。"""
+    if linear:
+        return math.radians(max(-90.0, min(90.0, lat)))
+    return mercator_y(lat)
+
+
 def normalize_lon(lon: float) -> float:
     return (lon + 180.0) % 360.0 - 180.0
 
@@ -95,27 +102,29 @@ class Box:
     def east(self) -> float:
         return self.center + self.half
 
-    def scale(self, width: float, height: float) -> float:
+    def scale(self, width: float, height: float, linear: bool = False) -> float:
         """投影填滿 width × height 時的比例（像素／弧度）。"""
         dx = math.radians(2 * self.half) or 1e-9
-        dy = (mercator_y(self.north) - mercator_y(self.south)) or 1e-9
+        dy = (projected_y(self.north, linear) - projected_y(self.south, linear)) or 1e-9
         return min(width / dx, height / dy)
 
-    def zoom(self, width: float, height: float) -> float:
+    def zoom(self, width: float, height: float, linear: bool = False) -> float:
         """Web 地圖的縮放層級（世界寬 256 × 2^z 像素）。"""
-        return math.log2(2 * math.pi * self.scale(width, height) / 256)
+        return math.log2(2 * math.pi * self.scale(width, height, linear) / 256)
 
-    def project(self, width: float, height: float) -> Projector:
-        return Projector(self, width, height)
+    def project(self, width: float, height: float, linear: bool = False) -> Projector:
+        return Projector(self, width, height, linear)
 
 
 class Projector:
-    """填滿 width × height、以 box 置中的麥卡托投影（與 Vega 的 fit 相同）：經緯度 → 像素。"""
+    """填滿 width × height、以 box 置中的麥卡托投影（與 Vega 的 fit 相同；linear 為等距投影，Vega 的
+    equirectangular）：經緯度 → 像素。"""
 
-    def __init__(self, box: Box, width: float, height: float) -> None:
+    def __init__(self, box: Box, width: float, height: float, linear: bool = False) -> None:
         self.box = box
-        self.k = box.scale(width, height)
-        y0, y1 = mercator_y(box.south), mercator_y(box.north)
+        self.linear = linear
+        self.k = box.scale(width, height, linear)
+        y0, y1 = projected_y(box.south, linear), projected_y(box.north, linear)
         self.x_offset = width / 2
         self.y_offset = height / 2 + self.k * (y0 + y1) / 2
 
@@ -123,12 +132,15 @@ class Projector:
         dx = normalize_lon(lon - self.box.center)
         return (
             self.x_offset + self.k * math.radians(dx),
-            self.y_offset - self.k * mercator_y(lat),
+            self.y_offset - self.k * projected_y(lat, self.linear),
         )
 
     def arrays(self, lons: Any, lats: Any) -> tuple[np.ndarray, np.ndarray]:
         """經緯度的陣列 → 像素的陣列（空間資料的形狀依畫面簡化時使用）。"""
         dx = (np.asarray(lons, dtype=float) - self.box.center + 180.0) % 360.0 - 180.0
+        if self.linear:
+            phi = np.radians(np.clip(np.asarray(lats, dtype=float), -90.0, 90.0))
+            return self.x_offset + self.k * np.radians(dx), self.y_offset - self.k * phi
         phi = np.radians(np.clip(np.asarray(lats, dtype=float), -MAX_LATITUDE, MAX_LATITUDE))
         return (
             self.x_offset + self.k * np.radians(dx),
@@ -138,5 +150,7 @@ class Projector:
     def invert(self, x: float, y: float) -> tuple[float, float]:
         """像素 → 經緯度（經度在 box 的中心 ±180 之內，可能超出 ±180）。"""
         lon = self.box.center + math.degrees((x - self.x_offset) / self.k)
+        if self.linear:
+            return lon, math.degrees((self.y_offset - y) / self.k)
         lat = math.degrees(2 * math.atan(math.exp((self.y_offset - y) / self.k)) - math.pi / 2)
         return lon, lat

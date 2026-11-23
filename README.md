@@ -21,7 +21,7 @@
 全域篩選與篩選群組、自動尺寸的 dashboard、裝置專屬版面（手機、平板）、註解、dashboard 上的圖片、按鈕與網頁、Measure Names／Values、同一架多個量值與雙軸、圓餅、
 排除選取的標記、篩選動作（點選標記篩選其他工作表）、醒目提示動作與醒目提示控制項、網址、參數與切換動作、階層的切入、工具提示中的工作表、群組與數值分組、
 相對日期、條件與萬用字元篩選、在一般選取中取 Top N、差異與差異百分比、移動計算、參考線、趨勢線、甜甜圈與各標記卡不同的詳細程度、
-Story（故事點記下的篩選動作、篩選、選取、排序、欄列架上移除的欄位、註解、座標軸與地圖的範圍、頁）、集合（Top N、固定成員與條件集合）與集合動作、巢狀 LOD、
+Story（故事點記下的篩選動作、篩選、選取、排序、欄列架上移除與加上的欄位、量值與 Top N 篩選、移除的篩選、註解、座標軸與地圖的範圍、頁）、集合（Top N、固定成員與條件集合）與集合動作、巢狀 LOD、
 動態參數（開啟報表時取自欄位的目前值與允許值）、以參數切換日期單位（DATETRUNC／DATEADD／DATEDIFF／DATEPART／DATENAME 的日期部分為字串參數）、LOD 的維度為運算式
 （例如 MONTH([Date])、[Resort]=[參數]）、參數直接放在標記卡上、dashboard 文字物件中的參數與格式（粗體、字級、顏色、對齊）。
 31 張工作表 × 4 組篩選共 124 項計算比對全部通過，
@@ -72,7 +72,7 @@ INCLUDE／EXCLUDE LOD（相對於排序或篩選的維度）、開啟報表時�
 可直接開始的從 23 份增加到 37 份。巢狀 Table Calculation 也已支援（內層先算成欄位，巢狀計算各自的
 計算方向），HR 人資報表原本無法查詢的 5 張工作表都能查詢。盤點也加上產生查詢時才知道的不支援
 （例如總計中的 Table Calculation）。Story 也已支援：故事點顯示的 dashboard 或工作表，以及記下的篩選動作、
-篩選（成員、所有的值、範圍）、選取、參數、排序、從欄列架上移除的欄位、註解、座標軸（範圍、標題、文字方向）、地圖的範圍與
+篩選（成員、所有的值、範圍）、選取、參數、排序、從欄列架上移除與加上的欄位、量值與 Top N 篩選、移除的篩選、註解、座標軸（範圍、標題、文字方向）、地圖的範圍與
 頁面架目前的頁（見「已知限制與待驗證」），含 Story 的 3 份公開報表因此可直接開始，共 40 份。
 集合（Set）也已支援：Top N、固定成員與條件集合轉成 TRUE／FALSE 的欄位，IN/OUT 顯示為 In／Out（或欄位實例上的
 別名），可以放在架上、篩選架與計算欄位中；Top N 與條件集合與 Tableau 相同，以內容篩選後、維度篩選前的資料決定成員。
@@ -937,11 +937,14 @@ Tableau Desktop 2021.2 相同，由上到下：
   分頁之後接在一起印（每一頁的印法與目前的頁面相同），印完回到原本的頁，不留在檢視的歷程裡
 - **分析**：參考線（平均、中位數、總和、總計、最小、最大、常數）、參考區間、分布（百分位數、標準差、分位數）、
   盒鬚圖、趨勢線（線性、對數、指數、冪、多項式，信賴區間、通過原點）、預測（預測選項：自動、正好或直到 N 個
-  年／季／月／週／日／小時，忽略最後幾期、以 0 填補缺少的值，自動、不含季節性或自訂的趨勢與季節模型，90／95／99%
+  年／季／月／週／日／小時，彙總依據（自動或指定的時間單位，.twb 的指定也解析）、忽略最後幾期、以 0 填補缺少的值，自動、不含季節性或自訂的趨勢與季節模型，90／95／99%
   的預測區間；選「自動」時與 Tableau 相同，檢視中少於 9 年（季、週）的資料且量值是 SUM 或 COUNT 時改以季（月、日）
   估計再加總回檢視的期（描述預測寫出實際使用的細度）；資料窗格加上 Forecast Indicator，量值膠囊的「預測結果」：實際值與預測值、趨勢、精度、精度 %、品質、
-  上層／較低預測區間、無）、叢集（變數預設為檢視中的量值，也可以是維度（類別變數，以 ATTR 在檢視的詳細程度彙總，可以不在檢視中；
-  編輯器的介面還不能加入，API 可以）；彙總量值關閉時每一列資料分叢集；叢集數自動或指定，叢集欄位放到
+  上層／較低預測區間、無）、叢集（與 Tableau 的叢集對話框相同不擋住編輯器：開啟時側欄換到資料窗格，從資料窗格或架上把欄位拖進「變數」、
+  拖出變數區或按 × 移除，關閉之後回到原本的分頁；變數預設為檢視中的量值，維度是類別變數，以 ATTR 在檢視的詳細程度
+  彙總、可以不在檢視中，顯示成 ATTR(Category)；Table Calculation、群組、集合、數值分組、日期、空間欄位與
+  Measure Names／Values 不能當變數，拖進來時說明原因；檢視以外的量值還不能加入；至少要有一個量值）；
+  彙總量值關閉時每一列資料分叢集；叢集數自動或指定，叢集欄位放到
   色彩上，以 Cluster N 顯示）、彙總量值（關閉時量值不彙總，
   每一列資料是一個標記，完全相同的列也各是一個標記；只有維度時相同的組合只畫一個；與總計一起使用尚不支援）
 - **註解**（分析的「註解…」或選取標記後的「💬 註解…」）：標記的註解跟著選取的標記，點與區域的註解以座標軸上的值
@@ -1339,11 +1342,24 @@ API 見 `tmig_service.publishing`（發布、版本、比較、回復、下載�
   - **檢視更新中**：重新查詢或新的圖還沒畫好（例如地圖「只保留」之後要下載更細的底圖與形狀）超過 0.3 秒時，檢視上
     蓋一層「更新中…」的標示，畫好之前不接受框選、點選與拖曳（落在還沒畫好的圖上什麼都選不到）；工作表標著
     `data-updating`。很快就畫好的重畫（選取標記之後）不顯示
+  - **停止**（Tableau：處理互動太久時可以停止，停止之後檢視像暫停自動更新一樣；`web/src/viewUpdates.ts`、
+    `tmig_service.query_stop`、`tmig.data.cancel`）：「更新中…」上有「停止」。按下去之後
+    頁面上所有的檢視一起停止（停止的是這一次互動，dashboard 上每一張工作表都暫停）：進行中的查詢請求中止，並以
+    查詢代號請查詢服務中斷伺服器上的查詢（`POST /api/queries/{代號}/cancel`，萃取以 DuckDB 的 interrupt、Live
+    連線以驅動程式的取消——目前 PostgreSQL 與 DuckDB；其他驅動程式送出的查詢在資料庫照常跑完、結果丟掉，與
+    Tableau 的「放棄」相同）；新的圖還沒畫好時回到最後畫好的那一張。暫停中的檢視照常可以點選、框選，但狀態改變
+    不查詢：要的狀態與畫面上的不同時圖淡化、上方標示「已停止更新，顯示的是之前的結果」與「繼續更新」（工作表標著
+    `data-suspended`、`data-stale`）。「繼續更新」以目前的狀態重新查詢；工具列的復原回到畫面上的那個狀態時不必
+    查詢、整頁恢復更新；重新整理（編輯器裡改了工作表）也恢復更新
   - **標記的動畫**（`web/src/markAnimation.ts`，Tableau 2020.1 起的「格式＞動畫」）：報表的活頁簿預設或工作表開了
     動畫時，篩選、排序、頁面、參數與動作改變檢視之後，長條與點、方塊、形狀從原本的位置移到新的位置、大小與顏色
     跟著變，新出現的淡入、消失的以原本的樣子淡出，標記的標籤最後淡入；「同時」三者一起，「依序」先淡出、再移動、
-    最後淡入。第一次畫、選取與醒目提示不動；系統設定減少動態效果時不動。與 Tableau 相同地圖、圓餅、文字標記、
-    標題、參考線與趨勢線不動，折線與區域本平台也不動（見「已知限制與待驗證」）
+    最後淡入。折線與區域：同一條線（依色彩等分開線的維度與所在的窗格認得）的形狀從原本的點內插到新的點（線上的
+    點依標記的身分對應，新出現的點從原本的線上相鄰的點長出來、消失的點縮到新的線上相鄰的點；階梯線照樣是階梯），
+    新出現的線淡入、消失的線淡出。連續的座標軸（數字、日期）：同一個值的刻度文字、刻度線與格線移到新的位置，新的
+    刻度從原本的比例尺上的位置移過來並淡入，比例尺之外的移到新的位置並淡出（都裁在圖的範圍內）；離散的座標軸
+    （標題）與 Tableau 相同不動。第一次畫、選取與醒目提示不動；系統設定減少動態效果時不動。與 Tableau 相同地圖、
+    圓餅、文字標記、標題、參考線與趨勢線不動（見「已知限制與待驗證」）
 - **多選下拉的篩選控制項**：選單浮在 dashboard 上面（不受篩選區塊的大小限制，下方放不下時往上開），勾選時不收，
   點別的地方或按 Esc 收起來
 - **框選**（Tableau 預設的矩形選取工具）：在圖上按住左鍵拖曳出方框，方框碰到的標記都選取——與點選多個標記相同
@@ -1441,8 +1457,10 @@ Latitude／Longitude (generated) 在欄列架上（或緯度、經度角色的�
 - **背景圖片**（地圖＞背景圖片，`Datasource.background_images`）：資料源的圖片畫在標記之下，左右、上下的邊對應 X、Y
   欄位的值。工作表的欄架上有 X 欄位、列架上有 Y 欄位（連續）時顯示，各工作表可以停用（`Worksheet.background_images_off`）；
   有淡化、鎖定外觀比例、一律顯示整張圖片與顯示的條件。.twbx 中的圖片（Image/）存報表套件時一併帶著。編輯器的
-  「地圖＞背景圖片…」新增、編輯、移除，圖片檔與 dashboard 的圖片物件同樣存進報表的 files/Image/。地圖（緯度、經度）、
-  分格與同一架上多個座標軸的檢視尚未畫出（附註中列出）
+  「地圖＞背景圖片…」新增、編輯、移除，圖片檔與 dashboard 的圖片物件同樣存進報表的 files/Image/。分格時每個窗格各自
+  畫，同一架上多個座標軸時畫在 X、Y 欄位的座標軸那張圖；地圖（產生的或角色為緯度、經度的欄位）與 Tableau 相同，要把
+  背景地圖設成「無」（`<mapsource name=''>`，`MapOptions.basemap`）才畫：不畫底圖，經緯度以等距的座標畫出，圖片的
+  四角是對應的經緯度
 
 ## 色彩
 
@@ -1661,16 +1679,21 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   對應分析，https://boraberan.wordpress.com/2016/07/19/understanding-clustering-in-tableau-10/ ）以指標矩陣的對應分析
   取各標記的主座標（全部維度），每個維度再做最小–最大正規化（推定）；真的是 Null 的類別也不分叢集、25 個值以檢視中
   所有標記計算（推定）；只有維度的叢集尚不支援。彙總量值關閉時每一列資料是一個標記（說明文件：每個標記分到一個
-  叢集）；叢集建立時的彙總量值與檢視目前的不同時尚不支援
+  叢集）；叢集建立時的彙總量值與檢視目前的不同時尚不支援。編輯器的叢集對話框（同一份說明：拖進 Variables、拖出
+  移除，Table Calculation、群組、集合、數值分組、參數、日期與 Measure Names／Values 不能當變數）：檢視以外的量值
+  還不能加入、按右鍵改變變數的彙總沒有做（Tableau 都可以）；空間欄位不能當變數是推定的；叢集數是「自動決定叢集數」
+  的勾選與 2–50 的數字（Tableau 是空白為自動）；開啟時側欄換到資料窗格、關閉之後回到原本的分頁是平台自己的選擇
 - **預測**：指數平滑（趨勢、季節各為無、加法或乘法，以 AIC 選模型；季節長度依月 12、季 4、週 13、日 7、時 24），
   忽略最後幾期、預測長度、信賴水準與預測區間依設定；Tableau 的初始值與最佳化細節沒有公開，估計值可能有些微差異
 - **預測結果**（https://help.tableau.com/v2021.2/pro/desktop/en-us/forecast_field_results.htm ，2026-11-22 查閱）：
-  .twb 的 `forecast-column-type` 只看過 `forecast-value`、`forecast-indicator`，其他結果類型的名稱（`forecast-trend`、
-  `forecast-precision`、`forecast-quality`、`forecast-upper-bound` 等）是推定的，不認得的列為不支援；實際值的列在
+  上層、較低預測區間的 `forecast-column-type` 是 `forecast-prediction-interval-upper`／`-lower`（欄位實例的前綴
+  `fPIU:`、`fPIL:`；GitHub 上的公開報表，例如 https://github.com/Payalchak/US-Sales-Profit-Analysis-Tableau 、
+  https://github.com/univizor/explore 的 002-when_disk.twb，2026-11-23）。約 1000 份有預測的公開報表中沒有看過趨勢、
+  精度、精度 %、品質與「無」：`forecast-trend`、`forecast-precision`、`forecast-precision-percent`、`forecast-quality`、
+  `forecast-none` 仍是推定的，不認得的列為不支援；實際值的列在
   趨勢、精度等結果類型上是 Null（Tableau 的文件只說明預測的列）；乘法模型的預測區間以模擬計算，上下不對稱時精度
   取區間寬度的一半；精度 % 以百分比、品質以整數顯示，標題寫成「Sales（趨勢）」，都是推定的；量值選單沒有
-  「指示器」（用資料窗格的 Forecast Indicator）。預測指定的彙總依據（`auto-forecast-agg='false'`）尚不支援：估計的
-  做法與「自動」改用較細的細度時相同，但 .twb 中指定細度的寫法沒有樣本
+  「指示器」（用資料窗格的 Forecast Indicator）。預測指定的彙總依據見「預測的較細細度」
 - **預測的較細細度**（https://help.tableau.com/v2021.2/pro/desktop/en-us/forecast_how_it_works.htm「Getting More Data」、
   forecast_options.htm，2026-11-23 查閱）：選「自動」、量值是 SUM 或 COUNT、檢視中少於 9 年（季、週）時以季（月、日）
   估計，估計值加總回檢視的期；忽略的最後幾期是較細的期，檢視的最後一期成為實際值與估計值的合計。預測區間以模擬的
@@ -1678,7 +1701,14 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   期數依算法（算不算沒有資料的期、忽略的最後幾期、各條序列或整個檢視）而不同、以季估計仍少於 9 季（文件說資料仍
   不夠時改以月，沒有寫怎樣算不夠）、最後一期不完整、日→時、時→分、YEAR 日期部分、量值混用 SUM 與其他彙總、預測
   結果（趨勢等）、Data Blending、頁面架、量值或 Table Calculation 篩選、量值中的 INCLUDE／EXCLUDE。以前這些情形一律
-  以檢視的細度估計，數字可能與 Tableau 不同。還沒有與 Tableau 的數字比對
+  以檢視的細度估計，數字可能與 Tableau 不同。還沒有與 Tableau 的數字比對。預測選項指定的「彙總依據」
+  （`auto-forecast-agg='false'`，細度寫在 `forecast-agg`：`Year-Trunc`、`Month-Trunc`、`Week-Trunc`、`Day-Trunc`、
+  `Hour-Trunc`；GitHub 上的公開報表，例如 https://github.com/Bernardino652/tfm 的 tendenciasypredicciones.twb、
+  https://github.com/GyaneshSamanta/DAVM 的 Session 2.twb，2026-11-23）：與檢視相同時以檢視的期估計，不依期數改用較細
+  的細度；比檢視細時一律以它估計再加總回檢視的期（年→季、年→月、季→月、週→日；SUM、COUNT），忽略的最後幾期是
+  估計的細度（forecast_options.htm）。比檢視粗、其他組合（月→週、日→時、年份的日期部分等）、SUM／COUNT 以外的彙總、
+  與「自動」相同的不支援情況與不完整的最後一期列為不支援。編輯器的預測選項也可以設定（自動、檢視的單位與較細的
+  單位）。還沒有與 Tableau 的數字比對
 - **描述預測的摘要**（https://help.tableau.com/v2021.2/pro/desktop/en-us/forecast_describe.htm ，2026-11-22 查閱）：
   初始是第一個估計的期（含忽略的最後幾期）；季節影響取實際值與估計值合起來的最後一個季節長度；貢獻是估計的
   各期中去掉季節的部分與季節成分各自的變異數占比（Tableau 沒有公開算法）；「以百分比顯示」時的變化百分比沒有做；
@@ -1791,7 +1821,10 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   故事點記下的參數值（`<datasource name='Parameters'>`）取代目前的值，改過的 dashboard 文字物件
   （`<dashboard><zone>`）取代區塊原本的文字；記下的醒目提示只影響醒目提示，略過。故事點中工作表的其他差異
   （`StorySheet`）：排序（`<computed-sort>` 等，取代同一欄位的排序；`<clear-shelf-sort-v2>` 清除欄列架的巢狀排序）、
-  從欄列架移除的欄位（`<rows><column delta-type='removed'>`）、註解（新增、修改、刪除套在工作表的註解上，記下整份
+  從欄列架移除的欄位（`<rows><column delta-type='removed'>`）、加上的欄位（`<rows>`／`<cols>`／`<columns>` 的
+  `<column delta-type='added' index>`）、量值（彙總）的範圍與選取、Top N 與條件篩選（以工作表的寫法解析，取代同一個
+  欄位的篩選，`StorySheet.filters`）、移除的篩選（`<filter delta-type='removed'>`：一般篩選從工作表移除，篩選動作的
+  篩選與沒有選取時相同；篩選的欄位實例只在資料源層級時也照常解析）、註解（新增、修改、刪除套在工作表的註解上，記下整份
   清單）、格式（`<style delta-type='added'>` 合併進工作表的 style，記下與工作表不同的座標軸設定、地圖的範圍與「N 個
   Null」指示器）。檢視故事點時查詢服務套在工作表目前的定義上（`QueryState.story`），與 Tableau「故事點與原本的
   工作表相連」相同（https://help.tableau.com/v2021.2/pro/desktop/en-us/story_create.htm ，2026-11-23 查閱）；註解
@@ -1872,7 +1905,10 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   PREVIOUS_VALUE 以遞迴的 CTE 在每個分割中依計算方向的順序逐列計算（公式中的其他 Table Calculation 先算成欄位），
   只支援寫在工作表上的 Table Calculation 計算欄位中；視窗函式的起訖可以是運算式（例如 `FIRST() + 1`、參數），
   逐列決定範圍，起點在終點之後時為 Null；HEXBINX／HEXBINY 的六角形邊長為 1、頂點朝上（與 d3-hexbin 相同，
-  方向依公開資料推定）。外部分析服務（SCRIPT_*）、預測模型（MODEL_PERCENTILE、MODEL_QUANTILE）尚不支援。
+  方向依公開資料推定）。預測模型函式 MODEL_QUANTILE、MODEL_PERCENTILE 以線性迴歸（OLS）在檢視的標記上
+  計算：每個標記一列、權重相同，「計算依據」之外的維度分割，每個分割少於 3 個標記時為 Null；維度以 ATTR 當作無序的
+  類別（字串、布林，或標上 "unordered"），量值的 "augmentation=on" 加上 2 次項；查詢之後計算（與叢集相同）。外部分析
+  服務（SCRIPT_*）、高斯過程（model=gp）與正規化線性迴歸（model=rl）尚不支援。
   直通資料庫的 SQL（RAWSQL_*、RAWSQLAGG_*）在 Live 連線上把 SQL 原文代入參數後原樣送到來源資料庫
   （https://help.tableau.com/v2021.2/pro/desktop/en-us/functions_functions_passthrough.htm ，2026-11-22 查閱）；
   萃取、檔案與 RAWSQL_SPATIAL 不支援。空間函式見「地圖」
@@ -1978,7 +2014,7 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
 - **次要計算**（`TableCalc.secondary`：`type`、`addressing`、`options`）：主要計算（累計或移動計算）的結果先依它
   自己的計算方向算成欄位，再套用次要計算（計算方向沒有指定時與主要計算相同）。合計百分比是「值 ÷ 範圍內各值的
   總和」，其餘與快速表計算相同的寫法；顯示格式依次要計算（百分比類以百分比顯示）。目前只能在編輯器中建立，
-  .twb 的次要計算尚未解析；次要計算的類型與 Tableau 相同限於累計與移動計算之後（依 Tableau 文件推定）
+  .twb 的次要計算尚未解析（約 300 份公開報表與 GitHub 的搜尋都沒有找到樣本，2026-11-23）；次要計算的類型與 Tableau 相同限於累計與移動計算之後（依 Tableau 文件推定）
 - **巢狀排序**（`Sort.nested`）：依欄位排序的排序值在同一架上外層維度的每個值之內各自計算，各窗格的順序可以
   不同；不是巢狀時以這個維度所有資料的值排序，各窗格的順序相同。.twb 中從座標軸、工具列或欄位標籤排序的寫法
   （`<shelf-sorts>` 的 `<shelf-sort-v2>`，Tableau 2018.2 起）是巢狀排序；排序對話框的依欄位排序（`<computed-sort>`）
@@ -1997,7 +2033,20 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   （`user:ui-builder='lasso-group'`）與固定成員的集合相同解析（依樣本推定）
 - **顯示集合中的成員**：集合直接放在架上或標記卡上、沒有 IN/OUT 的欄位實例時，是 Tableau 的 Show Members in Set
   （列出成員並自動加上篩選，https://help.tableau.com/v2021.2/pro/desktop/en-us/sortgroup_sets_create.htm ，2026-11-23
-  查閱）。以前當成 In／Out（成員合成一列、數字不同），現在列為不支援
+  查閱）：以一個隱藏的計算欄位列出集合所在維度的成員（名稱是集合的名稱，別名、格式、地理角色照抄），篩選架上自動
+  加上的篩選照常是「在集合中」。推定：拿掉這個篩選時列出所有的成員；以集合為對象的格式（欄寬等）沒有套到成員。
+  多個維度的集合尚不支援。寫法取自 10 份公開的 .twb（Fin_Complaints_Analysis 等）
+- **預測模型函式（推定的部分）**：說明文件（functions_functions_predictivemodeling.htm、predictions_overview.htm、
+  predictions_choosing_model.htm、predictions_regularization_and_augmentation.htm、predictions_compute_using.htm、
+  predictions_resolve_errors.htm、predictions_future.htm，https://help.tableau.com/v2021.2/pro/desktop/en-us/ ，
+  2026-11-23 查閱）寫了預設 OLS、每個標記一列且權重相同、ATTR 與 `*`、「計算依據」只用來分割、至少 3 個標記、
+  重複的預測變數與一對一會報錯，以及後驗預測的分位數與 CDF。下面是平台自己決定的：後驗分配以無資訊先驗計算（自由度
+  n−p 的 Student t，尺度 s·√(1+h)；分位數 0.5 一律是 OLS 的預測值，不受影響）；目標是 Null 的標記不進模型、照樣預測；
+  量值的預測變數是 Null 時為 Null；類別的 Null 與 `*` 是同一個類別；只出現在沒有目標的標記上的類別為 Null；殘差全部
+  為 0 時退化成預測值；秩不足（含常數的量值）或自由度不到 1 時列為不支援（Tableau 會顯示錯誤）；"augmentation=on"
+  的量值在線性迴歸加上 x²；lambda 在線性迴歸忽略；總計的格依總計的標記計算（多半少於 3 個，為 Null）。不支援：gp、
+  rl、有序的預測變數（日期、"ordered"）、數字的 ATTR 沒標 "unordered"、與其他運算組合或在其他 Table Calculation 中、
+  工作表有 Table Calculation 篩選或預測。沒有樣本，也沒有與 Tableau 的數字比對過
 - **背景圖片（推定的部分）**：https://help.tableau.com/v2021.2/pro/desktop/en-us/bkimages.htm （2026-11-23 查閱）寫了
   X、Y 欄位與左右、上下的值、淡化、鎖定外觀比例、一律顯示整張圖片、條件全部成立才顯示與各工作表的啟用勾選。下面是
   平台自己決定的：沒有寫的選項依樣本判斷為鎖定比例、不顯示整張、不淡化；淡化以不透明度 1 − 淡化畫出（在白色的窗格
@@ -2005,7 +2054,10 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   條件在檢視中有這個值時成立，欄位不在檢視中時不顯示（第三方文章：條件的欄位要放在篩選與詳細資料上，
   https://kirk-olson.squarespace.com/blog-1/2020/3/13/switch-an-image-with-a-selection-in-a-tableau-dashboard ，
   2026-11-23 查閱）。.twbx 中圖片寫成 `file:Image/<檔名>`；.twb 中電腦上的路徑在報表中沒有同名的 Image/ 檔案時略過，
-  網址略過。寫法取自 GitHub 上公開的 51 份 .twb。都沒有與 Tableau 的畫面比對過
+  網址略過。分格時每個窗格都畫，條件的欄位是分格的維度時只畫在這個值的窗格；多個座標軸依 X、Y 欄位的座標軸對齊
+  （雙軸時依 Y 欄位的軸）；背景地圖「無」時以等距投影、固定寬高比畫出（Tableau 說是「not a map」，兩軸是否各自縮放
+  沒有比對），寫法 `<mapsource name=''>` 與沒有 projection 的經緯度範圍依樣本；地圖不看座標軸反轉、分格的地圖每一格
+  都畫。寫法取自 GitHub 上公開的 51 份 .twb。都沒有與 Tableau 的畫面比對過
 - **線條類型**（標記樣式的 `line-interpolation`，`Marks.line_type`）：階梯以 step 內插（量值在橫軸時先垂直），
   跳躍只畫每個點到下一個點位置的水平線（屬性值 `step`、`jump` 依公開資料推定）
 - **工作表上的控制項**（工作表視窗的 `<card type='filter'|'parameter'>`，`Worksheet.controls`）：單獨檢視工作表時
@@ -2033,7 +2085,7 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   寫法是把預設的分隔線關掉）、列標題預設靠左與文字表的數字預設靠右（依公開報表中 Tableau 存下的縮圖）、
   欄位標籤一律以半粗體顯示，依公開報表推定
 - **線的樣式**：零線、趨勢線與參考線的 `line-pattern-only` 有公開報表的樣本；格線、座標軸線與分隔線
-  （`table-div`、`header-div`）用同一個屬性名稱是推定的（沒有樣本），標題的分隔線沒有寫樣式時視為實線（不沿用
+  （`table-div`、`header-div`）的 `line-pattern-only` 也有公開報表的樣本（含 dashed），標題的分隔線沒有寫樣式時視為實線（不沿用
   窗格的）也是推定的。虛線與點線的線段長度沒有與 Tableau 的畫面對過。儲存格與窗格的框線見下一項
 - **摘要卡選用的統計量**：Tableau 的文件只說明標準差是樣本標準差（含修正）、四分位數是第 25 與第 75 百分位數，
   沒有列出公式。四分位數在排序後的值之間線性內插（與中位數取中間兩個值的平均一致）、偏度與超額峰度用樣本的
@@ -2098,9 +2150,12 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
     留白，112 像素寬的欄放得下 `Customer Segment`
   - **還與截圖不同、沒有修的**：下拉式控制項的外觀（框線顏色）；天氣的城市名稱比截圖高一點；尖峰季的色帶
     與上方的數字差幾個像素（座標軸標籤的寬度不同）；文字表量值欄的分隔線與列標題的差 2 像素
-- **儲存格、窗格、表頭、合計與總計的框線**：.twb 中的寫法沒有樣本，是推定的——`cell`、`pane`、`header` 的
-  `border-style`、`border-width`、`border-color`（沿用 dashboard 區塊框線的屬性名稱），合計、總計是帶
-  `data-class='subtotal'`／`'total'` 與 `scope='rows'`／`'cols'` 的同樣屬性（沒有 scope 時兩個方向都套用）。
+- **儲存格、窗格、表頭、合計與總計的框線**：寫法取自 GitHub 上的公開報表
+  （https://github.com/Bava7/Students-profile-analysis-Tableau- 、https://github.com/StephenKinggg/Data_Science_Course_Repo
+  的 Pre(Story)_05.12.21.twb 等十幾份，2026-11-23）：`cell`、`pane`、`header` 的 `border-style`、`border-width`、
+  `border-color`，合計、總計是帶 `data-class='subtotal'`／`'total'` 與 `scope='rows'`／`'cols'` 的同樣屬性（沒有 scope
+  時兩個方向都套用），窗格與表頭各一組；沒有 data-class 的框線也可能帶 scope（格式化框線的「列」「欄」頁），平台
+  不分方向（公開報表中兩個方向相同或是 none）；合計、總計的窗格與表頭框線不同時平台只用窗格的。
   同一個位置有不只一種線時分隔線優先，其次總計、合計、窗格，最後儲存格；外框用窗格（沒有時為儲存格）的框線，
   也是推定的（Tableau 的文件 https://help.tableau.com/v2021.2/pro/desktop/en-us/formatting_worksheet.htm 沒有說明
   重疊時的順序，2026-11-22 查閱）；線的位置與粗細還沒有與 Tableau 的畫面對過。地圖與分面的小倍數沒有框線
@@ -2110,8 +2165,34 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   樹狀圖有「Use Absolute Values」，平台沒有），「Hide Indicator」在右鍵選單；「篩選資料」只寫以篩選排除 Null 值、
   之後的計算也不含它們，沒有寫加的是哪一種篩選。平台加的是只留非 Null 值的範圍篩選（篩選對話框「特殊值」的
   「非 Null 值」），只加在查詢結果有 Null 的座標軸欄位上，直接加入、不開對話框——是推定的。平台的選單左鍵、右鍵
-  都列出三項。.twb 中特殊值的設定（標記怎麼處理、指示器是否隱藏）沒有樣本、不解析，從 Tableau 開啟的報表
-  一律是預設（隱藏標記、顯示指示器）
+  都列出三項。工作表 `<style-rule element='table'>` 中沒有 field 的 `show-null-value-warning='false'` 解析成「隱藏
+  指示器」（公開報表 27 張工作表的寫法，例如 https://github.com/aadityapanchal/NHL-Analytics 的 Shot_analysis.twb）；
+  帶 field 的特殊值設定（`omit-on-special`、`break-on-special`、`show-null-value-warning`）與選項的對應沒有文件，記為
+  略過，Null 值的標記照預設（隱藏標記、顯示指示器）
+- **篩選控制項的自訂**：dashboard 區塊與工作表的 `<card type='filter'>` 的 `show-all='false'`、`show-search='false'`、
+  `show-apply='true'`、`show-exclude` 與 `values='context'` 解析成 `ControlOptions`
+  （https://github.com/smartinternz02/SPS-9541-Horticulture 、https://github.com/JAM5BOCsAdi/Data_Analyst_Tableau 的
+  Filters.twb 等）。.twb 只寫與預設不同的，公開報表的 show-exclude 只有 'false'：推定 Tableau 預設在篩選卡選單上顯示
+  「包含／排除」，平台預設不顯示排除的勾選框。`show-null-ctrls`、`show-domain`（推定是讀數）、`show-slider`、
+  `show-morefewerbutton`、`show-mode`、`show-filter-state`、`show-reldate-picker` 平台沒有，記為略過（選項名稱依
+  https://help.tableau.com/v2021.2/pro/desktop/en-us/filtering.htm ，2026-11-23 查閱）
+- **頁面的顯示歷程（推定的部分）**：`<page-trail-options>` 的 `enabled`、`mark-type='all'`、`lines`、`marks`、`size`
+  解析成 `Worksheet.page_history`（約 200 份公開報表）。說明文件
+  （https://help.tableau.com/v2021.2/pro/desktop/en-us/buildmanual_shelves.htm ，2026-11-23）列了選項、沒有寫 XML：
+  `size` 是長度、沒有 `mark-type` 時是「選取的標記」是推定的；只對選取、醒目提示或手動指定的標記時平台不顯示歷程
+  （記為略過）；標記與軌跡的格式（色彩、線條、`trail-effect`、推定是淡化範圍的 `start`／`end`）記為略過
+- **表計算的自訂排序順序**：`<table-calc>` 中的 `<sort direction using>`（using 是彙總後的欄位實例）解析成
+  `TableCalc.sort`（https://github.com/Apress/pro-tableau 的 Bump chart.twb 等）；巢狀計算的自訂排序與依非量值排序
+  列為不支援（以前沒有解析，排序方向不同時數字可能不同）
+- **Story 的格式**：storyboard 的 `<style>`：`table` 的底色、`story-title` 的字級、對齊與顏色、`story-point-caption` 的
+  底色與文字顏色、`story-description` 的底色與文字顏色解析成 `StoryFormat`（13 份公開報表；標題與文字物件的 color
+  沒有樣本，推定）；字型、框線、外距、導覽的寬度、標題的底色與個別文字物件（帶 id）的格式記為略過
+- **分頁顏色**：工作表的 `<window class='worksheet' tab-color>` 解析成 `Worksheet.tab_color`；dashboard、Story 的分頁
+  顏色沒有 IR 的欄位，記為略過
+- **活頁簿佈景主題**：Tableau 2021.2 有（https://help.tableau.com/v2021.2/pro/desktop/en-us/formatting_workbook.htm ：
+  Default、Smooth（10.x 起）、Clean（8.0–9.3）、Modern（3.5–7.0）、Classic（1.0–3.2），2026-11-23 查閱）；.twb 只寫
+  `<style-theme name='…'>`（Default 不寫），佈景主題的字型、顏色與線條不寫進檔案，文件也沒有列出：記為略過，以平台
+  的預設呈現
 - **在檢視上拖曳標題排序（推定的部分）**：Tableau 的排序說明
   （https://help.tableau.com/v2021.2/pro/desktop/en-us/sortgroup_sorting_computed_howto.htm ，2026-11-22、2026-11-23
   查閱）寫了「清除排序」在欄位的右鍵選單（Right-click a field and select Clear Sort）、工具列與「工作表＞清除＞
@@ -2257,18 +2338,37 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   是剛開啟的樣子（最上面）。圖片太大時降低解析度（canvas 單邊最多 16,384 像素），訂閱的圖片最大 16,000 像素
 - **檢視更新中（推定）**：Tableau 的說明（https://help.tableau.com/v2021.2/pro/desktop/en-us/refresh.htm ，2026-11-23
   查閱；頁面寫的是 Tableau Cloud 與 Server）寫「When an interaction takes a long time to load, a dialog appears that
-  allows you to stop the action」，停下之後檢視像暫停自動更新一樣，可以復原、繼續或不更新繼續工作。平台：超過
-  0.3 秒時在檢視上蓋一層「更新中…」的標示、不接受滑鼠操作，畫好之後拿掉；沒有停止的按鈕（不能中途取消查詢），
-  也沒有 Tableau 多久之後顯示的資料（0.3 秒是平台自己的選擇）
+  allows you to stop the action」，「If you stop, the viz goes into a suspended state similar to pausing automatic
+  updates」，之後可以復原（Undo）、繼續（Resume Auto Updates），或不更新繼續工作、之後再繼續。Tableau Desktop 的
+  「Processing Request」對話框的取消：第三方整理的舊版說明（https://tekslate.com/manageupdate-cancel-abandon-queries-in-tableau ，
+  2026-11-23 查閱，不是 Tableau 的網站）寫取消時請資料庫停止查詢，不支援取消的資料源（Excel、Access 等）只是放棄、
+  查詢在背景照常跑完；舊版 Desktop 取消之後檢視是空白的、改變檢視才重新查詢。平台：超過 0.3 秒時在檢視上蓋一層
+  「更新中…」的標示與「停止」、不接受滑鼠操作，畫好之後拿掉（0.3 秒是平台自己的選擇，Tableau 多久之後出現對話框
+  沒有查到）。停止之後推定的部分：停止的是整個頁面（dashboard 上所有的工作表一起暫停、一起繼續）；檢視停在最後
+  畫好的圖（不是空白）、要的狀態不同時圖淡化並標示「已停止更新」；暫停中的狀態改變不查詢（Tableau 的「不更新
+  繼續工作」），「繼續更新」以目前的狀態查詢；復原回到畫面上的狀態時不再查詢、整頁恢復；重新整理與編輯器裡改了
+  工作表時恢復更新（與舊版 Desktop「改變檢視就重新查詢」相同）。伺服器上能中斷的：萃取（DuckDB）的查詢、Live 連線
+  的 PostgreSQL 與 DuckDB（PostgreSQL 的取消有實跑的測試 `kernel/tests/data/test_cancel.py`，這台電腦沒有 PostgreSQL、還沒跑過）；
+  其他驅動程式的查詢照常跑完、結果丟掉，Live 兩段式執行與跨資料庫 join 在本機合併的那一段、Data Blending 次要
+  資料源的查詢也不中途中斷，停止在下一段查詢開始時生效。停止的請求比查詢先到時保留一分鐘；只能停止自己的查詢
 - **標記的動畫（推定的部分）**：Tableau 的說明
   （https://help.tableau.com/v2021.2/pro/desktop/en-us/formatting_animations.htm ，2026-11-23 查閱；讀到的內容沒有
   版本的標示）寫了活頁簿預設與選取的工作表、預設的或自訂最多 10 秒的持續時間、同時（預設）與依序（「fades out
   marks, moves and sorts them, then fades them in」）、篩選排序縮放頁面與篩選參數集合動作時播放，以及地圖、多邊形、
-  密度、圓餅、文字標記、標題、預測趨勢參考線與頁面歷程不做動畫。沒有寫的、平台自己決定的：預設的持續時間
-  （0.3 秒）與選項的長度、依序時每一段各占設定的時間、折線與區域不動（Tableau 會動）、標籤最後淡入、座標軸直接
-  換到新的範圍（Tableau 的座標軸會動）、檢視器沒有「重播」按鈕（2021.4 起才有）與個人的「啟用動畫」設定（改看
-  作業系統的減少動態效果）。**.twb 的動畫設定還不解析**：從 Tableau 開啟的報表動畫都是關，要在編輯器的「格式＞
-  動畫…」打開；寫法與解析的規則見 `docs/backlog.md`。沒有與 Tableau 的畫面比對過
+  密度、圓餅、文字標記、標題、預測趨勢參考線與頁面歷程不做動畫；也提到座標軸會動（「axis animation」）。沒有寫的、
+  平台自己決定的：預設的持續時間（0.3 秒）與選項的長度、依序時每一段各占設定的時間、標籤最後淡入；折線與區域的
+  動法（依系列與標記的身分對應線上的點、新出現的點從原本的線上相鄰的點長出來、消失的點縮到新的線上相鄰的點、
+  新出現與消失的線淡入淡出）；座標軸的動法（同一個值的刻度移動，新出現的從原本的比例尺上的位置移過來並淡入、
+  消失的移到新的比例尺上的位置並淡出——比例尺之間以相鄰的刻度線性內插、兩端外插，對數座標軸只是近似；只動連續的
+  座標軸，離散的座標軸依說明的「Headers」不動；依序時座標軸在移動那一段）；檢視器沒有「重播」按鈕（2021.4 起才有）
+  與個人的「啟用動畫」設定（改看作業系統的減少動態效果）。解析 .twb 的設定：活頁簿預設（`/workbook/style`）與各工作表（`<table><style>`）的
+  `<style-rule element='animation'>`（常寫成 `_.fcp.MarkAnimation.true...style-rule`）中的 `animation-on`（`ao-on`／
+  `ao-off`）、`animation-duration`（秒）、`animation-style`（`as-synced` 同時、`as-phased` 依序）；工作表沒有寫的項目
+  沿用活頁簿預設；活頁簿沒有寫開關時，manifest 有 `AnimationOnByDefault` 的檔案是開，沒有的舊檔案是關；
+  `_.fcp.AnimationOnByDefault.false...` 的替代內容略過（寫法取自公開報表：https://github.com/harshita0410/automobile_project 、
+  https://github.com/felicitimilne/bluefall2hwteam17 、https://github.com/estebannoemr/BBDD1 等，2021.2–2025.2 存的檔案）。
+  Snow Sports 報表（較新版本存的，manifest 有這個旗標）開啟後動畫是開；示範報表明確寫成關（量位置的測試不受動畫影響）。
+  沒有與 Tableau 的畫面比對過
 - **同一個 dashboard 每次載入的截圖差幾個像素（不是平台的程式）**：以 Chromium 截圖比較時，同一個 dashboard 每次
   載入可能差幾十到幾百個像素（Snow Sports 的 Overview，1700×1100：Poly、Rented Units Chart、Snow Chart、Seasonal
   Rev 與 Rev KPI 幾張，每個色版差 1–6，都在反鋸齒的邊緣）。各工作表的查詢結果、字型、位置與大小、畫出來的 SVG
@@ -2287,13 +2387,13 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   （Tableau 代入的是伺服器上的名稱還是檔案的名稱沒有查證）
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
-預測指定的彙總依據、預測「自動」改用較細細度時文件沒有寫明的情況（見「預測的較細細度」）、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度中的 INCLUDE／EXCLUDE、SCRIPT_*／MODEL_*、RAWSQL_SPATIAL 與萃取或檔案上的 RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
+預測指定的彙總依據中平台不照做的情況、預測「自動」改用較細細度時文件沒有寫明的情況（見「預測的較細細度」）、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度中的 INCLUDE／EXCLUDE、SCRIPT_*、MODEL_* 的高斯過程與正規化線性迴歸、MODEL_* 的有序預測變數與其他不支援的寫法（見「預測模型函式」）、RAWSQL_SPATIAL 與萃取或檔案上的 RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、
 上表以外的資料庫的 Live 連線、
 要求檢視者輸入自己的資料庫帳號或以檢視者身分模擬的連線、預存程序（Stored Procedure）當作資料表、
 Data Blending 中同一個彙總混用兩個資料源的欄位、同一個 LOD 混用主要與次要資料源的欄位、次要資料源的內容篩選、
 標題中產生的緯度經度、
-故事點在欄列架上新增的欄位、量值（彙總）的範圍篩選與 Top N 篩選的變更、篩選的刪除（delta-type='removed'）、
-不同維度的集合組合成的合併集合、顯示集合中的成員、
+故事點加上的 Measure Names／Values 與工作表上沒有的 Table Calculation 欄位、篩選的其他變更（delta-type='edited' 等）、
+不同維度的集合組合成的合併集合、多個維度的集合以成員顯示、
 只以維度分群的叢集、建立時的彙總量值與檢視不同的叢集、Teradata 的彙總中的 RANDOM()、
 舊版的 .tde 萃取。
 
