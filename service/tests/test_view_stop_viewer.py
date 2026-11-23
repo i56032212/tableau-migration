@@ -199,10 +199,17 @@ def test_stop_suspends_the_view_until_resumed_or_undone(engine: str) -> None:
         count = len(requests.renders)
         suspended.get_by_role("button", name="繼續更新").click()
         expect(suspended).to_have_count(0)
+        # 重新查詢在按下之後的下一次更新才送出：先等它送出，再等畫好（只等「不在更新中」會在送出之前就成立，
+        # 2026-11-24 的完整測試中電腦忙時讀到舊的長條）
+        deadline = time.monotonic() + 10
+        while len(requests.renders) < count + 1:
+            assert time.monotonic() < deadline, "繼續更新之後沒有重新查詢"
+            page.wait_for_timeout(100)
         page.wait_for_function(
             "() => { const w = document.querySelector('.single-sheet .worksheet'); return w.dataset.updating === 'false' && w.dataset.suspended === 'false'; }",
             timeout=30000,
         )
+        page.wait_for_function(f"!({BARS})().includes('Copiers')", timeout=30000)
         assert len(requests.renders) == count + 1
         after = page.evaluate(BARS)
         assert "Copiers" not in after and after[0] == before[1]
