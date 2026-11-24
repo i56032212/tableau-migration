@@ -67,6 +67,16 @@ cd desktop && pnpm install --frozen-lockfile && pnpm tauri build     # 第一次
 第一次執行時 Windows SmartScreen 會警告。不安裝也可以直接執行 `desktop/src-tauri/target/release/tmig-desktop.exe`
 （引擎在同一個資料夾的 `engine/`）。
 
+### 發布安裝檔
+
+安裝檔超過 GitHub 單一檔案 100 MB 的上限，不進 git：建好之後放在這個（private）repo 的 GitHub Release，tag 寫成
+`desktop-v<版本>-<日期>`，指向建置時的 commit，說明寫上 SHA-256、內容的 commit、驗證過與還沒驗證的；還沒實際安裝
+執行過的標成預先發行版（prerelease）：
+
+```bash
+gh release create desktop-v0.1.0-20261124 desktop/src-tauri/target/release/bundle/nsis/TmigDesktop_0.1.0_x64-setup.exe   --target <commit> --title "桌面版 0.1.0（2026-11-24）" --notes-file <說明> --prerelease
+```
+
 ## 開發
 
 ```bash
