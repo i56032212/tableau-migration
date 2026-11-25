@@ -426,7 +426,8 @@
 - **試點的報表**：盤點後挑選
 - **離線安裝檔中專有授權的驅動**：伺服器版與桌面版的安裝檔帶著所有資料庫驅動，其中 SAP HANA（hdbcli，SAP Developer
   License Agreement）、Teradata（teradatasql，Teradata License Agreement）與 Db2 的 clidriver（IBM 的授權）是專有授權。
-  公司沒有用到的可以不帶；用到的要確認授權條款允許在公司內部這樣散布（目前的安裝檔只放在 private repo 的 Release）
+  公司沒有用到的可以不帶；用到的要確認授權條款允許這樣散布。**repo 是公開的**，`offline-v0.1.0-20261125` 的 Release
+  誰都下載得到（2026-11-25 告知使用者後，使用者決定照樣發布）
 - **標題中的量值**：Tableau 知識庫 001458099（Adding Totals to a Title）寫的是標題中的欄位值在檢視中有多個不同的值時
   顯示「範圍」；本平台把標題中的量值當作全部資料的合計（依公開報表推定）。欄列架上有離散維度、量值在各標記不同時
   兩者不同。要在公司的 Tableau 上試一張工作表確認：確認是「範圍」時改成與 Tableau 相同（目前顯示合計的標題會改變）

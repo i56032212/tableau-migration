@@ -88,7 +88,7 @@ cd desktop && pnpm install --frozen-lockfile && pnpm tauri build     # 第一次
 
 ### 發布安裝檔
 
-安裝檔超過 GitHub 單一檔案 100 MB 的上限，不進 git：建好之後放在這個（private）repo 的 GitHub Release，tag 寫成
+安裝檔超過 GitHub 單一檔案 100 MB 的上限，不進 git：建好之後放在這個 repo 的 GitHub Release（repo 目前是公開的，Release 誰都下載得到），tag 寫成
 `desktop-v<版本>-<日期>`，指向建置時的 commit，說明寫上 SHA-256、內容的 commit、驗證過與還沒驗證的；還沒實際安裝
 執行過的標成預先發行版（prerelease）。伺服器版的離線安裝檔（`deploy/windows/build.py`）也照同樣的方式放，
 tag 寫成 `offline-v<版本>-<日期>` 時兩份放在同一個 Release：

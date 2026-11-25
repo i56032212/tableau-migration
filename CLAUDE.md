@@ -80,11 +80,11 @@ uv run python deploy/windows/build.py           # 伺服器版的 Windows 離線
 - 沒有實機驗證過的（資料庫、Windows 安裝檔、與 Tableau 的畫面比對）在文件與回報中照實寫，不寫成已驗證
 - 其餘見 README 的「開發規則」
 
-## 目前的狀態（2026-11-24）
+## 目前的狀態（2026-11-25）
 
 - Linux 上的完整測試（3573fd6）：2752 項通過、2 項略過（PostgreSQL、MySQL、Spark 實跑，略過的 2 項是沒有 Trino 與
   BigQuery 模擬器）
-- Windows 上的完整測試（2fcd576，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 3019 項通過、145 項略過
+- Windows 上的完整測試（8622057，Windows 11、沒有資料庫引擎）：ruff、pyright 通過，pytest 3028 項通過、145 項略過
   （都是需要 PostgreSQL、MySQL、Spark、Trino、BigQuery 或認證管理員的，在 Windows 上還沒跑過）；前端可以建置。
   3573fd6 之後的 commit 只在 Windows 上測過，還沒在有引擎的 Linux 環境跑過
 - 2026-11-21 使用體驗稽核找到的程式錯誤已修（01f6a4c 桌面版與核心、baf7d8b 伺服器端、ac93b7e 桌面版裡的確認、
@@ -117,5 +117,13 @@ uv run python deploy/windows/build.py           # 伺服器版的 Windows 離線
   幾批在視窗裡驗證過版面、功能表、拉 dashboard、刪除後復原與確認用的訊息方塊。還沒有實際執行安裝檔，原生的選檔與
   存檔對話框也還沒驗證。建置的做法在 `desktop/README.md`；動到桌面版的流程後要在真正的視窗裡再驗證（瀏覽器裡的
   測試看不到外殼特有的行為：捲軸占的寬度就是在視窗裡才看到的）
+- 離線安裝檔（8622057）：2026-11-25 建置伺服器版（`deploy/windows`：Windows Server 的服務，內含 Python、所有套件與
+  資料庫驅動、Chromium）與桌面版（內含 WebView2 的離線安裝程式，引擎帶所有資料庫驅動），放在 GitHub Release
+  `offline-v0.1.0-20261125`（預先發行版）。伺服器版的內容以 `deploy/windows/smoke.py` 實際執行過（服務主程式的主控台
+  模式）；**還沒在 Windows Server 上以服務安裝過**，驅動只驗證到載入。見 README「伺服器的安裝（Windows）」與
+  `docs/backlog.md` 第三部分的 11
+- **GitHub 上的 repo 是公開的**（2026-10-26 建立時就是公開，與上面安全規則的「維持 private」不同）。2026-11-25 告知
+  使用者後，使用者決定照樣把離線安裝檔發布到公開的 Release；repo 的公開與否由使用者決定，不要自己改，也不要在
+  回報中說它是 private
 - `scripts/regen_ir.py`、`scripts/check_commit.py` 在 Linux 與 Windows 上都跑過
 - 接下來的工作與待決定的事項見 `docs/backlog.md`
