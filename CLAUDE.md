@@ -30,6 +30,7 @@ kernel/schema/     IR 的 JSON Schema（由程式產生，不手改）
 service/           FastAPI 查詢服務 tmig_service：檢視器的 API、身分驗證、權限、發布、排程、桌面版的本機引擎與編輯 API
 web/               React＋TypeScript 的檢視器與編輯器；建置結果 web/dist 進版控
 desktop/           桌面版：Tauri 外殼（Rust）、本機引擎的打包（PyInstaller）與冒煙測試
+deploy/windows/    伺服器版的 Windows 離線安裝檔：服務主程式（Rust）、預設的 server.toml、NSIS、建置腳本與冒煙測試
 tools/             連 Tableau Server 的工具（盤點、下載、抓預期結果、畫面比對）
 fixtures/<報表>/    .twbx、golden IR、cases、mapping、預期結果、SQL 與規格快照
 scripts/           check.py（一鍵檢查）、check_commit.py、regen_ir.py、示範報表的建置
@@ -50,6 +51,7 @@ uv run python scripts/check_commit.py --require-engines --log <檔案>   # 在�
 uv run python scripts/regen_ir.py               # IR 欄位異動後重新產生 Schema、範例 IR、golden IR
 cd web && pnpm install --frozen-lockfile && pnpm build                # 建置檢視器（含 tsc 型別檢查）
 uv run playwright install chromium              # 端到端測試用的瀏覽器
+uv run python deploy/windows/build.py           # 伺服器版的 Windows 離線安裝檔（含冒煙測試；桌面版見 desktop/README.md）
 ```
 
 - 需要外部引擎的測試（PostgreSQL、MySQL、Spark 等，見 `kernel/tests/engines.py`）沒有引擎時略過；設

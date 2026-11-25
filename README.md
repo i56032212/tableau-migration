@@ -703,6 +703,46 @@ uv run tmig schedule run schedules.json --job extract:<id>      # 立即執行�
 - `GET /api/usage?days=90`（有權限檔時限管理員）與 `uv run tmig usage summary usage --fixtures fixtures --csv usage.csv`：
   每份報表與 view 的檢視次數、不重複使用者數與最後一次檢視，期間內沒有檢視的報表也列出（廢棄候選）
 
+## 伺服器的安裝（Windows）
+
+伺服器版有 Windows 的離線安裝檔 `TmigServer_<版本>_x64-offline-setup.exe`（放在這個 repo 的 GitHub Release）：
+安裝與執行都不必連網路，內含可搬移的 Python（python-build-standalone）、`uv.lock` 鎖定版本的所有套件、
+所有資料庫驅動（PostgreSQL、Oracle、SQL Server、MySQL、Databricks、Snowflake、Redshift、Trino／Presto、Athena、
+BigQuery、Teradata、Hive／Impala、Db2、SAP HANA）、檢視器，以及產生訂閱 PNG、PDF 用的 Chromium。
+建置的做法：`uv run python deploy/windows/build.py`（說明在檔案開頭；建置時要連網路下載 Python、套件與 Chromium）。
+其中 SAP HANA（hdbcli，SAP Developer License Agreement）、Teradata（teradatasql，Teradata License Agreement）與
+Db2 的 clidriver（IBM 的授權）是專有授權，其餘是開放原始碼授權（各套件的授權檔在 `python\Lib\site-packages` 的
+`*.dist-info`）；公司用到這幾種資料庫時先確認授權條款允許這樣內部散布（見 `docs/backlog.md`「四、待決定」）。
+
+以系統管理員身分執行安裝檔（無人值守：`/S`，要改安裝目錄時 `/D=<目錄>` 放在最後）：
+
+- 程式裝在 `C:\Program Files\TmigServer`；報表、設定與記錄在 `C:\ProgramData\TmigServer`（`workbooks\`、`store\`、
+  `usage\`、`logs\`），這個資料夾只有 SYSTEM、系統管理員與服務帳號讀得到
+- 登錄並啟動 Windows 服務 `TmigServer`（延遲自動啟動，以虛擬帳號 `NT SERVICE\TmigServer` 執行）。服務主程式
+  `tmig-server-host.exe`（`deploy/windows/host`）依 `C:\ProgramData\TmigServer\server.toml` 啟動查詢服務與排程器，
+  程序意外結束時重新啟動，停止服務時連同它們再啟動的 hyperd、Chromium 一起結束
+- 預設**只接受這台電腦本身的連線**（`http://127.0.0.1:8000`）：沒有設定身分驗證時，連得到的人都能看所有的報表
+- 升級：直接執行新版的安裝檔，先停止服務、換掉程式，`server.toml` 與報表都不動
+- 解除安裝（「設定＞應用程式」或 `uninstall.exe /S`）：刪除服務與程式，`C:\ProgramData\TmigServer` 保留
+
+安裝後的設定（改完 `server.toml` 以 `Restart-Service TmigServer` 重新啟動；`tmig-server-host.exe check` 列出會執行的指令）：
+
+1. 身分驗證：把安裝目錄的 `config\auth.example.toml` 複製成 `C:\ProgramData\TmigServer\auth.toml` 修改（見「身分驗證」），
+   在 `server` 程序的 `args` 加上 `"--auth", '{data}\auth.toml'`；以 `${變數}` 參照的密鑰在 `server.toml` 的 `[environment]`
+   給值。之後才把 `--host` 改成 `"0.0.0.0"`，並在防火牆開放埠號（例如
+   `New-NetFirewallRule -DisplayName "報表平台伺服器" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow`）。
+   安裝檔不含 HTTPS：要 HTTPS 時在前面放反向代理（IIS、nginx 等；proxy 模式本來就這樣部署）
+2. 站台與報表：`& "C:\Program Files\TmigServer\tmig.cmd" site init --store C:\ProgramData\TmigServer\store --admin <帳號>`
+   （或 `site import` Tableau Server 匯出的檔案，見「站台管理」），之後以桌面版發布報表；`tmig.cmd` 就是 `tmig` 指令，
+   用法與「指令」相同
+3. Live 連線與萃取更新：連線設定檔（`tmig.cmd connections template` 產生範本）放在資料夾中，`[environment]` 設
+   `TMIG_CONNECTIONS`，帳號密碼也在 `[environment]` 給值；資料庫用 Windows 整合驗證時，在「服務」中把登入帳號
+   改成網域的服務帳號，並給那個帳號資料夾的修改權限
+4. 排程器：`scheduler` 程序的 `enabled` 改成 `true`；訂閱寄信加上 `"--mail", '{data}\mail.toml'`（範本 `config\mail.example.toml`）
+
+記錄檔：`logs\host.log`（服務本身：啟動、意外結束與重新啟動）與各程序的 `logs\<名稱>.log`，每個超過 10 MB
+時換新檔，保留 5 份。
+
 ## 指令
 
 | 指令 | 用途 |
@@ -774,8 +814,10 @@ Tableau Desktop 2021.2。第一階段（D0）是骨架：開啟 Tableau 的 .twb
   身分為作業系統的帳號（沒有群組）；開啟的檔案複製到工作區，原始檔不動
 - **報表套件**（`.tmigx`，見 `tmig.package`）：zip，內含 manifest、IR、萃取的 DuckDB 檔與圖片；不含帳號密碼；
   開啟時檢查格式版本與成員路徑（不會解到工作區之外）
-- **安裝檔**：CI 的 desktop 工作流程在 Windows 上以 PyInstaller 打包引擎、實跑冒煙測試（開啟 .twbx 由 Hyper 匯入、
-  查詢每張工作表、存成報表套件），再以 Tauri 產生 NSIS 安裝檔（安裝在使用者資料夾，不需要系統管理員權限）
+- **安裝檔**：CI 的 desktop 工作流程在 Windows 上以 PyInstaller 打包引擎、實跑冒煙測試（每個資料庫驅動都打包進去、
+  開啟 .twbx 由 Hyper 匯入、查詢每張工作表、存成報表套件），再以 Tauri 產生 NSIS 安裝檔（安裝在使用者資料夾，
+  不需要系統管理員權限）。離線安裝檔 `TmigDesktop_<版本>_x64-offline-setup.exe` 另外內含 WebView2 執行階段的
+  安裝程式，沒有 WebView2 的電腦也不必連網路；所有資料庫驅動都在引擎裡，Live 連線不必另外安裝套件
 
 開發與打包的方式見 `desktop/README.md`。
 
@@ -2388,6 +2430,12 @@ Tableau 公布的 .twb 結構與公開報表）。解析後以圖片的路徑表
   浮點數去掉加總留下的尾數（相對誤差一兆分之一以內）；計算比對（`tmig verify`）與檢視器用的仍是完整精度
 - **發布的名稱**：伺服器上顯示的是發布時填的名稱，但連線的 Initial SQL 的 `[WorkbookName]` 仍代入報表檔裡的名稱
   （Tableau 代入的是伺服器上的名稱還是檔案的名稱沒有查證）
+- **離線安裝檔（驗證到哪裡）**：伺服器版與桌面版的離線安裝檔都是在 Windows 11 上建置的。伺服器版的內容以
+  `deploy/windows/smoke.py` 實際執行過（服務主程式的主控台模式：每個資料庫驅動載入、示範報表的查詢結果與 repo 的
+  程式相同、Chromium 印出 PDF、意外結束的程序重新啟動、停止時所有程序結束）；資料庫驅動只驗證到載入（含原生程式庫），
+  沒有連過真的 Oracle、SQL Server 等資料庫。**還沒在 Windows Server 上安裝過**，以服務執行（虛擬帳號
+  `NT SERVICE\TmigServer`、資料夾的權限、開機後延遲自動啟動）、網域服務帳號與 Windows 整合驗證、防火牆與反向代理也還沒
+  實測。桌面版的離線安裝檔在已經有 WebView2 的電腦上建置，沒有 WebView2 的電腦上內附的安裝程式會不會正常安裝還沒試過
 
 尚未支援（解析時列入 unsupported，報表進人工佇列）：
 預測指定的彙總依據中平台不照做的情況、預測「自動」改用較細細度時文件沒有寫明的情況（見「預測的較細細度」）、工作表與 dashboard 的擴充功能（Extensions）、LOD 的維度中的 INCLUDE／EXCLUDE、SCRIPT_*、MODEL_* 的高斯過程與正規化線性迴歸、MODEL_* 的有序預測變數與其他不支援的寫法（見「預測模型函式」）、RAWSQL_SPATIAL 與萃取或檔案上的 RAWSQL_*、尚未併入 .tdsx 的 Published Data Source、

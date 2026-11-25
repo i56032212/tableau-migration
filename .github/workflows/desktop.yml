@@ -46,8 +46,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-      - name: 安裝相依套件
-        run: uv sync --locked --no-dev --python 3.12
+      - name: 安裝相依套件（含所有資料庫驅動：離線的電腦上裝不了，安裝檔要帶齊）
+        run: uv sync --locked --no-dev --all-packages --all-extras --python 3.12
       - name: 建置檢視器
         working-directory: web
         run: |
@@ -57,7 +57,7 @@ jobs:
         run: >
           uv run --no-dev --with pyinstaller pyinstaller desktop/engine/tmig-engine.spec
           --distpath desktop/engine/dist --workpath desktop/engine/build --noconfirm
-      - name: 本機引擎冒煙測試（開啟 .twbx、查詢、存成報表套件、關閉後重新開啟）
+      - name: 本機引擎冒煙測試（資料庫驅動、開啟 .twbx、查詢、存成報表套件、關閉後重新開啟）
         run: python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine.exe fixtures/superstore_demo/superstore_demo.twbx
       - name: Windows 認證管理員（存放伺服器權杖）
         run: uv run --no-dev python -c "from tmig_service.credentials import WindowsCredentials, selftest; selftest(WindowsCredentials()); print('認證管理員：寫入、讀回、覆蓋、刪除都正常')"

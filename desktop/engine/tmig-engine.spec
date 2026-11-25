@@ -5,6 +5,7 @@
 #
 # 資料夾形式（不是單一檔案）：啟動時不必先解壓縮，開啟桌面版比較快。
 # 訂閱（playwright）、Spark 與測試用的套件不打包。
+import importlib.util
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -30,6 +31,18 @@ for package in ("pyogrio", "pyproj"):
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_imports
+# 資料庫驅動中 PyInstaller 不會自動帶上的原生程式庫（離線的電腦上裝不了，安裝檔要帶齊；
+# desktop/engine/smoke.py 逐一檢查）。沒有安裝這些驅動時略過（只開發檢視器時）。
+#   Db2（ibm_db）：clidriver 整個資料夾；DLL 的搜尋路徑由執行期掛鉤 rthook_ibm_db.py 設定
+#   Teradata（teradatasql）：呼叫時才以 ctypes 載入的 teradatasql.dll（其他平台的 .so、.dylib 不帶）
+_clidriver = importlib.util.find_spec("clidriver")
+_clidriver_dir = None
+if _clidriver is not None and _clidriver.submodule_search_locations:
+    _clidriver_dir = Path(list(_clidriver.submodule_search_locations)[0]).resolve()
+    datas.append((str(_clidriver_dir), "clidriver"))
+_teradata = importlib.util.find_spec("teradatasql")
+if _teradata is not None and _teradata.origin:
+    binaries.append((str(Path(_teradata.origin).parent / "teradatasql.dll"), "teradatasql"))
 # 延遲匯入（函式內 import）與 SQLGlot 的方言、uvicorn 的協定實作
 for package in ("tmig", "tmig_service", "sqlglot", "uvicorn"):
     hiddenimports += collect_submodules(
@@ -42,9 +55,22 @@ a = Analysis(  # noqa: F821
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    runtime_hooks=[str(ROOT / "desktop" / "engine" / "rthook_ibm_db.py")],
     excludes=["playwright", "pyspark", "pytest", "tkinter", "tmig_service.subscriptions"],
     noarchive=False,
 )
+if _clidriver_dir is not None:
+    # 分析相依性時 PyInstaller 會把 clidriver\bin 的 DLL（DB2APP64.dll 等）另外複製到封裝的根目錄；在那裡找不到
+    # 旁邊的組件資訊清單（IBM.DB2.*.manifest），載入時失敗（並列設定不正確）。只留 clidriver 資料夾中的那一份
+    _root = str(_clidriver_dir).lower()
+    a.binaries = [
+        entry
+        for entry in a.binaries
+        if not (
+            str(Path(entry[1]).resolve()).lower().startswith(_root)
+            and not entry[0].replace("\\", "/").startswith("clidriver/")
+        )
+    ]
 pyz = PYZ(a.pure)  # noqa: F821
 exe = EXE(  # noqa: F821
     pyz,

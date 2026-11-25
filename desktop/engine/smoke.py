@@ -2,6 +2,7 @@
 關閉（工作區的複本要刪得掉：Windows 上檔案還開著時刪不掉）、重新開啟報表套件，查詢結果的列數要相同；
 確認連到伺服器的程式有打包進去（以作業系統憑證存放區的 HTTPS 用戶端連一個沒有服務的埠）；最後以 MapInfo 的
 .mif（TWD67 二度分帶）建立報表，確認 GDAL（pyogrio）與基準面轉換的 PROJ（pyproj）的資料檔有打包進去。
+開始之前先確認每個資料庫驅動都打包進去了（離線的電腦上裝不了套件）。
 
     python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine fixtures/superstore_demo/superstore_demo.twbx
 
@@ -55,10 +56,50 @@ def render_all(port: int, token: str, document: str) -> dict[str, int]:
     return rows
 
 
+# Live 連線與萃取更新的資料庫驅動（kernel 的 optional-dependencies，見 kernel/src/tmig/data/sources.py）：
+# 離線的電腦上裝不了套件，安裝檔一律全部帶上
+DRIVER_MODULES = [
+    "psycopg",
+    "oracledb",
+    "databricks.sql",
+    "pymssql",
+    "redshift_connector",
+    "pymysql",
+    "snowflake.connector",
+    "prestodb",
+    "trino",
+    "pyathena",
+    "pyathena.arrow.cursor",
+    "google.cloud.bigquery",
+    "teradatasql:runtimestats",  # 呼叫時才載入原生程式庫
+    "impala.dbapi",
+    "ibm_db_dbi",
+    "hdbcli.dbapi",
+]
+
+
+def check_drivers(engine: str) -> None:
+    out = subprocess.run(
+        [engine, "--check-modules", *DRIVER_MODULES],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=300,
+    )
+    lines = out.stdout.strip().splitlines()
+    result = json.loads(lines[-1]) if lines else {}
+    failed = {k: v for k, v in result.items() if v != "ok"}
+    assert out.returncode == 0 and not failed and result, (
+        f"資料庫驅動沒有打包進去：{failed or out.stderr[-2000:]}"
+    )
+    print(f"資料庫驅動：{len(result)} 個模組都載入成功")
+
+
 def main(engine: str, workbook: str) -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8")
     engine = str(Path(engine).resolve())  # Windows：相對路徑與斜線一律換成完整路徑
+    check_drivers(engine)
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
         workspace = work / "workspace"

@@ -49,6 +49,7 @@ from tmig.catalog import Report
 from tmig.data.sources import ENV_REF
 from tmig.schedule.runner import Job
 from tmig_service.auth import SESSION_COOKIE, Authenticator, AuthError, AuthSettings
+from tmig_service.paths import default_web_dist
 from tmig_service.site import SiteStore
 from tmig_service.store import ReportStore
 
@@ -263,7 +264,7 @@ class Renderer:
 
             stack = ExitStack()
             try:
-                dist = self.web_dist or Path(__file__).resolve().parents[3] / "web" / "dist"
+                dist = self.web_dist or default_web_dist()
                 if not (dist / "index.html").is_file():
                     raise SubscriptionError(
                         f"找不到檢視器 {dist}；先執行 cd web && pnpm install && pnpm build"

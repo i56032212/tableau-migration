@@ -1,0 +1,46 @@
+# 報表平台伺服器（TmigServer 服務）的設定。修改之後重新啟動服務才會生效（以系統管理員身分執行 PowerShell）：
+#
+#   Restart-Service TmigServer
+#
+# 檢查設定（列出會執行的指令）：& "C:\Program Files\TmigServer\tmig-server-host.exe" check
+# 記錄檔在這個資料夾的 logs\：host.log 是服務本身（啟動、意外結束與重新啟動），其餘是各程序的輸出。
+#
+# 路徑中的 {data} 是這個資料夾（C:\ProgramData\TmigServer），{install} 是安裝目錄。
+# 每個 [[process]] 常駐執行一個 tmig 的子指令，參數與 README「指令」相同；意外結束時服務會自動重新啟動它。
+# 這個資料夾只有系統管理員、SYSTEM 與服務帳號（NT SERVICE\TmigServer）讀得到。
+
+[environment]
+# 傳給每個程序的環境變數。
+#
+# Live 連線與萃取更新的連線設定檔（tmig connections template 產生範本）：
+# TMIG_CONNECTIONS = '{data}\connections.toml'
+#
+# 連線設定檔、auth.toml、mail.toml 中以 ${變數} 參照的帳號、密碼與密鑰也在這裡給值，例如：
+# TMIG_SESSION_SECRET = "<隨機產生的長字串>"
+# 這個檔案不要複製到別處或放進版控。
+
+[[process]]
+name = "server"
+# 查詢服務與檢視器。預設只接受這台電腦本身的連線：沒有設定身分驗證時，連得到的人都能看所有的報表。
+# 設定身分驗證之後（加上 "--auth", '{data}\auth.toml'；範本在安裝目錄的 config\auth.example.toml），
+# 再把 --host 改成 "0.0.0.0"，並在 Windows 防火牆開放埠號。
+args = [
+  "serve",
+  "--host", "127.0.0.1",
+  "--port", "8000",
+  "--fixtures", '{data}\workbooks',
+  "--store", '{data}\store',
+  "--usage-dir", '{data}\usage',
+]
+
+[[process]]
+name = "scheduler"
+# 排程器：萃取更新與訂閱（讀報表庫中站台管理的排程）。要啟用時把 enabled 改成 true。
+# 訂閱要寄信時加上 "--mail", '{data}\mail.toml'（範本在 config\mail.example.toml）；
+# 以訂閱者的身分產生 PNG、PDF 需要使用者目錄（站台資料，或加上 "--auth", '{data}\auth.toml'）。
+enabled = false
+args = [
+  "schedule", "serve",
+  "--store", '{data}\store',
+  "--fixtures", '{data}\workbooks',
+]

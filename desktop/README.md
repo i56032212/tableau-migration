@@ -48,6 +48,21 @@ CI 的 desktop 工作流程（`.github/workflows/desktop.yml`）在 Windows 上�
 在該次執行的 Artifacts 下載 `TmigDesktop-windows-installer`。安裝在使用者自己的資料夾，不需要系統管理員權限；
 需要 WebView2（Windows 10／11 通常已內建，沒有時安裝程式會下載）。
 
+本機引擎帶著所有資料庫驅動（kernel 的 optional-dependencies：PostgreSQL、Oracle、SQL Server、MySQL、Databricks、
+Snowflake、Redshift、Trino／Presto、Athena、BigQuery、Teradata、Hive／Impala、Db2、SAP HANA），冒煙測試逐一檢查；
+PyInstaller 不會自動帶上的 Db2 clidriver 與 Teradata 的原生程式庫由 `tmig-engine.spec` 與執行期掛鉤
+`rthook_ibm_db.py` 帶上。
+
+**離線安裝檔**：給不能連網路的電腦。以 `src-tauri/tauri.offline.conf.json` 建置時，安裝檔內含 WebView2 執行階段的
+離線安裝程式（多約 130 MB），沒有 WebView2 的電腦安裝時直接安裝它，不必下載：
+
+```bash
+cd desktop && pnpm tauri build --config src-tauri/tauri.offline.conf.json
+```
+
+產生的檔名與一般的相同（`TmigDesktop_<版本>_x64-setup.exe`），發布時改名成 `TmigDesktop_<版本>_x64-offline-setup.exe`。
+建置時 Tauri 會從 Microsoft 下載 WebView2 的離線安裝程式。
+
 ### 在 Windows 本機建置安裝檔
 
 GitHub Actions 沒有在跑時，可以在 Windows 電腦上自己建。需要 Rust（`winget install --id Rustlang.Rustup -e`）與
@@ -57,13 +72,17 @@ Visual Studio Build Tools 的 C++ 工作負載（`winget install --id Microsoft.
 
 ```bash
 cd web && pnpm install --frozen-lockfile && pnpm build && cd ..      # 檢視器（web/dist 已是最新時可以略過）
-uv run --with pyinstaller pyinstaller desktop/engine/tmig-engine.spec --distpath desktop/engine/dist --workpath desktop/engine/build --noconfirm
+# 打包用另一個環境（含所有資料庫驅動），不動開發用的 .venv（裝了驅動之後，測驅動沒有安裝時的測試會不一樣）
+export UV_PROJECT_ENVIRONMENT=desktop/engine/build/venv UV_PYTHON_PREFERENCE=only-system
+uv sync --frozen --no-dev --all-packages --all-extras --python 3.12
+uv run --no-sync --with pyinstaller pyinstaller desktop/engine/tmig-engine.spec --distpath desktop/engine/dist --workpath desktop/engine/build/pyinstaller --noconfirm
+unset UV_PROJECT_ENVIRONMENT UV_PYTHON_PREFERENCE
 python desktop/engine/smoke.py desktop/engine/dist/tmig-engine/tmig-engine.exe fixtures/superstore_demo/superstore_demo.twbx
-cd desktop && pnpm install --frozen-lockfile && pnpm tauri build     # 第一次編譯約 8 分鐘
+cd desktop && pnpm install --frozen-lockfile && pnpm tauri build     # 第一次編譯約 8 分鐘；離線安裝檔加 --config src-tauri/tauri.offline.conf.json
 ```
 
-安裝檔在 `desktop/src-tauri/target/release/bundle/nsis/TmigDesktop_<版本>_x64-setup.exe`（約 135 MB）。建置的中間產物
-（`desktop/src-tauri/target` 約 2 GB、`desktop/engine/dist` 約 650 MB）都不進版控，可以刪。安裝檔沒有程式碼簽章，
+安裝檔在 `desktop/src-tauri/target/release/bundle/nsis/TmigDesktop_<版本>_x64-setup.exe`。建置的中間產物
+（`desktop/src-tauri/target` 約 2 GB、`desktop/engine/dist`、`desktop/engine/build`）都不進版控，可以刪。安裝檔沒有程式碼簽章，
 第一次執行時 Windows SmartScreen 會警告。不安裝也可以直接執行 `desktop/src-tauri/target/release/tmig-desktop.exe`
 （引擎在同一個資料夾的 `engine/`）。
 
@@ -71,7 +90,8 @@ cd desktop && pnpm install --frozen-lockfile && pnpm tauri build     # 第一次
 
 安裝檔超過 GitHub 單一檔案 100 MB 的上限，不進 git：建好之後放在這個（private）repo 的 GitHub Release，tag 寫成
 `desktop-v<版本>-<日期>`，指向建置時的 commit，說明寫上 SHA-256、內容的 commit、驗證過與還沒驗證的；還沒實際安裝
-執行過的標成預先發行版（prerelease）：
+執行過的標成預先發行版（prerelease）。伺服器版的離線安裝檔（`deploy/windows/build.py`）也照同樣的方式放，
+tag 寫成 `offline-v<版本>-<日期>` 時兩份放在同一個 Release：
 
 ```bash
 gh release create desktop-v0.1.0-20261124 desktop/src-tauri/target/release/bundle/nsis/TmigDesktop_0.1.0_x64-setup.exe   --target <commit> --title "桌面版 0.1.0（2026-11-24）" --notes-file <說明> --prerelease

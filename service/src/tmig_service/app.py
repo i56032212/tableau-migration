@@ -114,14 +114,12 @@ from tmig_service.downloads import (
     summary_value,
     xlsx_bytes,
 )
+from tmig_service.paths import REPO_ROOT, default_web_dist
 from tmig_service.query_stop import QUERY_HEADER, RunningQueries
 from tmig_service.site import SiteStore, from_exports
 from tmig_service.store import STORE_ENV, ReportRecord, ReportStore
 from tmig_service.usage import UsageLog, Visit, summarize
 from tmig_service.viewer_store import ViewerStore
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
 
 IMAGE_TYPES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp"})
 
@@ -436,7 +434,7 @@ def create_app(
         Path(os.environ["TMIG_USAGE_DIR"]) if os.environ.get("TMIG_USAGE_DIR") else None
     )
     usage = UsageLog(usage_path) if usage_path is not None else None
-    dist = web_dist if web_dist is not None else REPO_ROOT / "web" / "dist"
+    dist = web_dist if web_dist is not None else default_web_dist()
     data = runtime or DataRuntime()
     running = RunningQueries()
     """render 中可以停止的查詢（tmig_service.query_stop）。"""
