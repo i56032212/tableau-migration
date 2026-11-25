@@ -83,3 +83,25 @@ def test_command_wrapper_sets_the_same_locations_as_the_service() -> None:
         assert f"{variable}=" in command
         assert f'"{variable}"' in host
     assert command.isascii()  # cmd.exe 以系統碼頁讀批次檔
+
+
+def _smoke_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("deploy_windows_smoke", HERE / "smoke.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_smoke_compares_raw_numbers_with_a_tolerance() -> None:
+    """2026-11-25 安裝後的查詢：顯示的值相同，原始值差在第 16 位有效數字（DuckDB 平行加總的順序）。"""
+    same_table = _smoke_module().same_table
+    table = {
+        "headers": ["Region", "Sales"],
+        "rows": [["East", "208,291"]],
+        "raw": [["East", "208291.20399999985"]],
+    }
+    assert same_table(table, {**table, "raw": [["East", "208291.20399999982"]]})
+    assert not same_table(table, {**table, "raw": [["East", "208291.3"]]})
+    assert not same_table(table, {**table, "raw": [["West", "208291.20399999985"]]})
+    assert not same_table(table, {**table, "rows": [["East", "208,292"]]})

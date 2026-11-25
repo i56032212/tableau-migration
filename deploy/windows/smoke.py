@@ -169,6 +169,31 @@ def _wait_ready(base: str, host: subprocess.Popen[bytes], deadline: float) -> No
     raise SmokeError("查詢服務沒有在時間內就緒")
 
 
+def same_table(got: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """顯示的內容（欄名、格式化後的值）要完全相同；原始值的數字容許 1e-9 的相對誤差：DuckDB 平行加總
+    浮點數時相加的順序不固定，最後一、兩位有效數字每次可能不同（2026-11-25 安裝後的查詢就差在第 16 位）。"""
+    if {k: v for k, v in got.items() if k != "raw"} != {
+        k: v for k, v in expected.items() if k != "raw"
+    }:
+        return False
+    rows, other = got.get("raw") or [], expected.get("raw") or []
+    if len(rows) != len(other):
+        return False
+    for row, other_row in zip(rows, other, strict=True):
+        if len(row) != len(other_row):
+            return False
+        for a, b in zip(row, other_row, strict=True):
+            if a == b:
+                continue
+            try:
+                x, y = float(a), float(b)
+            except (TypeError, ValueError):
+                return False
+            if abs(x - y) > 1e-9 * max(abs(x), abs(y)):
+                return False
+    return True
+
+
 def _expected_table() -> Any:
     """repo 的程式在這台電腦上算的結果（比對安裝內容算的是否相同）。"""
     with warnings.catch_warnings():
@@ -255,8 +280,8 @@ def check_host(install: Path, temp: Path) -> None:
         )
         print(f"  查詢服務：第一次查詢（含萃取匯入）{time.monotonic() - started:.1f} 秒")
         expected = _expected_table()
-        if rendered["table"] != expected:
-            raise SmokeError("查詢結果與 repo 的程式算的不同")
+        if not same_table(rendered["table"], expected):
+            raise SmokeError(f"查詢結果與 repo 的程式算的不同：{rendered['table']} ≠ {expected}")
         print(f"  查詢結果與 repo 的程式相同（{rendered['rows']} 列）")
         pdf = subprocess.run(
             [str(_python(install)), "-X", "utf8", "-s", "-c", PDF, f"{base}/views/{DEMO.name}"],
