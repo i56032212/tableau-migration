@@ -3,8 +3,11 @@
   "bundle": {
     "windows": {
       "webviewInstallMode": {
-        "type": "offlineInstaller",
-        "silent": true
+        "type": "fixedRuntime",
+        "path": "./webview2-fixed/"
+      },
+      "nsis": {
+        "installerHooks": "./windows/offline-hooks.nsh"
       }
     }
   }

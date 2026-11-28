@@ -121,7 +121,8 @@ uv run python deploy/windows/build.py           # 伺服器版的 Windows 離線
   資料庫驅動、Chromium）與桌面版（內含 WebView2 的離線安裝程式，引擎帶所有資料庫驅動），放在 GitHub Release
   `offline-v0.1.0-20261125`（預先發行版）。同一天在這台 Windows 11 上實際安裝驗證：伺服器版安裝成服務、查詢、重新啟動、
   升級與解除安裝都正常（驗證後已解除安裝）；桌面版更新了使用者在 `D:\TableauX\TmigDesktop` 的安裝並在視窗裡開報表。
-  **還沒在 Windows Server 上安裝過**，驅動只驗證到載入。見 README「伺服器的安裝（Windows）」與 `docs/backlog.md` 第三部分的 11
+  **還沒在 Windows Server 上安裝過**，驅動只驗證到載入。桌面版的離線安裝檔內附的 WebView2 離線安裝程式在公司內網的電腦上安裝失敗，
+  2026-11-28 改成內附 WebView2 的固定版本（不必安裝；還沒在內網電腦上驗證，見 `desktop/README.md`）。見 README「伺服器的安裝（Windows）」與 `docs/backlog.md` 第三部分的 11
 - **GitHub 上的 repo 是公開的**（2026-10-26 建立時就是公開，與上面安全規則的「維持 private」不同）。2026-11-25 告知
   使用者後，使用者決定照樣把離線安裝檔發布到公開的 Release；repo 的公開與否由使用者決定，不要自己改，也不要在
   回報中說它是 private

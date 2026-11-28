@@ -53,15 +53,28 @@ Snowflake、Redshift、Trino／Presto、Athena、BigQuery、Teradata、Hive／Im
 PyInstaller 不會自動帶上的 Db2 clidriver 與 Teradata 的原生程式庫由 `tmig-engine.spec` 與執行期掛鉤
 `rthook_ibm_db.py` 帶上。
 
-**離線安裝檔**：給不能連網路的電腦。以 `src-tauri/tauri.offline.conf.json` 建置時，安裝檔內含 WebView2 執行階段的
-離線安裝程式（多約 130 MB），沒有 WebView2 的電腦安裝時直接安裝它，不必下載：
+**離線安裝檔**：給不能連網路的電腦（例如公司內網）。以 `src-tauri/tauri.offline.conf.json` 建置時，安裝檔內附
+WebView2 的固定版本（Fixed Version），裝在程式資料夾的 `webview2-fixed`，程式啟動時由 Tauri 設定
+`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向它。完全不必安裝 WebView2，不受群組原則或資安軟體擋下 WebView2 安裝的影響。
+（之前內附的是 WebView2 的離線安裝程式，以一般使用者的權限在 `%TEMP%` 執行，公司內網的電腦上安裝失敗。）
 
-```bash
-cd desktop && pnpm tauri build --config src-tauri/tauri.offline.conf.json
+固定版本要先從 Microsoft 的 WebView2 下載頁（https://developer.microsoft.com/microsoft-edge/webview2/ 的「Fixed Version」，
+選 x64）下載 `.cab`（要接受授權條款），以 `expand` 解開，把裡面的資料夾改名成 `src-tauri/webview2-fixed`（不進版控）。
+不要用檔案總管解壓縮，Microsoft 說資料夾結構可能不對：
+
+```powershell
+expand Microsoft.WebView2.FixedVersionRuntime.<版本>.x64.cab -F:* $env:TEMP\wv2
+Move-Item $env:TEMP\wv2\Microsoft.WebView2.FixedVersionRuntime.<版本>.x64 desktop\src-tauri\webview2-fixed
+cd desktop; pnpm tauri build --config src-tauri/tauri.offline.conf.json
 ```
 
 產生的檔名與一般的相同（`TmigDesktop_<版本>_x64-setup.exe`），發布時改名成 `TmigDesktop_<版本>_x64-offline-setup.exe`。
-建置時 Tauri 會從 Microsoft 下載 WebView2 的離線安裝程式。
+安裝掛鉤 `src-tauri/windows/offline-hooks.nsh` 在安裝後以 `icacls` 讓「ALL APPLICATION PACKAGES」與「ALL RESTRICTED
+APPLICATION PACKAGES」可以讀取這個資料夾：Microsoft 的說明是 Windows 10 上未封裝的程式使用固定版本 120 以後的版本必須這樣做
+（https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution ）。
+
+代價：固定版本解開後約 945 MB（158.0.4370.45），安裝檔約 515 MiB（之前內附離線安裝程式時約 486 MiB）；內附的 WebView2 **不會自動更新**，資安更新要靠重新建置、
+發布安裝檔；固定版本不能從網路磁碟或 UNC 路徑執行（使用者資料夾被導到網路磁碟的電腦不能用）。
 
 ### 在 Windows 本機建置安裝檔
 
